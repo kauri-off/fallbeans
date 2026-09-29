@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { BodyFullState } from '../shared/codec';
 
 const _l = new THREE.Vector3();
 const _q = new THREE.Vector3();
@@ -9,12 +10,14 @@ const _w = new THREE.Vector3();
 const _sv = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 
+/** The bean is two spheres of radius R, at these heights above its feet. */
 export const R = 0.5;
 export const SPHERES = [0.5, 1.1] as const;
+export const HEIGHT = 1.6;
 export const GRAVITY = 28;
 export const RUN_SPEED = 8.5;
 export const JUMP_V = 10.5;
-export const FIXED_DT = 1 / 120;
+export const DIVE_SPEED = 12.5;
 
 export type Shape =
   | { type: 'box'; hx: number; hy: number; hz: number }
@@ -40,6 +43,10 @@ export interface Contact {
 
 export class Collider {
   enabled = true;
+  /** Position in the world's collider list; identical on server and clients (same build). */
+  index = -1;
+  /** Query de-duplication mark (see World.query). */
+  stamp = 0;
   readonly isStatic: boolean;
   bounce: number;
   hit: number;
@@ -67,9 +74,14 @@ export class Collider {
     this.onTouch = opts.onTouch ?? null;
     this.onGround = opts.onGround ?? null;
     this.radius =
-      shape.type === 'box' ? Math.hypot(shape.hx, shape.hy, shape.hz) : shape.type === 'cyl' ? Math.hypot(shape.r, shape.hh) : shape.r;
+      shape.type === 'box'
+        ? Math.hypot(shape.hx, shape.hy, shape.hz)
+        : shape.type === 'cyl'
+          ? Math.hypot(shape.r, shape.hh)
+          : shape.r;
   }
 
+  /** Reads the object's world matrix; the previous one is kept for surface velocity. */
   sync() {
     if (this.isStatic && this.synced) {
       this.prev.copy(this.cur);
@@ -84,13 +96,27 @@ export class Collider {
     this.synced = true;
   }
 
+  /** World-space AABB half extents in x and z (for the static grid). */
+  extentXZ(): [number, number] {
+    const e = this.cur.elements;
+    const s = this.shape;
+    const [hx, hy, hz] = s.type === 'box' ? [s.hx, s.hy, s.hz] : s.type === 'cyl' ? [s.r, s.hh, s.r] : [s.r, s.r, s.r];
+    const ex = Math.abs(e[0]!) * hx + Math.abs(e[4]!) * hy + Math.abs(e[8]!) * hz;
+    const ez = Math.abs(e[2]!) * hx + Math.abs(e[6]!) * hy + Math.abs(e[10]!) * hz;
+    return [ex, ez];
+  }
+
   contact(center: THREE.Vector3, r: number, out: Contact): boolean {
     if (center.distanceToSquared(this.center) > (this.radius + r) ** 2) return false;
     _l.copy(center).applyMatrix4(this.inv);
     const s = this.shape;
     let depth: number;
     if (s.type === 'box') {
-      _q.set(THREE.MathUtils.clamp(_l.x, -s.hx, s.hx), THREE.MathUtils.clamp(_l.y, -s.hy, s.hy), THREE.MathUtils.clamp(_l.z, -s.hz, s.hz));
+      _q.set(
+        THREE.MathUtils.clamp(_l.x, -s.hx, s.hx),
+        THREE.MathUtils.clamp(_l.y, -s.hy, s.hy),
+        THREE.MathUtils.clamp(_l.z, -s.hz, s.hz),
+      );
       _n.subVectors(_l, _q);
       const d = _n.length();
       if (d > 1e-6) {
@@ -170,6 +196,59 @@ export class Collider {
   }
 }
 
+/** Uniform 2D (x/z) grid of static colliders; moving colliders are checked separately. */
+export class ColliderGrid {
+  private readonly cells = new Map<number, Collider[]>();
+  constructor(readonly cell = 4) {}
+
+  private key(ix: number, iz: number) {
+    return (ix + 32768) * 65536 + (iz + 32768);
+  }
+
+  insert(col: Collider) {
+    const [ex, ez] = col.extentXZ();
+    const c = col.center;
+    const x0 = Math.floor((c.x - ex) / this.cell);
+    const x1 = Math.floor((c.x + ex) / this.cell);
+    const z0 = Math.floor((c.z - ez) / this.cell);
+    const z1 = Math.floor((c.z + ez) / this.cell);
+    for (let ix = x0; ix <= x1; ix++)
+      for (let iz = z0; iz <= z1; iz++) {
+        const k = this.key(ix, iz);
+        const list = this.cells.get(k);
+        if (list) list.push(col);
+        else this.cells.set(k, [col]);
+      }
+  }
+
+  query(x: number, z: number, r: number, stamp: number, out: Collider[]) {
+    const x0 = Math.floor((x - r) / this.cell);
+    const x1 = Math.floor((x + r) / this.cell);
+    const z0 = Math.floor((z - r) / this.cell);
+    const z1 = Math.floor((z + r) / this.cell);
+    for (let ix = x0; ix <= x1; ix++)
+      for (let iz = z0; iz <= z1; iz++) {
+        const list = this.cells.get(this.key(ix, iz));
+        if (!list) continue;
+        for (const c of list) {
+          if (c.stamp === stamp) continue;
+          c.stamp = stamp;
+          out.push(c);
+        }
+      }
+  }
+
+  get size() {
+    return this.cells.size;
+  }
+}
+
+/** What a body collides with: the world's colliders near a point. */
+export interface CollisionWorld {
+  readonly colliders: readonly Collider[];
+  query(x: number, z: number, r: number, out: Collider[]): Collider[];
+}
+
 export interface BodyInput {
   mx: number;
   mz: number;
@@ -186,15 +265,15 @@ export interface OtherBody {
 }
 
 export type BodyState = 'normal' | 'stun' | 'dive' | 'slide';
+export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide'];
 
 const hitInfo: Contact = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
+const nearby: Collider[] = [];
 
 export class PlayerBody {
   readonly pos = new THREE.Vector3();
-  readonly prevPos = new THREE.Vector3();
   readonly vel = new THREE.Vector3();
   yaw = 0;
-  prevYaw = 0;
   grounded = false;
   groundCol: Collider | null = null;
   private carryCol: Collider | null = null;
@@ -202,28 +281,33 @@ export class PlayerBody {
   private hasGroundLocal = false;
   state: BodyState = 'normal';
   stateT = 0;
-  private coyote = 0;
-  private jumpBuf = 0;
-  slowUntil = 0;
+  coyote = 0;
+  jumpBuf = 0;
+  /** Sim time (s) until which the body is slowed (being grabbed). */
+  slowUntil = -1e9;
   landImpact = 0;
+  // Events of the last step, for sounds and effects.
   jumped = false;
   bounced = false;
   hitSomething = false;
   stunned = false;
 
-  constructor(readonly actor?: number) {}
+  constructor(readonly actor: number) {}
 
   reset(p: THREE.Vector3, yaw = 0) {
     this.pos.copy(p);
-    this.prevPos.copy(p);
     this.vel.set(0, 0, 0);
     this.yaw = yaw;
-    this.prevYaw = yaw;
     this.state = 'normal';
     this.stateT = 0;
     this.grounded = false;
     this.groundCol = null;
+    this.carryCol = null;
     this.hasGroundLocal = false;
+    this.coyote = 0;
+    this.jumpBuf = 0;
+    this.slowUntil = -1e9;
+    this.landImpact = 0;
   }
 
   stun(t = 1.1) {
@@ -231,6 +315,7 @@ export class PlayerBody {
     this.stateT = t;
   }
 
+  /** Before moving the world: remember where we stand on the ground collider. */
   beforeWorldUpdate() {
     this.hasGroundLocal = false;
     if (this.grounded && this.groundCol?.enabled) {
@@ -240,6 +325,7 @@ export class PlayerBody {
     }
   }
 
+  /** After moving the world: ride along with a moving platform. */
   afterWorldUpdate() {
     const c = this.carryCol;
     if (!this.hasGroundLocal || !c?.enabled) return;
@@ -257,8 +343,8 @@ export class PlayerBody {
     this.stunned = false;
   }
 
-  step(dt: number, input: BodyInput, colliders: readonly Collider[], nowMs: number, others: readonly OtherBody[] = []) {
-    const slow = nowMs < this.slowUntil ? 0.45 : 1;
+  step(dt: number, input: BodyInput, world: CollisionWorld, t: number, others: readonly OtherBody[] = []) {
+    const slow = t < this.slowUntil ? 0.45 : 1;
     const g = this.grounded;
     this.coyote = g ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuf = input.jump ? 0.12 : Math.max(0, this.jumpBuf - dt);
@@ -313,8 +399,8 @@ export class PlayerBody {
           fz = input.mz / l;
           this.yaw = Math.atan2(fx, fz);
         }
-        this.vel.x = fx * 12.5 * slow;
-        this.vel.z = fz * 12.5 * slow;
+        this.vel.x = fx * DIVE_SPEED * slow;
+        this.vel.z = fz * DIVE_SPEED * slow;
         this.vel.y = g ? 6 : Math.max(this.vel.y, 3);
         this.grounded = false;
       }
@@ -327,9 +413,10 @@ export class PlayerBody {
     this.grounded = false;
     let newGround: Collider | null = null;
     const hitDone = new Set<Collider>();
+    const cols = world.query(this.pos.x, this.pos.z, R + 1.2, nearby);
     for (let iter = 0; iter < 3; iter++) {
       let any = false;
-      for (const col of colliders) {
+      for (const col of cols) {
         if (!col.enabled) continue;
         for (const oy of SPHERES) {
           _c.set(this.pos.x, this.pos.y + oy, this.pos.z);
@@ -348,7 +435,8 @@ export class PlayerBody {
           } else if (vn < 0) {
             this.vel.addScaledVector(n, -vn);
           }
-          if (col.hit && !hitDone.has(col)) {
+          // Knockback once per hit: a stunned bean pinned against a mover is not re-launched every tick.
+          if (col.hit && !hitDone.has(col) && this.state !== 'stun') {
             hitDone.add(col);
             col.surfaceVelocity(hitInfo.local, dt, _sv);
             const sp = _sv.length();
@@ -375,9 +463,9 @@ export class PlayerBody {
       const dz = this.pos.z - o.z;
       const dy = this.pos.y - o.y;
       const d = Math.hypot(dx, dz);
-      if (d < 0.95 && Math.abs(dy) < 1.5) {
+      if (d < 0.95 && Math.abs(dy) < HEIGHT) {
         if (dy > 1.1 && this.vel.y <= 0) {
-          this.pos.y = o.y + 1.5;
+          this.pos.y = o.y + HEIGHT;
           this.vel.y = 0;
           this.grounded = true;
         } else if (d > 1e-4) {
@@ -402,5 +490,42 @@ export class PlayerBody {
       } else if (!g) this.landImpact = Math.min(1, -vyBefore / 20);
     }
     if (stateBefore !== 'stun' && this.state === 'stun') this.stunned = true;
+  }
+
+  toFull(teleport = false): BodyFullState {
+    return {
+      px: this.pos.x,
+      py: this.pos.y,
+      pz: this.pos.z,
+      vx: this.vel.x,
+      vy: this.vel.y,
+      vz: this.vel.z,
+      yaw: this.yaw,
+      state: BODY_STATES.indexOf(this.state),
+      stateT: this.stateT,
+      grounded: this.grounded,
+      coyote: this.coyote,
+      jumpBuf: this.jumpBuf,
+      slowUntil: Math.max(this.slowUntil, -1e6),
+      groundCol: this.groundCol?.index ?? -1,
+      landImpact: this.landImpact,
+      teleport,
+    };
+  }
+
+  fromFull(s: BodyFullState, world: CollisionWorld) {
+    this.pos.set(s.px, s.py, s.pz);
+    this.vel.set(s.vx, s.vy, s.vz);
+    this.yaw = s.yaw;
+    this.state = BODY_STATES[s.state] ?? 'normal';
+    this.stateT = s.stateT;
+    this.grounded = s.grounded;
+    this.coyote = s.coyote;
+    this.jumpBuf = s.jumpBuf;
+    this.slowUntil = s.slowUntil;
+    this.groundCol = s.groundCol >= 0 ? (world.colliders[s.groundCol] ?? null) : null;
+    this.carryCol = null;
+    this.hasGroundLocal = false;
+    this.landImpact = s.landImpact;
   }
 }

@@ -1,17 +1,21 @@
 import * as THREE from 'three';
-import { type Builder, PAL, type Palette } from '../../client/world/builder';
-import { pathBrain, type Waypoint } from '../../client/world/bots';
-import { defineMap } from '../../client/world/map';
+import { pathBrain, type Waypoint } from '../../sim/bots';
+import { type Builder, PAL, type Palette } from '../../sim/builder';
+import { defineMap } from '../../sim/map';
 import meta from './meta';
 
 function drum(b: Builder, z: number, r: number, len: number, speed: number, pal: Palette) {
   const d = b.cyl(0, -r, z, r, len, pal, { dynamic: true, rot: [0, 0, Math.PI / 2], seg: 32 });
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2;
-    b.box(Math.cos(a) * r, 0, Math.sin(a) * r, 0.18, len - 0.2, 0.35, '#ffffff', { parent: d.mesh, noCollide: true, castShadow: false });
+    b.box(Math.cos(a) * r, 0, Math.sin(a) * r, 0.18, len - 0.2, 0.35, '#ffffff', {
+      parent: d.obj,
+      noCollide: true,
+      castShadow: false,
+    });
   }
-  b.update((t) => {
-    d.mesh.rotation.set(t * speed, 0, Math.PI / 2);
+  b.move((t) => {
+    d.obj.rotation.set(t * speed, 0, Math.PI / 2);
   });
 }
 
@@ -21,11 +25,12 @@ export default defineMap(meta, (b) => {
 
   const path: Waypoint[] = [{ x: 0, z: 12, w: 3 }];
   const pals = [PAL.orange, PAL.teal, PAL.pink, PAL.green];
-  [18.6, 22.6, 26.6, 30.6].forEach((z, i) => {
+  // Drums nearly touch: a bean can never get wedged between two of them.
+  [18.6, 22.0, 25.4, 28.8].forEach((z, i) => {
     drum(b, z, 1.6, 12, (i % 2 ? 1 : -1) * 1.4, pals[i % 4]!);
-    path.push({ x: 0, z, w: 3, jump: true });
+    path.push({ x: 0, z, w: 3 });
   });
-  b.box(0, -1, 36.5, 12, 2, 8, PAL.purple);
+  b.box(0, -1, 35.6, 12, 2, 9.8, PAL.purple);
 
   b.pad(0, 0, 42.3, 1.6, 17);
   b.pad(0, 0, 52, 1.6, 17);
@@ -39,12 +44,12 @@ export default defineMap(meta, (b) => {
   b.box(0, -1, 84.5, 4, 2, 5, PAL.yellow);
   path.push({ x: 3, z: 73, w: 0.5, jump: true }, { x: 3, z: 79, w: 0.5, jump: true }, { x: 0, z: 84, w: 0.4 });
 
-  [89, 92.6, 96.2, 99.8, 103.4].forEach((z, i) => {
+  [88.4, 91.4, 94.4, 97.4, 100.4, 103.4].forEach((z, i) => {
     drum(b, z, 1.4, 8, (i % 2 ? -1 : 1) * (1.8 + i * 0.2), pals[(i + 1) % 4]!);
-    path.push({ x: 0, z, w: 2, jump: true });
+    path.push({ x: 0, z, w: 2 });
   });
 
-  b.box(0, -1, 120.25, 18, 2, 29.5, PAL.yellow);
+  b.box(0, -1, 119.95, 18, 2, 30.1, PAL.yellow);
   b.finish(0, 0, 128);
   b.clouds(0, 60, 60, 36);
   path.push({ x: 0, z: 110, w: 3 }, { x: 0, z: 132, w: 3 });

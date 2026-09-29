@@ -1,19 +1,21 @@
-import type { AnyGameMeta } from '../shared/game';
-import ballHill from './ball-hill/meta';
-import crownPeak from './crown-peak/meta';
-import doorDash from './door-dash/meta';
-import drumRoll from './drum-roll/meta';
-import fruitMemory from './fruit-memory/meta';
-import hammerSwing from './hammer-swing/meta';
-import hexAGone from './hex-a-gone/meta';
-import hiddenBridge from './hidden-bridge/meta';
-import jumpClub from './jump-club/meta';
-import plateDrop from './plate-drop/meta';
-import rollOut from './roll-out/meta';
-import tailTag from './tail-tag/meta';
-import wallRush from './wall-rush/meta';
+import type { GameMeta } from '../shared/game';
+import type { MapModule } from '../sim/map';
+import ballHill from './ball-hill/map';
+import crownPeak from './crown-peak/map';
+import doorDash from './door-dash/map';
+import drumRoll from './drum-roll/map';
+import fruitMemory from './fruit-memory/map';
+import hammerSwing from './hammer-swing/map';
+import hexAGone from './hex-a-gone/map';
+import hiddenBridge from './hidden-bridge/map';
+import jumpClub from './jump-club/map';
+import lobby from './lobby/map';
+import plateDrop from './plate-drop/map';
+import rollOut from './roll-out/map';
+import tailTag from './tail-tag/map';
+import wallRush from './wall-rush/map';
 
-export const GAMES: readonly AnyGameMeta[] = [
+export const MAPS: readonly MapModule[] = [
   doorDash,
   hammerSwing,
   ballHill,
@@ -29,11 +31,18 @@ export const GAMES: readonly AnyGameMeta[] = [
   plateDrop,
 ];
 
-const byId = new Map(GAMES.map((g) => [g.id, g]));
-if (byId.size !== GAMES.length) throw new Error('duplicate game id');
+export const GAMES: readonly GameMeta[] = MAPS.map((m) => m.meta);
+export const LOBBY: MapModule = lobby;
 
-export function getGame(id: string): AnyGameMeta | undefined {
-  return byId.get(id);
+const byId = new Map(MAPS.map((m) => [m.meta.id, m]));
+if (byId.size !== MAPS.length) throw new Error('duplicate game id');
+
+export function getGame(id: string): GameMeta | undefined {
+  return byId.get(id)?.meta;
+}
+
+export function getMap(id: string): MapModule | undefined {
+  return id === LOBBY.meta.id ? LOBBY : byId.get(id);
 }
 
 export const FINALS = GAMES.filter((g) => g.genre === 'final');
