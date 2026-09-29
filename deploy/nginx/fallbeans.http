@@ -1,0 +1,4 @@
+# Fall Beans: http-level directives. Installed as /etc/nginx/apps.d/fallbeans.http by scripts/deploy.ts
+# (the shared site includes /etc/nginx/apps.d/*.http at http level).
+limit_req_zone $binary_remote_addr zone=fb_auth:1m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=fb_api:1m rate=5r/s;

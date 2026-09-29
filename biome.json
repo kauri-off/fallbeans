@@ -1,0 +1,31 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": { "enabled": false },
+  "files": {
+    "includes": [
+      "**",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!.build",
+      "!!.dev",
+      "!!.claude",
+      "!!test-results",
+      "!!playwright-report",
+      "!!blender",
+      "!!public/models"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 130 },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": { "noNonNullAssertion": "off", "noParameterAssign": "off" },
+      "complexity": { "noForEach": "off" },
+      "suspicious": { "noAssignInExpressions": "off" },
+      "a11y": { "recommended": false }
+    }
+  },
+  "javascript": { "formatter": { "quoteStyle": "single" } },
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.build/
+.dev/
+.claude/
+test-results/
+playwright-report/
+*.blend1
+.DS_Store
+Thumbs.db
