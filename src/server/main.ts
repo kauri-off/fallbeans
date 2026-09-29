@@ -4,7 +4,6 @@ import { loadConfig } from './config';
 import { Gateway } from './gateway';
 import { startHttp } from './http';
 import { createLogger } from './log';
-import { startWebTransport } from './webtransport';
 
 const cfg = loadConfig(process.argv.slice(2));
 const log = createLogger(cfg.dev);
@@ -19,9 +18,11 @@ const auth = new Auth(cfg.secret, checkPin);
 const gateway = new Gateway(auth, log, { minPlayers: cfg.solo ? 1 : 2 });
 const http = startHttp(cfg, auth, gateway, log);
 
-let wt: ReturnType<typeof startWebTransport> | null = null;
+let wt: { close(): Promise<void> } | null = null;
 if (cfg.wtPort && cfg.certPem && cfg.keyPem) {
   try {
+    // Loaded lazily: without the native addon the game still runs over WebSocket.
+    const { startWebTransport } = await import('./webtransport');
     wt = startWebTransport({ port: cfg.wtPort, certPem: cfg.certPem, keyPem: cfg.keyPem, gateway, log });
   } catch (e) {
     log.warn('WebTransport disabled', { err: String(e) });

@@ -4,10 +4,38 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/opt/fallbeans/FallBeans-linux-x64 --port 7777
+Type=simple
+WorkingDirectory=/opt/fallbeans/current
+ExecStart=/opt/fallbeans/bin/bun server/main.js
+EnvironmentFile=/etc/fallbeans/env
+Environment=NODE_ENV=production FB_HTTP_HOST=127.0.0.1 FB_HTTP_PORT=7777 FB_WT_PORT=443 FB_TRUST_PROXY=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+# TLS for WebTransport, readable by the dynamic user through $CREDENTIALS_DIRECTORY.
+LoadCredential=cert.pem:/etc/ssl/cybershield/fullchain.pem
+LoadCredential=key.pem:/etc/ssl/cybershield/privkey.pem
+
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+MemoryMax=350M
+TasksMax=64
 Restart=always
 RestartSec=2
-DynamicUser=yes
 
 [Install]
 WantedBy=multi-user.target

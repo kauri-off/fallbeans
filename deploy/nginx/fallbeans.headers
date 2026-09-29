@@ -1,0 +1,8 @@
+# Fall Beans security headers. Installed as /etc/nginx/apps.d/fallbeans.headers (included by fallbeans.conf).
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "same-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), gamepad=(self), fullscreen=(self)" always;
+add_header Cross-Origin-Opener-Policy "same-origin" always;
+add_header Strict-Transport-Security "max-age=31536000" always;
+add_header X-Robots-Tag "noindex, nofollow" always;

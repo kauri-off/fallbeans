@@ -45,6 +45,7 @@ export function loadConfig(argv: string[], env: Env = process.env, root = proces
   if (!pinHash && !pinPlain) throw new Error('no PIN configured: set FB_PIN_HASH_B64 (production) or --pin');
 
   let secretHex = env.FB_SECRET;
+  if (!secretHex && !dev && !pinPlain) throw new Error('FB_SECRET is not set (see deploy/remote-install.sh)');
   if (!secretHex) {
     // Development: a stable secret in .dev/ so cookies survive restarts.
     const file = join(root, '.dev', 'secret');

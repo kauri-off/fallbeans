@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun x tsc --noEmit
+      - run: bun x biome ci .
+      - run: bun x vitest run
+      - run: bun scripts/build.ts
+      - run: bun x playwright install --with-deps chromium
+      - run: bun x playwright test
+        env:
+          PW_CHANNEL: chromium
