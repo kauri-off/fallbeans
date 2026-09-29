@@ -10,6 +10,14 @@ interface Probe {
   drawCalls: number;
 }
 
+test.beforeEach(({ page }) => {
+  // Surface browser-side problems in the test output (CI has no screen to look at).
+  page.on('pageerror', (e) => console.log(`[pageerror] ${e.stack ?? e}`));
+  page.on('console', (m) => {
+    if (m.type() === 'error') console.log(`[console] ${m.text()} ${m.location().url}`);
+  });
+});
+
 const state = (page: Page) => page.evaluate(() => (window as unknown as { __fallbeans: { state(): Probe } }).__fallbeans.state());
 
 async function login(page: Page) {

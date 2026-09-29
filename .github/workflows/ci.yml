@@ -21,3 +21,9 @@ jobs:
       - run: bun x playwright test
         env:
           PW_CHANNEL: chromium
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright
+          path: test-results/
+          retention-days: 7
