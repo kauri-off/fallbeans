@@ -1,10 +1,28 @@
+# Dependencies and build output
 node_modules/
 dist/
 .build/
+
+# Local dev: self-signed certs, Claude Code session files
 .dev/
 .claude/
+
+# Tests
 test-results/
 playwright-report/
+blob-report/
+coverage/
+
+# Secrets and logs
+.env
+.env.*
+*.log
+*.pem
+*.key
+
+# Editors and OS
+.idea/
+.vscode/
 *.blend1
 .DS_Store
 Thumbs.db

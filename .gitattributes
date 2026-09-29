@@ -1,0 +1,12 @@
+# Keep LF everywhere: Biome expects it, and deploy/remote-install.sh runs on Linux.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+
+*.glb binary
+*.blend binary
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.ogg binary
+*.mp3 binary
+*.wav binary

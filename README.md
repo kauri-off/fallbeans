@@ -73,7 +73,7 @@
 | `src/games` | карты: `meta.ts` (описание) и `map.ts` (постройка, логика, бот) |
 | `src/server` | HTTP/WebSocket, WebTransport, PIN и билеты, лобби и игра, очки и титулы, авторитетная арена |
 | `src/client` | браузер: предсказание, интерполяция, рендер, ввод, интерфейс (Preact) |
-| `public` | модели (`models/*.glb`, из `blender/fallguys_assets.blend`), звуки, шрифты, страница PIN |
+| `public` | модели (`models/*.glb`, из `blender/fallguys_assets.blend`), шрифты, страница PIN |
 | `deploy` | nginx, systemd, установка на сервер |
 | `tests`, `e2e` | unit-тесты (Vitest) и сквозные тесты (Playwright) |
 

@@ -237,14 +237,23 @@ describe('room', () => {
   });
 
   it('practice rooms start immediately with bots and loop', () => {
-    const pr = new Room({ minPlayers: 1, practice: { game: 'jump-club', bots: 2 }, introMs: 100, clock, autoTick: false });
+    const pr = new Room({
+      minPlayers: 1,
+      practice: { game: 'jump-club', bots: 2 },
+      introMs: 100,
+      clock,
+      autoTick: false,
+      seed: 7,
+    });
     const a = new Client(pr).hello('A');
     expect(pr.phase).toBe('round');
     expect(a.last('arena')?.participants).toHaveLength(3);
-    advance(pr, 80_000);
+    // Stop right at the first round's end: rounds can be short (everyone falls), so the phase at a fixed time is not stable.
+    for (let t = 0; t < 80_000 && !a.last('roundEnd'); t += 100) advance(pr, 100);
     expect(a.last('roundEnd')?.practice).toBe(true);
+    const arenas = a.msgs.filter((m) => m.t === 'arena').length;
     advance(pr, 4000);
-    expect(pr.phase).toBe('round');
+    expect(a.msgs.filter((m) => m.t === 'arena').length).toBeGreaterThan(arenas);
     pr.dispose();
   });
 });
