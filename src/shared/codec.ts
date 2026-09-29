@@ -32,7 +32,7 @@ export const quantizeAxis = (v: number) => clampAxis(v * 127);
 export const axisValue = (q: number) => q / 127;
 const clampAxis = (q: number) => Math.max(-127, Math.min(127, Math.round(q) || 0));
 
-export function encodeInput(p: InputPacket): Uint8Array {
+export function encodeInput(p: InputPacket): Uint8Array<ArrayBuffer> {
   const n = Math.min(p.frames.length, MAX_INPUT_FRAMES);
   const buf = new ArrayBuffer(8 + 3 * n);
   const v = new DataView(buf);
@@ -111,7 +111,7 @@ const TAU = Math.PI * 2;
 const yawToU16 = (y: number) => Math.round((((y % TAU) + TAU) % TAU) * (65535 / TAU)) & 0xffff;
 const u16ToYaw = (q: number) => (q * TAU) / 65535;
 
-export function encodeSnapshot(s: Snapshot): Uint8Array {
+export function encodeSnapshot(s: Snapshot): Uint8Array<ArrayBuffer> {
   const size = 8 + (s.own ? 4 + FULL_BYTES : 0) + 1 + s.bodies.length * REMOTE_BYTES;
   const buf = new ArrayBuffer(size);
   const v = new DataView(buf);

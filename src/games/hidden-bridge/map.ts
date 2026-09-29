@@ -54,7 +54,7 @@ export default defineMap(meta, (b, ctx) => {
             if (!tile.trusted && ctx.server) ctx.emit('safe', { i: tile.i });
             return;
           }
-          if (tile.fallAt !== null) return;
+          if (tile.fallAt !== null || ctx.now() < 0) return;
           if (ctx.server) ctx.emit('tile', { i: tile.i, at: ctx.now() + FALL_DELAY });
           else tile.fallAt = ctx.now() + FALL_DELAY;
         };

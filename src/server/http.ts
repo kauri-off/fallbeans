@@ -25,7 +25,7 @@ const MIME: Record<string, string> = {
 /** Same headers nginx adds in production (deploy/nginx/fallbeans.conf). */
 export const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), gamepad=(self), fullscreen=(self)',
@@ -49,7 +49,8 @@ export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger
   const authed = (req: Request) => auth.validCookie(readCookie(req.headers.get('cookie'), COOKIE));
   const sameOrigin = (req: Request) => {
     const origin = req.headers.get('origin');
-    if (!origin) return true;
+    // Development goes through the Vite proxy, which rewrites Host.
+    if (!origin || cfg.dev) return true;
     try {
       return new URL(origin).host === (req.headers.get('x-forwarded-host') ?? req.headers.get('host'));
     } catch {

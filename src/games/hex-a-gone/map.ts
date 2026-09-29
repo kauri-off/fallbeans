@@ -44,7 +44,8 @@ export default defineMap(meta, (b, ctx) => {
           col: b.collider(b.anchor(x, y - THICK / 2, zz), { type: 'cyl', r: SIZE * 0.92, hh: THICK / 2 }, { isStatic: true }),
         };
         tile.col.onGround = () => {
-          if (tile.fallAt !== null) return;
+          // Nothing falls before the start.
+          if (tile.fallAt !== null || ctx.now() < 0) return;
           const at = ctx.now() + FALL_DELAY;
           if (ctx.server) ctx.emit('tile', { i: tile.i, at });
           else tile.fallAt = at;

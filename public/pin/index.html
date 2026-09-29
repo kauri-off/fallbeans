@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Fall Beans — вход</title>
+    <link rel="stylesheet" href="pin.css" />
+  </head>
+  <body>
+    <form class="card" id="form" autocomplete="off">
+      <h1>Fall Beans</h1>
+      <p>Введите PIN-код</p>
+      <div class="digits" id="digits">
+        <input inputmode="numeric" maxlength="4" aria-label="Цифра 1" />
+        <input inputmode="numeric" maxlength="4" aria-label="Цифра 2" />
+        <input inputmode="numeric" maxlength="4" aria-label="Цифра 3" />
+        <input inputmode="numeric" maxlength="4" aria-label="Цифра 4" />
+      </div>
+      <p class="msg" id="msg" role="status"></p>
+      <button type="submit" id="go">Войти</button>
+      <p class="small">В этом браузере PIN запомнится.</p>
+    </form>
+    <script src="pin.js"></script>
+  </body>
+</html>
