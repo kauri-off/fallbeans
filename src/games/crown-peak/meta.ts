@@ -1,0 +1,12 @@
+import { defineGame } from '../../shared/game';
+
+export default defineGame({
+  id: 'crown-peak',
+  title: 'Гора короны',
+  genre: 'final',
+  rules: 'raceFinal',
+  desc: 'Карабкайтесь на вершину сквозь молоты, шары и вертушки. Первый, кто схватит корону, — победитель!',
+  goal: 'Схватите корону первым',
+  duration: 240,
+  finishZ: 118,
+});
