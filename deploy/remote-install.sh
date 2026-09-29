@@ -162,6 +162,8 @@ echo "Сервер игры обновлён: $R ($(cat "$R/VERSION" 2>/dev/null
 # ------------------------------------------------------------------ checks from outside
 
 say "Проверка снаружи"
+# nginx reload is asynchronous: give the new workers a moment.
+sleep 2
 code() { curl -sS -o /dev/null -w '%{http_code}' -m 20 "$1" || true; }
 status=0
 check() {
