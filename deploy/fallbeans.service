@@ -1,0 +1,13 @@
+[Unit]
+Description=Fall Beans game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/fallbeans/FallBeans-linux-x64 --port 7777
+Restart=always
+RestartSec=2
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target
