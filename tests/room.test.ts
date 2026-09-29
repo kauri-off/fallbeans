@@ -1,188 +1,267 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Room, type Session } from '../src/server/room';
-import { PROTOCOL_VERSION } from '../src/shared/consts';
-import type { ClientMsg, ServerMsg, ServerMsgOf } from '../src/shared/protocol';
+import * as THREE from 'three';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Auth } from '../src/server/auth';
+import { Gateway } from '../src/server/gateway';
+import { type Conn, Room } from '../src/server/room';
+import { BTN, decodeSnapshot, encodeInput, type Snapshot } from '../src/shared/codec';
+import { PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
+import type { ServerMsg, ServerMsgOf } from '../src/shared/protocol';
 
-class Client {
+let now = 0;
+const clock = () => now;
+
+class Client implements Conn {
+  readonly kind = 'ws' as const;
+  readonly ip = '127.0.0.1';
   msgs: ServerMsg[] = [];
+  snaps: Snapshot[] = [];
   closed = false;
-  session: Session;
-  constructor(room: Room) {
-    this.session = room.open({ send: (m) => this.msgs.push(structuredClone(m)), close: () => (this.closed = true) });
+  id = -1;
+  constructor(readonly room: Room) {}
+  send(m: ServerMsg) {
+    this.msgs.push(structuredClone(m));
   }
-  send(m: ClientMsg | Record<string, unknown>) {
-    this.session.message(JSON.stringify(m));
+  datagram(d: Uint8Array) {
+    const s = decodeSnapshot(d);
+    if (s) this.snaps.push(s);
+  }
+  close() {
+    this.closed = true;
   }
   hello(name: string, token?: string) {
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, name, token });
+    const id = this.room.join(this, { t: 'hello', v: PROTOCOL_VERSION, name, ticket: 'x', ...(token ? { token } : {}) });
+    if (id !== null) this.id = id;
     return this;
+  }
+  ctl(m: Parameters<Room['control']>[2]) {
+    this.room.control(this.id, this, m);
   }
   last<T extends ServerMsg['t']>(t: T): ServerMsgOf<T> | undefined {
     return this.msgs.filter((m): m is ServerMsgOf<T> => m.t === t).at(-1);
   }
-  get id() {
-    return this.last('welcome')!.id;
+  /** Sends inputs for the next `ticks` ticks (as a client running just ahead of the server). */
+  input(buttons: number, mz: number, ticks = 8) {
+    const a = this.room.arena;
+    const frames = Array.from({ length: ticks }, (_, i) => ({ mx: 0, mz, buttons: i === 0 ? buttons : buttons & BTN.grab }));
+    this.room.datagram(this.id, this, encodeInput({ arena: a.id, firstTick: a.tick + 1, frames }));
+  }
+}
+
+function advance(room: Room, ms: number) {
+  const end = now + ms;
+  while (now < end) {
+    now = Math.min(end, now + 16);
+    room.update(now);
   }
 }
 
 let room: Room;
 beforeEach(() => {
-  vi.useFakeTimers();
-  room = new Room({ minPlayers: 2, seed: 7, introMs: 1000 });
+  now = 1000;
+  room = new Room({ minPlayers: 2, seed: 7, introMs: 1000, clock, autoTick: false });
 });
-afterEach(() => {
-  room.dispose();
-  vi.useRealTimers();
-});
+afterEach(() => room.dispose());
 
 describe('room', () => {
-  it('assigns host, colors and rejects bad versions', () => {
+  it('assigns host and colors, and puts players into the lobby world', () => {
     const a = new Client(room).hello('Аня');
     const b = new Client(room).hello('Боря');
     const lobby = b.last('lobby')!;
     expect(lobby.host).toBe(a.id);
     expect(new Set(lobby.players.map((p) => p.color)).size).toBe(2);
-    const old = new Client(room);
-    old.send({ t: 'hello', v: 1, name: 'x' });
-    expect(old.last('reject')?.reason).toBe('version');
-    expect(old.closed).toBe(true);
+    expect(b.last('arena')?.kind).toBe('lobby');
+    advance(room, 200);
+    expect(a.snaps.at(-1)?.own).not.toBeNull();
+    expect(a.snaps.at(-1)?.bodies.map((x) => x.id)).toEqual([b.id]);
   });
 
-  it('ignores malformed messages', () => {
+  it('moves players only through their inputs (server authority)', () => {
     const a = new Client(room).hello('A');
-    a.session.message('not json');
-    a.send({ t: 's', p: [Number.NaN, 0, 0], r: 0, a: 0 });
-    a.send({ t: 'color', c: '#000000' });
-    a.send({ t: 'nonsense' });
-    expect(room.players.get(a.id)?.state).toBeNull();
+    const b = new Client(room).hello('B');
+    advance(room, 500);
+    const pa = room.arena.pawns.get(a.id)!;
+    const pb = room.arena.pawns.get(b.id)!;
+    // Out of reach of the lobby rotor.
+    pa.body.reset(new THREE.Vector3(-3, 0.05, -12));
+    pb.body.reset(new THREE.Vector3(3, 0.05, -12.5));
+    advance(room, 300);
+    const startA = pa.body.pos.clone();
+    const startB = pb.body.pos.clone();
+    for (let i = 0; i < 6; i++) {
+      a.input(0, 127, 12);
+      advance(room, 50);
+    }
+    expect(pa.ack).toBeGreaterThan(room.arena.tick - 8);
+    expect(pa.body.pos.distanceTo(startA)).toBeGreaterThan(1);
+    expect(pb.body.pos.distanceTo(startB)).toBeLessThan(0.2);
   });
 
-  it('only host starts and only with enough players', () => {
+  it('rejects inputs for the wrong arena or too far ahead', () => {
     const a = new Client(room).hello('A');
-    a.send({ t: 'start' });
+    const arena = room.arena;
+    expect(
+      arena.input(a.id, { arena: arena.id + 1, firstTick: arena.tick + 1, frames: [{ mx: 0, mz: 0, buttons: 0 }] }, now),
+    ).toBe(false);
+    expect(arena.input(a.id, { arena: arena.id, firstTick: arena.tick + 500, frames: [{ mx: 0, mz: 0, buttons: 0 }] }, now)).toBe(
+      false,
+    );
+    expect(arena.input(a.id, { arena: arena.id, firstTick: arena.tick + 1, frames: [{ mx: 0, mz: 0, buttons: 0 }] }, now)).toBe(
+      true,
+    );
+  });
+
+  it('only the host starts, and only with enough players', () => {
+    const a = new Client(room).hello('A');
+    a.ctl({ t: 'start' });
     expect(room.phase).toBe('lobby');
     const b = new Client(room).hello('B');
-    b.send({ t: 'start' });
+    b.ctl({ t: 'start' });
     expect(room.phase).toBe('lobby');
-    a.send({ t: 'start' });
+    a.ctl({ t: 'start' });
     expect(room.phase).toBe('round');
-    expect(b.last('round')?.participants.sort()).toEqual([a.id, b.id].sort());
+    expect(b.last('arena')?.participants.sort()).toEqual([a.id, b.id].sort());
   });
 
-  it('bots count as players and are driven by the host', () => {
-    const a = new Client(room).hello('A');
-    a.send({ t: 'addBot' });
-    const bot = a.last('lobby')!.players.find((p) => p.bot)!;
-    expect(bot.owner).toBe(a.id);
-    a.send({ t: 'start' });
-    expect(room.phase).toBe('round');
-    a.send({ t: 's', p: [1, 2, 3], r: 0, a: 0, as: bot.id });
-    expect(room.players.get(bot.id)?.state?.p).toEqual([1, 2, 3]);
-    const b = new Client(room).hello('B');
-    b.send({ t: 's', p: [9, 9, 9], r: 0, a: 0, as: bot.id });
-    expect(room.players.get(bot.id)?.state?.p).toEqual([1, 2, 3]);
-  });
-
-  it('runs a full show to a winner', () => {
+  it('runs a show to a winner with server-decided eliminations', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');
     room.playlist = { mode: 'custom', games: ['jump-club'], final: 'hex-a-gone' };
-    a.send({ t: 'start' });
-    expect(a.last('round')?.game).toBe('jump-club');
-    vi.advanceTimersByTime(1500);
-    a.send({ t: 'out' });
-    expect(room.phase).toBe('round');
-    vi.advanceTimersByTime(80_000);
-    expect(room.phase).toBe('results');
-    vi.advanceTimersByTime(7000);
-    expect(a.last('round')?.game).toBe('hex-a-gone');
-    vi.advanceTimersByTime(1500);
-    b.send({ t: 'out' });
-    expect(room.phase).toBe('winner');
+    a.ctl({ t: 'start' });
+    expect(a.last('arena')?.game).toBe('jump-club');
+    const until = (cond: () => boolean, ms: number, each?: () => void) => {
+      for (let t = 0; t < ms && !cond(); t += 50) {
+        each?.();
+        advance(room, 50);
+      }
+      expect(cond()).toBe(true);
+    };
+    // B walks off the edge; the server notices, not the client.
+    advance(room, 1100);
+    until(
+      () => room.arena.out.includes(b.id),
+      5000,
+      () => b.input(0, 127, 12),
+    );
+    until(() => room.phase === 'results', 80_000);
+    until(() => room.arena.module.meta.id === 'hex-a-gone', 8000);
+    advance(room, 1100);
+    until(
+      () => room.phase === 'winner',
+      8000,
+      () => {
+        b.input(0, 127, 12);
+        a.input(BTN.jump, 0, 12);
+      },
+    );
     expect(a.last('winner')?.id).toBe(a.id);
-    vi.advanceTimersByTime(12_000);
+    advance(room, 12_000);
     expect(room.phase).toBe('lobby');
     expect(a.last('lobby')?.players.find((p) => p.id === a.id)?.crowns).toBe(1);
   });
 
-  it('eliminates in races and validates finish position', () => {
-    const cs = ['A', 'B', 'C', 'D'].map((n) => new Client(room).hello(n));
-    room.playlist = { mode: 'custom', games: ['door-dash', 'jump-club'], final: 'hex-a-gone' };
-    cs[0]!.send({ t: 'start' });
-    const r = cs[0]!.last('round')!;
-    expect(r.eliminate).toBe(1);
-    vi.advanceTimersByTime(1500);
-    cs[0]!.send({ t: 'finish' });
-    expect(cs[0]!.last('fin')).toBeUndefined();
-    for (const c of cs.slice(0, 3)) {
-      c.send({ t: 's', p: [0, 4, 171], r: 0, a: 0 });
-      c.send({ t: 'finish' });
-    }
-    expect(room.phase).toBe('results');
-    const end = cs[0]!.last('roundEnd')!;
-    expect(end.ranking.filter((e) => !e.ok).map((e) => e.id)).toEqual([cs[3]!.id]);
+  it('bots count as players and are simulated on the server', () => {
+    const a = new Client(room).hello('A');
+    a.ctl({ t: 'addBot' });
+    const bot = a.last('lobby')!.players.find((p) => p.bot)!;
+    room.playlist = { mode: 'custom', games: ['door-dash'], final: 'random' };
+    a.ctl({ t: 'start' });
+    expect(room.phase).toBe('round');
+    advance(room, 6000);
+    expect(room.arena.pawns.get(bot.id)!.progress).toBeGreaterThan(5);
   });
 
   it('keeps disconnected players during a show and resumes by token', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');
-    a.send({ t: 'start' });
+    a.ctl({ t: 'start' });
     const token = b.last('welcome')!.token;
-    b.session.close();
+    room.leave(b.id, b);
     expect(room.players.has(b.id)).toBe(true);
     expect(room.host).toBe(a.id);
     const b2 = new Client(room).hello('B', token);
     expect(b2.last('welcome')).toMatchObject({ id: b.id, resumed: true });
-    expect(b2.last('round')?.late).toBe(true);
+    expect(b2.last('arena')?.late).toBe(true);
   });
 
   it('drops disconnected players after the grace period', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');
-    a.send({ t: 'start' });
-    b.session.close();
-    vi.advanceTimersByTime(31_000);
+    a.ctl({ t: 'start' });
+    room.leave(b.id, b);
+    advance(room, 31_000);
     expect(room.players.has(b.id)).toBe(false);
   });
 
-  it('transfers host and bots when the host leaves the lobby', () => {
+  it('transfers host when the host leaves the lobby', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');
-    a.send({ t: 'addBot' });
-    a.session.close();
-    const lobby = b.last('lobby')!;
-    expect(lobby.host).toBe(b.id);
-    expect(lobby.players.find((p) => p.bot)?.owner).toBe(b.id);
+    a.ctl({ t: 'addBot' });
+    room.leave(a.id, a);
+    expect(b.last('lobby')!.host).toBe(b.id);
   });
 
-  it('tail tag steals only within range', () => {
+  it('tail tag steals only by grabbing within reach', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');
     room.playlist = { mode: 'custom', games: ['tail-tag'], final: 'random' };
-    a.send({ t: 'start' });
-    const tails = a.last('round')!.events.find((e) => e[0] === 'tails')![1] as { ids: number[] };
-    expect(tails.ids).toHaveLength(1);
-    const holder = tails.ids[0] === a.id ? a : b;
-    const thief = holder === a ? b : a;
-    vi.advanceTimersByTime(1500);
-    holder.send({ t: 's', p: [0, 0, 0], r: 0, a: 0 });
-    thief.send({ t: 's', p: [10, 0, 0], r: 0, a: 0 });
-    thief.send({ t: 'ev', n: 'steal', d: { from: holder.id } });
-    expect(thief.last('ev')).toBeUndefined();
-    thief.send({ t: 's', p: [1, 0, 0], r: 0, a: 0 });
-    thief.send({ t: 'ev', n: 'steal', d: { from: holder.id } });
-    expect(thief.last('ev')).toMatchObject({ n: 'tails', d: { ids: [thief.id] } });
+    a.ctl({ t: 'start' });
+    advance(room, 1100);
+    const pa = room.arena.pawns.get(a.id)!;
+    const pb = room.arena.pawns.get(b.id)!;
+    // Put them face to face; whoever has no tail grabs.
+    pa.body.pos.set(0, 1.6, 0);
+    pb.body.pos.set(0, 1.6, 1);
+    pa.body.yaw = 0;
+    pb.body.yaw = Math.PI;
+    expect(a.last('ev')).toBeUndefined();
+    a.input(BTN.grab, 0, 4);
+    b.input(BTN.grab, 0, 4);
+    advance(room, 60);
+    const ev = a.last('ev');
+    expect(ev?.n).toBe('tails');
   });
 
   it('practice rooms start immediately with bots and loop', () => {
-    const pr = new Room({ minPlayers: 1, practice: { game: 'tail-tag', bots: 0 }, introMs: 100 });
+    const pr = new Room({ minPlayers: 1, practice: { game: 'jump-club', bots: 2 }, introMs: 100, clock, autoTick: false });
     const a = new Client(pr).hello('A');
     expect(pr.phase).toBe('round');
-    expect(a.last('round')?.participants).toHaveLength(2);
-    vi.advanceTimersByTime(80_000);
+    expect(a.last('arena')?.participants).toHaveLength(3);
+    advance(pr, 80_000);
     expect(a.last('roundEnd')?.practice).toBe(true);
-    vi.advanceTimersByTime(4000);
+    advance(pr, 4000);
     expect(pr.phase).toBe('round');
     pr.dispose();
+  });
+});
+
+describe('gateway', () => {
+  it('requires a valid ticket and protocol version', () => {
+    const auth = new Auth(Buffer.alloc(32, 1), async () => true);
+    const g = new Gateway(auth, { info() {}, warn() {} }, { minPlayers: 2, clock, autoTick: false });
+    const c = new Client(g.main);
+    const s = g.open(c);
+    s.control(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'x', ticket: 'forged' }));
+    expect(c.last('reject')?.reason).toBe('auth');
+    const c2 = new Client(g.main);
+    g.open(c2).control(JSON.stringify({ t: 'hello', v: 1, name: 'x', ticket: auth.issueTicket() }));
+    expect(c2.last('reject')?.reason).toBe('version');
+    const c3 = new Client(g.main);
+    const s3 = g.open(c3);
+    s3.control('not json');
+    s3.control(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'ok', ticket: auth.issueTicket() }));
+    expect(c3.last('welcome')).toBeDefined();
+    const c4 = new Client(g.main);
+    g.open(c4).control(
+      JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'p', ticket: auth.issueTicket(), practice: 'hex-a-gone' }),
+    );
+    expect(g.practice.size).toBe(1);
+    expect(c4.last('arena')?.game).toBe('hex-a-gone');
+    g.dispose();
+  });
+});
+
+describe('timing', () => {
+  it('uses a 120 Hz tick', () => {
+    expect(TICK_MS).toBeCloseTo(8.333, 2);
   });
 });

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .build/
+.dev/
 test-results/
 playwright-report/
 .playwright-mcp/
@@ -8,3 +9,4 @@ playwright-report/
 .env.*
 !.env.example
 .DS_Store
+.claude/

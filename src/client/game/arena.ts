@@ -1,0 +1,351 @@
+import * as THREE from 'three';
+import { getMap } from '../../games';
+import {
+  type BodyFullState,
+  BTN,
+  encodeInput,
+  type InputFrame,
+  quantizeAxis,
+  type RemoteState,
+  type Snapshot,
+} from '../../shared/codec';
+import { ANIM, DT, INPUT_EVERY, INPUT_REDUNDANCY, SNAPSHOT_EVERY, TICK_MS } from '../../shared/consts';
+import type { ArenaInfo } from '../../shared/protocol';
+import { Builder } from '../../sim/builder';
+import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
+import { type OtherBody, PlayerBody } from '../../sim/physics';
+import { ClientView, timeUniform } from './view';
+
+const IDLE: InputFrame = { mx: 0, mz: 0, buttons: 0 };
+const MAX_HISTORY = 240;
+
+interface Frame {
+  tick: number;
+  bodies: Map<number, RemoteState>;
+}
+
+export interface RemotePose {
+  pos: THREE.Vector3;
+  yaw: number;
+  anim: number;
+  grab: boolean;
+}
+
+export interface ArenaHost {
+  myId: number;
+  sfx(s: MapSfx): void;
+  decorate(id: number, deco: { tail?: boolean }): void;
+  send(data: Uint8Array<ArrayBuffer>): void;
+  /** Server clock (ms). */
+  serverNow(): number;
+  rtt(): number;
+}
+
+/**
+ * One map on the client: built with a view, the local bean predicted at 120 Hz from local input and
+ * corrected from server snapshots (replaying unacknowledged inputs); other beans interpolated.
+ */
+export class ClientArena {
+  readonly mod: MapModule;
+  readonly builder: Builder;
+  readonly spec: MapSpec;
+  readonly scores = new Map<number, number>();
+  readonly finished = new Set<number>();
+  readonly out = new Set<number>();
+  /** Local predicted body, while the local player is in play. */
+  body: PlayerBody | null = null;
+  predTick: number;
+  private readonly history = new Map<number, InputFrame>();
+  private readonly prevPos = new THREE.Vector3();
+  private prevYaw = 0;
+  /** Prediction error being smoothed away (render position = predicted + offset). */
+  readonly offset = new THREE.Vector3();
+  private lead: number;
+  private readonly frames: Frame[] = [];
+  private lastArrival = 0;
+  private jitter = 8;
+  private readonly bodies = new Map<number, PlayerBody>();
+  private othersNow: OtherBody[] = [];
+  /** Local body events since the last read (sounds, effects). */
+  events = { jumped: false, bounced: false, hit: false, landed: 0, dived: false };
+  teleported = false;
+  corrections = 0;
+
+  constructor(
+    readonly info: ArenaInfo,
+    scene: THREE.Scene,
+    private readonly host: ArenaHost,
+  ) {
+    const mod = getMap(info.game);
+    if (!mod) throw new Error(`unknown map ${info.game}`);
+    this.mod = mod;
+    this.builder = new Builder(info.seed, new ClientView());
+    for (const [id, v] of info.scores) this.scores.set(id, v);
+    for (const id of info.finished) this.finished.add(id);
+    for (const id of info.out) this.out.add(id);
+    const ctx: MapCtx = {
+      server: false,
+      seed: info.seed,
+      participants: info.participants,
+      now: () => this.builder.world.t,
+      emit: () => {},
+      score: (id) => this.scores.get(id) ?? 0,
+      setScore: () => {},
+      bodies: () => this.bodies,
+      sfx: (s) => host.sfx(s),
+      me: () => host.myId,
+      decorate: (id, d) => host.decorate(id, d),
+    };
+    this.spec = mod.build(this.builder, ctx);
+    const now = host.serverNow();
+    this.predTick = Math.floor(this.tickAt(now)) - 1;
+    this.builder.world.finalize(this.predTick * DT);
+    scene.add(this.builder.group);
+    for (const [name, data] of info.events) this.spec.onEvent?.(name, data);
+    this.lead = host.rtt() / 2 + 30;
+  }
+
+  get kind() {
+    return this.info.kind;
+  }
+
+  tickAt(serverMs: number) {
+    return (serverMs - this.info.startAt) / TICK_MS;
+  }
+
+  /** Spawn pose for the local player: the server sends the real one with the first snapshot. */
+  spawn(index: number): { pos: THREE.Vector3; yaw: number } {
+    const s = this.spec.spawns;
+    const pos = (s[index % Math.max(1, s.length)] ?? new THREE.Vector3()).clone();
+    const yaw = this.spec.faceCenter ? Math.atan2(-pos.x, -pos.z) : 0;
+    return { pos, yaw };
+  }
+
+  /** Starts predicting the local player (they have a pawn on the server). */
+  play(myId: number) {
+    const b = new PlayerBody(myId);
+    const i = Math.max(0, this.info.participants.indexOf(myId));
+    const { pos, yaw } = this.spawn(this.info.kind === 'lobby' ? i : i);
+    b.reset(pos, yaw);
+    this.body = b;
+    this.bodies.set(myId, b);
+    this.prevPos.copy(pos);
+    this.prevYaw = yaw;
+  }
+
+  stopPlaying() {
+    if (this.body) this.bodies.delete(this.body.actor);
+    this.body = null;
+  }
+
+  // ------------------------------------------------------------------ prediction
+
+  private stepOwn(tick: number, f: InputFrame, others: readonly OtherBody[], replay: boolean) {
+    const b = this.body!;
+    const world = this.builder.world;
+    const t = tick * DT;
+    if (!replay) {
+      this.prevPos.copy(b.pos);
+      this.prevYaw = b.yaw;
+    }
+    b.clearEvents();
+    b.beforeWorldUpdate();
+    world.setTime(t);
+    b.afterWorldUpdate();
+    const wasGrounded = b.grounded;
+    const wasDive = b.state === 'dive';
+    b.step(
+      DT,
+      { mx: f.mx / 127, mz: f.mz / 127, jump: (f.buttons & BTN.jump) !== 0, dive: (f.buttons & BTN.dive) !== 0 },
+      world,
+      t,
+      others,
+    );
+    if (!replay) {
+      if (b.jumped) this.events.jumped = true;
+      if (b.bounced) this.events.bounced = true;
+      if (b.stunned) this.events.hit = true;
+      if (!wasDive && b.state === 'dive') this.events.dived = true;
+      if (!wasGrounded && b.grounded && b.landImpact > 0.3) this.events.landed = Math.max(this.events.landed, b.landImpact);
+    }
+  }
+
+  /**
+   * Advances prediction to the current input tick, sampling input per tick.
+   * `sample` returns camera-relative input already converted to world space.
+   */
+  predict(sample: () => { mx: number; mz: number; jump: boolean; dive: boolean; grab: boolean }) {
+    const now = this.host.serverNow();
+    const target = Math.floor(this.tickAt(now + this.lead));
+    if (!this.body) {
+      // Spectating: the world simply follows server time.
+      const t = Math.floor(this.tickAt(now));
+      if (t > this.predTick) {
+        this.predTick = t;
+        this.builder.world.setTime(t * DT);
+      }
+      return;
+    }
+    if (target - this.predTick > 60) this.predTick = target - 1;
+    while (this.predTick < target) {
+      const k = ++this.predTick;
+      const s = sample();
+      const f: InputFrame = {
+        mx: quantizeAxis(s.mx),
+        mz: quantizeAxis(s.mz),
+        buttons: (s.jump ? BTN.jump : 0) | (s.dive ? BTN.dive : 0) | (s.grab ? BTN.grab : 0),
+      };
+      this.history.set(k, f);
+      this.history.delete(k - MAX_HISTORY);
+      this.stepOwn(k, f, this.othersNow, false);
+      if (k % INPUT_EVERY === 0) this.sendInputs(k);
+    }
+  }
+
+  private sendInputs(upTo: number) {
+    const first = upTo - INPUT_REDUNDANCY + 1;
+    const frames: InputFrame[] = [];
+    for (let k = first; k <= upTo; k++) frames.push(this.history.get(k) ?? IDLE);
+    this.host.send(encodeInput({ arena: this.info.id, firstTick: first, frames }));
+  }
+
+  // ------------------------------------------------------------------ snapshots
+
+  onSnapshot(s: Snapshot) {
+    if (s.arena !== this.info.id) return;
+    const arrival = performance.now();
+    if (this.lastArrival) {
+      const expected = SNAPSHOT_EVERY * TICK_MS;
+      this.jitter += (Math.abs(arrival - this.lastArrival - expected) - this.jitter) * 0.1;
+    }
+    this.lastArrival = arrival;
+    const bodies = new Map(s.bodies.map((b) => [b.id, b]));
+    if (!this.frames.length || s.tick > this.frames.at(-1)!.tick) this.frames.push({ tick: s.tick, bodies });
+    while (this.frames.length > 40) this.frames.shift();
+    this.othersNow = s.bodies.map((b) => ({ id: b.id, x: b.x, y: b.y, z: b.z, touching: false }));
+    if (s.own && this.body) this.reconcile(s.tick, s.own.ack, s.own.s);
+  }
+
+  private reconcile(tick: number, ack: number, st: BodyFullState) {
+    const b = this.body!;
+    // Our inputs reach the server too late: run further ahead. On time: creep back.
+    const rttHalf = this.host.rtt() / 2;
+    if (ack < tick) this.lead = Math.min(rttHalf + 250, this.lead + 6);
+    else this.lead = Math.max(rttHalf + 12, this.lead - 0.3);
+    const world = this.builder.world;
+    if (tick >= this.predTick) {
+      b.fromFull(st, world);
+      this.predTick = tick;
+      world.setTime(tick * DT);
+      this.offset.set(0, 0, 0);
+      this.prevPos.copy(b.pos);
+      this.teleported ||= st.teleport;
+      return;
+    }
+    const before = b.pos.clone();
+    b.fromFull(st, world);
+    world.setTime((tick - 1) * DT);
+    world.setTime(tick * DT);
+    for (let k = tick + 1; k <= this.predTick; k++) this.stepOwn(k, this.history.get(k) ?? IDLE, this.othersNow, true);
+    for (const k of this.history.keys()) if (k <= tick - 30) this.history.delete(k);
+    const err = before.sub(b.pos);
+    if (st.teleport || err.length() > 3) {
+      this.offset.set(0, 0, 0);
+      this.prevPos.copy(b.pos);
+      if (st.teleport) this.teleported = true;
+    } else {
+      if (err.lengthSq() > 1e-6) this.corrections++;
+      this.offset.add(err);
+    }
+  }
+
+  // ------------------------------------------------------------------ rendering
+
+  /** Render time of the local prediction (for movers and effects). */
+  renderTick(): number {
+    const now = this.host.serverNow();
+    if (!this.body) return this.tickAt(now);
+    const frac = Math.min(1, Math.max(0, this.tickAt(now + this.lead) - this.predTick));
+    return this.predTick - 1 + frac;
+  }
+
+  /** Local bean pose, interpolated between the last two predicted ticks, with error smoothing. */
+  ownPose(dt: number, out: THREE.Vector3): number {
+    const b = this.body!;
+    const alpha = THREE.MathUtils.clamp(this.renderTick() - (this.predTick - 1), 0, 1);
+    this.offset.multiplyScalar(Math.exp(-dt * 12));
+    out.lerpVectors(this.prevPos, b.pos, alpha).add(this.offset);
+    let dy = b.yaw - this.prevYaw;
+    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    return this.prevYaw + dy * alpha;
+  }
+
+  /** Interpolation delay for other beans: two snapshot intervals plus measured jitter. */
+  private interpDelayTicks() {
+    return (SNAPSHOT_EVERY * TICK_MS * 2 + this.jitter * 2) / TICK_MS;
+  }
+
+  remotePoses(): Map<number, RemotePose> {
+    const out = new Map<number, RemotePose>();
+    if (!this.frames.length) return out;
+    const r = this.tickAt(this.host.serverNow()) - this.interpDelayTicks();
+    let i = this.frames.length - 1;
+    while (i > 0 && this.frames[i]!.tick > r) i--;
+    const a = this.frames[i]!;
+    const b = this.frames[i + 1];
+    for (const [id, sa] of a.bodies) {
+      const sb = b?.bodies.get(id);
+      let pos: THREE.Vector3;
+      let yaw = sa.yaw;
+      let anim = sa.anim;
+      let flags = sa.flags;
+      if (sb && b) {
+        const f = THREE.MathUtils.clamp((r - a.tick) / (b.tick - a.tick), 0, 1);
+        pos = new THREE.Vector3(sa.x + (sb.x - sa.x) * f, sa.y + (sb.y - sa.y) * f, sa.z + (sb.z - sa.z) * f);
+        let dy = sb.yaw - sa.yaw;
+        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        yaw = sa.yaw + dy * f;
+        if (f > 0.5) {
+          anim = sb.anim;
+          flags = sb.flags;
+        }
+      } else pos = new THREE.Vector3(sa.x, sa.y, sa.z);
+      out.set(id, { pos, yaw, anim, grab: (flags & 1) !== 0 });
+    }
+    // Newest frame for beans that just appeared.
+    const last = this.frames.at(-1)!;
+    for (const [id, s] of last.bodies)
+      if (!out.has(id))
+        out.set(id, { pos: new THREE.Vector3(s.x, s.y, s.z), yaw: s.yaw, anim: s.anim, grab: (s.flags & 1) !== 0 });
+    return out;
+  }
+
+  /** Positions movers and runs visual animations for render time `t` (seconds). */
+  animate(t: number, dt: number) {
+    const world = this.builder.world;
+    // Movers for the smooth rendered time; collision matrices keep the last simulated tick.
+    for (const m of world.movers) m(t);
+    for (const a of this.builder.anims) a(t, dt);
+    timeUniform.value = t;
+  }
+
+  ownAnim(grabbing: boolean): number {
+    const b = this.body;
+    if (!b) return ANIM.idle;
+    if (b.state === 'stun') return ANIM.stun;
+    if (b.state === 'dive') return ANIM.dive;
+    if (b.state === 'slide') return ANIM.slide;
+    if (!b.grounded) return ANIM.air;
+    return grabbing ? ANIM.grab : ANIM.idle;
+  }
+
+  takeEvents() {
+    const e = this.events;
+    this.events = { jumped: false, bounced: false, hit: false, landed: 0, dived: false };
+    return e;
+  }
+
+  dispose() {
+    this.builder.dispose();
+  }
+}

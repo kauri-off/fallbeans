@@ -1,5 +1,5 @@
-import type { RankEntry } from './protocol';
 import type { RuleKind } from './game';
+import type { RankEntry } from './protocol';
 import { type Rng, shuffle } from './rng';
 
 export interface RoundView {
@@ -29,11 +29,20 @@ export interface Rule {
 const connectedParts = (r: RoundView) => r.participants.filter(r.connected);
 const remaining = (r: RoundView) => connectedParts(r).filter((id) => !r.finished.includes(id) && !r.out.includes(id));
 
-function split(order: number[], keep: number, points: (id: number, i: number) => number, note: (id: number, ok: boolean) => string) {
+function split(
+  order: number[],
+  keep: number,
+  points: (id: number, i: number) => number,
+  note: (id: number, ok: boolean) => string,
+) {
   return order.map((id, i) => {
     const ok = i < keep;
     return { id, ok, points: points(id, i), note: note(id, ok) };
   });
+}
+
+function withWinner(ranking: RankEntry[], winner: number | undefined): Outcome {
+  return winner === undefined ? { ranking } : { ranking, winner };
 }
 
 const race: Rule = {
@@ -115,16 +124,15 @@ const lastStanding: Rule = {
     const rem = shuffle(remaining(r), rng);
     const outs = r.out.filter((id) => parts.includes(id)).reverse();
     const order = [...rem, ...outs];
-    const winner = order[0];
-    return {
-      winner,
-      ranking: split(
+    return withWinner(
+      split(
         order,
         1,
         (_id, i) => (i === 0 ? 10 : 0),
         (_id, ok) => (ok ? 'победитель' : 'упал'),
       ),
-    };
+      order[0],
+    );
   },
 };
 
@@ -138,15 +146,15 @@ const raceFinal: Rule = {
     const fin = r.finished.filter((id) => parts.includes(id));
     const rest = parts.filter((id) => !fin.includes(id)).sort((a, b) => r.progress(b) - r.progress(a));
     const order = [...fin, ...rest];
-    return {
-      winner: order[0],
-      ranking: split(
+    return withWinner(
+      split(
         order,
         1,
         (_id, i) => (i === 0 ? 10 : 0),
         (_id, ok) => (ok ? 'схватил корону' : ''),
       ),
-    };
+      order[0],
+    );
   },
 };
 

@@ -1,6 +1,6 @@
 {
   "name": "fall-beans",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,11 +14,12 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "check": "tsc --noEmit && biome check . && vitest run",
-    "new-game": "bun scripts/new-game.ts"
+    "new-game": "bun scripts/new-game.ts",
+    "deploy": "bun scripts/deploy.ts"
   },
   "dependencies": {
     "@preact/signals": "^2.11.2",
-    "lil-gui": "^0.21.0",
+    "@webtransport-bun/webtransport": "0.3.0",
     "preact": "^10.29.8",
     "three": "^0.186.1",
     "zod": "^4.6.5"

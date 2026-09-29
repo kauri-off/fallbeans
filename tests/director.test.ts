@@ -17,7 +17,8 @@ describe('director', () => {
   });
 
   it('never eliminates more than half the players in a round', () => {
-    for (let alive = 2; alive <= 8; alive++) for (let k = 1; k <= 4; k++) expect(eliminationFor(alive, k, 8)).toBeLessThanOrEqual(alive / 2);
+    for (let alive = 2; alive <= 8; alive++)
+      for (let k = 1; k <= 4; k++) expect(eliminationFor(alive, k, 8)).toBeLessThanOrEqual(alive / 2);
   });
 
   it('plans non-final rounds followed by exactly one final', () => {
@@ -25,7 +26,9 @@ describe('director', () => {
     for (let n = 1; n <= 8; n++) {
       const plan = planShow(n, DEFAULT_PLAYLIST, rng);
       expect(plan).toHaveLength(nonFinalCount(n) + 1);
-      plan.forEach((id, i) => expect(getGame(id)?.genre === 'final').toBe(i === plan.length - 1));
+      plan.forEach((id, i) => {
+        expect(getGame(id)?.genre === 'final').toBe(i === plan.length - 1);
+      });
     }
   });
 
@@ -34,7 +37,7 @@ describe('director', () => {
     for (let i = 0; i < 50; i++) {
       expect(planShow(1, DEFAULT_PLAYLIST, rng)).not.toContain('tail-tag');
       const races = planShow(5, { ...DEFAULT_PLAYLIST, mode: 'races' }, rng);
-      races.slice(0, -1).forEach((id) => expect(getGame(id)?.genre).toBe('race'));
+      for (const id of races.slice(0, -1)) expect(getGame(id)?.genre).toBe('race');
     }
   });
 

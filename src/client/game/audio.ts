@@ -1,4 +1,17 @@
-export type Sfx = 'jump' | 'dive' | 'hit' | 'boing' | 'break' | 'count' | 'go' | 'qualify' | 'out' | 'win' | 'click' | 'steal' | 'warn';
+export type Sfx =
+  | 'jump'
+  | 'dive'
+  | 'hit'
+  | 'boing'
+  | 'break'
+  | 'count'
+  | 'go'
+  | 'qualify'
+  | 'out'
+  | 'win'
+  | 'click'
+  | 'steal'
+  | 'warn';
 
 let actx: AudioContext | null = null;
 let master: GainNode | null = null;
@@ -34,8 +47,11 @@ export function sfx(type: Sfx) {
       o.start(t0 + delay);
       o.stop(t0 + delay + dur + 0.02);
     };
-    const seq = (fs: number[], dur: number, wave: OscillatorType, vol: number, gap: number) =>
-      fs.forEach((f, i) => tone(f, f, dur, wave, vol, i * gap));
+    const seq = (fs: number[], dur: number, wave: OscillatorType, vol: number, gap: number, bend = 1) => {
+      fs.forEach((f, i) => {
+        tone(f, f * bend, dur, wave, vol, i * gap);
+      });
+    };
     switch (type) {
       case 'jump':
         return tone(330, 620, 0.14, 'triangle', 0.1);
@@ -60,7 +76,7 @@ export function sfx(type: Sfx) {
       case 'qualify':
         return seq([523, 659, 784, 1046], 0.18, 'triangle', 0.12, 0.09);
       case 'out':
-        return [440, 330, 220].forEach((f, i) => tone(f, f * 0.95, 0.22, 'sawtooth', 0.07, i * 0.14));
+        return seq([440, 330, 220], 0.22, 'sawtooth', 0.07, 0.14, 0.95);
       case 'win':
         return seq([523, 659, 784, 1046, 784, 1046], 0.25, 'triangle', 0.12, 0.12);
     }

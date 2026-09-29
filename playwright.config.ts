@@ -1,0 +1,27 @@
+import { defineConfig, devices } from '@playwright/test';
+
+const PORT = 7790;
+// Windows: drive the installed Edge; elsewhere (CI) Playwright's Chromium.
+const channel = process.env.PW_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
+
+export default defineConfig({
+  testDir: 'e2e',
+  timeout: 120_000,
+  retries: 0,
+  workers: 1,
+  use: {
+    baseURL: `http://127.0.0.1:${PORT}`,
+    trace: 'retain-on-failure',
+    viewport: { width: 1280, height: 720 },
+    ...(channel ? { channel } : {}),
+    launchOptions: { args: ['--ignore-gpu-blocklist'] },
+  },
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], ...(channel ? { channel } : {}) } }],
+  webServer: {
+    // Built client served by the game server itself (no nginx), dev PIN 5050, WebTransport on udp/4434.
+    command: `bun src/server/main.ts --dev --static dist/client --host 127.0.0.1 --port ${PORT} --wt-port 4434 --solo`,
+    url: `http://127.0.0.1:${PORT}/fallbeans/health`,
+    reuseExistingServer: false,
+    timeout: 30_000,
+  },
+});

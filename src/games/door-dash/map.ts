@@ -1,10 +1,14 @@
 import * as THREE from 'three';
-import { clone } from '../../client/engine/assets';
-import { PAL } from '../../client/world/builder';
-import { pathBrain, type Waypoint } from '../../client/world/bots';
-import { defineMap } from '../../client/world/map';
-import { AtEvent } from '../../shared/game';
+import { z } from 'zod';
+import { shuffle } from '../../shared/rng';
+import { pathBrain, type Waypoint } from '../../sim/bots';
+import { PAL } from '../../sim/builder';
+import { type BotView, defineMap } from '../../sim/map';
+import type { Collider } from '../../sim/physics';
+import { armContactEta } from '../../sim/props';
 import meta from './meta';
+
+const DoorEvent = z.object({ i: z.number().int().min(0).max(63) });
 
 export default defineMap(meta, (b, ctx) => {
   const spawns = b.startArea(0);
@@ -16,7 +20,7 @@ export default defineMap(meta, (b, ctx) => {
     breakable: boolean;
     broken: boolean;
     t: number;
-    col: ReturnType<typeof b.collider>;
+    col: Collider;
   }
   const doors: Door[] = [];
   const openX: number[] = [];
@@ -25,15 +29,14 @@ export default defineMap(meta, (b, ctx) => {
     [24, 2],
     [34, 2],
   ] as const) {
-    const idx = [0, 1, 2, 3, 4].sort(() => b.rng() - 0.5).slice(0, nBreak);
+    const idx = shuffle([0, 1, 2, 3, 4], b.rng).slice(0, nBreak);
     openX.push(-6.8 + (idx[0] ?? 0) * 3.4);
     for (let i = 0; i < 5; i++) {
       const x = -6.8 + i * 3.4;
-      const obj = clone('door');
+      const obj = b.model('door');
       obj.position.set(x, 0, z);
       obj.scale.x = 3.4 / 3.1;
       obj.rotation.y = Math.PI;
-      b.group.add(obj);
       const id = doors.length;
       const d: Door = {
         obj,
@@ -42,23 +45,27 @@ export default defineMap(meta, (b, ctx) => {
         t: 0,
         col: b.collider(b.anchor(x, 1.6, z), { type: 'box', hx: 1.7, hy: 1.6, hz: 0.3 }, { isStatic: true }),
       };
-      if (d.breakable) d.col.onTouch = (_c, _n, body) => breakDoor(id, body.actor);
+      if (d.breakable)
+        d.col.onTouch = () => {
+          // The server decides; the local player's prediction breaks it right away too.
+          if (ctx.server) ctx.emit('door', { i: id });
+          else breakDoor(id);
+        };
       doors.push(d);
     }
     b.box(0, 3.6, z, 18.4, 0.8, 1.0, PAL.yellow);
     b.box(-9.4, 1.6, z, 0.8, 3.2, 1.0, PAL.yellow);
     b.box(9.4, 1.6, z, 0.8, 3.2, 1.0, PAL.yellow);
   }
-  function breakDoor(id: number, actor: number | undefined | null) {
+  function breakDoor(id: number) {
     const d = doors[id];
-    if (!d || d.broken) return;
+    if (!d || d.broken || !d.breakable) return;
     d.broken = true;
     d.col.enabled = false;
     d.t = 0;
-    if (actor !== null) ctx.emit('door', { i: id }, actor);
     ctx.sfx('break');
   }
-  b.update((_t, dt) => {
+  b.anim((_t, dt) => {
     for (const d of doors) {
       if (!d.broken || !d.obj.visible) continue;
       d.t += dt;
@@ -73,11 +80,12 @@ export default defineMap(meta, (b, ctx) => {
     [70, 3, -1.7, 0],
     [86, 2, 1.9, 1],
   ] as const;
+  const highAngle = (t: number) => -t * 1.1 + 1.5;
   plats.forEach(([z, n, sp, high], i) => {
     b.cyl(0, -1, z, 6, 2, i % 2 ? PAL.pink : PAL.purple);
     b.hub(0, 0, z, 1);
     b.rotor(0, 0.6, z, 5.7, n, (t) => t * sp + i, 0.75);
-    if (high) b.rotor(0, 2.45, z, 5.7, 1, (t) => -t * 1.1 + 1.5, 0.75);
+    if (high) b.rotor(0, 2.45, z, 5.7, 1, highAngle, 0.75);
     if (i < 2) b.box(0, -1, z + 8, 3.6, 2, 6, PAL.yellow);
   });
   b.box(0, -1, 93.5, 3.6, 2, 5, PAL.yellow);
@@ -90,18 +98,17 @@ export default defineMap(meta, (b, ctx) => {
     [123.5, 1.3, 4],
     [130, 1.0, 1],
   ] as const;
-  const moverX: ((t: number) => number)[] = [];
+  const moverX = (sp: number, ph: number) => (t: number) => (sp === 0 ? 0 : Math.sin(t * sp + ph) * 4);
   movers.forEach(([z, sp, ph], i) => {
     const m = b.box(0, -0.5, z, 4.5, 1, 4.5, i % 2 ? PAL.orange : PAL.green, { dynamic: true });
-    const fx = (t: number) => (sp === 0 ? 0 : Math.sin(t * sp + ph) * 4);
-    moverX.push(fx);
+    const fx = moverX(sp, ph);
     if (sp === 0)
-      b.update((t) => {
-        m.mesh.rotation.y = t * 0.9;
+      b.move((t) => {
+        m.obj.rotation.y = t * 0.9;
       });
     else
-      b.update((t) => {
-        m.mesh.position.x = fx(t);
+      b.move((t) => {
+        m.obj.position.x = fx(t);
       });
   });
   b.box(0, -1, 139, 12, 2, 10, PAL.purple);
@@ -126,11 +133,41 @@ export default defineMap(meta, (b, ctx) => {
   [14, 24, 34].forEach((z, i) => {
     path.push({ x: openX[i] ?? 0, z: z - 2, w: 0.4 }, { x: openX[i] ?? 0, z: z + 1.5, w: 0.8 });
   });
-  path.push({ x: 0, z: 43.5, w: 0.3 }, { x: 0, z: 49, w: 0.3 });
-  for (const z of [54, 70, 86]) path.push({ x: 2.6, z: z - 3, w: 0.5, jump: true }, { x: 2.6, z: z + 3, w: 0.5, jump: true }, { x: 0, z: z + 6.5, w: 0.3 });
-  path.push({ x: 0, z: 95, w: 0.4 }, { x: 0, z: 100.5, w: 0.5 });
-  for (const [z] of movers) path.push({ x: 0, z, w: 0.5 });
-  path.push({ x: 0, z: 136, w: 2 }, { x: 0, z: 150, w: 3 }, { x: 0, z: 172, w: 3 });
+  path.push({ x: 0, z: 43.5, w: 0.3 });
+  plats.forEach(([z, n, sp, high], i) => {
+    // Jump the low arm as it comes (in reach of it only); never into the high one.
+    const jumpWhen = (bot: BotView) => {
+      const p = bot.body.pos;
+      const r = Math.hypot(p.x, p.z - z);
+      if (r > 7 || r < 1.2) return false;
+      const eta = armContactEta(bot, bot.t * sp + i, sp, n, 0, z);
+      return eta > 0.06 && eta < 0.2 && (!high || armContactEta(bot, highAngle(bot.t), -1.1, 1, 0, z) > 0.8);
+    };
+    path.push(
+      { x: 0, z: z - 5.5, w: 0.3, jumpWhen },
+      { x: 2.6, z: z - 3, w: 0.3, jumpWhen },
+      { x: 2.6, z: z + 3, w: 0.3, jumpWhen },
+      { x: 0, z: z + 6.5, w: 0.3, jumpWhen },
+    );
+  });
+  path.push({ x: 0, z: 95, w: 0.4 }, { x: 0, z: 99, w: 0.2 });
+  // Moving platforms: wait until the next one lines up, then jump across the gap.
+  let edge = 100;
+  for (const [z, sp, ph] of movers) {
+    const fx = moverX(sp, ph);
+    path.push({
+      x: fx,
+      z,
+      wait: (bot) => Math.abs(fx(bot.t + 0.6) - bot.body.pos.x) < 1.2,
+      jumpWhen: (
+        (e) => (bot: BotView) =>
+          bot.body.pos.z > e - 1.0 && bot.body.pos.z < e + 0.4
+      )(edge),
+    });
+    edge = z + 2.25;
+  }
+  path.push({ x: 0, z: 136, w: 1, jumpWhen: (bot) => bot.body.pos.z > edge - 1.0 && bot.body.pos.z < edge + 0.4 });
+  path.push({ x: 0, z: 150, w: 3 }, { x: 0, z: 172, w: 3 });
 
   return {
     spawns,
@@ -143,9 +180,9 @@ export default defineMap(meta, (b, ctx) => {
       { z: 134, p: new THREE.Vector3(0, 0.1, 138) },
     ],
     onEvent(name, data) {
-      if (name !== 'at') return;
-      const d = AtEvent.safeParse(data);
-      if (d.success) breakDoor(d.data.i, null);
+      if (name !== 'door') return;
+      const d = DoorEvent.safeParse(data);
+      if (d.success) breakDoor(d.data.i);
     },
     bot: pathBrain(path),
   };
