@@ -20,9 +20,8 @@ import { glovePuncher } from '../../sim/props';
 import meta from './meta';
 
 /**
- * Glass bridges with one safe pane per row. A fake pane gives way the instant anyone touches it, and
- * crumbling glass is no springboard: no jumping (or diving) off it, whoever steps on it falls. Panes
- * that held light up green for everybody. Gloves punch across some rows of the later bridges.
+ * Glass bridges with one safe pane per row. A fake pane is not solid: whoever steps on it falls
+ * straight through (it shatters for everybody to see). Panes that held light up green for everybody. Gloves punch across some rows of the later bridges.
  */
 
 const TileEvent = z.object({ i: z.number().int().min(0).max(255), at: z.number().optional() });
@@ -70,7 +69,7 @@ function glassBridge(id: number, rows: number, cols: number, gloveRows: readonly
           collider: b.collider(
             b.anchor(x, s.y - THICK / 2, zz),
             { type: 'box', hx: PANE / 2, hy: THICK / 2, hz: PANE / 2 },
-            { isStatic: true, crumbly: !real },
+            { isStatic: true, trigger: !real },
           ),
         };
         const touched = () => {
@@ -83,7 +82,7 @@ function glassBridge(id: number, rows: number, cols: number, gloveRows: readonly
           else breakTile(tile, ctx.now());
         };
         tile.collider.onGround = touched;
-        // Landing on its rim counts too (brushing its side from the next pane does not).
+        // Brushing a fake pane's side from the next pane does not break it.
         tile.collider.onTouch = (_c, n) => {
           if (n.y > 0.3) touched();
         };

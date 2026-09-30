@@ -58,9 +58,7 @@ export interface ColliderOpts {
    * passes under it instead of being dragged along.
    */
   sweep?: boolean;
-  /** Crumbling ground (fake glass): no jumping off it, and a dive from it gets no boost. */
-  crumbly?: boolean;
-  /** Not solid: only reports touches (onTouch), e.g. portals. */
+  /** Not solid: only reports touches (onTouch), e.g. portals, fake glass panes. */
   trigger?: boolean;
 }
 
@@ -89,7 +87,6 @@ export class Collider {
   readonly navSkip: boolean;
   readonly sinks: boolean;
   readonly sweep: boolean;
-  readonly crumbly: boolean;
   readonly trigger: boolean;
   readonly cur = new THREE.Matrix4();
   readonly prev = new THREE.Matrix4();
@@ -115,7 +112,6 @@ export class Collider {
     this.navSkip = !!opts.navSkip;
     this.sinks = !!opts.sinks;
     this.sweep = !!opts.sweep;
-    this.crumbly = !!opts.crumbly;
     this.trigger = !!opts.trigger;
     this.radius =
       shape.type === 'box'
@@ -549,9 +545,7 @@ export class PlayerBody {
     const slow = (t < this.slowUntil ? this.slowK : 1) * (pw === POWER.speed ? SPEED_UP : 1);
     const g = this.grounded;
     const slip = g ? (this.groundCol?.slip ?? 0) : 0;
-    // Crumbling ground: the coyote timer goes negative (no jump, no dive boost) for a moment.
-    const crumbly = g && !!this.groundCol?.crumbly;
-    this.coyote = crumbly ? -0.35 : g ? 0.12 : this.coyote > 0 ? Math.max(0, this.coyote - dt) : Math.min(0, this.coyote + dt);
+    this.coyote = g ? 0.12 : Math.max(0, this.coyote - dt);
     this.jumpBuf = input.jump ? 0.12 : Math.max(0, this.jumpBuf - dt);
     this.stateT -= dt;
     const stateBefore = this.state;
@@ -627,17 +621,10 @@ export class PlayerBody {
         }
         // Keep some of the speed already going the same way (no dive may be slower than running).
         const along = Math.max(0, this.vel.x * fx + this.vel.z * fz);
-        if (this.coyote < 0) {
-          // Off crumbling ground: a flop, no boost.
-          this.vel.x = fx * along;
-          this.vel.z = fz * along;
-          this.vel.y = Math.min(this.vel.y, 0);
-        } else {
-          const sp = Math.max(DIVE_SPEED * slow, Math.min(along, DIVE_SPEED * 1.25));
-          this.vel.x = fx * sp + (g ? platV.x : 0);
-          this.vel.z = fz * sp + (g ? platV.z : 0);
-          this.vel.y = g ? 6 + Math.max(0, platV.y) : Math.max(this.vel.y, 3);
-        }
+        const sp = Math.max(DIVE_SPEED * slow, Math.min(along, DIVE_SPEED * 1.25));
+        this.vel.x = fx * sp + (g ? platV.x : 0);
+        this.vel.z = fz * sp + (g ? platV.z : 0);
+        this.vel.y = g ? 6 + Math.max(0, platV.y) : Math.max(this.vel.y, 3);
         this.grounded = false;
       }
     }

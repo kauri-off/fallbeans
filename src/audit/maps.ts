@@ -47,7 +47,7 @@ function overlap(body: PlayerBody, world: World): { depth: number; col: Collider
   let best = { depth: 0, col: null as Collider | null };
   world.query(body.pos.x, body.pos.z, 1.5, near);
   for (const col of near) {
-    if (!col.enabled) continue;
+    if (!col.enabled || col.trigger) continue;
     for (const h of SPHERES) {
       c.set(body.pos.x, body.pos.y + h, body.pos.z);
       if (!col.contact(c, R, contact)) continue;

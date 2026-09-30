@@ -77,23 +77,20 @@ describe('course mechanics', () => {
     }
   };
 
-  it('allows no jump (and no dive boost) off crumbling ground', () => {
+  it('falls straight through a fake pane, keeping its speed and reporting the touch', () => {
     const b = new Builder(1, null);
-    b.box(0, -0.5, 0, 6, 1, 6, undefined, { crumbly: true });
-    b.box(20, -0.5, 0, 6, 1, 6);
+    let touched = 0;
+    b.box(0, -0.15, 0, 3, 0.3, 3, undefined, { trigger: true, onTouch: () => touched++ });
     b.world.finalize(0);
     const body = new PlayerBody(1);
-    body.reset(new THREE.Vector3(0, 0.02, 0));
-    run(body, b.world, 0, 30);
-    run(body, b.world, 0.25, 1, { ...idle, jump: true });
+    body.reset(new THREE.Vector3(0, 2, 0));
+    body.vel.set(0, -6, 4);
+    run(body, b.world, 0, 40, { ...idle, mz: 1, jump: true });
+    expect(touched).toBeGreaterThan(0);
     expect(body.jumped).toBe(false);
-    run(body, b.world, 0.26, 1, { ...idle, mz: 1, dive: true });
-    expect(body.vel.y).toBeLessThanOrEqual(0);
-    // On solid ground it works as always.
-    body.reset(new THREE.Vector3(20, 0.02, 0));
-    run(body, b.world, 1, 30);
-    run(body, b.world, 1.25, 1, { ...idle, jump: true });
-    expect(body.jumped).toBe(true);
+    expect(body.pos.y).toBeLessThan(-0.5);
+    expect(body.vel.y).toBeLessThan(-6);
+    expect(body.vel.z).toBeGreaterThan(3);
   });
 
   it('a sweeping arm always knocks a bean over, then passes over it', () => {

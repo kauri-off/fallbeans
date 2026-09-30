@@ -237,7 +237,7 @@ export class NavGrid {
 
   /** Builds the grid from the world's static, solid colliders as they are now. */
   static build(world: World, forbidden?: (p: THREE.Vector3) => boolean): NavGrid {
-    const solid = world.colliders.filter((c) => c.isStatic && c.enabled && !c.navSkip);
+    const solid = world.colliders.filter((c) => c.isStatic && c.enabled && !c.navSkip && !c.trigger);
     let x0 = Infinity;
     let x1 = -Infinity;
     let z0 = Infinity;
@@ -267,7 +267,7 @@ export class NavGrid {
         const z = nav.cz(iz);
         const list: Span[] = [];
         for (const c of world.query(x, z, NAV_CELL * 0.5, near)) {
-          if (!c.isStatic || !c.enabled || c.navSkip) continue;
+          if (!c.isStatic || !c.enabled || c.navSkip || c.trigger) continue;
           const sp = rayDown(c, x, z, top + 5);
           if (sp) list.push(sp);
         }
