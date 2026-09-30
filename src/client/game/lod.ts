@@ -4,15 +4,17 @@ import { canFade, fadeMaterial, lodFrame } from './materials';
 
 /**
  * Client-only levels of detail M0 (full) … M6 (coarsest) for every mesh that has them. The level
- * follows the projected size on screen; near each switch both levels are drawn with complementary
- * dither masks (see materials.ts), which the temporal anti-aliasing blends into a smooth cross-fade.
+ * follows the projected size on screen; for a moment after each switch both levels are drawn with
+ * complementary dither masks (see materials.ts), which the temporal anti-aliasing blends into a smooth cross-fade.
  */
 
 export const LOD_LEVELS = 7;
 /** Screen-size thresholds (bounding radius / (distance · tan(fov/2))) where Mi→Mi+1. */
 const THRESHOLDS = [0.16, 0.095, 0.056, 0.033, 0.02, 0.012] as const;
-/** Half width of each cross-fade band, as a ratio of the size (log scale); bands must not overlap. */
-const BAND = 1.2;
+/** Hysteresis around each threshold (ratio of the size), so a mesh near one does not keep switching. */
+const HYST = 1.08;
+/** Seconds a switch cross-fades. */
+const FADE_S = 0.3;
 /** Target share of the triangles kept at M0…M6 (model meshes). */
 const KEEP = [1, 0.62, 0.4, 0.24, 0.13, 0.07, 0.035] as const;
 
@@ -105,7 +107,10 @@ interface Entry {
   /** Fade copies per base material (the game may alternate materials, e.g. a warning blink). */
   pairs: Map<THREE.Material, [THREE.Material, THREE.Material]>;
   cast: boolean;
+  /** Level shown (-1 until the first update), the one it fades from, and the fade's progress (1 = done). */
   level: number;
+  from: number;
+  fade: number;
   /** Levels chosen for a whole model at once: its root and bounding radius (see register). */
   group: { root: THREE.Object3D; radius: number } | null;
 }
@@ -130,6 +135,7 @@ export class LodSystem {
   force: number | null = null;
   enabled = true;
   private frame = 0;
+  private last = 0;
   readonly stats: LodStats = { meshes: 0, levels: Array(LOD_LEVELS).fill(0), fading: 0 };
 
   /**
@@ -156,7 +162,9 @@ export class LodSystem {
         ghostMat: null,
         pairs: new Map(),
         cast: o.castShadow,
-        level: 0,
+        level: -1,
+        from: 0,
+        fade: 1,
         group,
       });
       list.push(o);
@@ -203,7 +211,8 @@ export class LodSystem {
     if (e.base) e.mesh.material = e.base;
     e.mesh.castShadow = e.cast;
     if (e.ghost) e.ghost.visible = false;
-    e.level = 0;
+    e.level = -1;
+    e.fade = 1;
   }
 
   update(camera: THREE.PerspectiveCamera) {
@@ -215,17 +224,19 @@ export class LodSystem {
     st.fading = 0;
     const k = 1 / (Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * this.bias);
     const cam = camera.position;
+    const now = performance.now();
+    const step = this.last ? Math.min(0.1, (now - this.last) / 1000) / FADE_S : 1;
+    this.last = now;
     for (const e of this.entries.values()) {
       const m = e.mesh;
       // The game may swap materials (warning blinks): follow it.
       if (m.material !== e.mainMat && m.material !== e.base) e.base = m.material as THREE.Material;
       e.base ??= m.material as THREE.Material;
       if (!this.enabled) {
-        if (e.level !== 0 || e.ghost?.visible) this.reset(e);
+        if (e.level > 0 || e.ghost?.visible) this.reset(e);
         continue;
       }
       let lvl: number;
-      let fade = 0;
       if (this.force !== null) lvl = this.force;
       else {
         if (e.group) {
@@ -239,21 +250,27 @@ export class LodSystem {
           _s.copy(g.boundingSphere!).applyMatrix4(m.matrixWorld);
         }
         const size = (_s.radius * k) / Math.max(0.01, _s.center.distanceTo(cam));
-        lvl = 0;
-        for (const t of THRESHOLDS) if (size < t / BAND) lvl++;
-        // Inside a band: fading from level lvl−1 (bigger) to lvl.
-        for (let i = 0; i < THRESHOLDS.length; i++) {
-          const t = THRESHOLDS[i]!;
-          if (size < t * BAND && size >= t / BAND) {
-            lvl = i + 1;
-            fade = Math.log((t * BAND) / size) / Math.log(BAND * BAND);
-          }
+        let finer = 0;
+        let coarser = 0;
+        for (const t of THRESHOLDS) {
+          if (size * HYST < t) finer++;
+          if (size < t * HYST) coarser++;
         }
+        lvl = e.level < 0 ? finer : Math.min(coarser, Math.max(finer, e.level));
       }
-      const fadable = fade > 0.02 && fade < 0.98 && e.levels[lvl - 1] !== e.levels[lvl] && canFade(e.base);
+      if (e.level < 0 || this.force !== null) {
+        e.from = lvl;
+        e.fade = 1;
+      } else if (lvl !== e.level) {
+        e.from = e.level;
+        e.fade = 0;
+      }
+      e.level = lvl;
+      e.fade = Math.min(1, e.fade + step);
       st.levels[lvl]!++;
+      const fadable = e.fade < 1 && e.levels[e.from] !== e.levels[lvl] && canFade(e.base);
       if (!fadable) {
-        const g = e.levels[Math.min(LOD_LEVELS - 1, fade > 0 && fade < 0.5 ? lvl - 1 : lvl)]!;
+        const g = e.levels[lvl]!;
         if (m.geometry !== g) m.geometry = g;
         if (m.material !== e.base) m.material = e.base;
         m.castShadow = e.cast;
@@ -261,9 +278,10 @@ export class LodSystem {
         continue;
       }
       st.fading++;
-      // Main mesh: the bigger level fading out; ghost: the smaller one fading in.
+      // Main mesh: the old level fading out; ghost: the new one fading in.
+      const fade = e.fade;
       this.materials(e);
-      m.geometry = e.levels[lvl - 1]!;
+      m.geometry = e.levels[e.from]!;
       m.material = e.mainMat!;
       e.mainFade.value = fade;
       const ghost = this.ghost(e);

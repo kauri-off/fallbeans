@@ -52,6 +52,8 @@ function bellyMaterial(color: string) {
   return m;
 }
 
+const FACE_PARTS = /^(Visor|Belly|Blush|Eye|Glint|Pupil)/;
+
 let tailProto: THREE.Object3D | null = null;
 function makeTail(): THREE.Object3D {
   if (!tailProto) {
@@ -217,8 +219,10 @@ export class Bean {
     this.face = new Face(this.model);
     this.grow.x = 1;
     // The visor carries the face: always at full detail, or the face patch would cut into it.
+    // Face parts lie on the body, whose shadow already covers theirs.
     this.model.traverse((o) => {
       if (o.name === 'Visor') o.userData.noLod = true;
+      if (FACE_PARTS.test(o.name)) o.castShadow = false;
     });
     this.setColor(color);
     this.name = name;

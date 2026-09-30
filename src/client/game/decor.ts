@@ -138,6 +138,8 @@ class Kit {
   }
 }
 
+const recolored = new WeakMap<object, Map<string, THREE.Material>>();
+
 /** Gives a model's materials new colours (copies, owned by the map). */
 function recolor(
   b: Builder,
@@ -145,15 +147,18 @@ function recolor(
   color: (name: string) => string | null,
   emissive?: (name: string) => string | null,
 ) {
-  const done = new Map<THREE.Material, THREE.Material>();
+  // Copies are shared across the build, so identical pieces stay batchable (statics.ts).
+  let done = recolored.get(b.view!);
+  if (!done) recolored.set(b.view!, (done = new Map()));
   root.traverse((o) => {
     if (!(o instanceof THREE.Mesh) || !(o.material instanceof THREE.MeshStandardMaterial)) return;
     const src = o.material;
-    let m = done.get(src);
+    const c = color(src.name);
+    const e = emissive?.(src.name);
+    if (!c && !e) return;
+    const key = `${src.uuid}|${c}|${e}`;
+    let m = done.get(key);
     if (!m) {
-      const c = color(src.name);
-      const e = emissive?.(src.name);
-      if (!c && !e) return;
       const copy = src.clone();
       if (c) copy.color.set(c);
       if (e) copy.emissive.set(e);
@@ -161,7 +166,7 @@ function recolor(
       delete copy.userData.detail;
       applySurface(copy, surfaceForModelMaterial(copy.name));
       m = b.view!.own(copy);
-      done.set(src, m);
+      done.set(key, m);
     }
     o.material = m;
   });
