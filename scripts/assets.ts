@@ -1,8 +1,9 @@
 /**
  * Checks the 3D models (public/models/*.glb), and rebuilds them from Blender.
  *   bun run assets                 validate + budgets + what the game needs from each model
- *   bun run assets --export [--dry-run]  re-export from blender/fallguys_assets.blend (headless Blender),
- *                                  optimise, check, and replace public/models if everything passes
+ *   bun run assets --export [--dry-run]  re-export from blender/fallguys_assets.blend (headless Blender:
+ *                                  modifiers applied, AO baked per model), attach the AO maps compressed
+ *                                  with ffmpeg, optimise, check, and replace public/models if everything passes
  *   bun run assets --optimize      optimise the current files in place (dedup, prune, weld, unused
  *                                  UVs dropped, normals to 12 bits, vertex-cache order, meshopt
  *                                  compression; names, hierarchy and positions are kept exactly)
@@ -24,10 +25,10 @@ const args = process.argv.slice(2);
 const MODELS = 'public/models';
 const STAGE = '.build/models';
 
-/** Budgets per model: triangles, file size (KB), materials. */
+/** Budgets per model: triangles, file size (KB, the baked AO map included), materials. */
 const BUDGET: Record<string, { tris: number; kb: number; mats: number }> = {
   bean: { tris: 16000, kb: 400, mats: 12 },
-  default: { tris: 6000, kb: 120, mats: 8 },
+  default: { tris: 6000, kb: 160, mats: 8 },
 };
 /** Names the code looks up in a model (src/client/game/bean.ts, assets.ts, materials.ts). */
 const NEEDS: Record<string, { nodes?: string[]; materials?: string[] }> = {
@@ -93,6 +94,13 @@ async function check(dir: string): Promise<ModelReport[]> {
     if (s.tris > b.tris) r.warnings.push(`${s.tris} triangles (budget ${b.tris})`);
     if (r.kb > b.kb) r.warnings.push(`${r.kb} KB (budget ${b.kb})`);
     if (s.materials > b.mats) r.warnings.push(`${s.materials} materials (budget ${b.mats})`);
+    if (
+      !doc
+        .getRoot()
+        .listMaterials()
+        .every((m) => m.getOcclusionTexture())
+    )
+      r.warnings.push('no baked AO map on every material (bun run assets --export)');
     for (const n of NEEDS[name]?.nodes ?? [])
       if (!s.nodeNames.has(n)) r.errors.push(`node "${n}" is missing (the code animates it)`);
     for (const n of NEEDS[name]?.materials ?? [])
@@ -106,21 +114,71 @@ async function check(dir: string): Promise<ModelReport[]> {
   return out;
 }
 
+/** ffmpeg: the build in the repository folder (git-ignored), $FFMPEG, or the one on the PATH. */
+const FFMPEG =
+  process.env.FFMPEG ??
+  ['ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe', 'ffmpeg-master-latest-win64-gpl/bin/ffmpeg'].find((p) => existsSync(p)) ??
+  'ffmpeg';
+
 /**
- * The game shades models with object-space triplanar detail (materials.ts) and no textures, so
- * texture coordinates are dead weight: dropped.
+ * A baked AO map (grey PNG from Blender) compressed with ffmpeg: JPEG at quality 2 (visually
+ * lossless on smooth occlusion), unless the lossless 8-bit grey PNG is barely bigger.
  */
-function dropUVs(doc: Document) {
+function compressAo(png: string): { bytes: Uint8Array; mime: string } {
+  const jpg = `${png.slice(0, -4)}.min.jpg`;
+  const gray = `${png.slice(0, -4)}.min.png`;
+  const run = (args: string[]) => {
+    const r = Bun.spawnSync([FFMPEG, '-y', '-hide_banner', '-loglevel', 'error', '-i', png, ...args], { stderr: 'pipe' });
+    if (r.exitCode !== 0) throw new Error(`ffmpeg failed (${FFMPEG}): ${r.stderr.toString()}`);
+  };
+  run(['-vf', 'format=gray,format=yuvj420p', '-q:v', '2', jpg]);
+  run(['-vf', 'format=gray', '-pix_fmt', 'gray', '-pred', 'mixed', '-compression_level', '9', gray]);
+  const a = readFileSync(jpg);
+  const b = readFileSync(gray);
+  return b.byteLength <= a.byteLength * 1.2
+    ? { bytes: new Uint8Array(b), mime: 'image/png' }
+    : { bytes: new Uint8Array(a), mime: 'image/jpeg' };
+}
+
+/**
+ * The model's baked AO (blender/export.py) as the occlusion texture of every material (UV set 0,
+ * the AO layout; three applies it to the ambient light). Returns the image's size in KB, or null
+ * when there is no bake next to the file.
+ */
+function attachAo(doc: Document, png: string): number | null {
+  if (!existsSync(png)) return null;
+  const { bytes, mime } = compressAo(png);
+  const root = doc.getRoot();
+  for (const t of root.listTextures()) t.dispose();
+  const tex = doc
+    .createTexture('AO')
+    .setImage(bytes)
+    .setMimeType(mime)
+    .setURI(mime === 'image/png' ? 'ao.png' : 'ao.jpg');
+  for (const m of root.listMaterials()) {
+    m.setOcclusionTexture(tex).setOcclusionStrength(1);
+    m.getOcclusionTextureInfo()?.setTexCoord(0);
+  }
+  return Math.round(bytes.byteLength / 102.4) / 10;
+}
+
+/**
+ * Texture coordinates nothing samples are dead weight (the game's surface detail is triplanar):
+ * dropped, unless a material has a texture (the baked AO uses TEXCOORD_0).
+ */
+function dropUnusedUVs(doc: Document) {
+  if (doc.getRoot().listTextures().length) return;
   for (const mesh of doc.getRoot().listMeshes())
     for (const prim of mesh.listPrimitives())
       for (const sem of prim.listSemantics()) if (sem.startsWith('TEXCOORD_')) prim.setAttribute(sem, null);
 }
 
 /**
- * Repacks every model: shared data merged, unused data dropped, vertices welded and ordered for the
- * GPU's vertex cache, normals stored in 16-bit integers (12 bits: invisible), and the buffers
- * compressed with EXT_meshopt_compression (decoded by the loader). Positions stay 32-bit floats and
- * no node transform changes (quantised positions would move scale into nodes the game animates).
+ * Repacks every model: the baked AO attached (when there is one) and compressed, shared data merged,
+ * unused data dropped, vertices welded and ordered for the GPU's vertex cache, normals and UVs
+ * stored as 16-bit integers (12 / 14 bits: invisible), and the buffers compressed with
+ * EXT_meshopt_compression (decoded by the loader). Positions stay 32-bit floats and no node
+ * transform changes (quantised positions would move scale into nodes the game animates).
  */
 async function optimize(dir: string) {
   for (const name of MODEL_NAMES) {
@@ -128,12 +186,13 @@ async function optimize(dir: string) {
     if (!existsSync(file)) continue;
     const before = statSync(file).size;
     const doc = await io.read(file);
-    dropUVs(doc);
+    const ao = attachAo(doc, join(dir, `${name}_ao.png`));
+    dropUnusedUVs(doc);
     await doc.transform(
       dedup(),
       prune({ keepLeaves: true, keepAttributes: true }),
       weld(),
-      quantize({ pattern: /^NORMAL$/, quantizeNormal: 12, cleanup: false }),
+      quantize({ pattern: /^(NORMAL|TEXCOORD_0)$/, quantizeNormal: 12, quantizeTexcoord: 14, cleanup: false }),
       reorder({ encoder: MeshoptEncoder }),
     );
     // Integer normals need KHR_mesh_quantization (quantize() only declares it for positions).
@@ -144,7 +203,9 @@ async function optimize(dir: string) {
       .setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
     await io.write(file, doc);
     const after = statSync(file).size;
-    console.log(`  optimised ${name}: ${Math.round(before / 1024)} → ${Math.round(after / 1024)} KB`);
+    console.log(
+      `  optimised ${name}: ${Math.round(before / 1024)} → ${Math.round(after / 1024)} KB${ao === null ? '' : ` (AO map ${ao} KB)`}`,
+    );
   }
 }
 

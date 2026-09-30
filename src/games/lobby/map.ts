@@ -258,49 +258,6 @@ export default defineMap(LOBBY_META, (b, ctx) => {
     b.cyl(x, 0.4, z, 0.9, 0.8, PAL.green, { surface: 'grass', seg: 24 });
     solid(b, flora[k % flora.length]!, x, 0.8, z, { scale: 0.8 + ((k * 37) % 5) * 0.1, yaw: k * 1.7 });
   }
-  // Coloured lamps round the plaza (testing local lights): posts leaning a spotlight in over the floor.
-  const lamps = [
-    { a: Math.PI / 4, color: '#ff4fa0' },
-    { a: (3 * Math.PI) / 4, color: '#3fd0ff' },
-    { a: -Math.PI / 2, color: '#ffd23f' },
-    { a: -Math.PI / 6, color: '#7dff5a' },
-  ];
-  for (const l of lamps) {
-    const x = Math.cos(l.a) * 9;
-    const z = Math.sin(l.a) * 9;
-    b.cyl(x, 1.8, z, 0.12, 3.6, PAL.white, { surface: 'metal', seg: 12 });
-    const v = b.view;
-    if (!v) continue;
-    // The head hangs 0.9 m in from the post, towards the fountain.
-    const hx = x - Math.cos(l.a) * 0.9;
-    const hz = z - Math.sin(l.a) * 0.9;
-    const arm = new THREE.Mesh(
-      v.own(new THREE.BoxGeometry(0.08, 0.08, 1)),
-      v.own(new THREE.MeshStandardMaterial({ color: '#e8e8f0', metalness: 0.6, roughness: 0.4 })),
-    );
-    arm.position.set((x + hx) / 2, 3.55, (z + hz) / 2);
-    arm.rotation.y = Math.atan2(hx - x, hz - z);
-    const shade = new THREE.Mesh(
-      v.own(new THREE.ConeGeometry(0.32, 0.3, 20, 1, true)),
-      v.own(new THREE.MeshStandardMaterial({ color: '#39406b', side: THREE.DoubleSide, roughness: 0.5 })),
-    );
-    shade.position.set(hx, 3.45, hz);
-    const bulb = new THREE.Mesh(
-      v.own(new THREE.SphereGeometry(0.14, 16, 10)),
-      v.own(new THREE.MeshStandardMaterial({ color: l.color, emissive: l.color, emissiveIntensity: 1.5 })),
-    );
-    bulb.position.set(hx, 3.33, hz);
-    const light = new THREE.SpotLight(l.color, 160, 18, 0.8, 0.5, 2);
-    light.position.set(hx, 3.3, hz);
-    light.target.position.set(x * 0.45, 0, z * 0.45);
-    light.castShadow = true;
-    light.shadow.mapSize.set(1024, 1024);
-    light.shadow.camera.near = 0.3;
-    light.shadow.camera.far = 18;
-    light.shadow.bias = -0.0004;
-    light.shadow.normalBias = 0.02;
-    b.group.add(arm, shade, bulb, light, light.target);
-  }
   b.clouds(0, 0, 44);
 
   // ---------------------------------------------------------------- the bell (server)

@@ -51,8 +51,10 @@ bun run assets         # validate models (gltf-validator, budgets, names the cod
 players, clock, roomDebug, arena (simulation, recording), director, awards, replay · `src/client` game, net, `debug/`
 (capture, probe, profiler, gpuTimer, debug page), `ui/` App, `home/` (room list), `menu/` (Esc menu: room, host setup, dev),
 `hud/` (HUD, chat, controls line, name tags) · `src/audit` audits (maps.ts, systems.ts, run.ts) · `scripts/` CLI tools ·
-`blender/` source models + `export.py` (`bun run assets --export [--dry-run]`; new models: add an `A_<name>` collection and the
+`blender/` source models + `export.py` (`bun run assets --export [--dry-run]`: modifiers applied, AO baked per model in
+Cycles and attached as each material's occlusion map, compressed with ffmpeg from `ffmpeg-master-latest-win64-gpl/` or $FFMPEG; new models: add an `A_<name>` collection and the
 name to `MODEL_NAMES`). Client rendering: `src/client/game/renderer.ts` (presets, shadows, feature toggles), `postfx.ts` (the post
 pipeline: scene/MSAA, composite, SMAA, TAA, output), `xegtao.ts` (AO), `fsr.ts` (FSR 1 EASU + RCAS), `lod.ts` (M0–M6 + dithered cross-fade), `materials.ts` (surfaces, patterns, fade chunk),
-`scenery.ts` + `decor.ts` (clouds, islands, themed set pieces, the ground below). Looks: `src/sim/looks.ts` (per map in
+`scenery.ts` + `decor.ts` (clouds, islands, themed set pieces, the ground below). Lighting: the sun is the only light (one
+shadow map, no cascades, statics baked: `shadowBake.ts`); ambient light is image-based (`environment.ts`). Looks: `src/sim/looks.ts` (per map in
 `defineMap(meta, build, looks)`: palettes, patterns, sky, sun, fog, motes, decor set; a round picks one by seed; visual only).

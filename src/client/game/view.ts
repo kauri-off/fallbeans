@@ -97,7 +97,9 @@ export function plainMaterial(
   opts: THREE.MeshStandardMaterialParameters = {},
   surface: SurfaceKind = 'plastic',
 ): THREE.Material {
-  const key = `plain|${color}|${JSON.stringify(opts)}|${surface}`;
+  // (A texture in the options, the baked AO of a model, keys by its id.)
+  const { aoMap, ...rest } = opts;
+  const key = `plain|${color}|${JSON.stringify(rest)}|${surface}|${aoMap?.uuid ?? ''}`;
   let m = matCache.get(key);
   if (!m) {
     m = applySurface(new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.5, ...opts }), surface, {

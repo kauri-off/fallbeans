@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { ResolvedLook } from '../../sim/looks';
 import { GpuTimer } from '../debug/gpuTimer';
+import { Ambient } from './environment';
 import { FSR_SCALE, type Upscale } from './fsr';
 import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
@@ -16,8 +16,6 @@ interface Preset {
   pixelRatio: number;
   shadowMap: number;
   shadowRange: number;
-  /** Largest shadow map of other lights (lamps): they are drawn live every frame, statics included. */
-  localShadowMap: number;
   /**
    * Anti-aliasing is SMAA 4x on every preset: SMAA 1x (edges) + 2x MSAA (spatial multisampling)
    * + 2x temporal supersampling (jittered frames blended with the reprojected previous one).
@@ -30,8 +28,8 @@ interface Preset {
 }
 
 const PRESETS: Record<Quality, Preset> = {
-  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, localShadowMap: 512, msaa: 2, ao: null, lodBias: 0.75 },
-  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, localShadowMap: 1024, msaa: 2, ao: AO_QUALITY.high, lodBias: 1 },
+  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 2, ao: null, lodBias: 0.75 },
+  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 2, ao: AO_QUALITY.high, lodBias: 1 },
 };
 
 /**
@@ -39,7 +37,7 @@ const PRESETS: Record<Quality, Preset> = {
  * only ever removes work from the preset (the ambient occlusion stays off on medium).
  */
 export interface Effects {
-  /** Shadows of every light (the shadow maps are not drawn at all). */
+  /** The sun's shadow (the shadow map is not drawn at all). */
   shadows: boolean;
   /** Ambient occlusion. */
   ao: boolean;
@@ -185,10 +183,10 @@ function motes(time: { value: number }): THREE.Points {
 }
 
 /**
- * The shadow map of a directional or spot light: 16-bit depth (plenty for these ranges, half the
- * bandwidth of the default) and a minimal colour attachment (never written: see splitShadows).
+ * The sun's shadow map: one plain map (no cascades), 16-bit depth (plenty for its 140 m range, half
+ * the bandwidth of the default) and a minimal colour attachment (never written: see depthOnly).
  */
-function shadowTarget(light: THREE.Light & { shadow: THREE.LightShadow }): THREE.WebGLRenderTarget {
+function shadowTarget(light: THREE.DirectionalLight): THREE.WebGLRenderTarget {
   const { x, y } = light.shadow.mapSize;
   const rt = new THREE.WebGLRenderTarget(x, y, {
     format: THREE.RedFormat,
@@ -208,7 +206,8 @@ function shadowTarget(light: THREE.Light & { shadow: THREE.LightShadow }): THREE
 }
 
 /**
- * WebGL2 renderer: soft shadows following the camera, image-based lighting, neutral tone
+ * WebGL2 renderer: one light (the sun) with a soft shadow following the camera, image-based
+ * ambient light (see environment.ts), neutral tone
  * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, (high)
  * half-resolution XeGTAO and FSR 1 upscaling (see postfx.ts).
  */
@@ -217,7 +216,6 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(70, 1, 0.25, 1100);
   readonly sun = new THREE.DirectionalLight('#fff1dc', 2.2);
-  readonly hemi = new THREE.HemisphereLight('#cfe8ff', '#b99be0', 0.9);
   private preset: Preset = PRESETS.high;
   quality: Quality = 'high';
   private readonly time = { value: 0 };
@@ -232,8 +230,10 @@ export class Renderer {
   readonly fx: Effects = { ...DEFAULT_EFFECTS };
   /** FSR mode: the scene renders below the display resolution and is upscaled. */
   upscale: Upscale = 'off';
-  private _statics: Statics | null = null;
+  /** Static meshes of the current map (their shadows are baked once, not drawn every frame). */
+  statics: Statics | null = null;
   readonly bake: ShadowBake;
+  private readonly ambient: Ambient;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -249,13 +249,10 @@ export class Renderer {
     this.renderer.info.autoReset = false;
     setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.3;
-    pmrem.dispose();
+    this.ambient = new Ambient(this.renderer);
+    this.scene.environment = this.ambient.build(0.3, { sky: '#cfe8ff', ground: '#b99be0', intensity: 0.9 });
     this.scene.fog = new THREE.Fog(SKY_HORIZON.clone().lerp(SKY_TOP, 0.25), 120, 520);
     this.scene.add(this.sky, this.motes);
-    this.scene.add(this.hemi);
     this.sun.name = 'sun';
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0003;
@@ -264,32 +261,17 @@ export class Renderer {
     this.scene.add(this.sun, this.sun.target);
     this.bake = new ShadowBake(this.renderer, SUN_OFFSET, this.scene);
     this.post = new PostPipeline(this.renderer, this.scene, this.camera);
-    this.splitShadows();
+    this.depthOnly();
   }
 
-  /** Static meshes of the current map (their shadows are baked once, not drawn every frame). */
-  get statics(): Statics | null {
-    return this._statics;
-  }
-
-  set statics(s: Statics | null) {
-    this._statics = s;
-    // A new map may bring lights of its own.
-    if (!this.fx.shadows) this.applyShadows();
-  }
-
-  /**
-   * The sun's shadow map starts from the bake and draws only moving things; other lights (lamps)
-   * have no bake, so theirs are drawn in a second pass with the static casters in. Shadow maps are
-   * depth only: colour writes stay off while they render.
-   */
-  private splitShadows() {
+  /** The shadow map is depth only: colour writes stay off while it renders. */
+  private depthOnly() {
     type Render = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => void;
     const sm = this.renderer.shadowMap as unknown as { render: Render };
     const orig = sm.render.bind(sm);
     const color = this.renderer.state.buffers.color;
-    const draw = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => {
-      for (const l of lights) this.prepareShadow(l);
+    sm.render = (lights, scene, camera) => {
+      this.sun.shadow.map ??= shadowTarget(this.sun);
       color.setMask(false);
       color.setLocked(true);
       try {
@@ -299,37 +281,6 @@ export class Renderer {
         color.setMask(true);
       }
     };
-    sm.render = (lights, scene, camera) => {
-      const statics = this._statics;
-      if (!statics || lights.every((l) => l === this.sun)) {
-        draw(lights, scene, camera);
-        return;
-      }
-      if (lights.includes(this.sun)) draw([this.sun], scene, camera);
-      statics.castLive(true);
-      this.bake.active = false;
-      draw(
-        lights.filter((l) => l !== this.sun),
-        scene,
-        camera,
-      );
-      this.bake.active = true;
-      statics.castLive(false);
-    };
-  }
-
-  /** Our own shadow map for directional and spot lights, and the preset's size limit for lamps. */
-  private prepareShadow(l: THREE.Light) {
-    const light = l as THREE.Light & { shadow?: THREE.LightShadow; isPointLight?: boolean };
-    const shadow = light.shadow;
-    if (!shadow || light.isPointLight) return;
-    if (light !== this.sun) {
-      const want = (light.userData.fbShadowSize as number | undefined) ?? shadow.mapSize.x;
-      light.userData.fbShadowSize = want;
-      const size = Math.min(want, this.preset.localShadowMap);
-      if (shadow.mapSize.x !== size) shadow.mapSize.set(size, size);
-    }
-    shadow.map ??= shadowTarget(light as THREE.Light & { shadow: THREE.LightShadow });
   }
 
   setQuality(q: Quality) {
@@ -398,19 +349,11 @@ export class Renderer {
     this.cut();
   }
 
-  /**
-   * Shadows on or off for every light in the scene (a light keeps whether it casts in its user
-   * data). Lights that stop casting change the shader programs, so nothing samples a stale map.
-   */
+  /** The sun's shadow on or off (its castShadow changes the shader programs: nothing samples a stale map). */
   private applyShadows() {
     const on = this.fx.shadows;
     this.renderer.shadowMap.enabled = on;
-    this.scene.traverse((o) => {
-      if (!(o instanceof THREE.Light) || !(o as { shadow?: unknown }).shadow) return;
-      if (o.userData.fbCast === undefined) o.userData.fbCast = o.castShadow;
-      o.castShadow = on && (o.userData.fbCast as boolean);
-      if (on) delete o.userData.fbCast;
-    });
+    this.sun.castShadow = on;
   }
 
   /**
@@ -431,15 +374,13 @@ export class Renderer {
     (sky.sunDir!.value as THREE.Vector3).copy(SUN_OFFSET).normalize();
     this.sun.color.set(look.sun.color);
     this.sun.intensity = look.sun.intensity;
-    this.hemi.color.set(look.hemi.sky);
-    this.hemi.groundColor.set(look.hemi.ground);
-    this.hemi.intensity = look.hemi.intensity;
     const fog = this.scene.fog as THREE.Fog;
     fog.color.set(look.fog.color);
     fog.near = look.fog.near;
     fog.far = look.fog.far;
     this.renderer.toneMappingExposure = look.exposure;
-    this.scene.environmentIntensity = look.env;
+    this.scene.environment = this.ambient.build(look.env, look.hemi);
+    this.scene.environmentIntensity = 1;
     this.post.setGrade(look.saturation);
     const motes = (this.motes.material as THREE.ShaderMaterial).uniforms;
     (motes.tint!.value as THREE.Color).set(look.motes.color);
@@ -475,10 +416,10 @@ export class Renderer {
     // Profiling: the same frame several times back to back keeps the GPU busy, so timer queries
     // measure work rather than the gaps while it waits for the CPU (see GpuTimer).
     this.camera.updateMatrixWorld();
-    this._statics?.update(this.camera);
+    this.statics?.update(this.camera);
     lod.update(this.camera);
     // Static shadows at the live shadow map's texel size (the bake is redone when that or the statics change).
-    if (this.fx.shadows) this.bake.update(this._statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
+    if (this.fx.shadows) this.bake.update(this.statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
     for (let i = 0; i < this.debugRepeat; i++) {
       if (i) this.renderer.info.reset();
       this.post.jitter();
