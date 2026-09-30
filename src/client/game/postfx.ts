@@ -313,8 +313,6 @@ export class PostPipeline {
   private index = 0;
   private valid = false;
   private jittered = false;
-  /** Frames rendered (the AO noise pattern follows it with the temporal pass on). */
-  private frame = 0;
 
   /** In drawing order; the profiler times them and switches them off. */
   readonly stages: Stage[];
@@ -431,7 +429,6 @@ export class PostPipeline {
 
   render() {
     if (!this.cfg) return;
-    this.frame++;
     for (const st of this.stages) if (st.enabled || st === this.stage.scene || st === this.stage.composite) st.render();
     if (!this.stage.fsr.enabled) this.renderOutput();
   }
@@ -455,7 +452,9 @@ export class PostPipeline {
 
   private renderAo() {
     if (!this.aoOn || !this.sceneRT) return;
-    this.ao.render(this.renderer, this.quad, this.sceneRT.depthTexture!, this.camera, this.temporalOn ? this.frame : 0);
+    // A fixed noise pattern: one that changes every frame needs a strong temporal filter to average it,
+    // and ours (SMAA T2x) is light: it showed as a shimmer. The denoiser smooths the fixed one.
+    this.ao.render(this.renderer, this.quad, this.sceneRT.depthTexture!, this.camera, 0);
   }
 
   private renderComposite() {
