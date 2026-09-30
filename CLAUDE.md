@@ -55,4 +55,6 @@ players, clock, roomDebug, arena (simulation, recording), director, awards, repl
 `hud/` (HUD, chat, controls line, name tags) · `src/audit` audits (maps.ts, systems.ts, run.ts) · `scripts/` CLI tools ·
 `blender/` source models + `export.py` (`bun run assets --export [--dry-run]`; new models: add an `A_<name>` collection and the
 name to `MODEL_NAMES`). Client rendering: `src/client/game/renderer.ts` (presets, passes), `postfx.ts` (scene/MSAA,
-temporal AA), `lod.ts` (M0–M3 + dithered cross-fade), `materials.ts` (surfaces, patterns, fade chunk).
+temporal AA), `lod.ts` (M0–M3 + dithered cross-fade), `materials.ts` (surfaces, patterns, fade chunk),
+`scenery.ts` + `decor.ts` (clouds, islands, themed set pieces, the ground below). Looks: `src/sim/looks.ts` (per map in
+`defineMap(meta, build, looks)`: palettes, patterns, sky, sun, fog, motes, decor set; a round picks one by seed; visual only).

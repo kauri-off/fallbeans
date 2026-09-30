@@ -275,14 +275,17 @@ function glassBridge(id: number, rows: number, cols: number, gloveRows: readonly
   };
 }
 
-export default defineMap(meta, (b, ctx) => {
-  b.style.pattern = 'checker';
-  const mids = pickSections(b.rng, [rotorDecks(1), movingPlatforms(4), gloveAlley(3), pistons(3), tippingBridge(5)], 2);
-  const rows = (lo: number) => lo + Math.floor(b.rng() * 3);
-  return raceCourse(b, ctx, {
-    sections: withRests(
-      [glassBridge(0, rows(8), 5), mids[0]!, glassBridge(1, rows(6), 4, [2, 5]), mids[1]!, glassBridge(2, rows(5), 3, [1, 3])],
-      6,
-    ),
-  });
-});
+export default defineMap(
+  meta,
+  (b, ctx) => {
+    const mids = pickSections(b.rng, [rotorDecks(1), movingPlatforms(4), gloveAlley(3), pistons(3), tippingBridge(5)], 2);
+    const rows = (lo: number) => lo + Math.floor(b.rng() * 3);
+    return raceCourse(b, ctx, {
+      sections: withRests(
+        [glassBridge(0, rows(8), 5), mids[0]!, glassBridge(1, rows(6), 4, [2, 5]), mids[1]!, glassBridge(2, rows(5), 3, [1, 3])],
+        6,
+      ),
+    });
+  },
+  ['starlight', 'neon', 'ocean'],
+);

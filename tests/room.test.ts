@@ -90,7 +90,7 @@ describe('room', () => {
     advance(room, 500);
     const pa = room.arena.pawns.get(a.id)!;
     const pb = room.arena.pawns.get(b.id)!;
-    // Out of reach of the lobby rotor.
+    // On open floor between the plaza and the playground.
     pa.body.reset(new THREE.Vector3(-3, 0.05, -12));
     pb.body.reset(new THREE.Vector3(3, 0.05, -12.5));
     advance(room, 300);

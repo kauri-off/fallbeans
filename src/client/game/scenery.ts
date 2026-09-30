@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Builder } from '../../sim/builder';
 import type { Collider } from '../../sim/physics';
 import { clone, meshParts } from './assets';
+import { cloudTint, decorate, island } from './decor';
 import { atLevel } from './lod';
 import { applySurface } from './materials';
 import { patternMaterial, plainMaterial } from './view';
@@ -56,10 +57,11 @@ function bounds(boxes: readonly Box[]): Box {
 
 /**
  * Client-only scenery after a map is built and its colliders placed: drifting clouds kept clear
- * of the course, birds circling far out and hot-air balloons bobbing on the horizon.
+ * of the course, birds circling far out and hot-air balloons bobbing on the horizon, floating
+ * islands, and the set pieces and the land below of the round's look (decor.ts).
  */
 export function placeScenery(b: Builder) {
-  if (!b.view || !b.scenery.length) return;
+  if (!b.view) return;
   const boxes = b.world.colliders.map(colliderBox);
   const all = bounds(boxes);
   // Scenery randomness is visual only: its own generator, so map layouts stay as they are.
@@ -71,10 +73,14 @@ export function placeScenery(b: Builder) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   for (const req of b.scenery) clouds(b, boxes, req, rnd);
-  birds(b, all, rnd);
-  balloons(b, boxes, all, rnd);
+  if (b.look.birds) birds(b, all, rnd);
+  if (b.look.balloons) balloons(b, boxes, all, rnd);
   islands(b, boxes, all, rnd);
+  decorate(b, all, (p, r, h, margin) => blocked(boxes, p, r, h, margin), rnd);
 }
+
+/** Looks whose islands grow trees. */
+const LEAFY = new Set(['classic', 'meadow', 'castle', 'circus', 'royal', 'jungle', 'ocean']);
 
 /** Floating islands below and around the course, with trees, pines and mushrooms on top. */
 function islands(b: Builder, boxes: readonly Box[], all: Box, rnd: () => number) {
@@ -93,10 +99,10 @@ function islands(b: Builder, boxes: readonly Box[], all: Box, rnd: () => number)
       if (!blocked(boxes, c, 4.5 * scale + 2, 7 * scale, 8)) pos = c;
     }
     if (!pos) continue;
-    const g = clone('island');
+    const g = island(b, b.look);
     g.scale.setScalar(scale);
     g.rotation.y = rnd() * 6.3;
-    const n = 1 + Math.floor(rnd() * 3);
+    const n = LEAFY.has(b.look.id) ? 1 + Math.floor(rnd() * 3) : 0;
     for (let i = 0; i < n; i++) {
       const f = clone(flora[Math.floor(rnd() * flora.length)]!);
       const a = rnd() * 6.3;
@@ -147,7 +153,8 @@ function clouds(b: Builder, boxes: readonly Box[], req: Builder['scenery'][numbe
   }
   if (!list.length) return;
   const parts = meshParts('cloud').map(({ mesh, local }) => {
-    const inst = new THREE.InstancedMesh(atLevel(mesh.geometry, 1), mesh.material, list.length);
+    const mat = Array.isArray(mesh.material) ? mesh.material : cloudTint(b, b.look, mesh.material);
+    const inst = new THREE.InstancedMesh(atLevel(mesh.geometry, 1), mat, list.length);
     inst.frustumCulled = false;
     inst.castShadow = false;
     inst.receiveShadow = false;

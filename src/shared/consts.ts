@@ -2,7 +2,23 @@ export const PROTOCOL_VERSION = 9;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;
-export const COLORS = ['#ff5fa2', '#3fa9ff', '#ffd23f', '#4fdc6a', '#a66bff', '#ff8a3d', '#39e0d0', '#ffffff'] as const;
+/** Bean colours: hex, or RAINBOW (the colour runs through the rainbow). The first eight go to newcomers. */
+export const RAINBOW = 'rainbow';
+export const COLORS = [
+  '#ff5fa2',
+  '#3fa9ff',
+  '#ffd23f',
+  '#4fdc6a',
+  '#a66bff',
+  '#ff8a3d',
+  '#39e0d0',
+  '#ffffff',
+  '#ff3b3b',
+  '#2b2b33',
+  '#9ea3b0',
+  '#8b5a2b',
+  RAINBOW,
+] as const;
 export const NAME_MAX = 16;
 /** Emotes 1…EMOTES: wave, dance, laugh, cry, fright. */
 export const EMOTES = 5;
@@ -47,6 +63,8 @@ export const ANIM = {
   reach: 8,
   climb: 9,
   climbOver: 10,
+  /** Inside a portal: not drawn. */
+  portal: 11,
 } as const;
 export type AnimCode = (typeof ANIM)[keyof typeof ANIM];
 

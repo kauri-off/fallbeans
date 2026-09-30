@@ -3,7 +3,7 @@ import { GENRE_LABEL } from '../../../shared/game';
 import type { LobbyPlayer } from '../../../shared/protocol';
 import { settings } from '../../settings';
 import { arenaInfo, conn, feed, gameEnd, hud, lobby, menuOpen, myId, needClick, results } from '../../state';
-import { cause, fmtTime, ordinal, signed } from '../labels';
+import { cause, colorBg, fmtTime, ordinal, signed } from '../labels';
 import { Keys } from './Keys';
 
 const playersById = () => new Map((lobby.value?.players ?? []).map((p) => [p.id, p]));
@@ -11,7 +11,7 @@ const playersById = () => new Map((lobby.value?.players ?? []).map((p) => [p.id,
 function Name({ p, id }: { p: LobbyPlayer | undefined; id: number }) {
   return (
     <span class={`who${id === myId.value ? ' me' : ''}`}>
-      <i class="dot" style={{ background: p?.color ?? '#ccc' }} />
+      <i class="dot" style={{ background: colorBg(p?.color ?? '#ccc') }} />
       {p?.name ?? `#${id}`}
     </span>
   );
@@ -50,6 +50,9 @@ function Panel() {
               <Name p={p} id={p.id} />
               {p.id === l?.host && <span title="Хост">⭐</span>}
               {info.kind === 'lobby' && p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
+              {info.kind === 'lobby' && (h.roundScores[p.id] ?? 0) > 0 && (
+                <span title="Звонков в колокол на башне">🔔{h.roundScores[p.id]}</span>
+              )}
               <span class="st">{icon}</span>
               {round && points && <span class="rs">{h.roundScores[p.id] ?? 0}</span>}
               {info.kind !== 'lobby' && <b class="sc">{p.score}</b>}

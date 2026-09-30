@@ -3,6 +3,7 @@ import { getGame } from '../../../games';
 import { BASE_PATH, COLORS } from '../../../shared/consts';
 import type { Game } from '../../game/game';
 import { arenaInfo, lobby, myId, practiceGame } from '../../state';
+import { colorBg } from '../labels';
 import { NameForm, PracticeList } from '../shared';
 import { HostSetup } from './HostSetup';
 
@@ -46,7 +47,7 @@ export function RoomTab({ game }: { game: Game }) {
                 type="button"
                 key={c}
                 class={`swatch${mine?.color === c ? ' on' : ''}`}
-                style={{ background: c }}
+                style={{ background: colorBg(c) }}
                 disabled={taken}
                 title={taken ? 'Цвет занят' : 'Выбрать цвет'}
                 onClick={() => send({ t: 'color', c })}
@@ -64,7 +65,7 @@ export function RoomTab({ game }: { game: Game }) {
           <ul class="players">
             {l.players.map((p) => (
               <li key={p.id} class={p.connected ? '' : 'dim'}>
-                <i class="dot" style={{ background: p.color }} />
+                <i class="dot" style={{ background: colorBg(p.color) }} />
                 <span class="grow">
                   {p.name}
                   {p.id === me && ' (вы)'}

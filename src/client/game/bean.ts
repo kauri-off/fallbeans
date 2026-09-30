@@ -1,10 +1,25 @@
 import * as THREE from 'three';
-import { ANIM } from '../../shared/consts';
+import { ANIM, RAINBOW } from '../../shared/consts';
 import { shotMode } from '../state';
 import { clone } from './assets';
 import { type Expr, Face } from './face';
 import { lod } from './lod';
 import { applySurface } from './materials';
+
+/** A colour three.js understands (the rainbow starts red and is recoloured every frame: tickRainbow). */
+const baseColor = (color: string) => new THREE.Color(color === RAINBOW ? '#ff5f5f' : color);
+const WHITE = new THREE.Color('#ffffff');
+const hue = new THREE.Color();
+
+/** The rainbow suit: its colour runs round the colour wheel (`t` in seconds). */
+export function tickRainbow(t: number) {
+  const body = bodyMats.get(RAINBOW);
+  const belly = bellyMats.get(RAINBOW);
+  if (!body && !belly) return;
+  hue.setHSL((t * 0.15) % 1, 0.85, 0.6);
+  body?.color.copy(hue);
+  belly?.color.copy(hue).lerp(WHITE, 0.62);
+}
 
 const bodyMats = new Map<string, THREE.MeshStandardMaterial>();
 /** Smooth, solid suit colour: soft plastic with a faint clearcoat, no surface texture. */
@@ -12,7 +27,7 @@ function bodyMaterial(color: string) {
   let m = bodyMats.get(color);
   if (!m) {
     m = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(color),
+      color: baseColor(color),
       roughness: 0.5,
       clearcoat: 0.3,
       clearcoatRoughness: 0.35,
@@ -31,10 +46,7 @@ const bellyMats = new Map<string, THREE.MeshStandardMaterial>();
 function bellyMaterial(color: string) {
   let m = bellyMats.get(color);
   if (!m) {
-    m = applySurface(
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.62), roughness: 0.55 }),
-      null,
-    );
+    m = applySurface(new THREE.MeshStandardMaterial({ color: baseColor(color).lerp(WHITE, 0.62), roughness: 0.55 }), null);
     bellyMats.set(color, m);
   }
   return m;

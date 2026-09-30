@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
 import * as THREE from 'three';
 import { decodeSnapshot } from '../../shared/codec';
-import { BASE_PATH, DT, INTRO_MS } from '../../shared/consts';
+import { ANIM, BASE_PATH, DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
 import { BONUS_KINDS } from '../../sim/bonus';
@@ -38,7 +38,7 @@ import {
 import { fmtSec, ordinal } from '../ui/labels';
 import { ClientArena } from './arena';
 import { setVolume, sfx } from './audio';
-import { Bean } from './bean';
+import { Bean, tickRainbow } from './bean';
 import { CameraRig } from './camera';
 import { Input } from './input';
 import { type Quality, Renderer } from './renderer';
@@ -387,7 +387,11 @@ export class Game {
         this.arena?.onEvent(m.n, m.d);
         return;
       case 'scores':
-        for (const [id, v] of m.s) this.arena?.scores.set(id, v);
+        for (const [id, v] of m.s) {
+          const was = this.arena?.scores.get(id) ?? 0;
+          this.arena?.scores.set(id, v);
+          if (this.arena?.kind === 'lobby' && v > was) this.bell(id, v);
+        }
         return;
       case 'emote':
         this.beans.get(m.id)?.playEmote(m.e);
@@ -437,6 +441,7 @@ export class Game {
     });
     this.arena = arena;
     this.renderer.statics = arena.statics;
+    this.renderer.applyLook(arena.builder.look);
     arena.onBonus = (b) => {
       const info = BONUS_KINDS[b.kind];
       if (!info || b.takenBy === null) return;
@@ -471,6 +476,16 @@ export class Game {
       void this.input.lock().then(() => {
         if (!this.input.locked && !menuOpen.value) needClick.value = true;
       });
+  }
+
+  /** Lobby: somebody climbed the tower and rang the bell (the lobby map counts it as a score). */
+  private bell(id: number, times: number) {
+    const mine = id === myId.value;
+    if (this.players.get(id)?.bot) return;
+    sfx(mine ? 'win' : 'boing', mine ? 1 : 0.5);
+    this.beans.get(id)?.react('laugh', 2);
+    const again = times > 1 ? ` (в ${times}-й раз)` : '';
+    note(`🔔 ${mine ? 'Вы звоните' : `${this.nameOf(id)} звонит`} в колокол на башне${again}!`);
   }
 
   private removeBean(id: number) {
@@ -515,6 +530,7 @@ export class Game {
     const arena = this.arena;
     const prof = this.prof;
     this.renderer.tick(shotMode.value ? 0 : now / 1000);
+    tickRainbow(shotMode.value ? 0 : now / 1000);
     this.renderer.motes.visible = !shotMode.value;
     if (arena) {
       prof.start('predict');
@@ -656,10 +672,12 @@ export class Game {
     if (arena.body) {
       const b = this.bean(me);
       const yaw = arena.ownPose(dt, this.tmp);
-      pushOut(arena.builder.world, this.tmp, arena.body.tilt, arena.body.tiltDir, arena.body.size);
+      // Inside a portal: out of sight, gliding to the other end (the camera follows it there).
+      const hidden = arena.body.inPortal;
+      if (!hidden) pushOut(arena.builder.world, this.tmp, arena.body.tilt, arena.body.tiltDir, arena.body.size);
       b.root.position.copy(this.tmp);
       b.root.rotation.y = yaw;
-      b.root.visible = true;
+      b.root.visible = !hidden;
       if (podium) b.pose = this.podiumPose(me);
       const held = arena.ownGrab >= 0 ? this.beans.get(arena.ownGrab) : undefined;
       b.animate(dt, {
@@ -687,7 +705,8 @@ export class Game {
         v = new THREE.Vector3();
         this.vels.set(id, v);
       }
-      pushOut(arena.builder.world, p.pos, p.tilt, p.tiltDir, p.power === POWER.giant ? GIANT_SIZE : 1);
+      const inPortal = p.anim === ANIM.portal;
+      if (!inPortal) pushOut(arena.builder.world, p.pos, p.tilt, p.tiltDir, p.power === POWER.giant ? GIANT_SIZE : 1);
       // Velocity from the interpolated path, smoothed: steady cycles instead of per-frame jitter.
       if (!fresh && dt > 0) {
         this.tmp.subVectors(p.pos, b.root.position).divideScalar(dt);
@@ -712,7 +731,10 @@ export class Game {
       });
       // (A bean knocked out just now stays hidden: the last snapshots may still carry it.)
       if (arena.out.has(id) || arena.finished.has(id)) b.root.visible = false;
-      else this.lastSeen.set(id, now);
+      else if (inPortal) {
+        b.root.visible = false;
+        this.lastSeen.set(id, now);
+      } else this.lastSeen.set(id, now);
     }
     for (const [id, b] of this.beans) {
       if (now - (this.lastSeen.get(id) ?? 0) > 400) b.root.visible = false;

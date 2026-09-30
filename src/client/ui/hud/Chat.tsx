@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { CHAT_MAX } from '../../../shared/consts';
 import type { Game } from '../../game/game';
 import { chatFresh, chatLog, chatOpen, menuOpen } from '../../state';
+import { colorInk } from '../labels';
 
 /**
  * The room's text chat, bottom left. Normally invisible; a new line shows it half transparent for a
@@ -29,7 +30,7 @@ export function Chat({ game }: { game: Game }) {
       <div class="chat-log" ref={log}>
         {(open ? lines : lines.slice(-6)).map((l) => (
           <div key={l.n} class={l.mine ? 'me' : ''}>
-            <b style={{ color: l.color }}>{l.name}:</b> {l.text}
+            <b style={{ color: colorInk(l.color) }}>{l.name}:</b> {l.text}
           </div>
         ))}
       </div>

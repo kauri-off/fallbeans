@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mulberry32, type Rng } from '../shared/rng';
-import { Collider, type ColliderOpts, type Shape } from './physics';
+import { CLASSIC, type Palette, type PalKey, type PatternKind, type ResolvedLook } from './looks';
+import { Collider, type ColliderOpts, PORTAL_T, type Shape } from './physics';
 import { type Mover, World } from './world';
 
 export const MODEL_NAMES = [
@@ -26,7 +27,7 @@ export const MODEL_NAMES = [
 ] as const;
 export type ModelName = (typeof MODEL_NAMES)[number];
 
-export type Palette = readonly [string, string];
+export type { Palette, PatternKind };
 
 export const PAL = {
   blue: ['#7ccfff', '#9bdcff'],
@@ -38,7 +39,10 @@ export const PAL = {
   orange: ['#ff9f4a', '#ffb673'],
   red: ['#ff6070', '#ff8490'],
   teal: ['#39e0d0', '#6ff0e4'],
-} as const satisfies Record<string, Palette>;
+} as const satisfies Record<PalKey, Palette>;
+
+/** Which palette a PAL entry is (the look of a round repaints them). */
+const PAL_KEY = new Map<Palette, PalKey>(Object.entries(PAL).map(([k, v]) => [v, k as PalKey]));
 
 export type PrimKind = 'box' | 'cyl' | 'sphere';
 
@@ -61,9 +65,6 @@ export type SurfaceKind =
   | 'cloth'
   | 'glass'
   | 'carpet';
-
-/** Two-colour pattern of palette materials (client). */
-export type PatternKind = 'stripes' | 'checker' | 'dots' | 'chevron' | 'waves';
 
 /** Client-only decoration placed after the build, clear of everything solid. */
 export interface SceneryRequest {
@@ -102,6 +103,18 @@ export interface View {
 }
 
 export type Anim = (t: number, dt: number) => void;
+
+/** How long (s) both ends of a portal stay shut after the traveller came out. */
+export const PORTAL_CLOSED = 1;
+
+/** The last trip through a pair of portals (the same on the server and on clients). */
+export interface PortalPair {
+  /** Sim time somebody went in, and at which end (0 or 1). */
+  at: number;
+  from: number;
+  /** Both ends are shut until then. */
+  closedUntil: number;
+}
 
 export interface PrimOpts extends ColliderOpts {
   material?: THREE.Material | undefined;
@@ -167,8 +180,14 @@ export class Builder {
   /** Candidate spots for bonuses (sim/bonus.ts picks a few of them per round). */
   readonly bonusSpots: { x: number; y: number; z: number }[] = [];
   readonly rng: Rng;
+  /** Portal pairs in build order (their index is how the server names them to clients). */
+  readonly portalPairs: PortalPair[] = [];
+  /** Server: somebody went through portal pair `pair` (the arena tells the clients). */
+  onPortal: ((pair: number, from: number, t: number) => void) | null = null;
   /** Look of the map (client only): the pattern its palette materials use by default. */
   readonly style: { pattern: PatternKind } = { pattern: 'stripes' };
+  /** This round's look (sim/looks.ts): colours, light, sky, scenery. Visual only. */
+  look: ResolvedLook = CLASSIC;
 
   constructor(
     readonly seed: number,
@@ -181,8 +200,21 @@ export class Builder {
     return this.view === null;
   }
 
+  /** Sets the round's look (before the build): the palettes are repainted, the pattern is its pick. */
+  setLook(look: ResolvedLook) {
+    this.look = look;
+    this.style.pattern = look.pattern;
+  }
+
+  /** A palette as this round's look paints it (hex colours are kept as they are). */
+  pal<P extends Palette | string>(p: P): P | Palette {
+    if (typeof p === 'string' || this.look.id === 'classic') return p;
+    const k = PAL_KEY.get(p as Palette);
+    return k ? this.look.palette[k] : p;
+  }
+
   mat(pal: Palette | string, freq?: number): THREE.Material | undefined {
-    return this.view?.material(pal, freq);
+    return this.view?.material(this.pal(pal), freq);
   }
 
   /** Collision-relevant motion: a pure function of time, run on server and client. */
@@ -211,7 +243,11 @@ export class Builder {
     const [a = 1, b = 1, c = 1] = dims;
     const big = kind === 'box' ? a * c >= 30 && Math.min(a, c) >= 3 && b <= 3 : kind === 'cyl' ? a >= 4 && b <= 3 : false;
     const surface = opts.surface ?? (kind === 'sphere' ? 'rubber' : big ? 'padded' : 'plastic');
-    return v.prim(kind, dims, opts.material ?? v.material(pal, opts.freq ?? freq, surface, opts.pattern ?? this.style.pattern));
+    return v.prim(
+      kind,
+      dims,
+      opts.material ?? v.material(this.pal(pal), opts.freq ?? freq, surface, opts.pattern ?? this.style.pattern),
+    );
   }
 
   box(
@@ -377,23 +413,30 @@ export class Builder {
     const top = this.cyl(x, y + 0.05, z, r, 0.1, PAL.blue, { pad: power, material: mat, surface: 'fabric' });
     const base = top.obj.position.y;
     this.anim((t) => {
-      // The mat sags and springs back.
+      // The mat sags and springs back: never below the rim (top y + 0.03), which would hide it.
       const k = Math.max(0, Math.sin(t * 6 + x)) ** 4;
-      top.obj.position.y = base - k * 0.08;
-      top.obj.scale.set(1, 1 - k * 0.3, 1);
+      top.obj.position.y = base - k * 0.03;
+      top.obj.scale.set(1, 1 - k * 0.25, 1);
     });
     return top;
   }
 
   /**
-   * Two linked portals (rings standing up, facing yaw): running into either comes out in front of
-   * the other, facing its way, with at least minSpeed.
+   * Two linked portals (rings standing up, facing yaw): running into either takes PORTAL_T, out of
+   * sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip
+   * closes both ends (sashes shut, solid) until a second after the traveller is out; the end they
+   * went in at flashes as it swallows them, the other as it lets them out.
    */
   portal(
     a: { x: number; y: number; z: number; yaw: number },
     b: { x: number; y: number; z: number; yaw: number },
     color = '#a66bff',
   ) {
+    const k = this.portalPairs.length;
+    const pair: PortalPair = { at: -1e9, from: 0, closedUntil: -1e9 };
+    this.portalPairs.push(pair);
+    // (Not in the tick it closed: prediction may replay that tick, and must go through again.)
+    const closed = (t: number) => t > pair.at && t < pair.closedUntil;
     const ends = [a, b];
     ends.forEach((e, i) => {
       const other = ends[1 - i]!;
@@ -407,9 +450,25 @@ export class Builder {
           isStatic: true,
           trigger: true,
           navSkip: true,
-          onTouch: (_c, _n, body) => body.warp(to, other.yaw),
+          onTouch: (_c, _n, body) => {
+            const t = this.world.t;
+            if (body.inPortal || closed(t)) return;
+            this.portalUsed(k, i, t);
+            body.enterPortal(to, other.yaw);
+            this.onPortal?.(k, i, t);
+          },
         },
       );
+      // Shut: the sashes are a wall.
+      const sash = this.collider(
+        this.anchor(0, 1.35, 0, ring),
+        { type: 'box', hx: 1.25, hy: 1.3, hz: 0.12 },
+        { isStatic: true, navSkip: true },
+      );
+      sash.enabled = false;
+      this.move((t) => {
+        sash.enabled = closed(t);
+      });
       const v = this.view;
       if (!v) return;
       const frame = new THREE.Mesh(
@@ -419,30 +478,100 @@ export class Builder {
       frame.position.y = 1.4;
       frame.castShadow = true;
       ring.add(frame);
-      const disc = new THREE.Mesh(
-        v.own(new THREE.CircleGeometry(1.2, 48)),
-        v.own(
-          new THREE.MeshBasicMaterial({
-            map: v.own(swirlTexture(color)),
-            transparent: true,
-            opacity: 0.85,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            toneMapped: false,
-          }),
-        ),
+      const discMat = v.own(
+        new THREE.MeshBasicMaterial({
+          map: v.own(swirlTexture(color)),
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          toneMapped: false,
+        }),
       );
+      const disc = new THREE.Mesh(v.own(new THREE.CircleGeometry(1.2, 48)), discMat);
       disc.position.y = 1.4;
       ring.add(disc);
       for (const sx of [-1, 1])
         this.box(e.x + Math.cos(e.yaw) * sx * 1.35, e.y + 0.15, e.z - Math.sin(e.yaw) * sx * 1.35, 0.5, 0.3, 0.5, color, {
           noCollide: true,
         });
+      // Two half-disc sashes hinged at the rim, sliding shut towards the middle.
+      const sashMat = v.plain(color, { roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide }, 'metal');
+      const sashes = [-1, 1].map((side) => {
+        const g = v.own(new THREE.CircleGeometry(1.22, 32, side < 0 ? Math.PI / 2 : -Math.PI / 2, Math.PI));
+        g.translate(-side * 1.22, 0, 0);
+        const m = new THREE.Mesh(g, sashMat);
+        m.position.set(side * 1.22, 1.4, 0);
+        m.visible = false;
+        m.userData.dynamic = true;
+        ring.add(m);
+        return m;
+      });
+      // Light: a flash that swallows (way in) or bursts out (way out), and a ring of light going out.
+      const flashMat = v.own(
+        new THREE.MeshBasicMaterial({
+          color: '#fff6d0',
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      const flash = new THREE.Mesh(v.own(new THREE.SphereGeometry(1, 24, 16)), flashMat);
+      flash.position.y = 1.4;
+      flash.visible = false;
+      flash.userData.dynamic = true;
+      ring.add(flash);
+      const waveMat = v.own(
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      const wave = new THREE.Mesh(v.own(new THREE.TorusGeometry(1.35, 0.1, 10, 48)), waveMat);
+      wave.position.y = 1.4;
+      wave.visible = false;
+      wave.userData.dynamic = true;
+      ring.add(wave);
       this.anim((t) => {
         disc.rotation.z = t * (i ? -2.2 : 2.2);
-        disc.scale.setScalar(1 + Math.sin(t * 4 + i) * 0.03);
+        const shut = t < pair.at || t >= pair.closedUntil ? 0 : Math.min(1, (t - pair.at) / 0.15, (pair.closedUntil - t) / 0.2);
+        for (const m of sashes) {
+          m.visible = shut > 0.001;
+          m.scale.x = Math.max(0.001, shut);
+        }
+        // How long ago somebody went in here, or came out here.
+        const age = pair.from === i ? t - pair.at : t - pair.at - PORTAL_T;
+        const into = pair.from === i;
+        const span = into ? 0.4 : 0.6;
+        const f = age >= 0 && age < span ? age / span : -1;
+        flash.visible = f >= 0;
+        wave.visible = f >= 0 && !into;
+        if (f >= 0) {
+          const out = 1 - (1 - f) ** 3;
+          flash.scale.setScalar(into ? 0.2 + 2.4 * (1 - f) : 0.3 + 3.2 * out);
+          flashMat.opacity = into ? 0.95 * (1 - f * f) : 1 - f;
+          wave.scale.setScalar(1 + 1.4 * out);
+          waveMat.opacity = 1 - f;
+        }
+        discMat.color.setScalar(1 + (f >= 0 ? 1.5 * (1 - f) : 0));
+        disc.scale.setScalar((1 + Math.sin(t * 4 + i) * 0.03) * (1 - shut * 0.6));
       });
     });
+  }
+
+  /** A trip through portal pair `pair`, in at end `from` at time t: both ends shut till it is over. */
+  portalUsed(pair: number, from: number, t: number) {
+    const p = this.portalPairs[pair];
+    if (!p || t < p.at) return;
+    p.at = t;
+    p.from = from;
+    p.closedUntil = t + PORTAL_T + PORTAL_CLOSED;
   }
 
   finish(x: number, y: number, z: number) {

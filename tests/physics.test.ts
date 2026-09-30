@@ -281,12 +281,13 @@ describe('course mechanics', () => {
     b.world.finalize(0);
     const body = new PlayerBody(1);
     body.reset(new THREE.Vector3(0, 0.02, 0));
-    let warped = false;
-    for (let i = 0; i < 120 && !warped; i++) {
+    // In, half a second inside (out of play), then out at the other end.
+    let out = false;
+    for (let i = 0; i < 240 && !out; i++) {
       run(body, b.world, i / 120, 1, { ...idle, mz: 1 });
-      warped = body.warped;
+      out = body.portalOut;
     }
-    expect(warped).toBe(true);
+    expect(out).toBe(true);
     expect(body.pos.x).toBeGreaterThan(21);
     expect(body.vel.x).toBeGreaterThan(5);
   });

@@ -16,6 +16,7 @@ import { canMove } from '../../shared/game';
 import type { ArenaInfo } from '../../shared/protocol';
 import { BONUS_EVENT, type Bonus, Bonuses } from '../../sim/bonus';
 import { Builder } from '../../sim/builder';
+import { lookFor } from '../../sim/looks';
 import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
 import { type OtherBody, PlayerBody } from '../../sim/physics';
 import { report } from '../debug/capture';
@@ -110,6 +111,7 @@ export class ClientArena {
     if (!mod) throw new Error(`unknown map ${info.game}`);
     this.mod = mod;
     this.builder = new Builder(info.seed, new ClientView());
+    this.builder.setLook(lookFor(mod.looks, info.seed));
     this.statics = new Statics(this.builder.group);
     for (const [id, v] of info.scores) this.scores.set(id, v);
     for (const id of info.finished) this.finished.add(id);
@@ -163,6 +165,11 @@ export class ClientArena {
 
   /** An authoritative event from the server (map events, bonuses); replay: it happened before we joined. */
   onEvent(name: string, data: unknown, replay = false) {
+    if (name === 'portal') {
+      const d = data as { pair: number; from: number; t: number };
+      this.builder.portalUsed(d.pair, d.from, d.t);
+      return;
+    }
     if (name === BONUS_EVENT) {
       const b = this.bonuses?.onEvent(data);
       if (b && !replay) this.onBonus?.(b);
@@ -242,12 +249,8 @@ export class ClientArena {
       if (b.bumped > this.events.bumped) this.events.bumped = b.bumped;
       if (!wasDive && b.state === 'dive') this.events.dived = true;
       if (!wasGrounded && b.grounded && b.landImpact > 0.3) this.events.landed = Math.max(this.events.landed, b.landImpact);
-      if (b.warped) {
-        // Through a portal: no smoothing across it, and the camera cuts.
-        this.prevPos.copy(b.pos);
-        this.offset.set(0, 0, 0);
-        this.teleported = true;
-      }
+      // Into a portal (the camera glides after the body to the other end: no cut).
+      if (b.portalIn) this.events.bounced = true;
     }
   }
 
@@ -327,13 +330,16 @@ export class ClientArena {
     while (this.frames.length > 40) this.frames.shift();
     const prev = new Map(this.othersSnap.map((o) => [o.id, o]));
     const span = Math.max(1, s.tick - this.othersSnapTick) * DT;
-    this.othersSnap = s.bodies.map((b) => {
-      const p = prev.get(b.id);
-      const vx = p ? (b.x - p.x) / span : 0;
-      const vz = p ? (b.z - p.z) / span : 0;
-      const ok = Math.hypot(vx, vz) < 30;
-      return { id: b.id, x: b.x, y: b.y, z: b.z, vx: ok ? vx : 0, vz: ok ? vz : 0, touching: false };
-    });
+    // (Beans inside a portal are nowhere to bump into.)
+    this.othersSnap = s.bodies
+      .filter((b) => b.anim !== ANIM.portal)
+      .map((b) => {
+        const p = prev.get(b.id);
+        const vx = p ? (b.x - p.x) / span : 0;
+        const vz = p ? (b.z - p.z) / span : 0;
+        const ok = Math.hypot(vx, vz) < 30;
+        return { id: b.id, x: b.x, y: b.y, z: b.z, vx: ok ? vx : 0, vz: ok ? vz : 0, touching: false };
+      });
     this.othersSnapTick = s.tick;
     if (s.own && this.body) {
       this.ownGrab = s.own.grab;
@@ -498,6 +504,7 @@ export class ClientArena {
     if (b.state === 'dive') return ANIM.dive;
     if (b.state === 'slide') return ANIM.slide;
     if (b.state === 'climb') return b.climbingOver ? ANIM.climbOver : ANIM.climb;
+    if (b.state === 'portal') return ANIM.portal;
     if (!b.grounded) return ANIM.air;
     if (this.ownGrab >= 0) return ANIM.grab;
     return this.grabHeld && b.state === 'normal' ? ANIM.reach : ANIM.idle;
