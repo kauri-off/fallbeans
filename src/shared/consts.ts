@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;
@@ -26,7 +26,7 @@ export const PODIUM_MS = 20000;
 export const RECONNECT_GRACE_MS = 30000;
 export const MAX_PRACTICE_ROOMS = 3;
 
-export const ANIM = { idle: 0, air: 1, dive: 2, stun: 3, grab: 4, slide: 5, tumble: 6, getup: 7, reach: 8 } as const;
+export const ANIM = { idle: 0, air: 1, dive: 2, stun: 3, grab: 4, slide: 5, tumble: 6, getup: 7, reach: 8, climb: 9 } as const;
 export type AnimCode = (typeof ANIM)[keyof typeof ANIM];
 
 export const tickToTime = (tick: number) => tick * DT;

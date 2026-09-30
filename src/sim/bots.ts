@@ -1,5 +1,7 @@
+import type * as THREE from 'three';
 import { EMOTES } from '../shared/consts';
 import type { BotBrain, BotInput, BotView } from './map';
+import { DIVE_SPEED, GRAVITY } from './physics';
 
 /** Bot brains run at 20 Hz (BOT_EVERY ticks); timers below use this step. */
 export const BOT_DT = 1 / 20;
@@ -61,19 +63,21 @@ export function steer(bot: BotView, tx: number, tz: number, out: BotInput, speed
   return d;
 }
 
-/** Precise line following for narrow safe corridors: corrects x hard while moving along z. */
+/**
+ * Precise line following for narrow safe corridors, and holding a spot: the stick asks for a speed
+ * in proportion to the distance left (in x across the corridor, in z along it), so the bean eases in
+ * instead of overshooting and correcting back and forth at every decision.
+ */
 export function follow(bot: BotView, tx: number, tz: number, out: BotInput) {
   const b = bot.body;
+  const ex = tx - b.pos.x;
   const dz = tz - b.pos.z;
-  const d = Math.hypot(tx - b.pos.x, dz);
-  // Proportional with damping: no overshooting on moving or rolling ground.
-  const mx = Math.max(-1, Math.min(1, (tx - b.pos.x) * 2.5 - b.vel.x * 0.18));
-  const mz = Math.abs(dz) < 0.2 ? 0 : Math.sign(dz) * Math.max(0.2, 1 - Math.abs(mx));
-  const l = Math.hypot(mx, mz) || 1;
-  const k = Math.min(1, d / 0.8 + 0.2);
-  out.mx = (mx / l) * k;
-  out.mz = (mz / l) * k;
-  return d;
+  const mx = Math.max(-1, Math.min(1, ex * 0.55));
+  const mz = Math.sign(dz) * Math.min(1 - Math.abs(mx) * 0.5, Math.abs(dz) * 0.6);
+  const l = Math.hypot(mx, mz);
+  out.mx = l > 1 ? mx / l : mx;
+  out.mz = l > 1 ? mz / l : mz;
+  return Math.hypot(ex, dz);
 }
 
 /** Extra route cost near other beans on the ground: bots run around a crowd instead of into it. */
@@ -127,19 +131,31 @@ export function navTo(bot: BotView, tx: number, tz: number, out: BotInput, speed
     steer(bot, tx, tz, out, speed);
     return direct;
   }
-  // Move on past points we have reached (or passed).
+  // Move on past points we have reached or passed, and past points that would be a step back or
+  // sideways (a fresh route starts at the nearest cell, which may lie behind).
   while (plan.i < path.length - 1) {
     const p = path[plan.i]!;
     const q = path[plan.i + 1]!;
     const d = Math.hypot(p.x - b.pos.x, p.z - b.pos.z);
+    const seg = Math.hypot(q.x - p.x, q.z - p.z);
     const ahead = (q.x - p.x) * (b.pos.x - p.x) + (q.z - p.z) * (b.pos.z - p.z) > 0;
-    if (d < 0.7 || (ahead && d < 2 && !q.jump)) plan.i++;
+    const closer = Math.hypot(q.x - b.pos.x, q.z - b.pos.z) <= seg + 0.2;
+    const level = Math.abs(p.y - b.pos.y) < 0.6 && Math.abs(q.y - b.pos.y) < 0.6;
+    if (d < 0.7 || (!q.jump && !p.jump && d < 2 && (ahead || (closer && level)))) plan.i++;
     else break;
   }
   const p = path[plan.i]!;
   const last = plan.i === path.length - 1;
-  const dx = p.x - b.pos.x;
-  const dz = p.z - b.pos.z;
+  // Aim a little further along when the way there is plain ground: rounded turns, not zig-zags.
+  let ax = p.x;
+  let az = p.z;
+  const q = path[plan.i + 1];
+  if (q && !last && !p.jump && !q.jump && Math.abs(q.y - b.pos.y) < 0.6 && clearTo(nav, b.pos, q.x, q.z)) {
+    ax = (p.x + q.x) / 2;
+    az = (p.z + q.z) / 2;
+  }
+  const dx = ax - b.pos.x;
+  const dz = az - b.pos.z;
   const d = Math.hypot(dx, dz);
   // Last leg: the exact target (cells are coarse; and a route may end short of a target on
   // something the grid does not know, like a moving platform).
@@ -157,6 +173,17 @@ export function navTo(bot: BotView, tx: number, tz: number, out: BotInput, speed
     if (d < when && (along > 2.5 || climb)) out.jump = true;
   }
   return direct;
+}
+
+/** Walkable all the way along a straight line from `from` to (x, z) (samples every half metre)? */
+function clearTo(nav: NonNullable<BotView['nav']>, from: THREE.Vector3, x: number, z: number) {
+  const d = Math.hypot(x - from.x, z - from.z);
+  const n = Math.ceil(d / 0.5);
+  for (let i = 1; i <= n; i++) {
+    const f = i / n;
+    if (!nav.safe(from.x + (x - from.x) * f, from.z + (z - from.z) * f, from.y)) return false;
+  }
+  return true;
 }
 
 /** Stuck against something while trying to move: hop, then side-step. */
@@ -203,6 +230,97 @@ function beanAhead(bot: BotView, range: number, cone = 0.5) {
   return best ? { o: best, d: bd } : null;
 }
 
+/**
+ * Where a body flying from its position with horizontal velocity (vx, vz) and vertical vy comes
+ * down (checked every 50 ms of flight), or null if there is nothing under it within two seconds.
+ */
+function landing(bot: BotView, vx: number, vz: number, vy: number) {
+  const nav = bot.nav;
+  const p = bot.body.pos;
+  if (!nav) return null;
+  let py = p.y;
+  for (let t = 0.05; t <= 2; t += 0.05) {
+    const y = p.y + vy * t - (GRAVITY / 2) * t * t;
+    const x = p.x + vx * t;
+    const z = p.z + vz * t;
+    const f = nav.floorBelow(x, z, py);
+    if (f && y <= f.y) return { x, z, ...f };
+    py = y;
+  }
+  return null;
+}
+
+/** Heading of the stick (or the body, without one). */
+function heading(bot: BotView, out: BotInput): [number, number] {
+  const l = Math.hypot(out.mx, out.mz);
+  if (l > 0.1) return [out.mx / l, out.mz / l];
+  return [Math.sin(bot.body.yaw), Math.cos(bot.body.yaw)];
+}
+
+/**
+ * Dives that are worth it: in the air, when the jump falls short and a dive still reaches ground;
+ * held by someone, to break free (a dive shakes off any grip) when the way ahead is safe.
+ */
+export function smartDive(bot: BotView, out: BotInput) {
+  const b = bot.body;
+  const nav = bot.nav;
+  if (!nav || b.state !== 'normal' || out.dive) return;
+  const skill = bot.mem.skill ?? 0.7;
+  const [fx, fz] = heading(bot, out);
+  if (!b.grounded && b.vel.y < 1.5) {
+    const short = landing(bot, b.vel.x, b.vel.z, b.vel.y);
+    if (short?.safe) return;
+    const along = Math.max(0, b.vel.x * fx + b.vel.z * fz);
+    const sp = Math.max(DIVE_SPEED, Math.min(along, DIVE_SPEED * 1.25));
+    const far = landing(bot, fx * sp, fz * sp, Math.max(b.vel.y, 3));
+    // Landing on safe ground, with room to slide on it.
+    if (far?.safe && nav.safe(far.x + fx * 1.2, far.z + fz * 1.2, far.y) && bot.rng() < 0.35 + skill * 0.6) out.dive = true;
+    return;
+  }
+  const held = b.grounded && b.slowUntil > bot.t && b.slowK <= 0.5;
+  if (held && bot.rng() < (0.25 + skill * 0.5) * BOT_DT * 6) {
+    const y = b.pos.y;
+    if ([2, 4, 6].every((d) => nav.safe(b.pos.x + fx * d, b.pos.z + fz * d, y))) out.dive = true;
+    else out.jump = true;
+  }
+}
+
+/**
+ * Whether a shove from the bot sends `o` off the course: the ground beyond it (away from the bot) is
+ * unsafe, while the bot's own run-up and landing are safe. Returns the direction of the shove.
+ */
+export function shoveOff(bot: BotView, o: { pos: THREE.Vector3 }, ok: (x: number, z: number) => boolean) {
+  const b = bot.body;
+  const dx = o.pos.x - b.pos.x;
+  const dz = o.pos.z - b.pos.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 0.3) return null;
+  const ux = dx / d;
+  const uz = dz / d;
+  const beyond = [2, 3, 4].some((k) => !ok(o.pos.x + ux * k, o.pos.z + uz * k));
+  const self = [0.8, 1.6].every((k) => ok(b.pos.x + ux * Math.min(k, d), b.pos.z + uz * Math.min(k, d)));
+  return beyond && self ? { ux, uz, d } : null;
+}
+
+/** Direction from `o` towards the nearest unsafe ground (within 3 m), or null when it is well inside. */
+function edgeDir(o: { pos: THREE.Vector3 }, ok: (x: number, z: number) => boolean): [number, number] | null {
+  let sx = 0;
+  let sz = 0;
+  for (let k = 0; k < 12; k++) {
+    const a = (k / 12) * Math.PI * 2;
+    const ax = Math.sin(a);
+    const az = Math.cos(a);
+    for (const r of [1.5, 2.5, 3.5])
+      if (!ok(o.pos.x + ax * r, o.pos.z + az * r)) {
+        sx += ax / r;
+        sz += az / r;
+        break;
+      }
+  }
+  const l = Math.hypot(sx, sz);
+  return l > 1e-3 ? [sx / l, sz / l] : null;
+}
+
 export interface HumanOpts {
   /** Narrow or timed section: tiny wobble, no playing around. */
   precise?: boolean;
@@ -210,6 +328,8 @@ export interface HumanOpts {
   fun?: boolean;
   /** Grab / tackle beans that get in the way. */
   rough?: boolean;
+  /** Step round beans in the way (off when going for one). */
+  avoid?: boolean;
 }
 
 /**
@@ -221,6 +341,7 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   const skill = bot.mem.skill ?? 0.7;
   const ph = bot.mem.ph ?? 0;
   const t = bot.t;
+  smartDive(bot, out);
   // Wobble: a slow, uneven drift of the aim.
   const amount = o.precise ? 0.03 + (1 - skill) * 0.03 : 0.12 + (1 - skill) * 0.14;
   const a = (Math.sin(t * 0.9 + ph) * 0.6 + Math.sin(t * 2.3 + ph * 1.7) * 0.4) * amount;
@@ -233,7 +354,7 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   const moving = Math.hypot(out.mx, out.mz) > 0.5;
   // Someone right in front: step around them (or shove them, if that is the kind of player we are).
   const ahead = beanAhead(bot, 1.8, 0.55);
-  if (ahead && moving) {
+  if (ahead && moving && o.avoid !== false) {
     const dx = ahead.o.pos.x - b.pos.x;
     const dz = ahead.o.pos.z - b.pos.z;
     const side = (bot.mem.off ?? 0) >= 0 ? 1 : -1;
@@ -243,7 +364,14 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   }
   if (o.rough !== false) {
     const aggro = bot.mem.aggro ?? 0.3;
-    if ((bot.mem.grabUntil ?? -1) > t) out.grab = true;
+    const nav = bot.nav;
+    const shove =
+      ahead && nav && b.grounded && t > 5 && ahead.d > 1.3 && ahead.d < 2.8
+        ? shoveOff(bot, ahead.o, (x, z) => nav.safe(x, z, ahead.o.pos.y))
+        : null;
+    // Somebody at the edge right ahead: tackle them over it (the pushy ones, mostly).
+    if (shove && bot.rng() < (0.1 + aggro * 0.5) * BOT_DT * 3) out.dive = true;
+    else if ((bot.mem.grabUntil ?? -1) > t) out.grab = true;
     else if (ahead && ahead.d < 1.35 && b.grounded && bot.rng() < aggro * 1.2 * BOT_DT) {
       bot.mem.grabUntil = t + 0.4 + bot.rng() * 0.9;
       out.grab = true;
@@ -266,6 +394,21 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
     out.mx /= l;
     out.mz /= l;
   }
+}
+
+/**
+ * The stick as a hand moves it: eased towards what the brain wants instead of snapping to it each
+ * decision, so small corrections back and forth do not show as twitching. Letting go is quicker.
+ */
+export function smoothStick(bot: BotView, out: BotInput) {
+  const m = bot.mem;
+  const px = m.smx ?? out.mx;
+  const pz = m.smz ?? out.mz;
+  const k = Math.hypot(out.mx, out.mz) < 0.15 ? 0.7 : 0.5;
+  out.mx = px + (out.mx - px) * k;
+  out.mz = pz + (out.mz - pz) * k;
+  m.smx = out.mx;
+  m.smz = out.mz;
 }
 
 /** A bonus lying close by (ahead of the bot, on its level), if any: worth a small detour. */
@@ -437,28 +580,42 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
     const t = bot.t;
     const aggro = bot.mem.aggro ?? 0.3;
     bot.mem.pref ??= opts.radius * (0.25 + bot.rng() * 0.45);
+    // Judged from the ground the bot stands (or last stood) on: in the air everything looks unsafe.
+    if (b.grounded) bot.mem.gy = b.pos.y;
+    const gy = bot.mem.gy ?? b.pos.y;
     const okAt = (x: number, z: number) =>
-      (!opts.safe || opts.safe(x, z, t)) && (opts.ignoreNav || !bot.nav || bot.nav.safe(x, z, b.pos.y));
-    // Hunting someone (grab them, knock them into the sweeper…)?
+      (!opts.safe || opts.safe(x, z, t)) && (opts.ignoreNav || !bot.nav || bot.nav.safe(x, z, gy));
+    // Hunting someone: best a bean near the edge, to shove it off (or knock it into the sweeper…).
     let hunt = bot.mem.hunt !== undefined ? bot.others.find((o) => o.id === bot.mem.hunt) : undefined;
     if (hunt && (t > (bot.mem.huntUntil ?? 0) || hunt.down)) {
       hunt = undefined;
       bot.mem.hunt = undefined;
     }
-    if (!hunt && t > (bot.mem.nextHunt ?? 0)) {
+    // (Everyone starts near the edge: nobody goes after anybody in the first few seconds.)
+    bot.mem.nextHunt ??= 5 + bot.rng() * 6;
+    if (!hunt && b.grounded && t > bot.mem.nextHunt) {
       bot.mem.nextHunt = t + 3 + bot.rng() * 6;
-      if (bot.rng() < aggro * 0.6 && bot.others.length) {
-        const o = bot.others[Math.floor(bot.rng() * bot.others.length)]!;
-        if (Math.hypot(o.pos.x - b.pos.x, o.pos.z - b.pos.z) < 12 && okAt(o.pos.x, o.pos.z)) {
-          hunt = o;
-          bot.mem.hunt = o.id;
-          bot.mem.huntUntil = t + 2.5 + bot.rng() * 2.5;
+      if (bot.rng() < aggro * 0.7) {
+        let best = -Infinity;
+        for (const o of bot.others) {
+          const d = Math.hypot(o.pos.x - b.pos.x, o.pos.z - b.pos.z);
+          if (o.down || d > 12 || Math.abs(o.pos.y - b.pos.y) > 1) continue;
+          const score = (edgeDir(o, okAt) ? 5 : 0) - d * 0.35 + bot.rng() * 2;
+          if (score > best) {
+            best = score;
+            hunt = o;
+          }
+        }
+        if (hunt) {
+          bot.mem.hunt = hunt.id;
+          bot.mem.huntUntil = t + 3 + bot.rng() * 3;
         }
       }
     }
     const expired = t > (bot.mem.until ?? -1e9);
     const unsafe = bot.mem.tx !== undefined && !okAt(bot.mem.tx, bot.mem.tz ?? 0);
-    if (!hunt && (expired || unsafe || bot.mem.tx === undefined)) {
+    if (!hunt && (bot.mem.tx === undefined || (b.grounded && (expired || unsafe)))) {
+      bot.mem.arrived = 0;
       let best = -Infinity;
       const pois = opts.pois ?? [];
       for (let k = 0; k < 8; k++) {
@@ -490,25 +647,45 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
       bot.mem.until = t + (opts.retarget ?? 2) + bot.rng() * 2.5;
     }
     const bonus = hunt ? null : bonusNear(bot, 8, false);
-    const tx = hunt ? hunt.pos.x : bonus && okAt(bonus.x, bonus.z) ? bonus.x : (bot.mem.tx ?? cx);
-    const tz = hunt ? hunt.pos.z : bonus && okAt(bonus.x, bonus.z) ? bonus.z : (bot.mem.tz ?? cz);
-    const d = navTo(bot, tx, tz, out, hunt ? 1 : 0.85 + (bot.mem.spd ?? 1) * 0.15, hunt ? 1.1 : 0.9);
+    let tx = bonus && okAt(bonus.x, bonus.z) ? bonus.x : (bot.mem.tx ?? cx);
+    let tz = bonus && okAt(bonus.x, bonus.z) ? bonus.z : (bot.mem.tz ?? cz);
+    // Shoving: from the inside, towards the edge. Not lined up yet: get round to the inside first.
+    const shove = hunt ? shoveOff(bot, hunt, okAt) : null;
     if (hunt) {
-      if (d < 1.4) {
+      tx = hunt.pos.x;
+      tz = hunt.pos.z;
+      const e = shove ? null : edgeDir(hunt, okAt);
+      if (e && okAt(hunt.pos.x - e[0] * 1.9, hunt.pos.z - e[1] * 1.9)) {
+        tx = hunt.pos.x - e[0] * 1.9;
+        tz = hunt.pos.z - e[1] * 1.9;
+      }
+    }
+    const d = navTo(bot, tx, tz, out, hunt ? 1 : 0.85 + (bot.mem.spd ?? 1) * 0.15, hunt ? 1.1 : 0.9);
+    if (hunt && shove) {
+      // Lined up: charge straight at them, and tackle from close by (or just run them over).
+      out.mx = shove.ux;
+      out.mz = shove.uz;
+      if (shove.d > 1.3 && shove.d < 2.7 && b.grounded && bot.rng() < (0.2 + aggro * 0.6) * BOT_DT * 6) out.dive = true;
+    } else if (hunt) {
+      const hd = Math.hypot(hunt.pos.x - b.pos.x, hunt.pos.z - b.pos.z);
+      if (hd < 1.4) {
         out.grab = true;
         bot.mem.grabUntil = t + 0.3;
-      } else if (d < 2.6 && d > 1.8 && b.grounded && bot.rng() < aggro * 0.8 * BOT_DT) out.dive = true;
-    } else if (d < 1) {
-      // There: potter about instead of freezing.
-      const w = t * 0.7 + (bot.mem.ph ?? 0);
-      out.mx = Math.sin(w) * 0.25;
-      out.mz = Math.cos(w * 1.3) * 0.25;
+      } else if (hd < 2.6 && hd > 1.8 && b.grounded && bot.rng() < aggro * 0.8 * BOT_DT) out.dive = true;
+    } else if (d < (bot.mem.arrived ? 1.8 : 1)) {
+      // There: potter about round the spot instead of freezing (and without leaving it and coming back).
+      bot.mem.arrived = 1;
+      const w = t * 0.5 + (bot.mem.ph ?? 0);
+      const px = tx + Math.sin(w) * 0.6;
+      const pz = tz + Math.cos(w * 1.3) * 0.6;
+      if (okAt(px, pz)) steer(bot, px, pz, out, 0.3);
+      else steer(bot, tx, tz, out, 0.3);
     }
     if (opts.floor && Math.hypot(out.mx, out.mz) > 0.1) avoidHoles(bot, out, opts.floor);
     if (opts.social && d < 1.5 && b.grounded && bot.rng() < 0.12 * BOT_DT) out.emote = 1 + Math.floor(bot.rng() * EMOTES);
     // jumpWhen models reaction time itself (a timing window that depends on bot.mem.react).
     if (opts.jumpWhen?.(bot) && b.grounded) out.jump = true;
-    humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt });
+    humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt, avoid: !hunt });
     unstick(bot, out);
   };
 }

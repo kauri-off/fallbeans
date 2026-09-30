@@ -15,6 +15,7 @@ import type { GameEventRecord } from '../shared/protocol';
 import { mulberry32, type Rng } from '../shared/rng';
 import { emptyStats, type RoundStats } from '../shared/rules';
 import { Bonuses } from '../sim/bonus';
+import { smoothStick } from '../sim/bots';
 import { Builder } from '../sim/builder';
 import {
   type BotInput,
@@ -468,21 +469,20 @@ export class ServerArena {
     const others: BotView['others'][number][] = [];
     for (const o of this.pawns.values())
       if (o !== p && o.status === 'play') others.push({ id: o.id, pos: o.body.pos, vel: o.body.vel, down: o.body.down });
+    const view: BotView = {
+      id: p.id,
+      body: p.body,
+      t: this.time,
+      rng: st.rng,
+      mem: st.mem,
+      plan: st.plan,
+      others,
+      nav: this.nav,
+      bonuses: this.bonuses?.available(this.time) ?? [],
+    };
     try {
-      brain(
-        {
-          id: p.id,
-          body: p.body,
-          t: this.time,
-          rng: st.rng,
-          mem: st.mem,
-          plan: st.plan,
-          others,
-          nav: this.nav,
-          bonuses: this.bonuses?.available(this.time) ?? [],
-        },
-        out,
-      );
+      brain(view, out);
+      smoothStick(view, out);
     } catch (e) {
       this.hooks.warn('bot brain failed', { game: this.module.meta.id, err: String(e) });
     }
@@ -709,7 +709,8 @@ export class ServerArena {
       const fx = Math.sin(b.yaw);
       const fz = Math.cos(b.yaw);
       for (const o of active) {
-        if (o === p || o.body.down || (p.diveHits.get(o.id) ?? -1) > t) continue;
+        // A bean already down can still be shoved along (only not while it is getting up).
+        if (o === p || o.body.state === 'getup' || (p.diveHits.get(o.id) ?? -1) > t) continue;
         const dx = o.body.pos.x - b.pos.x;
         const dz = o.body.pos.z - b.pos.z;
         const d = Math.hypot(dx, dz);
@@ -944,6 +945,7 @@ export function animFor(b: PlayerBody, grabbing: boolean, reaching = false): num
   if (b.state === 'stun') return ANIM.stun;
   if (b.state === 'dive') return ANIM.dive;
   if (b.state === 'slide') return ANIM.slide;
+  if (b.state === 'climb') return ANIM.climb;
   if (!b.grounded) return ANIM.air;
   if (grabbing) return ANIM.grab;
   if (reaching) return ANIM.reach;

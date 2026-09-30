@@ -93,7 +93,17 @@ describe('course mechanics', () => {
     expect(body.vel.z).toBeGreaterThan(3);
   });
 
-  it('a sweeping arm always knocks a bean over, then passes over it', () => {
+  /** Deepest overlap of the body's spheres with sweeping arms right now. */
+  const armOverlap = (body: PlayerBody, world: Builder['world']) => {
+    const c = new THREE.Vector3();
+    const hit = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
+    let worst = 0;
+    for (const col of world.colliders)
+      for (const i of [0, 1]) if (col.sweep && col.contact(body.sphere(i, c), 0.5, hit)) worst = Math.max(worst, hit.depth);
+    return worst;
+  };
+
+  it('a sweeping arm knocks a bean over, and never passes through it', () => {
     const b = new Builder(1, null);
     b.box(0, -1, 0, 40, 2, 40);
     b.rotor(0, 0.6, 0, 8, 1, (t) => t * 1.2);
@@ -103,15 +113,127 @@ describe('course mechanics', () => {
     body.reset(new THREE.Vector3(0.5, 0.02, -5));
     let knocked = false;
     let maxDrag = 0;
+    let overlap = 0;
     const start = body.pos.clone();
     for (let i = 1; i <= 360; i++) {
       run(body, b.world, (i - 1) / 120, 1);
       if (body.knocked) knocked = true;
       maxDrag = Math.max(maxDrag, body.pos.distanceTo(start));
+      overlap = Math.max(overlap, armOverlap(body, b.world));
     }
     expect(knocked).toBe(true);
     // Shoved a few metres, not carried round with the arm.
     expect(maxDrag).toBeLessThan(8);
+    expect(overlap).toBeLessThan(0.35);
+  });
+
+  it('a sweeping arm tosses a bean lying in its way up and over itself', () => {
+    const b = new Builder(1, null);
+    b.box(0, -1, 0, 40, 2, 40);
+    b.rotor(0, 0.6, 0, 8, 1, (t) => t * 1.2);
+    b.world.finalize(0);
+    const body = new PlayerBody(1);
+    body.reset(new THREE.Vector3(0.5, 0.02, -5));
+    body.knock(0.2, 0, 0, 3);
+    let top = 0;
+    let overlap = 0;
+    let maxDrag = 0;
+    const start = body.pos.clone();
+    for (let i = 1; i <= 240; i++) {
+      run(body, b.world, (i - 1) / 120, 1);
+      if (i > 30) overlap = Math.max(overlap, armOverlap(body, b.world));
+      top = Math.max(top, body.pos.y);
+      maxDrag = Math.max(maxDrag, Math.hypot(body.pos.x - start.x, body.pos.z - start.z));
+    }
+    expect(top).toBeGreaterThan(0.7);
+    expect(overlap).toBeLessThan(0.35);
+    expect(maxDrag).toBeLessThan(6);
+  });
+
+  it('a dive lays the body along its flight, and into a wall it stays out of it', () => {
+    const b = new Builder(1, null);
+    b.box(0, -1, 0, 20, 2, 40);
+    b.box(0, 2, 6, 20, 4, 1);
+    b.world.finalize(0);
+    const body = new PlayerBody(1);
+    body.reset(new THREE.Vector3(0, 0.02, 0));
+    run(body, b.world, 0, 20, { ...idle, mz: 1 });
+    run(body, b.world, 20 / 120, 1, { ...idle, mz: 1, dive: true });
+    run(body, b.world, 21 / 120, 12, { ...idle, mz: 1 });
+    expect(body.state).toBe('dive');
+    expect(body.tilt).toBeGreaterThan(0.8);
+    const head = new THREE.Vector3();
+    let deepest = -9;
+    for (let i = 0; i < 120; i++) {
+      run(body, b.world, (33 + i) / 120, 1, { ...idle, mz: 1 });
+      deepest = Math.max(deepest, body.sphere(1, head).z + 0.5 - 5.5, body.pos.z + 0.5 - 5.5);
+    }
+    expect(deepest).toBeLessThan(0.02);
+  });
+
+  const ledgeCourse = (height: number) => {
+    const b = new Builder(1, null);
+    b.box(0, -1, 0, 20, 2, 40);
+    b.box(0, height / 2, 7, 20, height, 6);
+    b.world.finalize(0);
+    return b;
+  };
+  /** Runs at the block and jumps a little before it. */
+  const jumpAt = (body: PlayerBody, world: Builder['world'], hold = { ...idle, mz: 1 }) => {
+    body.reset(new THREE.Vector3(0, 0.02, 0));
+    let t = 0;
+    const step = (n: number, input: typeof idle) => {
+      run(body, world, t, n, input);
+      t += n / 120;
+    };
+    step(24, { ...idle, mz: 1 });
+    step(1, { ...idle, mz: 1, jump: true });
+    let climbed = false;
+    for (let i = 0; i < 360; i++) {
+      step(1, hold);
+      if (body.state === 'climb') climbed = true;
+      else if (climbed) break;
+    }
+    // Settle where it got to.
+    step(30, idle);
+    return climbed;
+  };
+
+  it('catches a ledge out of reach of a jump and climbs onto it', () => {
+    const b = ledgeCourse(2.6);
+    const body = new PlayerBody(1);
+    const climbed = jumpAt(body, b.world);
+    expect(climbed).toBe(true);
+    expect(body.state).toBe('normal');
+    expect(body.pos.y).toBeCloseTo(2.6, 1);
+    expect(body.pos.z).toBeGreaterThan(4.3);
+  });
+
+  it('does not catch a ledge that is too high, or when not pushing towards it', () => {
+    const high = ledgeCourse(4.2);
+    const a = new PlayerBody(1);
+    expect(jumpAt(a, high.world)).toBe(false);
+    expect(a.pos.y).toBeLessThan(0.1);
+    const low = ledgeCourse(2.6);
+    const c = new PlayerBody(1);
+    expect(jumpAt(c, low.world, idle)).toBe(false);
+  });
+
+  it('carries on climbing from a full state exactly', () => {
+    const b = ledgeCourse(2.6);
+    const a = new PlayerBody(1);
+    a.reset(new THREE.Vector3(0, 0.02, 0));
+    let t = 0;
+    const go = { ...idle, mz: 1 };
+    for (let i = 0; i < 300 && a.state !== 'climb'; i++, t += 1 / 120) run(a, b.world, t, 1, { ...go, jump: i === 24 });
+    expect(a.state).toBe('climb');
+    const c = new PlayerBody(1);
+    c.fromFull(a.toFull(), b.world);
+    for (let i = 0; i < 120; i++, t += 1 / 120) {
+      run(a, b.world, t, 1, go);
+      run(c, b.world, t, 1, go);
+    }
+    expect(c.pos.distanceTo(a.pos)).toBeLessThan(1e-6);
   });
 
   it('portals send a bean out of the other end, facing its way', () => {

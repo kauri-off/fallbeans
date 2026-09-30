@@ -87,11 +87,15 @@ export interface BodyFullState {
   /** Bonus in effect (physics POWER) and the sim time it wears off. */
   power: number;
   powerUntil: number;
+  /** Climbing: where the feet end up on the ledge. */
+  cx: number;
+  cy: number;
+  cz: number;
   /** A teleport (respawn): the client snaps instead of smoothing. */
   teleport: boolean;
 }
 
-export const FULL_BYTES = 8 * 7 + 1 + 4 + 1 + 4 + 4 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4;
+export const FULL_BYTES = 8 * 7 + 1 + 4 + 1 + 4 + 4 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 12;
 
 export interface RemoteState {
   id: number;
@@ -101,7 +105,7 @@ export interface RemoteState {
   yaw: number;
   anim: number;
   flags: number;
-  /** Tumbling: tip-over angle (0…π/2) and its direction. */
+  /** Tip-over angle (0…π: tumbling, diving, sliding) and its direction. */
   tilt: number;
   tiltDir: number;
   /** Id of the bean this one holds, or −1. */
@@ -123,8 +127,8 @@ export interface Snapshot {
 const TAU = Math.PI * 2;
 const yawToU16 = (y: number) => Math.round((((y % TAU) + TAU) % TAU) * (65535 / TAU)) & 0xffff;
 const u16ToYaw = (q: number) => (q * TAU) / 65535;
-const tiltToU8 = (t: number) => Math.max(0, Math.min(255, Math.round((t / (Math.PI / 2)) * 255)));
-const u8ToTilt = (q: number) => (q / 255) * (Math.PI / 2);
+const tiltToU8 = (t: number) => Math.max(0, Math.min(255, Math.round((t / Math.PI) * 255)));
+const u8ToTilt = (q: number) => (q / 255) * Math.PI;
 const dirToU8 = (y: number) => Math.round((((y % TAU) + TAU) % TAU) * (255 / TAU)) & 0xff;
 const u8ToDir = (q: number) => (q * TAU) / 255;
 
@@ -159,8 +163,11 @@ export function encodeSnapshot(s: Snapshot): Uint8Array<ArrayBuffer> {
     v.setFloat32(o + 32, f.tiltDir, true);
     v.setUint8(o + 36, f.power);
     v.setFloat32(o + 37, f.powerUntil, true);
-    v.setInt16(o + 41, s.own.grab, true);
-    o += 43;
+    v.setFloat32(o + 41, f.cx, true);
+    v.setFloat32(o + 45, f.cy, true);
+    v.setFloat32(o + 49, f.cz, true);
+    v.setInt16(o + 53, s.own.grab, true);
+    o += 55;
   }
   v.setUint8(o, s.bodies.length);
   o += 1;
@@ -223,10 +230,13 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
         tiltDir: v.getFloat32(o + 32, true),
         power: v.getUint8(o + 36),
         powerUntil: v.getFloat32(o + 37, true),
+        cx: v.getFloat32(o + 41, true),
+        cy: v.getFloat32(o + 45, true),
+        cz: v.getFloat32(o + 49, true),
       },
-      grab: v.getInt16(o + 41, true),
+      grab: v.getInt16(o + 53, true),
     };
-    o += 43;
+    o += 55;
   }
   const count = v.getUint8(o);
   o += 1;

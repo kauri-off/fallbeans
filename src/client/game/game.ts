@@ -5,7 +5,7 @@ import { DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
 import { BONUS_KINDS } from '../../sim/bonus';
-import { GIANT_SIZE, POWER } from '../../sim/physics';
+import { GIANT_SIZE, POWER, pushOut } from '../../sim/physics';
 import { report } from '../debug/capture';
 import { Connection } from '../net/connection';
 import { session, settings, updateSettings } from '../settings';
@@ -551,6 +551,7 @@ export class Game {
     if (arena.body) {
       const b = this.bean(me);
       const yaw = arena.ownPose(dt, this.tmp);
+      pushOut(arena.builder.world, this.tmp, arena.body.tilt, arena.body.tiltDir, arena.body.size);
       b.root.position.copy(this.tmp);
       b.root.rotation.y = yaw;
       b.root.visible = true;
@@ -564,6 +565,7 @@ export class Game {
         tilt: arena.body.tilt,
         tiltDir: arena.body.tiltDir,
         grabAt: held?.root.visible ? held.root.position : null,
+        grabSize: held?.root.scale.x ?? 1,
         size: arena.body.size,
         power: arena.body.power,
       });
@@ -580,6 +582,7 @@ export class Game {
         v = new THREE.Vector3();
         this.vels.set(id, v);
       }
+      pushOut(arena.builder.world, p.pos, p.tilt, p.tiltDir, p.power === POWER.giant ? GIANT_SIZE : 1);
       // Velocity from the interpolated path, smoothed: steady cycles instead of per-frame jitter.
       if (!fresh && dt > 0) {
         this.tmp.subVectors(p.pos, b.root.position).divideScalar(dt);
@@ -598,6 +601,7 @@ export class Game {
         tilt: p.tilt,
         tiltDir: p.tiltDir,
         grabAt: held?.root.visible ? held.root.position : null,
+        grabSize: held?.root.scale.x ?? 1,
         size: p.power === POWER.giant ? GIANT_SIZE : 1,
         power: p.power,
       });

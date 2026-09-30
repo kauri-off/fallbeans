@@ -97,8 +97,9 @@ export interface BeanFrame {
   tilt?: number;
   /** World yaw the body tips towards. */
   tiltDir?: number;
-  /** World position of the bean being held, if any. */
+  /** World position of the bean being held (its feet), if any, and its size. */
   grabAt?: THREE.Vector3 | null;
+  grabSize?: number;
   /** Size (1, or bigger while a giant). */
   size?: number;
   /** Bonus in effect (physics POWER), for the glow at the feet. */
@@ -124,11 +125,10 @@ interface Targets {
 }
 
 const _v = new THREE.Vector3();
-const _reach = new THREE.Vector3();
+const _aim = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _axis = new THREE.Vector3();
-const UP = new THREE.Vector3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
 const clamp = THREE.MathUtils.clamp;
 
@@ -136,7 +136,11 @@ const clamp = THREE.MathUtils.clamp;
 const PIVOT_Y = 0.5;
 const CROWN_SCALE = 0.62;
 /** Ground covered by one full run cycle (two steps), m. */
-const STRIDE = 1.45;
+const STRIDE = 2.2;
+/** Shoulders (model space) and the length from shoulder to hand. */
+const SHOULDER_X = 0.5;
+const SHOULDER_Y = 1.08;
+const ARM_LEN = 0.5;
 
 export class Bean {
   readonly root = new THREE.Group();
@@ -144,8 +148,10 @@ export class Bean {
   private readonly pivot = new THREE.Group();
   readonly model: THREE.Object3D;
   private readonly limbs: Record<'ArmL' | 'ArmR' | 'LegL' | 'LegR', Limb>;
+  private readonly hands: THREE.Object3D[];
+  /** Stretchy arms (grabbing, reaching out): length scale of each arm. */
+  private readonly stretch = [new Spring(), new Spring()];
   private readonly face: Face;
-  private readonly reach: THREE.Mesh[] = [];
   /** A face shown for a moment whatever else happens (finishing, being knocked out…). */
   private reactExpr: Expr | null = null;
   private reactT = 0;
@@ -194,21 +200,17 @@ export class Bean {
       return { o, base: o.rotation.clone(), sx: new Spring(), sz: new Spring() };
     };
     this.limbs = { ArmL: limb('ArmL'), ArmR: limb('ArmR'), LegL: limb('LegL'), LegR: limb('LegR') };
+    this.hands = ['HandL', 'HandR'].map((n) => this.model.getObjectByName(n) ?? new THREE.Object3D());
+    for (const st of this.stretch) st.x = 1;
     this.face = new Face(this.model);
     this.grow.x = 1;
-    // Stretchy arms for grabbing: a tapered tube from each shoulder to the held bean.
-    const tube = new THREE.CylinderGeometry(0.1, 0.13, 1, 10, 1, false);
-    tube.translate(0, 0.5, 0);
-    for (let i = 0; i < 2; i++) {
-      const m = new THREE.Mesh(tube, bodyMaterial(color));
-      m.visible = false;
-      m.castShadow = true;
-      this.root.add(m);
-      this.reach.push(m);
-    }
+    // The visor carries the face: always at full detail, or the face patch would cut into it.
+    this.model.traverse((o) => {
+      if (o.name === 'Visor') o.userData.noLod = true;
+    });
     this.setColor(color);
     this.name = name;
-    lod.register(this.model, this);
+    lod.register(this.model, this, 0.95);
   }
 
   setColor(color: string) {
@@ -223,7 +225,6 @@ export class Bean {
       if (o.userData.part === 'body') o.material = m;
       if (o.userData.part === 'belly') o.material = belly;
     });
-    for (const r of this.reach) r.material = m;
   }
 
   setCrown(on: boolean) {
@@ -340,6 +341,15 @@ export class Bean {
     L.ArmR.sz.v += aSide * kick;
     for (const l of [L.LegL, L.LegR]) l.sx.v += aFwd * kick * 0.6;
 
+    // Grabbing or reaching out: the arms point at the target and stretch to it.
+    const reach = this.aimArms(T, f, a, t);
+    for (let i = 0; i < 2; i++) {
+      const k = this.stretch[i]!.step(reach[i]!, 260, 22, dt);
+      const arm = i ? L.ArmR : L.ArmL;
+      arm.o.scale.y = Math.max(0.6, k);
+      this.hands[i]!.scale.y = 1 / Math.max(0.6, k);
+    }
+
     const set = (l: Limb, x: number, z: number) => {
       l.o.rotation.x = l.base.x + l.sx.step(x, T.k, T.c, dt);
       l.o.rotation.z = l.base.z + l.sz.step(z, T.k, T.c, dt);
@@ -407,12 +417,51 @@ export class Bean {
         seg = seg.children.find((c) => c.name.startsWith('tail')) as THREE.Object3D;
       }
     }
-    if (a === ANIM.reach && !f.grabAt) {
-      // Reaching out: the arms stretch forward, grasping.
-      const fw = 0.7 + Math.abs(Math.sin(t * 9)) * 0.45;
-      _reach.set(Math.sin(yaw) * fw, 0.05, Math.cos(yaw) * fw).add(this.root.position);
-      this.updateReach(_reach, 0.55);
-    } else this.updateReach(f.grabAt ?? null);
+  }
+
+  /**
+   * Arm targets for grabbing (hands on the held bean) and reaching out (grasping ahead), written
+   * into T as rotations; returns the stretch of each arm (1 = normal length).
+   */
+  private aimArms(T: Targets, f: BeanFrame, a: number, t: number): [number, number] {
+    const grabbing = !!f.grabAt && (a === ANIM.grab || a === ANIM.reach);
+    if (!grabbing && a !== ANIM.reach) return [1, 1];
+    this.root.updateMatrixWorld();
+    if (grabbing) {
+      // Both hands on the near side of the held bean, about its middle.
+      const hs = f.grabSize ?? 1;
+      const at = f.grabAt!;
+      _aim.subVectors(this.root.position, at).setY(0);
+      const d = _aim.length();
+      if (d > 1e-3) _aim.multiplyScalar((0.42 * hs) / d);
+      _aim.add(at);
+      _aim.y = at.y + 0.85 * hs;
+      this.model.worldToLocal(_aim);
+    } else {
+      // Grasping at the air ahead, the hands opening and closing.
+      _aim.set(0, 0.98, 0.62 + Math.abs(Math.sin(t * 9)) * 0.38);
+    }
+    const out: [number, number] = [1, 1];
+    for (let i = 0; i < 2; i++) {
+      const side = i ? 1 : -1;
+      const limb = i ? this.limbs.ArmR : this.limbs.ArmL;
+      _v.set(_aim.x + side * 0.2 - side * SHOULDER_X, _aim.y - SHOULDER_Y, _aim.z);
+      const len = Math.max(0.2, _v.length());
+      _v.divideScalar(len);
+      // Euler XYZ that turns the arm (hanging along −y) to point along _v.
+      const rz = Math.asin(clamp(_v.x, -1, 1));
+      const rx = Math.atan2(-_v.z, -_v.y);
+      if (i) {
+        T.armRx = rx - limb.base.x;
+        T.armRz = rz - limb.base.z;
+      } else {
+        T.armLx = rx - limb.base.x;
+        T.armLz = limb.base.z - rz;
+      }
+      out[i] = clamp(len / ARM_LEN, 0.8, 7);
+    }
+    T.k = Math.max(T.k, 260);
+    return out;
   }
 
   /** A soft glow at the feet while a bonus is in effect. */
@@ -508,8 +557,8 @@ export class Bean {
       return T;
     }
     if (a === ANIM.dive || a === ANIM.slide) {
-      // Superman: arms stretched ahead, legs straight back, belly towards the ground.
-      T.lean = a === ANIM.dive ? 1.3 : 1.42;
+      // Superman: arms stretched ahead, legs straight back. The body itself lies along the flight
+      // (the physics tilt, applied at the pivot like the collision spheres).
       T.armLx = -2.95;
       T.armRx = -2.95;
       T.armLz = 0.28;
@@ -522,9 +571,33 @@ export class Bean {
         T.legLx += Math.sin(t * 16) * 0.25 * Math.min(1, speed / 4);
         T.legRx -= Math.sin(t * 16) * 0.25 * Math.min(1, speed / 4);
       }
-      T.lift = a === ANIM.dive ? 0.42 : 0.3;
       T.roll = clamp(-side * 0.04, -0.3, 0.3);
       T.k = 200;
+      return T;
+    }
+    if (a === ANIM.climb) {
+      // Hanging on and pulling up (rising, or still), then a knee over the edge and a push down.
+      const pulling = vy > 0.4 || speed < 0.4;
+      T.k = 200;
+      T.c = 16;
+      if (pulling) {
+        const scramble = Math.sin(t * 17);
+        T.armLx = -2.75;
+        T.armRx = -2.75;
+        T.armLz = 0.32;
+        T.armRz = 0.32;
+        T.legLx = -0.5 + scramble * 0.45;
+        T.legRx = -0.5 - scramble * 0.45;
+        T.lean = 0.12;
+      } else {
+        T.armLx = -0.75;
+        T.armRx = -0.75;
+        T.armLz = 0.5;
+        T.armRz = 0.5;
+        T.legLx = -1.3;
+        T.legRx = 0.35;
+        T.lean = 0.5;
+      }
       return T;
     }
     if (a === ANIM.stun) {
@@ -579,6 +652,8 @@ export class Bean {
         T.legRz = 0.15;
         T.lean = 0.08;
       }
+      // Leaning into the flight: the faster forward and down, the more.
+      if (vy < 0) T.lean += clamp(Math.atan2(Math.max(0, fwd), -vy + 4) * 0.7, 0, 0.45);
       T.roll = clamp(-side * 0.03, -0.25, 0.25);
       return T;
     }
@@ -589,17 +664,22 @@ export class Bean {
     const c = Math.cos(this.phase);
     this.stepSide = s > 0 ? 1 : 0;
     const back = fwd < -0.5 ? -1 : 1;
-    T.legLx = s * (0.25 + 0.8 * run) * back;
-    T.legRx = -s * (0.25 + 0.8 * run) * back;
-    T.armLx = -s * (0.2 + 0.85 * run) * back + 0.05;
-    T.armRx = s * (0.2 + 0.85 * run) * back + 0.05;
-    T.armLz = 0.2 + 0.2 * run;
-    T.armRz = 0.2 + 0.2 * run;
-    T.lean = 0.2 * run * back + clamp(aFwd * 0.012, -0.22, 0.3);
-    // Two bobs per cycle, lowest at footfall; hips twist and roll with the step.
-    T.lift = Math.abs(s) * 0.085 * run;
-    T.twist = s * 0.12 * run;
-    T.roll = c * 0.05 * run + clamp(-this.yawRate * speed * 0.012, -0.32, 0.32);
+    // Long strides: each leg swings far, and lifts its knee on the way forward (the swing phase).
+    const swing = 0.3 + 0.95 * run;
+    const knee = 0.55 * run;
+    T.legLx = s * swing * back - Math.max(0, -c) * knee;
+    T.legRx = -s * swing * back - Math.max(0, c) * knee;
+    T.legLz = 0.03 + 0.06 * run;
+    T.legRz = 0.03 + 0.06 * run;
+    T.armLx = -s * (0.3 + 1.05 * run) * back + 0.1 * run;
+    T.armRx = s * (0.3 + 1.05 * run) * back + 0.1 * run;
+    T.armLz = 0.22 + 0.28 * run;
+    T.armRz = 0.22 + 0.28 * run;
+    T.lean = 0.26 * run * back + clamp(aFwd * 0.012, -0.22, 0.3);
+    // Two bounces per cycle: up in the flight of each stride, down as the legs pass; hips twist and roll.
+    T.lift = (1 - Math.abs(c)) * 0.13 * run;
+    T.twist = s * 0.2 * run;
+    T.roll = c * 0.08 * run + clamp(-this.yawRate * speed * 0.012, -0.32, 0.32);
     if (Math.abs(side) > 1 && Math.abs(fwd) < 2) {
       // Strafing: side steps.
       T.legLz = 0.05 + Math.max(0, s) * 0.35;
@@ -742,34 +822,5 @@ export class Bean {
       T.c = 14;
     }
     return T;
-  }
-
-  /** Arms stretching from the shoulders to the held bean (or out in front, reaching). */
-  private updateReach(target: THREE.Vector3 | null, height = 0.9) {
-    for (let i = 0; i < 2; i++) {
-      const m = this.reach[i]!;
-      if (!target) {
-        m.visible = false;
-        continue;
-      }
-      const side = i ? 1 : -1;
-      // Shoulder in root space → world.
-      _v.set(side * 0.5, 1.08, 0.05);
-      this.root.localToWorld(_v);
-      const end = target.clone();
-      end.y += height * this.root.scale.y;
-      end.x += side * 0.25 * Math.cos(this.root.rotation.y);
-      end.z -= side * 0.25 * Math.sin(this.root.rotation.y);
-      const dir = end.sub(_v);
-      const len = dir.length();
-      m.visible = len > 0.3;
-      if (!m.visible) continue;
-      // Position in root space (root is only translated and yawed).
-      const local = this.root.worldToLocal(_v.clone());
-      m.position.copy(local);
-      const localDir = dir.normalize().applyAxisAngle(UP, -this.root.rotation.y);
-      m.quaternion.setFromUnitVectors(UP, localDir);
-      m.scale.set(1, len, 1);
-    }
   }
 }

@@ -106,9 +106,13 @@ interface Entry {
   pairs: Map<THREE.Material, [THREE.Material, THREE.Material]>;
   cast: boolean;
   level: number;
+  /** Levels chosen for a whole model at once: its root and bounding radius (see register). */
+  group: { root: THREE.Object3D; radius: number } | null;
 }
 
 const _s = new THREE.Sphere();
+const _gp = new THREE.Vector3();
+const _gs = new THREE.Vector3();
 
 export interface LodStats {
   meshes: number;
@@ -128,8 +132,13 @@ export class LodSystem {
   private frame = 0;
   readonly stats: LodStats = { meshes: 0, levels: [0, 0, 0, 0], fading: 0 };
 
-  /** Every eligible mesh under root, until drop(owner). */
-  register(root: THREE.Object3D, owner: object = root) {
+  /**
+   * Every eligible mesh under root, until drop(owner). With `groupRadius` the whole model changes
+   * level together, by the size of a sphere of that radius around its middle (characters: small
+   * parts like hands and feet would otherwise drop to coarse levels long before the body).
+   */
+  register(root: THREE.Object3D, owner: object = root, groupRadius?: number) {
+    const group = groupRadius ? { root, radius: groupRadius } : null;
     const list = this.owners.get(owner) ?? [];
     root.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || o instanceof THREE.InstancedMesh || o.userData.lodGhost || o.userData.noLod) return;
@@ -148,6 +157,7 @@ export class LodSystem {
         pairs: new Map(),
         cast: o.castShadow,
         level: 0,
+        group,
       });
       list.push(o);
     });
@@ -197,9 +207,16 @@ export class LodSystem {
       let fade = 0;
       if (this.force !== null) lvl = this.force;
       else {
-        const g = e.levels[0]!;
-        if (!g.boundingSphere) g.computeBoundingSphere();
-        _s.copy(g.boundingSphere!).applyMatrix4(m.matrixWorld);
+        if (e.group) {
+          const w = e.group.root.matrixWorld;
+          _gs.setFromMatrixScale(w);
+          _s.center.copy(_gp.set(0, e.group.radius, 0).applyMatrix4(w));
+          _s.radius = e.group.radius * Math.max(_gs.x, _gs.y, _gs.z);
+        } else {
+          const g = e.levels[0]!;
+          if (!g.boundingSphere) g.computeBoundingSphere();
+          _s.copy(g.boundingSphere!).applyMatrix4(m.matrixWorld);
+        }
         const size = (_s.radius * k) / Math.max(0.01, _s.center.distanceTo(cam));
         lvl = 0;
         for (const t of THRESHOLDS) if (size < t / BAND) lvl++;

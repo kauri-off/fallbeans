@@ -9,6 +9,8 @@ const _p = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _sv = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _ro = new THREE.Vector3();
+const _rd = new THREE.Vector3();
 
 /** The bean is two spheres of radius R, at these heights above its feet. */
 export const R = 0.5;
@@ -229,6 +231,86 @@ export class Collider {
     return true;
   }
 
+  /**
+   * Distance along a ray (unit `dir`) to where it enters the shape, or −1 (no hit within `maxT`, or
+   * the ray starts inside). `normal` gets the world surface normal there.
+   */
+  raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxT: number, normal: THREE.Vector3): number {
+    const o = _ro.copy(origin).applyMatrix4(this.inv);
+    const d = _rd.copy(dir).transformDirection(this.inv);
+    const s = this.shape;
+    let t = -1;
+    if (s.type === 'box') {
+      const h = [s.hx, s.hy, s.hz];
+      const oa = [o.x, o.y, o.z];
+      const da = [d.x, d.y, d.z];
+      let t0 = Number.NEGATIVE_INFINITY;
+      let t1 = Number.POSITIVE_INFINITY;
+      let axis = -1;
+      for (let a = 0; a < 3; a++) {
+        const ha = h[a]!;
+        const o1 = oa[a]!;
+        const d1 = da[a]!;
+        if (Math.abs(d1) < 1e-9) {
+          if (Math.abs(o1) > ha) return -1;
+          continue;
+        }
+        let ta = (-ha - o1) / d1;
+        let tb = (ha - o1) / d1;
+        if (ta > tb) [ta, tb] = [tb, ta];
+        if (ta > t0) {
+          t0 = ta;
+          axis = a;
+        }
+        t1 = Math.min(t1, tb);
+        if (t0 > t1) return -1;
+      }
+      if (axis < 0 || t0 < 0 || t0 > maxT) return -1;
+      t = t0;
+      normal.set(0, 0, 0).setComponent(axis, -Math.sign(da[axis]!));
+    } else if (s.type === 'cyl') {
+      let best = Number.POSITIVE_INFINITY;
+      if (Math.hypot(o.x, o.z) <= s.r && Math.abs(o.y) <= s.hh) return -1;
+      // Caps.
+      if (Math.abs(d.y) > 1e-9)
+        for (const cy of [s.hh, -s.hh]) {
+          const tc = (cy - o.y) / d.y;
+          if (tc < 0 || tc >= best) continue;
+          if (Math.hypot(o.x + d.x * tc, o.z + d.z * tc) <= s.r) {
+            best = tc;
+            normal.set(0, Math.sign(cy), 0);
+          }
+        }
+      // Side.
+      const a = d.x * d.x + d.z * d.z;
+      if (a > 1e-12) {
+        const b = o.x * d.x + o.z * d.z;
+        const c = o.x * o.x + o.z * o.z - s.r * s.r;
+        const disc = b * b - a * c;
+        if (disc >= 0) {
+          const ts = (-b - Math.sqrt(disc)) / a;
+          if (ts >= 0 && ts < best && Math.abs(o.y + d.y * ts) <= s.hh) {
+            best = ts;
+            normal.set((o.x + d.x * ts) / s.r, 0, (o.z + d.z * ts) / s.r);
+          }
+        }
+      }
+      if (best > maxT) return -1;
+      t = best;
+    } else {
+      const b = o.dot(d);
+      const c = o.lengthSq() - s.r * s.r;
+      if (c <= 0) return -1;
+      const disc = b * b - c;
+      if (disc < 0) return -1;
+      t = -b - Math.sqrt(disc);
+      if (t < 0 || t > maxT) return -1;
+      normal.copy(d).multiplyScalar(t).add(o).divideScalar(s.r);
+    }
+    normal.transformDirection(this.cur);
+    return t;
+  }
+
   surfaceVelocity(local: THREE.Vector3, dt: number, out: THREE.Vector3) {
     _p.copy(local).applyMatrix4(this.cur);
     _w.copy(local).applyMatrix4(this.prev);
@@ -311,13 +393,27 @@ export interface OtherBody {
 
 /**
  * normal · stun (short daze) · dive → slide (belly slide) · tumble (knocked over: the body tips over,
- * slides and rolls with little control) → getup.
+ * slides and rolls with little control) → getup · climb (caught a ledge in the air, pulling up onto it).
  */
-export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup';
-export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide', 'tumble', 'getup'];
+export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup' | 'climb';
+export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide', 'tumble', 'getup', 'climb'];
 
 /** Lying down: the tilt a tumbling body settles at (a little under 90°). */
 const LIE = 1.4;
+/** Diving, the body lies along its flight (between these tilts); sliding, flat on the belly. */
+const DIVE_TILT_MIN = 0.95;
+const DIVE_TILT_MAX = 1.75;
+const SLIDE_TILT = 1.45;
+/** A sweeping arm catching a bean that is already down tosses it up and over itself (m/s). */
+const SCOOP_V = 7;
+/** Ledges: a top this high above the feet (× size) can be caught in the air, then climbed. */
+const LEDGE_MIN = 0.5;
+const LEDGE_MAX = 1.75;
+/** Climbing: a moment hanging, then up (m/s) and over the edge (m/s); given up after CLIMB_T. */
+const CLIMB_HANG = 0.08;
+const CLIMB_UP = 5.5;
+const CLIMB_OVER = 4.5;
+const CLIMB_T = 1.2;
 /** Distance between the two collision spheres. */
 const SPINE = SPHERES[1] - SPHERES[0];
 /** Closest two beans get (centre to centre, horizontally). */
@@ -330,7 +426,51 @@ const AIR_ACCEL = 24;
 const _gv = new THREE.Vector3();
 const hitInfo: Contact = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
 const nearby: Collider[] = [];
+const probe: Collider[] = [];
 const groundN = new THREE.Vector3();
+const wallN = new THREE.Vector3();
+const _rn = new THREE.Vector3();
+const DOWN = new THREE.Vector3(0, -1, 0);
+
+/** Centre of collision sphere i of a body with its feet at `pos`, tipped by `tilt` towards `tiltDir`. */
+function sphereAt(pos: THREE.Vector3, tilt: number, tiltDir: number, size: number, i: number, out: THREE.Vector3) {
+  out.set(pos.x, pos.y + SPHERES[0] * size, pos.z);
+  if (i === 0) return out;
+  const s = Math.sin(tilt) * SPINE * size;
+  return out.set(out.x + Math.sin(tiltDir) * s, out.y + Math.cos(tilt) * SPINE * size, out.z + Math.cos(tiltDir) * s);
+}
+
+const drawn: Collider[] = [];
+const _dc = new THREE.Vector3();
+const drawnHit: Contact = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
+
+/**
+ * Moves where a body is drawn (feet at `pos`) out of solid colliders, as its simulation would. Other
+ * beans are drawn a little in the past and the world in the present: without this they sink into
+ * walls coming at them.
+ */
+export function pushOut(world: CollisionWorld, pos: THREE.Vector3, tilt = 0, tiltDir = 0, size = 1) {
+  const r = R * size;
+  const cols = world.query(pos.x, pos.z, r + 1.2 * size + (tilt > 0 ? SPINE * size : 0), drawn);
+  for (let iter = 0; iter < 2; iter++) {
+    let any = false;
+    for (const col of cols) {
+      if (!col.enabled || col.trigger) continue;
+      for (let si = 0; si < 2; si++) {
+        if (!col.contact(sphereAt(pos, tilt, tiltDir, size, si, _dc), r, drawnHit)) continue;
+        pos.addScaledVector(drawnHit.normal, drawnHit.depth);
+        any = true;
+      }
+    }
+    if (!any) break;
+  }
+  return pos;
+}
+
+/** Solid ground a hand can hold on to: no hazards, pads, bumpers, ice or triggers. */
+function holdable(c: Collider) {
+  return c.enabled && c.isStatic && !c.trigger && !c.hit && !c.tag && !c.sweep && !c.bounce && !c.pad && c.slip < 0.5;
+}
 
 export class PlayerBody {
   readonly pos = new THREE.Vector3();
@@ -369,6 +509,8 @@ export class PlayerBody {
   powerUntil = -1e9;
   /** Current size (1, or GIANT_SIZE while a giant); follows the bonus at every step. */
   size = 1;
+  /** Climbing: where the feet end up on the ledge. */
+  readonly climbTo = new THREE.Vector3();
 
   constructor(readonly actor: number) {}
 
@@ -392,6 +534,7 @@ export class PlayerBody {
     this.power = POWER.none;
     this.powerUntil = -1e9;
     this.size = 1;
+    this.climbTo.set(0, 0, 0);
   }
 
   get down() {
@@ -451,15 +594,7 @@ export class PlayerBody {
 
   /** Centre of collision sphere i (0 feet, 1 head); the head swings over when tipped. */
   sphere(i: number, out: THREE.Vector3) {
-    const k = this.size;
-    out.set(this.pos.x, this.pos.y + SPHERES[0] * k, this.pos.z);
-    if (i === 0) return out;
-    const s = Math.sin(this.tilt) * SPINE * k;
-    return out.set(
-      out.x + Math.sin(this.tiltDir) * s,
-      out.y + Math.cos(this.tilt) * SPINE * k,
-      out.z + Math.cos(this.tiltDir) * s,
-    );
+    return sphereAt(this.pos, this.tilt, this.tiltDir, this.size, i, out);
   }
 
   /** Through a portal: out at `p`, facing `yaw`, keeping (at least `minSpeed` of) the speed. */
@@ -571,7 +706,8 @@ export class PlayerBody {
       this.vel.x *= f;
       this.vel.z *= f;
       this.tilt *= Math.exp(-10 * dt);
-      if (this.stateT <= 0) {
+      // Jump pressed while getting up: spring to the feet (the buffered jump follows).
+      if (this.stateT <= 0 || (g && this.jumpBuf > 0 && this.stateT < 0.3)) {
         this.state = 'normal';
         this.tilt = 0;
       }
@@ -588,6 +724,8 @@ export class PlayerBody {
         this.state = 'slide';
         this.stateT = 0.45;
       }
+    } else if (this.state === 'climb') {
+      this.climb(dt, input);
     } else {
       const acc = (g ? 60 - 58.5 * slip : AIR_ACCEL) * dt;
       this.accelerate(input.mx * RUN_SPEED * slow, input.mz * RUN_SPEED * slow, acc);
@@ -628,23 +766,36 @@ export class PlayerBody {
         this.grounded = false;
       }
     }
-    if (!this.down) this.tilt = 0;
+    if (this.state === 'dive' || this.state === 'slide') {
+      // The body lies along its motion: the head sphere swings forward, as the bean is drawn.
+      const along = this.vel.x * Math.sin(this.yaw) + this.vel.z * Math.cos(this.yaw);
+      const want =
+        this.state === 'dive'
+          ? THREE.MathUtils.clamp(Math.atan2(Math.max(2, along), this.vel.y), DIVE_TILT_MIN, DIVE_TILT_MAX)
+          : SLIDE_TILT;
+      this.tilt += (want - this.tilt) * Math.min(1, 12 * dt);
+      this.tiltDir = this.yaw;
+    } else if (!this.down) this.tilt = this.tilt > 0.02 ? this.tilt * Math.exp(-12 * dt) : 0;
 
-    this.vel.y = Math.max(this.vel.y - GRAVITY * dt, -32);
-    this.pos.addScaledVector(this.vel, dt);
+    const climbing = this.state === 'climb';
+    if (!climbing) {
+      this.vel.y = Math.max(this.vel.y - GRAVITY * dt, -32);
+      this.pos.addScaledVector(this.vel, dt);
+    }
 
     const vyBefore = this.vel.y;
     this.grounded = false;
     let newGround: Collider | null = null;
     groundN.set(0, 0, 0);
+    wallN.set(0, 0, 0);
     const hitDone = new Set<Collider>();
     const cols = world.query(this.pos.x, this.pos.z, r + 1.2 * size + (this.tilt > 0 ? SPINE * size : 0), nearby);
     for (let iter = 0; iter < 3; iter++) {
       let any = false;
       for (const col of cols) {
         if (!col.enabled) continue;
-        // Down (knocked over, getting up): a sweeping arm passes over the bean.
-        if (col.sweep && this.down) continue;
+        // Climbing moves the body along the ledge by itself; only hazards still get at it.
+        if (climbing && !col.hit && !col.sweep && !col.bounce && !col.trigger) continue;
         for (let si = 0; si < SPHERES.length; si++) {
           this.sphere(si, _c);
           if (!col.contact(_c, r, hitInfo)) continue;
@@ -682,8 +833,15 @@ export class PlayerBody {
             hitDone.add(col);
             col.surfaceVelocity(hitInfo.local, dt, _sv);
             const sp = Math.hypot(_sv.x, _sv.z);
-            // A sweeping arm fells whoever it catches, shoved along its swing (and then passes over).
-            if (sp > 1) {
+            if (this.state === 'tumble') {
+              // Already down: scooped up and over the arm (not dragged along with it, not passed through).
+              if (g && this.vel.y < SCOOP_V * 0.6) {
+                this.vel.y = SCOOP_V;
+                this.hitSomething = true;
+              }
+              this.stateT = Math.max(this.stateT, 0.6);
+            } else if (sp > 1) {
+              // A sweeping arm fells whoever it catches, shoved along its swing.
               // (hit sets how hard: 0.6 is a full shove)
               const k = Math.min(1, 11 / sp) * 1.5 * col.hit;
               this.knock(_sv.x * k + n.x * 1.5, _sv.z * k + n.z * 1.5, 5 + Math.min(2, sp * 0.15), 1.1, true);
@@ -714,11 +872,23 @@ export class PlayerBody {
             newGround = col;
             if (n.y > groundN.y) groundN.copy(n);
           } else if (col.tag) this.hazard = col.tag;
+          else if (Math.abs(n.y) < 0.35 && holdable(col)) wallN.copy(n);
           col.onTouch?.(col, n, this);
         }
       }
       if (!any) break;
     }
+
+    if (
+      stateBefore === 'normal' &&
+      this.state === 'normal' &&
+      !g &&
+      !this.grounded &&
+      this.vel.y < 4 &&
+      wallN.lengthSq() > 0 &&
+      this.intoWall(input, wallN) > 0.5
+    )
+      this.grabLedge(world, wallN);
 
     const myMass = this.mass;
     for (const o of others) {
@@ -729,6 +899,10 @@ export class PlayerBody {
       const os = o.size ?? 1;
       const gap = (BEAN_GAP * (size + os)) / 2;
       if (d < gap && dy < HEIGHT * os && -dy < HEIGHT * size) {
+        if (climbing) {
+          o.touching = true;
+          continue;
+        }
         if (dy > SPHERES[1] * os && this.vel.y <= 0) {
           this.pos.y = o.y + HEIGHT * os;
           this.vel.y = 0;
@@ -785,6 +959,105 @@ export class PlayerBody {
     if (stateBefore !== 'stun' && this.state === 'stun') this.stunned = true;
   }
 
+  /** How squarely the stick pushes into a wall with normal n (−1 … 1; 0 without input). */
+  private intoWall(input: BodyInput, n: THREE.Vector3) {
+    const l = Math.hypot(input.mx, input.mz);
+    const h = Math.hypot(n.x, n.z);
+    if (l < 0.3 || h < 1e-3) return 0;
+    return -(input.mx * n.x + input.mz * n.z) / (l * h);
+  }
+
+  /** Room for the upright body with its feet at (x, y, z)? */
+  private fits(world: CollisionWorld, x: number, y: number, z: number): boolean {
+    const k = this.size;
+    const cols = world.query(x, z, R * k + 0.2, probe);
+    for (const si of [0, 1]) {
+      _c.set(x, y + SPHERES[si]! * k, z);
+      for (const col of cols) {
+        if (!col.enabled || col.trigger) continue;
+        if (col.contact(_c, R * k, hitInfo) && hitInfo.depth > 0.03) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Airborne against a wall (n: its normal): a flat top within reach above it is caught, and the body
+   * climbs onto it. The top must be solid and still, with room to stand on it and on the way up.
+   */
+  private grabLedge(world: CollisionWorld, n: THREE.Vector3) {
+    const k = this.size;
+    const h = Math.hypot(n.x, n.z);
+    const nx = n.x / h;
+    const nz = n.z / h;
+    const reach = R * k + 0.3 * k;
+    const px = this.pos.x - nx * reach;
+    const pz = this.pos.z - nz * reach;
+    const y0 = this.pos.y + LEDGE_MAX * k;
+    const span = (LEDGE_MAX - LEDGE_MIN) * k;
+    _p.set(px, y0, pz);
+    let best = -1;
+    let bestCol: Collider | null = null;
+    for (const col of world.query(px, pz, 0.1, probe)) {
+      if (!col.enabled || col.trigger) continue;
+      // Something at hand height already (a taller wall): no ledge here.
+      if (col.contact(_p, 0.05, hitInfo)) return;
+      const t = col.raycast(_p, DOWN, span, _rn);
+      if (t < 0 || (best >= 0 && t >= best)) continue;
+      best = t;
+      bestCol = col;
+      groundN.copy(_rn);
+    }
+    if (!bestCol || !holdable(bestCol) || groundN.y < 0.8) return;
+    const top = y0 - best + 0.02;
+    if (!this.fits(world, px, top, pz) || !this.fits(world, this.pos.x, top, this.pos.z)) return;
+    this.state = 'climb';
+    this.stateT = CLIMB_T;
+    this.climbTo.set(px, top, pz);
+    this.vel.set(0, 0, 0);
+    this.yaw = Math.atan2(-nx, -nz);
+    this.tilt = 0;
+    this.coyote = 0;
+    this.jumpBuf = 0;
+  }
+
+  /** One step of climbing: hang, pull up the wall, then over the edge onto the ledge. */
+  private climb(dt: number, input: BodyInput) {
+    const to = this.climbTo;
+    const dx = to.x - this.pos.x;
+    const dz = to.z - this.pos.z;
+    const d = Math.hypot(dx, dz);
+    const rising = this.pos.y < to.y - 1e-4;
+    // Pulling away while still hanging lets go.
+    const away = d > 1e-3 && Math.hypot(input.mx, input.mz) > 0.3 && (input.mx * dx + input.mz * dz) / d < -0.5;
+    if ((rising && away) || this.stateT <= 0) {
+      this.state = 'normal';
+      if (d > 1e-3) this.vel.set((-dx / d) * 2, 0, (-dz / d) * 2);
+      return;
+    }
+    const x0 = this.pos.x;
+    const y0 = this.pos.y;
+    const z0 = this.pos.z;
+    if (this.stateT > CLIMB_T - CLIMB_HANG) {
+      // Hanging on for a moment.
+    } else if (rising) this.pos.y = Math.min(to.y, this.pos.y + CLIMB_UP * this.size * dt);
+    else {
+      const step = CLIMB_OVER * this.size * dt;
+      if (d <= step) {
+        this.pos.copy(to);
+        this.state = 'normal';
+        // Up and over: carry on the way the bean was going.
+        if (d > 1e-3) this.vel.set((dx / d) * 3, 0, (dz / d) * 3);
+        else this.vel.set(Math.sin(this.yaw) * 3, 0, Math.cos(this.yaw) * 3);
+        return;
+      }
+      this.pos.x += (dx / d) * step;
+      this.pos.z += (dz / d) * step;
+    }
+    this.vel.set((this.pos.x - x0) / dt, (this.pos.y - y0) / dt, (this.pos.z - z0) / dt);
+    if (d > 1e-3) this.yaw = Math.atan2(dx, dz);
+  }
+
   toFull(teleport = false): BodyFullState {
     return {
       px: this.pos.x,
@@ -807,6 +1080,9 @@ export class PlayerBody {
       tiltDir: this.tiltDir,
       power: this.power,
       powerUntil: Math.max(this.powerUntil, -1e6),
+      cx: this.climbTo.x,
+      cy: this.climbTo.y,
+      cz: this.climbTo.z,
       teleport,
     };
   }
@@ -831,5 +1107,6 @@ export class PlayerBody {
     this.power = s.power;
     this.powerUntil = s.powerUntil;
     this.size = s.power === POWER.giant ? GIANT_SIZE : 1;
+    this.climbTo.set(s.cx, s.cy, s.cz);
   }
 }

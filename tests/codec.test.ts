@@ -56,11 +56,14 @@ describe('codec', () => {
           tiltDir: -2,
           power: 2,
           powerUntil: 31.5,
+          cx: 2.5,
+          cy: 4.25,
+          cz: -7.5,
           teleport: true,
         },
         grab: 9,
       },
-      bodies: [{ id: 300, x: 1, y: 2, z: 3, yaw: 3, anim: 4, flags: 1, tilt: 1, tiltDir: 2, grab: -1 }],
+      bodies: [{ id: 300, x: 1, y: 2, z: 3, yaw: 3, anim: 4, flags: 1, tilt: 1.7, tiltDir: 2, grab: -1 }],
     };
     const back = decodeSnapshot(encodeSnapshot(s))!;
     expect(back.tick).toBe(12345);
@@ -68,9 +71,9 @@ describe('codec', () => {
     expect(back.bodies[0]).toMatchObject({ id: 300, x: 1, y: 2, z: 3, anim: 4, flags: 1 });
     expect(back.bodies[0]!.yaw).toBeCloseTo(3, 3);
     expect(back.bodies[0]).toMatchObject({ grab: -1 });
-    expect(back.bodies[0]!.tilt).toBeCloseTo(1, 2);
+    expect(back.bodies[0]!.tilt).toBeCloseTo(1.7, 1);
     expect(back.bodies[0]!.tiltDir).toBeCloseTo(2, 1);
-    expect(back.own).toMatchObject({ grab: 9, s: { slowK: 0.5, power: 2, powerUntil: 31.5 } });
+    expect(back.own).toMatchObject({ grab: 9, s: { slowK: 0.5, power: 2, powerUntil: 31.5, cx: 2.5, cy: 4.25, cz: -7.5 } });
     expect(back.own!.s.tilt).toBeCloseTo(1.2, 5);
     const spec = decodeSnapshot(encodeSnapshot({ ...s, own: null }))!;
     expect(spec.own).toBeNull();
