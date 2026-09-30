@@ -892,17 +892,17 @@ h3 {
   padding: 0.875rem 1rem;
 }
 
-/* (Sized by its content, up to the window: then it scrolls.) */
-.menu-wrap.side .menu-body {
-  flex: 0 1 auto;
-}
-
 .menu-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin-inline: -0.25rem;
   padding-inline: 0.25rem calc(0.25rem + 2px);
+}
+
+/* (Sized by its content, up to the window: then it scrolls.) */
+.menu-wrap.side .menu-body {
+  flex: 0 1 auto;
 }
 
 .tabs {
