@@ -1,4 +1,4 @@
-/** Browser launch settings shared by the probe, the client bench and Playwright: the real GPU, not a software fallback. */
+/** Browser launch settings for the client bench: the real GPU, not a software fallback. */
 
 /** Windows: the installed Edge; elsewhere Playwright's Chromium (PW_CHANNEL overrides). */
 export const channel = process.env.PW_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);

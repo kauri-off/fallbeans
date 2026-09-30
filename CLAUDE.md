@@ -19,24 +19,21 @@ gives a tab its own).
 ```sh
 bun run check          # tsc + biome + vitest (includes the quick audits: 0 errors AND 0 warnings)
 bun run audit          # all audits incl. multi-seed bot balance; --quick, --only a,b, map ids, --metrics
-bun run e2e            # browser tests (needs: bun run build:client)
-bun run visual         # screenshot per map vs this machine's baselines (visual:update after intended changes)
 bun run bench          # server cost per map vs bench/baseline.json; --profile for hot functions
 bun run assets         # validate models (gltf-validator, budgets, names the code needs)
 ```
 
 ## Look inside a running game (dev server: `bun run dev`; it keeps a permanent room `dev`, `?room=dev`)
 
-- Headless browser: `bun run probe "<js>" …` runs snippets against `window.__fallbeans` (as `p`) in headless Edge, e.g.
-  `bun run probe "await p.dev({c:'start', games:['door-dash'], bots:3})" "await p.dev({c:'skipIntro'})" "p.snapshot()"`.
-  It enters the `dev` room (`--room id` another, `--home` stays at the room list, `--practice map` a practice round).
-  The in-app browser pane pauses animation frames while hidden or unfocused; prefer `probe` for anything that needs frames.
+- Browser: always use the Playwright MCP (`mcp__playwright__*`) — not the in-app preview pane or ad-hoc scripts. Open
+  `http://localhost:5173/fallbeans/?room=dev` (`?practice=<map>` a practice round, no query = room list), then drive the game
+  with `browser_evaluate` against `window.__fallbeans`, e.g. `await p.dev({c:'start', games:['door-dash'], bots:3})` with
+  `const p = window.__fallbeans`; `browser_take_screenshot` to look, `browser_console_messages` for errors.
 - Probe (`src/client/debug/probe.ts`): `state/snapshot/time/body/beans/colliders/world/net/render/memory/hud/logs/errors/msgs`,
-  `input.hold({x,z}|{f,r}, ms)/press('jump')/walkTo(x,z)`, `camera.set(eye, look)/free()`, `shot(true)`, `dev(cmd)`,
+  `input.hold({x,z}|{f,r}, ms)/press('jump')/walkTo(x,z)`, `camera.set(eye, look)/free()`, `shot(true)` (no UI), `dev(cmd)`,
   `frames(n)`, `waitFor(fn)`, `profile.run()/passes()/ablate()/scene()`, `sections()`, `gpu('passes')`,
   `fx({smaa, temporal})` (post effects on/off), `lod({enabled, force, bias})`, `decorate({crown, tail})`,
   `rooms()/createRoom(title, private)/joinRoom(id, pin)/leaveRoom()`, `chat(text)/chatLog()`.
-  Snippets can save screenshots mid-run: `await shot('/tmp/a.png')`. Probe/bench pick the GPU backend per OS (scripts/browser.ts).
 - Dev commands (`DevCmdSchema` in `src/shared/protocol.ts`, only with `--dev`): skipIntro, warp, endRound, start {games, bots, rounds},
   lobby, rate {k} (0 pauses), step, teleport, goto {spawn|finish|checkpoint i}, bot {near}, bots {on}, kill, knock, grab, seed.
 - Server state without a browser: `curl "http://127.0.0.1:7777/fallbeans/api/debug/state?format=text"` — also `health`,

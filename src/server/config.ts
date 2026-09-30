@@ -10,7 +10,7 @@ export interface Config {
   wtPort: number | null;
   certPem: string | null;
   keyPem: string | null;
-  /** Serve the client build from this directory (dev, e2e); in production nginx does it. */
+  /** Serve the client build from this directory (dev); in production nginx does it. */
   staticDir: string | null;
   solo: boolean;
   dev: boolean;

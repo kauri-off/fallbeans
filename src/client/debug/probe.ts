@@ -331,7 +331,7 @@ export function createProbe(game: Game) {
     build: __BUILD__,
     /** The game itself (renderer, arena…), for digging in from the console. */
     game,
-    /** Short state (kept compatible with the e2e tests). */
+    /** Short state. */
     state: () => ({
       id: game.arena?.body?.actor ?? null,
       pos: game.arena?.body?.pos.toArray() ?? null,
@@ -448,7 +448,7 @@ export function createProbe(game: Game) {
     ui: (hidden: boolean) => {
       uiHidden.value = hidden;
     },
-    /** Screenshot mode: no interface, still sky and effects, no blinking (see e2e/visual.spec.ts). */
+    /** Screenshot mode: no interface, still sky and effects, no blinking. */
     shot: (on: boolean) => {
       uiHidden.value = on;
       shotMode.value = on;

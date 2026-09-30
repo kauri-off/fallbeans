@@ -57,7 +57,7 @@ export class Hub {
   constructor(private readonly opts: HubOptions) {
     this.log = opts.log;
     this.clock = opts.room.clock ?? (() => performance.now());
-    // Dev server: a room that is always there, for the tools (probe, benchmarks, e2e) to meet in.
+    // Dev server: a room that is always there, for the tools (benchmarks, Playwright MCP) to meet in.
     if (opts.room.dev) this.open(DEV_ROOM_ID, { title: 'Dev', permanent: true });
     this.sweeper = opts.room.autoTick === false ? null : setInterval(() => this.sweep(), 5000);
     this.sweeper?.unref?.();
