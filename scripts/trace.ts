@@ -9,7 +9,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import { harness, mapOrThrow } from '../src/audit/harness';
-import type { Pawn } from '../src/server/arena';
+import type { Pawn } from '../src/server/rooms/arena';
 import { BTN } from '../src/shared/codec';
 import { DT } from '../src/shared/consts';
 

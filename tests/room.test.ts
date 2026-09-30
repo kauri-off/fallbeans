@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Auth } from '../src/server/auth';
-import { Gateway } from '../src/server/gateway';
-import { replay } from '../src/server/replay';
-import { type Conn, Room } from '../src/server/room';
+import type { Conn } from '../src/server/net/conn';
+import { Gateway } from '../src/server/net/gateway';
+import { replay } from '../src/server/rooms/replay';
+import { Room } from '../src/server/rooms/room';
 import { BTN, decodeSnapshot, encodeInput, type Snapshot } from '../src/shared/codec';
 import { PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
 import type { ServerMsg, ServerMsgOf } from '../src/shared/protocol';
@@ -12,6 +13,7 @@ import { checkServerMsg } from '../src/shared/serverSchema';
 
 let now = 0;
 const clock = () => now;
+let uids = 0;
 
 class Client implements Conn {
   readonly kind = 'ws' as const;
@@ -34,8 +36,9 @@ class Client implements Conn {
   close() {
     this.closed = true;
   }
-  hello(name: string, token?: string) {
-    const id = this.room.join(this, { t: 'hello', v: PROTOCOL_VERSION, name, ticket: 'x', ...(token ? { token } : {}) });
+  /** Enters the room as `uid` (the same uid again: the same player on a new connection). */
+  hello(name: string, uid = `u${++uids}`) {
+    const id = this.room.join(this, { name, uid });
     if (id !== null) this.id = id;
     return this;
   }
@@ -191,15 +194,14 @@ describe('room', () => {
     expect(room.arena.pawns.get(bot.id)!.progress).toBeGreaterThan(5);
   });
 
-  it('keeps disconnected players during a game and resumes by token', () => {
+  it('keeps disconnected players during a game and resumes by identity', () => {
     const a = new Client(room).hello('A');
-    const b = new Client(room).hello('B');
+    const b = new Client(room).hello('B', 'b');
     a.ctl({ t: 'start' });
-    const token = b.last('welcome')!.token;
     room.leave(b.id, b);
     expect(room.players.has(b.id)).toBe(true);
     expect(room.host).toBe(a.id);
-    const b2 = new Client(room).hello('B', token);
+    const b2 = new Client(room).hello('B', 'b');
     expect(b2.last('welcome')).toMatchObject({ id: b.id, resumed: true });
     expect(b2.last('arena')?.late).toBe(true);
   });
@@ -280,26 +282,33 @@ describe('room', () => {
 });
 
 describe('gateway', () => {
-  it('requires a valid ticket and protocol version', () => {
-    const auth = new Auth(Buffer.alloc(32, 1), async () => true);
+  it('requires a valid ticket and protocol version, then opens rooms', () => {
+    const auth = new Auth(Buffer.alloc(32, 1));
     const g = new Gateway(auth, { info() {}, warn() {} }, { minPlayers: 2, clock, autoTick: false });
-    const c = new Client(g.main);
+    const c = new Client(room);
     const s = g.open(c);
     s.control(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'x', ticket: 'forged' }));
     expect(c.last('reject')?.reason).toBe('auth');
-    const c2 = new Client(g.main);
+    const c2 = new Client(room);
     g.open(c2).control(JSON.stringify({ t: 'hello', v: 1, name: 'x', ticket: auth.issueTicket() }));
     expect(c2.last('reject')?.reason).toBe('version');
-    const c3 = new Client(g.main);
+    // A good hello lands at the room list; whoever opens a room is its host and is told its PIN.
+    const c3 = new Client(room);
     const s3 = g.open(c3);
     s3.control('not json');
     s3.control(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'ok', ticket: auth.issueTicket() }));
-    expect(c3.last('welcome')).toBeDefined();
-    const c4 = new Client(g.main);
+    expect(auth.identity(c3.last('ready')?.token)).not.toBeNull();
+    expect(c3.last('rooms')).toMatchObject({ rooms: [], mine: null });
+    s3.control(JSON.stringify({ t: 'create', title: 'Наша', private: true }));
+    const id = c3.last('welcome')!.id;
+    expect(c3.last('lobby')).toMatchObject({ room: { title: 'Наша', private: true }, host: id });
+    expect(c3.last('lobby')?.pin).toMatch(/^\d{4}$/);
+    expect(g.hub.rooms.size).toBe(1);
+    const c4 = new Client(room);
     g.open(c4).control(
       JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: 'p', ticket: auth.issueTicket(), practice: 'hex-a-gone' }),
     );
-    expect(g.practice.size).toBe(1);
+    expect(g.hub.practice.size).toBe(1);
     expect(c4.last('arena')?.game).toBe('hex-a-gone');
     g.dispose();
   });

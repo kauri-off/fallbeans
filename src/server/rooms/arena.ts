@@ -7,16 +7,16 @@ import {
   REMOTE_FLAG,
   type RemoteState,
   type Snapshot,
-} from '../shared/codec';
-import { ANIM, BOT_EVERY, DT, TICK_MS } from '../shared/consts';
-import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../shared/game';
-import type { Sections } from '../shared/prof';
-import type { GameEventRecord } from '../shared/protocol';
-import { mulberry32, type Rng } from '../shared/rng';
-import { emptyStats, type RoundStats } from '../shared/rules';
-import { Bonuses } from '../sim/bonus';
-import { smoothStick } from '../sim/bots';
-import { Builder } from '../sim/builder';
+} from '../../shared/codec';
+import { ANIM, BOT_EVERY, DT, TICK_MS } from '../../shared/consts';
+import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../../shared/game';
+import type { Sections } from '../../shared/prof';
+import type { GameEventRecord } from '../../shared/protocol';
+import { mulberry32, type Rng } from '../../shared/rng';
+import { emptyStats, type RoundStats } from '../../shared/rules';
+import { Bonuses } from '../../sim/bonus';
+import { smoothStick } from '../../sim/bots';
+import { Builder } from '../../sim/builder';
 import {
   type BotInput,
   type BotMem,
@@ -27,9 +27,9 @@ import {
   type MapModule,
   type MapSpec,
   specProblems,
-} from '../sim/map';
-import { NavGrid } from '../sim/nav';
-import { type OtherBody, PlayerBody } from '../sim/physics';
+} from '../../sim/map';
+import { NavGrid } from '../../sim/nav';
+import { type OtherBody, PlayerBody } from '../../sim/physics';
 
 /** How far ahead of the server a client may send inputs (ticks). */
 const MAX_LEAD = 120;

@@ -1,5 +1,5 @@
 import type { ClientReport } from '../shared/debug';
-import type { Logger } from './room';
+import type { Logger } from './log';
 
 /**
  * Server diagnostics for the debug page and API: recent log lines, client error reports, and

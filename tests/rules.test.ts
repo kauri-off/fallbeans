@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeAwards, emptyGameStats } from '../src/server/awards';
+import { computeAwards, emptyGameStats } from '../src/server/rooms/awards';
 import { emptyStats, isRoundOver, placementPoints, type RoundStats, type RoundView, scoreRound } from '../src/shared/rules';
 
 function view(p: Partial<RoundView>): RoundView {

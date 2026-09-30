@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import type { Profiler } from '../debug/profiler';
+import type { Profiler } from '../../debug/profiler';
 
 type Result = Awaited<ReturnType<Profiler['run']>>;
 

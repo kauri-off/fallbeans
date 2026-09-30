@@ -23,29 +23,22 @@ test.beforeEach(async ({ page }) => {
 
 const state = (page: Page) => page.evaluate(() => (window as unknown as { __fallbeans: { state(): Probe } }).__fallbeans.state());
 
-async function login(page: Page) {
-  await page.goto('/fallbeans/');
-  await expect(page).toHaveURL(/\/fallbeans\/pin\//);
-  await page.getByLabel('Цифра 1').pressSequentially('5050');
-  await expect(page).toHaveURL(/\/fallbeans\/$/);
-}
-
 async function hold(page: Page, key: string, ms: number) {
   await page.keyboard.down(key);
   await page.waitForTimeout(ms);
   await page.keyboard.up(key);
 }
 
-test('PIN gate, lobby, movement and transport', async ({ page }) => {
+test('room list, own room, movement and transport', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  // A wrong PIN is refused.
-  await page.goto('/fallbeans/pin/');
-  await page.getByLabel('Цифра 1').pressSequentially('1234');
-  await expect(page.getByText('Неверный PIN-код')).toBeVisible();
-
-  await login(page);
+  // The game opens at the room list; a new room puts its creator into its lobby as the host.
+  await page.goto('/fallbeans/');
+  await expect(page.getByRole('heading', { name: /Комнаты/ })).toBeVisible({ timeout: 20_000 });
+  await page.getByPlaceholder('Название комнаты').fill('Тест');
+  await page.getByRole('button', { name: 'Создать комнату' }).click();
   await expect(page.getByText('Игроки: 1 из 8')).toBeVisible({ timeout: 20_000 });
+  await expect(page).toHaveURL(/\/fallbeans\/\?room=[a-z0-9]+$/);
   await expect.poll(async () => (await state(page)).kind).toBe('lobby');
   const probe = await state(page);
   console.log('transport:', probe.transport);
@@ -61,11 +54,10 @@ test('PIN gate, lobby, movement and transport', async ({ page }) => {
   expect(Math.hypot(after[0] - before[0], after[2] - before[2])).toBeGreaterThan(2);
   await page.screenshot({ path: 'test-results/lobby.png' });
 
-  // The PIN is remembered: a new page goes straight in.
-  const again = await page.context().newPage();
-  await again.goto('/fallbeans/');
-  await expect(again).toHaveURL(/\/fallbeans\/$/);
-  await again.close();
+  // Leaving the room leads back to the list; the room, now empty, is closed.
+  await page.evaluate(() => (window as unknown as { __fallbeans: { leaveRoom(): void } }).__fallbeans.leaveRoom());
+  await expect(page.getByRole('button', { name: 'Создать комнату' })).toBeVisible();
+  await expect(page).toHaveURL(/\/fallbeans\/$/);
   expect(errors).toEqual([]);
 });
 
@@ -91,7 +83,6 @@ test('every map loads and plays in practice', async ({ page }) => {
   page.on('console', (m) => {
     if (m.type() === 'error' && !m.text().includes('WebTransport') && !m.text().includes('QUIC')) errors.push(m.text());
   });
-  await login(page);
   for (const id of MAPS) {
     await page.goto(`/fallbeans/?practice=${id}`);
     await expect.poll(async () => (await state(page)).arena, { timeout: 20_000 }).toBe(id);

@@ -3,7 +3,7 @@
  *   bun scripts/bot-times.ts [map-id…]
  */
 import { MAPS } from '../src/games';
-import { ServerArena } from '../src/server/arena';
+import { ServerArena } from '../src/server/rooms/arena';
 
 const where = process.argv.includes('--where');
 const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));

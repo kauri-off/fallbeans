@@ -1,7 +1,6 @@
 /**
  * Deploys Fall Beans to https://киберщит-социум.рф/fallbeans/:  bun run deploy -- [options]
  *
- *   --pin <digits>    set (or change) the PIN; changing it signs everyone out. Needed on the first deploy.
  *   --debug-key <key> turn on the read-only debug page (/fallbeans/debug/) with this key (16–64 of
  *                     A–Z a–z 0–9 _ -); then open /fallbeans/api/debug/login?key=<key> once per browser
  *   --pack-only       build the bundle (.build/fallbeans-update.tar.gz) without uploading
@@ -19,7 +18,6 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { hashPin } from '../src/server/auth';
 
 const args = process.argv.slice(2);
 const flag = (n: string) => args.includes(n);
@@ -40,8 +38,6 @@ const run = (cmd: string[], opts: { cwd?: string } = {}) => {
 const root = process.cwd();
 const host = option('--host') ?? process.env.DEPLOY_HOST ?? 'deploy@168.113.157.12';
 const key = (option('--key') ?? process.env.DEPLOY_KEY ?? '~/.ssh/cybershield_deploy').replace(/^~(?=$|[\\/])/, os.homedir());
-const pin = option('--pin');
-if (pin !== undefined && !/^\d{4,12}$/.test(pin)) fail('PIN must be 4–12 digits');
 const debugKey = option('--debug-key');
 if (debugKey !== undefined && !/^[\w-]{16,64}$/.test(debugKey)) fail('debug key: 16–64 characters of A–Z a–z 0–9 _ -');
 
@@ -77,17 +73,14 @@ if (flag('--pack-only')) process.exit(0);
 if (!existsSync(key)) fail(`SSH key not found: ${key}`);
 if (!flag('--yes')) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(
-    `[deploy] Update Fall Beans on ${host} (production)${pin ? ' and set a new PIN' : ''}? [y/N] `,
-  );
+  const answer = await rl.question(`[deploy] Update Fall Beans on ${host} (production)? [y/N] `);
   rl.close();
   if (!/^y(es)?$/i.test(answer.trim())) fail('cancelled');
 }
 const ssh = ['-i', key, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
 const dir = `fallbeans-update-${Date.now()}`;
 run(['scp', ...ssh, archive, `${host}:${dir}.tar.gz`]);
-const env =
-  (pin ? `PIN_HASH_B64=${Buffer.from(await hashPin(pin)).toString('base64')} ` : '') + (debugKey ? `DEBUG_KEY=${debugKey} ` : '');
+const env = debugKey ? `DEBUG_KEY=${debugKey} ` : '';
 run([
   'ssh',
   ...ssh,

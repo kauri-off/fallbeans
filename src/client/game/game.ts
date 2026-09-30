@@ -1,17 +1,20 @@
 import { effect } from '@preact/signals';
 import * as THREE from 'three';
 import { decodeSnapshot } from '../../shared/codec';
-import { DT, INTRO_MS } from '../../shared/consts';
+import { BASE_PATH, DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
 import { BONUS_KINDS } from '../../sim/bonus';
 import { GIANT_SIZE, POWER, pushOut } from '../../sim/physics';
 import { report } from '../debug/capture';
 import { Connection } from '../net/connection';
-import { session, settings, updateSettings } from '../settings';
+import { identity, settings, updateSettings } from '../settings';
 import {
   arenaInfo,
+  chatOpen,
+  clearChat,
   conn,
+  denied,
   devMode,
   feed,
   gameEnd,
@@ -22,10 +25,14 @@ import {
   myId,
   needClick,
   note,
+  ownRoom,
   type PlayStatus,
   practiceGame,
+  pushChat,
   pushFeed,
   results,
+  room,
+  roomList,
   shotMode,
 } from '../state';
 import { fmtSec, ordinal } from '../ui/labels';
@@ -85,16 +92,22 @@ export class Game {
   readonly prof = new Sections(2000);
   private devSeq = 1;
   private readonly devWait = new Map<number, (r: { ok: boolean; msg: string }) => void>();
+  /** The room to be in: from the link (`?room=`), then whichever the player entered; null at the room list. */
+  private wantRoom: string | null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas);
     this.input = new Input(canvas);
     this.rig = new CameraRig(this.renderer.camera);
-    const practice = new URLSearchParams(location.search).get('practice');
+    const query = new URLSearchParams(location.search);
+    const practice = query.get('practice');
     practiceGame.value = practice;
+    const linked = query.get('room')?.toLowerCase() ?? '';
+    this.wantRoom = /^[a-z0-9]{2,8}$/.test(linked) ? linked : null;
     this.net = new Connection({
       name: () => settings.value.name,
-      token: () => (practice ? null : session.get('fb_token')),
+      token: () => identity.get(),
+      room: () => this.wantRoom,
       practice,
       onMessage: (m) => this.onMessage(m),
       onDatagram: (d) => {
@@ -134,11 +147,12 @@ export class Game {
         menuOpen.value = false;
         needClick.value = false;
       } else if (wasLocked) {
-        // Released by Esc: that opens the menu. Released because the window lost focus (Alt+Tab):
-        // no menu, just a prompt to click back in.
+        // Released by Esc: that opens the menu (or just closes the chat line). Released because the
+        // window lost focus (Alt+Tab): no menu, just a prompt to click back in.
         const focusLoss = !document.hasFocus() || document.hidden || performance.now() - blurredAt < 400;
-        if (focusLoss) needClick.value = true;
+        if (focusLoss || chatOpen.value) needClick.value = true;
         else menuOpen.value = true;
+        chatOpen.value = false;
       }
       wasLocked = locked;
     });
@@ -147,7 +161,7 @@ export class Game {
     });
     this.input.onEscape = () => {
       // With the mouse captured the browser handles Esc (and the lock change opens the menu).
-      if (this.input.locked) return;
+      if (this.input.locked || !this.arena) return;
       if (needClick.value && !menuOpen.value) {
         needClick.value = false;
         menuOpen.value = true;
@@ -166,6 +180,11 @@ export class Game {
       this.net.send({ t: 'emote', e });
     };
     this.input.onCycle = (dir) => this.cycleSpectate(dir);
+    this.input.onChat = () => {
+      if (!this.arena || practiceGame.value) return;
+      this.input.release();
+      chatOpen.value = true;
+    };
     canvas.addEventListener('mousedown', (e) => {
       // Spectating: the mouse buttons switch between players.
       if (menuOpen.value || this.arena?.body || this.arena?.kind !== 'round') return;
@@ -176,6 +195,7 @@ export class Game {
 
   /** Closes the menu and captures the mouse. */
   resume() {
+    if (!this.arena) return;
     menuOpen.value = false;
     needClick.value = false;
     void this.input.lock().then(() => {
@@ -207,6 +227,65 @@ export class Game {
     });
   }
 
+  // ------------------------------------------------------------------ rooms and chat
+
+  /** Opens a room of one's own (or returns to it) and enters it. */
+  createRoom(title: string, isPrivate: boolean) {
+    denied.value = null;
+    this.net.send({ t: 'create', title, private: isPrivate });
+  }
+
+  joinRoom(id: string, pin?: string) {
+    // (With a PIN the form stays up until the server answers: wrong PIN or welcome.)
+    if (!pin) denied.value = null;
+    this.net.send({ t: 'join', room: id, ...(pin ? { pin } : {}) });
+  }
+
+  /** Back to the room list (the server answers with `home`). */
+  leaveRoom() {
+    this.net.send({ t: 'leave' });
+  }
+
+  sendChat(text: string) {
+    const line = text.trim();
+    if (line) this.net.send({ t: 'chat', text: line });
+  }
+
+  /** The room (or none) shows in the address, so a reload comes back to it and the link can be shared. */
+  private setRoom(id: string | null) {
+    this.wantRoom = id;
+    if (practiceGame.value) return;
+    const url = new URL(location.href);
+    if (id) url.searchParams.set('room', id);
+    else url.searchParams.delete('room');
+    try {
+      history.replaceState(null, '', url.search ? url : BASE_PATH);
+    } catch {}
+  }
+
+  /** Out of the room: nothing to simulate or draw but the sky behind the room list. */
+  private exitRoom() {
+    this.arena?.dispose();
+    this.arena = null;
+    this.renderer.statics = null;
+    for (const id of [...this.beans.keys()]) this.removeBean(id);
+    this.decor.clear();
+    this.players = new Map();
+    this.input.unlock();
+    this.input.script = null;
+    arenaInfo.value = null;
+    lobby.value = null;
+    room.value = null;
+    results.value = null;
+    gameEnd.value = null;
+    feed.value = [];
+    myId.value = -1;
+    clearChat();
+    menuOpen.value = true;
+    needClick.value = false;
+    this.setRoom(null);
+  }
+
   /** Internals for the debug probe (read-only use). */
   inspect() {
     return {
@@ -227,13 +306,41 @@ export class Game {
   private onMessage(m: ServerMsg) {
     this.onServerMessage?.(m);
     switch (m.t) {
+      case 'ready':
+        devMode.value = m.dev;
+        identity.set(m.token);
+        return;
+      case 'rooms':
+        roomList.value = m.rooms;
+        ownRoom.value = m.mine;
+        return;
+      case 'denied':
+        // The room from the link or the one we were in is not to be had: the room list it is.
+        if (this.arena || (this.wantRoom && m.reason !== 'pin')) this.exitRoom();
+        denied.value = m;
+        return;
+      case 'home':
+        this.exitRoom();
+        denied.value = m.msg ? { t: 'denied', room: null, reason: 'gone', msg: m.msg } : null;
+        return;
       case 'welcome':
         myId.value = m.id;
-        devMode.value = m.dev;
-        if (!m.practice) session.set('fb_token', m.token);
+        denied.value = null;
+        if (!m.resumed) {
+          clearChat();
+          menuOpen.value = true;
+        }
+        if (m.room) this.setRoom(m.room);
         return;
+      case 'chat': {
+        const p = this.players.get(m.id);
+        pushChat({ name: m.name, color: p?.color ?? '#ffffff', text: m.text, mine: m.id === myId.value });
+        if (m.id !== myId.value) sfx('click', 0.5);
+        return;
+      }
       case 'lobby': {
         lobby.value = m;
+        room.value = m.room;
         this.players = new Map(m.players.map((p) => [p.id, p]));
         const me = this.players.get(myId.value);
         if (me && !settings.value.name) updateSettings({ name: me.name });
@@ -411,7 +518,7 @@ export class Game {
     this.renderer.motes.visible = !shotMode.value;
     if (arena) {
       prof.start('predict');
-      this.input.enabled = !menuOpen.value;
+      this.input.enabled = !menuOpen.value && !chatOpen.value;
       this.input.spectating = !arena.body && arena.kind === 'round';
       this.rig.look(this.input.lookX, this.input.lookY);
       this.input.lookX = 0;

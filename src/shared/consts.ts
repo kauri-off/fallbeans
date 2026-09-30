@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;
@@ -25,6 +25,15 @@ export const PRACTICE_RESULTS_MS = 3500;
 export const PODIUM_MS = 20000;
 export const RECONNECT_GRACE_MS = 30000;
 export const MAX_PRACTICE_ROOMS = 3;
+/** Rooms open at once (each simulates its own lobby or round). */
+export const MAX_ROOMS = 16;
+/** A room nobody is in is closed after this long (its owner may be reloading the page). */
+export const ROOM_EMPTY_MS = 30000;
+/** Dev servers keep one room open under this id for the tools (`?room=dev`). */
+export const DEV_ROOM_ID = 'dev';
+export const ROOM_TITLE_MAX = 24;
+export const ROOM_PIN_DIGITS = 4;
+export const CHAT_MAX = 160;
 
 export const ANIM = {
   idle: 0,

@@ -1,9 +1,10 @@
-import { getGame } from '../../games';
-import { GENRE_LABEL } from '../../shared/game';
-import type { LobbyPlayer } from '../../shared/protocol';
-import { settings } from '../settings';
-import { arenaInfo, conn, feed, gameEnd, hud, lobby, menuOpen, myId, needClick, results } from '../state';
-import { cause, fmtTime, ordinal, signed } from './labels';
+import { getGame } from '../../../games';
+import { GENRE_LABEL } from '../../../shared/game';
+import type { LobbyPlayer } from '../../../shared/protocol';
+import { settings } from '../../settings';
+import { arenaInfo, conn, feed, gameEnd, hud, lobby, menuOpen, myId, needClick, results } from '../../state';
+import { cause, fmtTime, ordinal, signed } from '../labels';
+import { Keys } from './Keys';
 
 const playersById = () => new Map((lobby.value?.players ?? []).map((p) => [p.id, p]));
 
@@ -37,7 +38,7 @@ function Panel() {
             <b>{g.title}</b>
           </>
         ) : (
-          <b>{info.kind === 'podium' ? 'Итоги игры' : 'Лобби'}</b>
+          <b class="room-title">{info.kind === 'podium' ? 'Итоги игры' : l?.room.title || 'Лобби'}</b>
         )}
       </div>
       <ul class="roster">
@@ -257,16 +258,25 @@ export function Hud() {
       )}
       {round && !between && <Status />}
       {round && h.status === 'play' && h.t >= 0 && h.t < 10 && (
-        <div class="keys">
-          <kbd>WASD</kbd> бег · <kbd>Пробел</kbd> прыжок · <kbd>E</kbd>/<kbd>ЛКМ</kbd> нырок · <kbd>Q</kbd>/<kbd>ПКМ</kbd>{' '}
-          {g?.grab ? 'схватить хвост' : 'захват'} · <kbd>1</kbd>–<kbd>5</kbd> эмоции · <kbd>Esc</kbd> меню
-        </div>
+        <Keys
+          grab={g?.grab ? 'схватить хвост' : 'захват'}
+          chat={!info.practice}
+          lead={
+            <>
+              <kbd>Esc</kbd> меню ·{' '}
+            </>
+          }
+        />
       )}
       {info.kind === 'lobby' && !menuOpen.value && (
-        <div class="keys">
-          <kbd>Esc</kbd> — меню{lobby.value?.host === myId.value ? ' и запуск игры' : ''} · <kbd>WASD</kbd> бег ·{' '}
-          <kbd>Пробел</kbd> прыжок · <kbd>E</kbd> нырок · <kbd>Q</kbd> захват · <kbd>1</kbd>–<kbd>5</kbd> эмоции
-        </div>
+        <Keys
+          grab="захват"
+          lead={
+            <>
+              <kbd>Esc</kbd> меню{lobby.value?.host === myId.value ? ' и запуск игры' : ''} ·{' '}
+            </>
+          }
+        />
       )}
       {needClick.value && !menuOpen.value && (
         <div class="prompt">

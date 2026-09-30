@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHAT_MAX, EMOTES, NAME_MAX, ROOM_TITLE_MAX } from './consts';
 import { PlaylistSchema, type ServerMsg } from './protocol';
 
 /**
@@ -35,26 +36,51 @@ const RoundRow = z.object({
   falls: z.number().int().min(0),
 });
 
+const RoomRef = z.object({ id: z.string(), title: z.string().max(ROOM_TITLE_MAX), private: z.boolean() });
+
 export const ServerMsgSchema = z.discriminatedUnion('t', [
+  z.object({ t: z.literal('ready'), token: z.string(), dev: z.boolean() }),
+  z.object({ t: z.literal('reject'), reason: z.enum(['version', 'auth', 'bad', 'busy', 'moved']), msg: z.string() }),
+  z.object({ t: z.literal('pong'), c: Num, s: Num }),
+  z.object({
+    t: z.literal('rooms'),
+    rooms: z.array(
+      RoomRef.extend({
+        host: z.string(),
+        players: z.number().int().min(0),
+        bots: z.number().int().min(0),
+        max: z.number().int().min(1).max(8),
+        phase: Phase,
+      }),
+    ),
+    mine: z.string().nullable(),
+  }),
+  z.object({
+    t: z.literal('denied'),
+    room: z.string().nullable(),
+    reason: z.enum(['pin', 'full', 'gone', 'limit']),
+    msg: z.string(),
+  }),
+  z.object({ t: z.literal('home'), msg: z.string() }),
   z.object({
     t: z.literal('welcome'),
     id: Id,
-    token: z.string(),
+    room: z.string(),
     solo: z.boolean(),
     practice: z.boolean(),
     resumed: z.boolean(),
-    dev: z.boolean(),
   }),
-  z.object({ t: z.literal('reject'), reason: z.enum(['full', 'version', 'auth', 'bad', 'busy']), msg: z.string() }),
-  z.object({ t: z.literal('pong'), c: Num, s: Num }),
   z.object({
     t: z.literal('lobby'),
+    room: RoomRef,
     phase: Phase,
     host: Id.nullable(),
     min: z.number().int().min(1),
     max: z.number().int().min(1).max(8),
     players: z.array(LobbyPlayer).max(8),
     playlist: PlaylistSchema,
+    fill: z.boolean(),
+    pin: z.string().nullable(),
   }),
   z.object({
     t: z.literal('arena'),
@@ -109,7 +135,8 @@ export const ServerMsgSchema = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('ev'), n: z.string(), d: z.unknown() }),
   z.object({ t: z.literal('scores'), s: z.array(z.tuple([Id, Num])) }),
-  z.object({ t: z.literal('emote'), id: Id, e: z.number().int().min(1).max(3) }),
+  z.object({ t: z.literal('emote'), id: Id, e: z.number().int().min(1).max(EMOTES) }),
+  z.object({ t: z.literal('chat'), id: Id, name: z.string().max(NAME_MAX), text: z.string().max(CHAT_MAX * 2) }),
   z.object({ t: z.literal('left'), id: Id }),
   z.object({ t: z.literal('devAck'), q: z.number().int().nullable(), ok: z.boolean(), msg: z.string() }),
   z.object({ t: z.literal('clock'), rate: z.number().min(0).max(8), s: Num }),

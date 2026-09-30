@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'preact/hooks';
-import type { Game } from '../game/game';
+import type { Game } from '../../game/game';
 
 /**
  * Name tags over the beans as HTML, positioned every frame. Drawn outside the 3D scene, they stay

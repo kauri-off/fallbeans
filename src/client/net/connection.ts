@@ -1,4 +1,4 @@
-import { BASE_PATH, PROTOCOL_VERSION } from '../../shared/consts';
+import { PROTOCOL_VERSION } from '../../shared/consts';
 import type { ClientMsg, ServerMsg } from '../../shared/protocol';
 import { conn } from '../state';
 import { connect, fetchSession, type Transport } from './transport';
@@ -50,7 +50,10 @@ export class Clock {
 
 export interface ConnectionOptions {
   name: () => string;
+  /** The identity token from an earlier `ready`, if the browser kept one. */
   token: () => string | null;
+  /** The room to enter right after the hello: the one from the link, or the one the player is in (reconnects). */
+  room: () => string | null;
   practice: string | null;
   onMessage(msg: ServerMsg): void;
   onDatagram(data: Uint8Array): void;
@@ -76,10 +79,6 @@ export class Connection {
     this.stopped = false;
     conn.value = { ...conn.value, status: this.retries ? 'reconnecting' : 'connecting' };
     const s = await fetchSession();
-    if (s === 'auth') {
-      location.replace(`${BASE_PATH}pin/index.html`);
-      return;
-    }
     if (s === 'error') return this.retry();
     if (s.version !== PROTOCOL_VERSION) {
       conn.value = { ...conn.value, status: 'rejected', message: 'Вышла новая версия игры — обновите страницу' };
@@ -99,12 +98,14 @@ export class Connection {
       return this.retry();
     }
     const token = this.o.token();
+    const room = this.o.practice ? null : this.o.room();
     this.send({
       t: 'hello',
       v: PROTOCOL_VERSION,
       name: this.o.name(),
       ticket: s.ticket,
       ...(token ? { token } : {}),
+      ...(room ? { room } : {}),
       ...(this.o.practice ? { practice: this.o.practice } : {}),
     });
     this.ping();
@@ -124,14 +125,13 @@ export class Connection {
       conn.value = { ...conn.value, ping: Math.round(this.clock.rtt) };
       return;
     }
-    if (m.t === 'welcome') {
+    if (m.t === 'ready') {
       this.retries = 0;
       conn.value = { status: 'online', transport: this.transport?.kind ?? null, message: '', ping: Math.round(this.clock.rtt) };
     }
     if (m.t === 'reject') {
       this.stopped = true;
       conn.value = { ...conn.value, status: 'rejected', message: m.msg };
-      if (m.reason === 'auth') setTimeout(() => location.replace(`${BASE_PATH}pin/index.html`), 1500);
     }
     this.o.onMessage(m);
   }

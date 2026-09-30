@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { GAMES } from '../src/games';
+import { DEV_ROOM_ID } from '../src/shared/consts';
 import { channel, gpuArgs } from './browser';
 
 const args = process.argv.slice(2);
@@ -32,9 +33,8 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));
-await page.goto(`${base}pin/index.html`);
-await page.evaluate(async (u) => fetch(`${u}api/auth`, { method: 'POST', body: JSON.stringify({ pin: '5050' }) }), base);
-await page.goto(base);
+// The dev server's permanent room.
+await page.goto(`${base}?room=${DEV_ROOM_ID}`);
 await page.waitForFunction(() => window.__fallbeans?.time().kind === 'lobby', null, { timeout: 30_000 });
 
 interface Row {

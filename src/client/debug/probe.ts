@@ -9,8 +9,10 @@ import type { Effects, Quality } from '../game/renderer';
 import { settings, updateSettings } from '../settings';
 import {
   arenaInfo,
+  chatLog,
   conn,
   debugOverlay,
+  denied,
   devMode,
   feed,
   gameEnd,
@@ -18,7 +20,10 @@ import {
   lobby,
   menuOpen,
   myId,
+  ownRoom,
   results,
+  room,
+  roomList,
   shotMode,
   uiHidden,
 } from '../state';
@@ -351,6 +356,14 @@ export function createProbe(game: Game) {
     memory,
     hud: () => ({ hud: hud.value, results: results.value, gameEnd: gameEnd.value, feed: feed.value }),
     lobby: () => lobby.value,
+    /** Rooms: the list (home screen), the room we are in, why the last attempt to enter one failed. */
+    rooms: () => ({ room: room.value, list: roomList.value, mine: ownRoom.value, denied: denied.value }),
+    createRoom: (title = '', isPrivate = false) => game.createRoom(title, isPrivate),
+    joinRoom: (id: string, pin?: string) => game.joinRoom(id, pin),
+    leaveRoom: () => game.leaveRoom(),
+    /** Says a line in the room's chat; chatLog() is what arrived. */
+    chat: (text: string) => game.sendChat(text),
+    chatLog: () => chatLog.value,
     logs: (level?: 'error' | 'warn' | 'info') => log.filter((l) => !level || l.level === level),
     errors: () => log.filter((l) => l.level === 'error'),
     msgs: (n = 50, type?: ServerMsg['t']) => msgs.filter((x) => !type || x.m.t === type).slice(-n),

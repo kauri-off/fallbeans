@@ -3,13 +3,13 @@
  * connections, playing a real round.
  *   bun run stress [--clients 8] [--seconds 30] [--map door-dash] [--latency 60] [--jitter 20] [--loss 0.02]
  *
- * Each client logs in with the dev PIN, joins, and sends inputs at 60 Hz like the browser does
+ * Each client enters the dev server's room and sends inputs at 60 Hz like the browser does
  * (redundant frames, a lead ahead of the server clock), through a fake link that delays, jitters
  * and drops input packets. Reported: snapshot rate and bandwidth per client, round-trip time,
  * inputs that arrived too late, and the server's own tick cost and event-loop lag while loaded.
  */
 import { decodeSnapshot, encodeInput, type InputFrame } from '../src/shared/codec';
-import { INPUT_EVERY, INPUT_REDUNDANCY, PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
+import { DEV_ROOM_ID, INPUT_EVERY, INPUT_REDUNDANCY, PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
 import type { ServerMsg } from '../src/shared/protocol';
 
 const args = process.argv.slice(2);
@@ -69,17 +69,9 @@ const link = (fn: () => void, lossy: boolean) => {
   return true;
 };
 
-/** One login for everyone (the PIN endpoint allows 5 attempts a minute per address). */
-let cookie = '';
-async function login() {
-  const auth = await fetch(`${base}api/auth`, { method: 'POST', body: JSON.stringify({ pin: '5050' }) });
-  if (!auth.ok) throw new Error(`login failed: ${auth.status}`);
-  cookie = (auth.headers.get('set-cookie') ?? '').split(';')[0]!;
-}
-
 async function connect(i: number): Promise<Client> {
-  const session = (await (await fetch(`${base}api/session`, { headers: { cookie } })).json()) as { ticket: string };
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/fallbeans/ws`, { headers: { cookie } } as unknown as string[]);
+  const session = (await (await fetch(`${base}api/session`)).json()) as { ticket: string };
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/fallbeans/ws`);
   ws.binaryType = 'arraybuffer';
   const c: Client = {
     i,
@@ -131,7 +123,8 @@ async function connect(i: number): Promise<Client> {
     ws.onopen = () => resolve();
     ws.onerror = () => reject(new Error('ws failed'));
   });
-  send({ t: 'hello', v: PROTOCOL_VERSION, name: `Stress ${i}`, ticket: session.ticket });
+  // (No identity token: every client is a new player. All meet in the dev room.)
+  send({ t: 'hello', v: PROTOCOL_VERSION, name: `Stress ${i}`, ticket: session.ticket, room: DEV_ROOM_ID });
   // Pings like the browser (every 2 s after the first few).
   let n = 0;
   setInterval(() => {
@@ -176,7 +169,6 @@ function dev(c: Client, cmd: object): Promise<{ ok: boolean; msg: string }> {
 }
 
 await waitHealth();
-await login();
 const clients: Client[] = [];
 for (let i = 0; i < CLIENTS; i++) clients.push(await connect(i));
 await Bun.sleep(1500);

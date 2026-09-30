@@ -9,8 +9,8 @@
  * stepped through.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import type { Recording } from '../src/server/arena';
-import { replay } from '../src/server/replay';
+import type { Recording } from '../src/server/rooms/arena';
+import { replay } from '../src/server/rooms/replay';
 import { DT } from '../src/shared/consts';
 
 const args = process.argv.slice(2);

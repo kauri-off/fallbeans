@@ -1,8 +1,9 @@
 import { createServer, type ServerSession, type WebTransportServer } from '@webtransport-bun/webtransport';
-import { FrameReader, frame } from '../shared/codec';
-import { MAX_CONTROL_BYTES, type ServerMsg } from '../shared/protocol';
+import { FrameReader, frame } from '../../shared/codec';
+import { MAX_CONTROL_BYTES, type ServerMsg } from '../../shared/protocol';
+import type { Logger } from '../log';
+import type { Conn } from './conn';
 import type { Gateway } from './gateway';
-import type { Conn, Logger } from './room';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -23,7 +24,7 @@ export function startWebTransport(opts: {
     host: '0.0.0.0',
     port: opts.port,
     tls: { certPem: opts.certPem, keyPem: opts.keyPem },
-    limits: { maxSessions: 64, maxStreamsPerSessionBidi: 2, maxStreamsPerSessionUni: 2, idleTimeoutMs: 30_000 },
+    limits: { maxSessions: 160, maxStreamsPerSessionBidi: 2, maxStreamsPerSessionUni: 2, idleTimeoutMs: 30_000 },
     rateLimits: {
       handshakesPerSec: 10,
       handshakesBurst: 20,

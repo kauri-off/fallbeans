@@ -1,5 +1,5 @@
 import { getMap } from '../games';
-import { type KoInfo, ServerArena } from '../server/arena';
+import { type KoInfo, ServerArena } from '../server/rooms/arena';
 import { TICK_MS } from '../shared/consts';
 import type { Sections } from '../shared/prof';
 import type { MapModule } from '../sim/map';
