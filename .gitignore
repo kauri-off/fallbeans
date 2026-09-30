@@ -28,3 +28,5 @@ coverage/
 *.blend1
 .DS_Store
 Thumbs.db
+
+ffmpeg-master-latest-win64-gpl/
