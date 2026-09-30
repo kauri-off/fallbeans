@@ -408,7 +408,30 @@ export class Renderer {
     this.time.value = t;
   }
 
+  /** Shader programs of a new map being compiled in the background (frames wait for it, briefly). */
+  private compiling = 0;
+
+  /**
+   * Compiles the programs of everything in the scene in the background (parallel shader
+   * compilation where the browser has it) instead of in the first frame that shows a new map: that
+   * frame used to freeze the page for a moment, delaying inputs, snapshots and pongs alike. Frames
+   * are held until it is done (at most 1.5 s); the game itself keeps running.
+   */
+  precompile() {
+    const r = this.renderer;
+    const prev = r.getRenderTarget();
+    // For the target the scene really renders to (output colour space and tone mapping differ).
+    r.setRenderTarget(this.post.sceneTarget);
+    const job = r.compileAsync(this.scene, this.camera).catch(() => {});
+    r.setRenderTarget(prev);
+    const id = ++this.compiling;
+    void Promise.race([job, new Promise<void>((ok) => setTimeout(ok, 1500))]).then(() => {
+      if (this.compiling === id) this.compiling = 0;
+    });
+  }
+
   render() {
+    if (this.compiling) return;
     this.renderer.info.reset();
     const gpu = this.gpuMode === 'off' ? null : this.gpu;
     if (gpu && this.gpuMode === 'passes') this.wrapPasses();

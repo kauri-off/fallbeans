@@ -141,7 +141,9 @@ export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger
           },
           datagram: (data) => {
             // Unreliable semantics on TCP: drop instead of queueing behind a slow link.
-            if (ws.getBufferedAmount() < 256 * 1024) ws.send(data);
+            // Snapshots only while the socket keeps up: a stalled TCP link would otherwise queue
+            // seconds of stale ones and deliver them in a burst (the newest is all that counts).
+            if (ws.getBufferedAmount() < 8 * 1024) ws.send(data);
           },
           close: () => ws.close(),
         };

@@ -2,14 +2,18 @@
  * Network stress test: a real game server (dev mode, WebSocket only) and simulated players on bad
  * connections, playing a real round.
  *   bun run stress [--clients 8] [--seconds 30] [--map door-dash] [--latency 60] [--jitter 20] [--loss 0.02]
+ *                  [--burst 0] [--burst-every 5] [--mode new|old]
  *
- * Each client enters the dev server's room and sends inputs at 60 Hz like the browser does
- * (redundant frames, a lead ahead of the server clock), through a fake link that delays, jitters
- * and drops input packets. Reported: snapshot rate and bandwidth per client, round-trip time,
- * inputs that arrived too late, and the server's own tick cost and event-loop lag while loaded.
+ * Each client enters the dev server's room and sends inputs at 60 Hz like the browser does, through
+ * a fake link that delays, jitters and drops packets, and (`--burst ms`) blacks out now and then
+ * like a Wi-Fi hiccup. `--mode new` (the browser now): every unacknowledged input resent, the lead
+ * steered by the server's input margin; `old`: the last 12 inputs, lead = rtt/2 + 30 ms. Reported:
+ * snapshot rate and bandwidth per client, round-trip time, ticks the server had to guess the
+ * input for, and the server's own tick cost and event-loop lag while loaded.
  */
-import { decodeSnapshot, encodeInput, type InputFrame } from '../src/shared/codec';
+import { decodeSnapshot, encodeInput, type InputFrame, MAX_INPUT_FRAMES } from '../src/shared/codec';
 import { DEV_ROOM_ID, INPUT_EVERY, INPUT_REDUNDANCY, PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
+import { LeadControl } from '../src/shared/lead';
 import type { ServerMsg } from '../src/shared/protocol';
 
 const args = process.argv.slice(2);
@@ -24,7 +28,11 @@ const LATENCY = Number(opt('--latency', '60'));
 const JITTER = Number(opt('--jitter', '20'));
 const LOSS = Number(opt('--loss', '0.02'));
 const PORT = Number(opt('--port', '7791'));
+const BURST = Number(opt('--burst', '0'));
+const BURST_EVERY = Number(opt('--burst-every', '5'));
+const MODE = opt('--mode', 'new') === 'old' ? 'old' : 'new';
 const base = `http://127.0.0.1:${PORT}/fallbeans/`;
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
 const server = Bun.spawn(
   [process.execPath, 'src/server/main.ts', '--dev', '--solo', '--no-wt', '--host', '127.0.0.1', '--port', String(PORT)],
@@ -57,13 +65,21 @@ interface Client {
   bytes: number;
   lastTick: number;
   ackLag: number[];
+  /** Snapshots whose tick the server simulated with a guessed input for us. */
+  guessed: number;
+  own: number;
+  ack: number;
+  lead: LeadControl;
+  /** Blacked out until (a burst). */
+  deadUntil: number;
   sent: number;
   dropped: number;
   msgs: Map<string, number>;
   dev: Map<number, (m: { ok: boolean; msg: string }) => void>;
 }
 
-const link = (fn: () => void, lossy: boolean) => {
+const link = (fn: () => void, lossy: boolean, c?: Client) => {
+  if (c && performance.now() < c.deadUntil) return false;
   if (lossy && Math.random() < LOSS) return false;
   setTimeout(fn, Math.max(0, LATENCY / 2 + (Math.random() * 2 - 1) * JITTER));
   return true;
@@ -84,6 +100,11 @@ async function connect(i: number): Promise<Client> {
     bytes: 0,
     lastTick: 0,
     ackLag: [],
+    guessed: 0,
+    own: 0,
+    ack: -1e9,
+    lead: new LeadControl(60),
+    deadUntil: 0,
     sent: 0,
     dropped: 0,
     msgs: new Map(),
@@ -92,7 +113,7 @@ async function connect(i: number): Promise<Client> {
   const send = (m: object) => link(() => ws.readyState === 1 && ws.send(JSON.stringify(m)), false);
   // Downstream goes through the fake link too: control messages delayed, snapshots delayed or lost.
   ws.onmessage = (e) => {
-    link(() => receive(e), typeof e.data !== 'string');
+    link(() => receive(e), typeof e.data !== 'string', typeof e.data !== 'string' ? c : undefined);
   };
   const receive = (e: MessageEvent) => {
     if (typeof e.data === 'string') {
@@ -117,8 +138,24 @@ async function connect(i: number): Promise<Client> {
     if (!s || s.arena !== c.arena?.id) return;
     c.snaps++;
     c.lastTick = s.tick;
-    if (s.own) c.ackLag.push(s.tick - s.own.ack);
+    if (s.own) {
+      c.ackLag.push(s.tick - s.own.ack);
+      c.own++;
+      if (s.own.ack < s.tick) c.guessed++;
+      c.ack = Math.max(c.ack, s.own.ack);
+      // The browser's lead steering (ClientArena).
+      if (MODE === 'new') c.lead.update(s.own.margin, avg(c.rtts.slice(-12)) || LATENCY, performance.now());
+    }
   };
+  // Wi-Fi hiccups: the link goes dead both ways for BURST ms every BURST_EVERY s (random phase).
+  if (BURST > 0)
+    setTimeout(
+      () =>
+        setInterval(() => {
+          c.deadUntil = performance.now() + BURST;
+        }, BURST_EVERY * 1000),
+      Math.random() * BURST_EVERY * 1000,
+    );
   await new Promise<void>((resolve, reject) => {
     ws.onopen = () => resolve();
     ws.onerror = () => reject(new Error('ws failed'));
@@ -137,7 +174,8 @@ async function connect(i: number): Promise<Client> {
   setInterval(() => {
     if (!c.arena || !c.rtts.length) return;
     const rtt = c.rtts.slice(-8).reduce((a, b) => a + b, 0) / Math.min(8, c.rtts.length);
-    const target = Math.floor((performance.now() + c.offset + rtt / 2 + 30 - c.arena.startAt) / TICK_MS);
+    const lead = MODE === 'old' ? rtt / 2 + 30 : c.lead.lead;
+    const target = Math.floor((performance.now() + c.offset + lead - c.arena.startAt) / TICK_MS);
     if (target - sentUpTo > 200) sentUpTo = target - 1;
     for (let k = sentUpTo + 1; k <= target; k++) {
       if (Math.random() < 0.01) dir += (Math.random() - 0.5) * 2;
@@ -146,13 +184,16 @@ async function connect(i: number): Promise<Client> {
         mz: Math.round(Math.cos(dir) * 127),
         buttons: Math.random() < 0.01 ? 1 : 0,
       });
-      history.delete(k - 64);
+      history.delete(k - 240);
       if (k % INPUT_EVERY === 0) {
-        const first = k - INPUT_REDUNDANCY + 1;
-        const frames = Array.from({ length: INPUT_REDUNDANCY }, (_, j) => history.get(first + j) ?? { mx: 0, mz: 0, buttons: 0 });
+        const first =
+          MODE === 'old'
+            ? k - INPUT_REDUNDANCY + 1
+            : Math.max(k - MAX_INPUT_FRAMES + 1, Math.min(k - INPUT_REDUNDANCY + 1, c.ack > -1e9 ? c.ack + 1 : k));
+        const frames = Array.from({ length: k - first + 1 }, (_, j) => history.get(first + j) ?? { mx: 0, mz: 0, buttons: 0 });
         const pkt = encodeInput({ arena: c.arena.id, firstTick: first, frames });
         c.sent++;
-        if (!link(() => ws.readyState === 1 && ws.send(pkt), true)) c.dropped++;
+        if (!link(() => ws.readyState === 1 && ws.send(pkt), true, c)) c.dropped++;
       }
     }
     sentUpTo = target;
@@ -173,7 +214,9 @@ const clients: Client[] = [];
 for (let i = 0; i < CLIENTS; i++) clients.push(await connect(i));
 await Bun.sleep(1500);
 const host = clients[0]!;
-console.log(`[stress] ${CLIENTS} clients on ws, link ${LATENCY}±${JITTER} ms, ${LOSS * 100}% input loss, map ${MAP}`);
+console.log(
+  `[stress] ${CLIENTS} clients on ws, link ${LATENCY}±${JITTER} ms, ${LOSS * 100}% loss, bursts ${BURST} ms every ${BURST_EVERY} s, mode ${MODE}, map ${MAP}`,
+);
 console.log(`[stress] ${JSON.stringify(await dev(host, { c: 'start', games: [MAP], rounds: 1 }))}`);
 await Bun.sleep(500);
 console.log(`[stress] ${JSON.stringify(await dev(host, { c: 'skipIntro' }))}`);
@@ -183,6 +226,8 @@ for (const c of clients) {
   c.snaps = 0;
   c.bytes = 0;
   c.ackLag = [];
+  c.guessed = 0;
+  c.own = 0;
 }
 const t0 = performance.now();
 const samples: { load: number; msPerTick: number; worst: number; lag: number }[] = [];
@@ -194,6 +239,10 @@ while (performance.now() - t0 < SECONDS * 1000) {
   };
   const p = s.rooms[0]!.perf;
   samples.push({ load: p.load, msPerTick: p.msPerTick, worst: p.worstUpdateMs, lag: s.server.health?.lagMs ?? 0 });
+  if (args.includes('--trace'))
+    console.log(
+      `[trace] ${Math.round((performance.now() - t0) / 1000)} s: lead ${clients.map((c) => Math.round(c.lead.lead)).join(' ')} ms, worst margin ${clients.map((c) => c.lead.worst).join(' ')}`,
+    );
 }
 const secs = (performance.now() - t0) / 1000;
 const state = (await (await fetch(`${base}api/debug/state`)).json()) as {
@@ -202,13 +251,21 @@ const state = (await (await fetch(`${base}api/debug/state`)).json()) as {
     arena: { pawns: { id: number; bot: boolean; lagTicks: number; rejected: number; queued: number }[] };
   }[];
 };
-const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 const r1 = (v: number) => Math.round(v * 10) / 10;
-console.log('\nclient  snaps/s  kbit/s down  rtt ms  ack lag ticks (avg/max)  inputs sent  dropped');
+console.log('\nclient  snaps/s  kbit/s down  rtt ms  ack lag ticks (avg/max)  guessed %  lead ms  inputs sent  dropped');
 for (const c of clients)
   console.log(
-    `${String(c.i).padStart(6)} ${String(r1(c.snaps / secs)).padStart(8)} ${String(r1((c.bytes * 8) / secs / 1000)).padStart(12)} ${String(r1(avg(c.rtts.slice(-10)))).padStart(7)} ${`${r1(avg(c.ackLag))}/${Math.max(0, ...c.ackLag)}`.padStart(24)} ${String(c.sent).padStart(12)} ${String(c.dropped).padStart(8)}`,
+    `${String(c.i).padStart(6)} ${String(r1(c.snaps / secs)).padStart(8)} ${String(r1((c.bytes * 8) / secs / 1000)).padStart(12)} ${String(r1(avg(c.rtts.slice(-10)))).padStart(7)} ${`${r1(avg(c.ackLag))}/${Math.max(0, ...c.ackLag)}`.padStart(24)} ${String(r1((100 * c.guessed) / Math.max(1, c.own))).padStart(10)} ${String(Math.round(MODE === 'old' ? avg(c.rtts.slice(-8)) / 2 + 30 : c.lead.lead)).padStart(8)} ${String(c.sent).padStart(12)} ${String(c.dropped).padStart(8)}`,
   );
+console.log(
+  `all clients: server guessed the input on ${r1(
+    (100 * clients.reduce((a, c) => a + c.guessed, 0)) /
+      Math.max(
+        1,
+        clients.reduce((a, c) => a + c.own, 0),
+      ),
+  )}% of snapshot ticks`,
+);
 const pawns = state.rooms[0]!.arena.pawns.filter((p) => !p.bot);
 console.log(
   `\nserver: load ${r1(avg(samples.map((s) => s.load)))}% of a core · ${avg(samples.map((s) => s.msPerTick)).toFixed(3)} ms/tick · worst update ${r1(

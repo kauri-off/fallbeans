@@ -5,7 +5,7 @@
  *   u8 type=1 · u16 arena · i32 firstTick · u8 n · n × (i8 mx · i8 mz · u8 buttons)
  * Snapshot (server → client):
  *   u8 type=2 · u16 arena · i32 tick · u8 flags
- *   [flags & 1: i32 ackTick · own body state (FULL_BYTES) · i16 grabbed id (−1 none)]
+ *   [flags & 1: i32 ackTick · own body state (FULL_BYTES) · i16 grabbed id (−1 none) · i8 input margin]
  *   u8 count · count × (u16 id · f32 x · f32 y · f32 z · u16 yaw · u8 anim · u8 flags · u8 tilt · u8 tiltDir · u16 grab+1)
  */
 
@@ -13,7 +13,11 @@ export const PKT_INPUT = 1;
 export const PKT_SNAPSHOT = 2;
 
 export const BTN = { jump: 1, dive: 2, grab: 4 } as const;
-export const MAX_INPUT_FRAMES = 32;
+/**
+ * Frames one input packet may carry: the client resends everything the server has not acknowledged
+ * (up to a second), so a burst of lost packets is recovered by the next one that gets through.
+ */
+export const MAX_INPUT_FRAMES = 120;
 
 /** One simulation tick of player input. mx/mz are world-space, quantized to −127…127. */
 export interface InputFrame {
@@ -120,7 +124,12 @@ export const POWER_SHIFT = 2;
 export interface Snapshot {
   arena: number;
   tick: number;
-  own: { ack: number; s: BodyFullState; grab: number } | null;
+  /**
+   * The viewer's own bean. `margin`: how many ticks ahead of the simulation the viewer's inputs were
+   * at worst since the previous snapshot (negative: they arrived too late); the client steers how far
+   * ahead it predicts by it.
+   */
+  own: { ack: number; s: BodyFullState; grab: number; margin: number } | null;
   bodies: RemoteState[];
 }
 
@@ -133,7 +142,7 @@ const dirToU8 = (y: number) => Math.round((((y % TAU) + TAU) % TAU) * (255 / TAU
 const u8ToDir = (q: number) => (q * TAU) / 255;
 
 export function encodeSnapshot(s: Snapshot): Uint8Array<ArrayBuffer> {
-  const size = 8 + (s.own ? 4 + FULL_BYTES + 2 : 0) + 1 + s.bodies.length * REMOTE_BYTES;
+  const size = 8 + (s.own ? 4 + FULL_BYTES + 3 : 0) + 1 + s.bodies.length * REMOTE_BYTES;
   const buf = new ArrayBuffer(size);
   const v = new DataView(buf);
   let o = 0;
@@ -167,7 +176,8 @@ export function encodeSnapshot(s: Snapshot): Uint8Array<ArrayBuffer> {
     v.setFloat32(o + 45, f.cy, true);
     v.setFloat32(o + 49, f.cz, true);
     v.setInt16(o + 53, s.own.grab, true);
-    o += 55;
+    v.setInt8(o + 55, Math.max(-128, Math.min(127, Math.round(s.own.margin))));
+    o += 56;
   }
   v.setUint8(o, s.bodies.length);
   o += 1;
@@ -197,7 +207,7 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
   let o = 8;
   let own: Snapshot['own'] = null;
   if (hasOwn) {
-    if (data.byteLength < o + 4 + FULL_BYTES + 2 + 1) return null;
+    if (data.byteLength < o + 4 + FULL_BYTES + 3 + 1) return null;
     const ack = v.getInt32(o, true);
     o += 4;
     const d: number[] = [];
@@ -235,8 +245,9 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
         cz: v.getFloat32(o + 49, true),
       },
       grab: v.getInt16(o + 53, true),
+      margin: v.getInt8(o + 55),
     };
-    o += 55;
+    o += 56;
   }
   const count = v.getUint8(o);
   o += 1;

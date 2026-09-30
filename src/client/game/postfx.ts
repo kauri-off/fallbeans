@@ -337,6 +337,11 @@ export class PostPipeline {
     this.stages = Object.values(this.stage);
   }
 
+  /** The scene's render target (materials compile for it: linear output, no tone mapping). */
+  get sceneTarget(): THREE.WebGLRenderTarget | null {
+    return this.sceneRT;
+  }
+
   /** Grade and exposure (the map's look). */
   setGrade(saturation: number) {
     this.composite.uniforms.uSat!.value = saturation;
