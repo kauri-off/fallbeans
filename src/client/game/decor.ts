@@ -478,7 +478,7 @@ const crystals = (glowing: boolean): Piece => ({
       const c = glowing ? k.bright() : '#cdeeff';
       const mat = glowing
         ? k.glow(c, 0.9)
-        : k.plain(c, 'ice', { roughness: 0.1, metalness: 0.1, emissive: new THREE.Color('#9fd8ff'), emissiveIntensity: 0.25 });
+        : k.plain(c, 'ice', { roughness: 0.35, emissive: new THREE.Color('#9fd8ff'), emissiveIntensity: 0.25 });
       const a = (i / n) * Math.PI * 2;
       const r = i ? 0.8 : 0;
       const s = i ? 0.35 + k.rnd() * 0.25 : 0.55;

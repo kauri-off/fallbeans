@@ -29,7 +29,7 @@ function iceSlope(): Segment {
     b.box(0, s.y - 1, s.z + 1, 18, 2, 2, PAL.purple);
     const ang = Math.atan2(A1.y - A0.y, A1.z - A0.z);
     const cosA = Math.cos(ang);
-    const ice = b.view?.plain('#d6f2ff', { roughness: 0.08, metalness: 0.05 }, 'ice');
+    const ice = b.view?.plain('#d6f2ff', {}, 'ice');
     b.ramp(0, A0.z, A0.y, A1.z, A1.y, W, PAL.blue, 1, { material: ice, slip: 1 });
     const lenA = Math.hypot(A1.z - A0.z, A1.y - A0.y);
     for (const sx of [-1, 1])
