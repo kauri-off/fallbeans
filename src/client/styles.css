@@ -22,17 +22,26 @@
   --panel-w: 16rem;
   --gap: 0.75rem;
   --ink: #2b1a5c;
-  --muted: #5e4f8a;
+  --muted: #54457f;
   --pink: #ff5fa2;
   --blue: #3fa9ff;
   --green: #22b35e;
   --red: #ff4d6a;
   --yellow: #ffd23f;
   --orange: #ff8a3d;
+  /* Accents dark enough for text on light glass, and fills dark enough for white text (WCAG AA). */
+  --pink-ink: #a3134f;
+  --green-ink: #0b5f2d;
+  --red-ink: #a8152f;
+  --orange-ink: #8f3c00;
+  --pink-fill: linear-gradient(180deg, #e0407f, #c8246f);
+  --green-fill: linear-gradient(180deg, #1c9150, #137a3e);
+  --blue-fill: linear-gradient(180deg, #1b78cc, #135fa8);
+  --red-fill: linear-gradient(180deg, #e03752, #c01a38);
   /* Liquid glass: a light translucent tint, blur of what is behind, a bright rim and a soft sheen. */
-  --glass: rgba(255, 255, 255, 0.28);
-  --glass-strong: rgba(255, 255, 255, 0.42);
-  --glass-low: rgba(255, 255, 255, 0.2);
+  --glass: rgba(255, 255, 255, 0.45);
+  --glass-strong: rgba(255, 255, 255, 0.58);
+  --glass-low: rgba(255, 255, 255, 0.38);
   --glass-rim: rgba(255, 255, 255, 0.65);
   --glass-shadow:
     0 0.625rem 1.875rem rgba(43, 26, 92, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(255, 255, 255, 0.25);
@@ -134,7 +143,7 @@ h3 {
 
 .logo {
   font-size: 2.75rem;
-  color: var(--pink);
+  color: #d02a73;
   text-shadow:
     0 0.1875rem 0 #fff,
     0 0.375rem 0 rgba(43, 26, 92, 0.18);
@@ -200,8 +209,12 @@ h3 {
     background 0.15s;
 }
 
-.btn:hover:not(:disabled) {
+.btn:where(:hover:not(:disabled)) {
   background: rgba(255, 255, 255, 0.75);
+}
+
+.btn:hover:not(:disabled) {
+  filter: brightness(1.06);
   transform: translateY(-1px);
 }
 
@@ -209,29 +222,23 @@ h3 {
   transform: translateY(1px);
 }
 
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .btn.primary,
 .btn.go-btn {
-  background: linear-gradient(180deg, #ff7cb4, var(--pink));
+  background: var(--pink-fill);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.5);
 }
 
 .btn.go-btn {
-  background: linear-gradient(180deg, #4fdc7a, var(--green));
+  background: var(--green-fill);
 }
 
 .btn.danger {
-  background: linear-gradient(180deg, #ff7389, var(--red));
+  background: var(--red-fill);
   color: #fff;
 }
 
 .muted-inv {
-  opacity: 0.75;
   font-weight: normal;
   font-size: 0.8125rem;
 }
@@ -248,8 +255,17 @@ h3 {
 }
 
 .btn.chip.on {
-  background: linear-gradient(180deg, #62b8ff, var(--blue));
+  background: var(--blue-fill);
   color: #fff;
+}
+
+/* Neutral instead of faded: a disabled button may still carry a message ("need 2 players"). */
+.btn.btn:disabled {
+  background: rgba(255, 255, 255, 0.4);
+  color: var(--muted);
+  border-color: rgba(255, 255, 255, 0.6);
+  box-shadow: none;
+  cursor: default;
 }
 
 .input {
@@ -330,11 +346,11 @@ h3 {
 }
 
 .g-race {
-  background: var(--blue);
+  background: #1673c4;
 }
 
 .g-survival {
-  background: var(--orange);
+  background: #b84e0c;
 }
 
 .pill.bonus {
@@ -342,7 +358,7 @@ h3 {
 }
 
 .g-points {
-  background: var(--green);
+  background: #137a3e;
 }
 
 /* Name tags over beans */
@@ -361,7 +377,7 @@ h3 {
   gap: 0.3125rem;
   padding: 0.1875rem 0.625rem 0.1875rem 0.4375rem;
   border-radius: 62.4375rem;
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.82);
   -webkit-backdrop-filter: blur(0.375rem);
   backdrop-filter: blur(0.375rem);
   border: 1px solid rgba(255, 255, 255, 0.8);
@@ -427,12 +443,12 @@ h3 {
 }
 
 .roster li.dim {
-  opacity: 0.5;
+  opacity: 0.8;
 }
 
 .roster li.off .who {
   font-style: italic;
-  opacity: 0.6;
+  opacity: 0.75;
 }
 
 .roster .st {
@@ -443,7 +459,7 @@ h3 {
 
 .roster .rs {
   font-size: 0.75rem;
-  color: var(--green);
+  color: var(--green-ink);
   font-weight: bold;
 }
 
@@ -459,12 +475,12 @@ h3 {
 }
 
 .panel .net .wt {
-  color: var(--green);
+  color: var(--green-ink);
   font-weight: bold;
 }
 
 .panel .net .ws {
-  color: var(--orange);
+  color: var(--orange-ink);
   font-weight: bold;
 }
 
@@ -524,8 +540,9 @@ h3 {
   font-weight: 900;
   color: #fff;
   text-shadow:
-    0 2px 0 rgba(43, 26, 92, 0.7),
-    0 0 0.875rem rgba(43, 26, 92, 0.35);
+    0 0 2px rgba(43, 26, 92, 0.9),
+    0 2px 0 rgba(43, 26, 92, 0.8),
+    0 0 0.875rem rgba(43, 26, 92, 0.45);
 }
 
 .timer.hurry {
@@ -565,7 +582,7 @@ h3 {
 
 .intro h2 {
   font-size: 1.5rem;
-  color: var(--pink);
+  color: var(--pink-ink);
 }
 
 .intro p {
@@ -592,7 +609,7 @@ h3 {
 .next {
   font-size: 0.8125rem;
   font-weight: bold;
-  color: var(--pink);
+  color: var(--pink-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -621,11 +638,11 @@ h3 {
 }
 
 .status.ok {
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 .status.bad {
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .keys {
@@ -639,7 +656,7 @@ h3 {
   font-size: 0.8125rem;
   font-weight: 700;
   color: #fff;
-  background: rgba(43, 26, 92, 0.62);
+  background: rgba(43, 26, 92, 0.75);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   box-shadow: 0 0.25rem 1rem rgba(43, 26, 92, 0.25);
@@ -675,7 +692,7 @@ h3 {
   font-weight: 800;
   color: #fff;
   text-align: center;
-  background: rgba(43, 26, 92, 0.7);
+  background: rgba(43, 26, 92, 0.78);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   box-shadow: 0 0.5rem 2rem rgba(43, 26, 92, 0.3);
@@ -746,12 +763,12 @@ h3 {
 }
 
 .sheet .pts {
-  color: var(--green);
+  color: var(--green-ink);
   text-align: right;
 }
 
 .sheet .pen {
-  color: var(--red);
+  color: var(--red-ink);
   text-align: right;
   width: 1.625rem;
 }
@@ -763,11 +780,11 @@ h3 {
 }
 
 .sheet .dl.up {
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 .sheet .dl.down {
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .sheet .tot,
@@ -792,7 +809,7 @@ h3 {
 }
 
 .summary h2 {
-  color: var(--pink);
+  color: var(--pink-ink);
   font-size: 1.375rem;
   text-align: center;
 }
@@ -933,7 +950,7 @@ h3 {
 }
 
 .players li.dim {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 .practice summary {
@@ -1083,7 +1100,7 @@ h3 {
 }
 
 .alert {
-  color: var(--red);
+  color: var(--red-ink);
   font-weight: bold;
 }
 
@@ -1152,7 +1169,7 @@ h3 {
   border-radius: 0.75rem;
   font-size: 0.8125rem;
   color: #fff;
-  background: rgba(43, 26, 92, 0.62);
+  background: rgba(43, 26, 92, 0.85);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   opacity: 0;
@@ -1160,7 +1177,7 @@ h3 {
 }
 
 .chat.fresh {
-  opacity: 0.5;
+  opacity: 0.9;
 }
 
 .chat.open {

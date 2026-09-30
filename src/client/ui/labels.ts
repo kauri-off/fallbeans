@@ -5,8 +5,14 @@ const RAINBOW_CSS = 'linear-gradient(135deg, #ff5f5f, #ffb13f, #ffe53f, #4fdc6a,
 /** A bean colour as a CSS background (colour dots, swatches, name tags). */
 export const colorBg = (c: string) => (c === RAINBOW ? RAINBOW_CSS : c);
 
-/** A bean colour as text on the dark chat panel (dark suits would not show). */
-export const colorInk = (c: string) => (c === RAINBOW ? '#ffb13f' : c === '#2b2b33' || c === '#8b5a2b' ? '#e0d6ff' : c);
+/** A bean colour as text on the dark chat panel: tinted halfway to white so every suit reads (AA). */
+export const colorInk = (c: string) => {
+  if (c === RAINBOW) return '#ffd89f';
+  if (c === '#2b2b33' || c === '#8b5a2b') return '#e0d6ff';
+  const n = Number.parseInt(c.slice(1), 16);
+  const tint = (v: number) => Math.round((v + 255) / 2);
+  return `rgb(${tint(n >> 16)}, ${tint((n >> 8) & 255)}, ${tint(n & 255)})`;
+};
 
 /** How the kill feed shows what knocked a bean off (collider tags and server causes). */
 export const CAUSES: Record<string, { icon: string; text: string }> = {
