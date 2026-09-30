@@ -858,6 +858,7 @@ export class ServerArena {
     if (counts && !shortcut) p.stats.falls++;
     this.note(shortcut ? 'shortcut' : 'fall', p.id, { by, cause, pos: [r3(pos.x), r3(pos.y), r3(pos.z)] });
     if (counts || this.kind === 'lobby') this.hooks.onKo({ id: p.id, out: false, by, cause, shortcut });
+    if (counts && !shortcut) this.spec.onFall?.(p.id, by);
     const to =
       this.fall === 'checkpoint' && p.checkpoint
         ? p.checkpoint.p

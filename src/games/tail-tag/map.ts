@@ -80,6 +80,13 @@ export default defineMap(
     };
     decorateAll();
     let lastSecond = 0;
+    const pass = (from: number, to: number) => {
+      const next = new Set(tails);
+      next.delete(from);
+      next.add(to);
+      immune.set(to, ctx.now() + IMMUNE);
+      ctx.emit('tails', { ids: [...next], by: to });
+    };
 
     return {
       spawns: b.ringSpawns(8, 9, 0.1, Math.PI / 8),
@@ -108,11 +115,25 @@ export default defineMap(
         const v = ctx.bodies().get(target);
         if (!a || !v) return;
         if (Math.hypot(a.pos.x - v.pos.x, a.pos.z - v.pos.z) > STEAL_RANGE || Math.abs(a.pos.y - v.pos.y) > 2) return;
-        const next = new Set(tails);
-        next.delete(target);
-        next.add(actor);
-        immune.set(actor, t + IMMUNE);
-        ctx.emit('tails', { ids: [...next], by: actor });
+        pass(target, actor);
+      },
+      onFall(id, by) {
+        if (!tails.has(id)) return;
+        const from = ctx.bodies().get(id);
+        let to = by !== null && by !== id && !tails.has(by) && ctx.bodies().has(by) ? by : null;
+        if (to === null && from) {
+          // Nobody knocked them off: the tail goes to the nearest bean without one.
+          let nd = Infinity;
+          for (const [oid, o] of ctx.bodies()) {
+            if (oid === id || tails.has(oid)) continue;
+            const d = Math.hypot(o.pos.x - from.pos.x, o.pos.z - from.pos.z);
+            if (d < nd) {
+              nd = d;
+              to = oid;
+            }
+          }
+        }
+        if (to !== null) pass(id, to);
       },
       onEvent(name, data) {
         if (name !== 'tails') return;

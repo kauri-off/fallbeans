@@ -97,6 +97,8 @@ export interface MapSpec {
   tick?(t: number): void;
   /** Server: `actor` grabbed `target` (grab button, target in reach). */
   onGrab?(actor: number, target: number): void;
+  /** Server: `id` fell off during the round (and respawns); `by` is the player credited with it. */
+  onFall?(id: number, by: number | null): void;
   /** Client: one line of HUD text (e.g. "Ваши очки: 12"). */
   hud?(): string | null;
   bot?: BotBrain;
