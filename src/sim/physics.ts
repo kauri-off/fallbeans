@@ -426,6 +426,9 @@ export const BEAN_GAP = 1.05;
 const BUMP_E = 0.45;
 const TUMBLE_E = 0.4;
 const AIR_ACCEL = 24;
+/** Largest move per collision substep, as a share of the bean's radius (see PlayerBody.step). */
+const SUBSTEP_REACH = 0.6;
+const MAX_SUBSTEPS = 8;
 
 const _gv = new THREE.Vector3();
 const hitInfo: Contact = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
@@ -818,10 +821,13 @@ export class PlayerBody {
     } else if (!this.down) this.tilt = this.tilt > 0.02 ? this.tilt * Math.exp(-12 * dt) : 0;
 
     const climbing = this.state === 'climb';
-    if (!climbing) {
-      this.vel.y = Math.max(this.vel.y - GRAVITY * dt, -32);
-      this.pos.addScaledVector(this.vel, dt);
-    }
+    if (!climbing) this.vel.y = Math.max(this.vel.y - GRAVITY * dt, -32);
+    // Continuous collision, conservatively: a move longer than SUBSTEP_REACH of the radius is split
+    // into substeps, each resolved against the colliders, so nothing is passed through or pushed
+    // out the wrong side at any speed. (At the speeds the game has today a tick moves at most
+    // about half a radius: one step, exactly as before.)
+    const travel = climbing ? 0 : this.vel.length() * dt;
+    const substeps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(travel / (r * SUBSTEP_REACH))));
 
     const vyBefore = this.vel.y;
     this.grounded = false;
@@ -829,96 +835,99 @@ export class PlayerBody {
     groundN.set(0, 0, 0);
     wallN.set(0, 0, 0);
     const hitDone = new Set<Collider>();
-    const cols = world.query(this.pos.x, this.pos.z, r + 1.2 * size + (this.tilt > 0 ? SPINE * size : 0), nearby);
-    for (let iter = 0; iter < 3; iter++) {
-      let any = false;
-      for (const col of cols) {
-        if (!col.enabled) continue;
-        // Climbing moves the body along the ledge by itself; only hazards still get at it.
-        if (climbing && !col.hit && !col.sweep && !col.bounce && !col.trigger) continue;
-        for (let si = 0; si < SPHERES.length; si++) {
-          this.sphere(si, _c);
-          if (!col.contact(_c, r, hitInfo)) continue;
-          if (col.trigger) {
-            if (!hitDone.has(col)) {
+    for (let sub = 0; sub < substeps; sub++) {
+      if (!climbing) this.pos.addScaledVector(this.vel, dt / substeps);
+      const cols = world.query(this.pos.x, this.pos.z, r + 1.2 * size + (this.tilt > 0 ? SPINE * size : 0), nearby);
+      for (let iter = 0; iter < 3; iter++) {
+        let any = false;
+        for (const col of cols) {
+          if (!col.enabled) continue;
+          // Climbing moves the body along the ledge by itself; only hazards still get at it.
+          if (climbing && !col.hit && !col.sweep && !col.bounce && !col.trigger) continue;
+          for (let si = 0; si < SPHERES.length; si++) {
+            this.sphere(si, _c);
+            if (!col.contact(_c, r, hitInfo)) continue;
+            if (col.trigger) {
+              if (!hitDone.has(col)) {
+                hitDone.add(col);
+                col.onTouch?.(col, hitInfo.normal, this);
+              }
+              break;
+            }
+            any = true;
+            const n = hitInfo.normal;
+            this.pos.addScaledVector(n, hitInfo.depth);
+            const vn = this.vel.dot(n);
+            if (col.bounce && !hitDone.has(col)) {
               hitDone.add(col);
-              col.onTouch?.(col, hitInfo.normal, this);
+              const push = Math.max(col.bounce, -vn * 0.8);
+              this.vel.addScaledVector(n, push - vn);
+              this.vel.y = Math.max(this.vel.y, 4);
+              // A fast run into a bumper knocks you over; a light touch only dazes.
+              if (n.y < 0.5) {
+                if (-vn > 11 && this.state !== 'tumble') this.knock(n.x * 2, n.z * 2, 5, 0.7);
+                else this.stun(0.5);
+              }
+              this.hitSomething = true;
+            } else if (vn < 0) {
+              // Tumbling beans bounce off like rag dolls; on your feet you just stop.
+              const e = this.state === 'tumble' && vn < -3 ? TUMBLE_E : 0;
+              this.vel.addScaledVector(n, -vn * (1 + e));
             }
-            break;
-          }
-          any = true;
-          const n = hitInfo.normal;
-          this.pos.addScaledVector(n, hitInfo.depth);
-          const vn = this.vel.dot(n);
-          if (col.bounce && !hitDone.has(col)) {
-            hitDone.add(col);
-            const push = Math.max(col.bounce, -vn * 0.8);
-            this.vel.addScaledVector(n, push - vn);
-            this.vel.y = Math.max(this.vel.y, 4);
-            // A fast run into a bumper knocks you over; a light touch only dazes.
-            if (n.y < 0.5) {
-              if (-vn > 11 && this.state !== 'tumble') this.knock(n.x * 2, n.z * 2, 5, 0.7);
-              else this.stun(0.5);
-            }
-            this.hitSomething = true;
-          } else if (vn < 0) {
-            // Tumbling beans bounce off like rag dolls; on your feet you just stop.
-            const e = this.state === 'tumble' && vn < -3 ? TUMBLE_E : 0;
-            this.vel.addScaledVector(n, -vn * (1 + e));
-          }
-          // Knockback once per hit: a bean pinned against a mover (tumbling, or just dazed by it)
-          // is pushed along, not re-launched every tick.
-          const fresh = this.state !== 'tumble' && !(this.state === 'stun' && this.stateT > 0.2);
-          if (col.sweep && n.y < 0.55 && !hitDone.has(col)) {
-            hitDone.add(col);
-            col.surfaceVelocity(hitInfo.local, dt, _sv);
-            const sp = Math.hypot(_sv.x, _sv.z);
-            // Running into the back of an arm that is moving away: just a wall (it fells only what it catches).
-            const behind = _sv.x * n.x + _sv.z * n.z < -0.3 * sp;
-            if (!behind && this.state === 'tumble') {
-              // Already down: scooped up and over the arm (not dragged along with it, not passed through).
-              if (g && this.vel.y < SCOOP_V * 0.6) {
-                this.vel.y = SCOOP_V;
+            // Knockback once per hit: a bean pinned against a mover (tumbling, or just dazed by it)
+            // is pushed along, not re-launched every tick.
+            const fresh = this.state !== 'tumble' && !(this.state === 'stun' && this.stateT > 0.2);
+            if (col.sweep && n.y < 0.55 && !hitDone.has(col)) {
+              hitDone.add(col);
+              col.surfaceVelocity(hitInfo.local, dt, _sv);
+              const sp = Math.hypot(_sv.x, _sv.z);
+              // Running into the back of an arm that is moving away: just a wall (it fells only what it catches).
+              const behind = _sv.x * n.x + _sv.z * n.z < -0.3 * sp;
+              if (!behind && this.state === 'tumble') {
+                // Already down: scooped up and over the arm (not dragged along with it, not passed through).
+                if (g && this.vel.y < SCOOP_V * 0.6) {
+                  this.vel.y = SCOOP_V;
+                  this.hitSomething = true;
+                }
+                this.stateT = Math.max(this.stateT, 0.6);
+              } else if (!behind && sp > 1) {
+                // A sweeping arm fells whoever it catches, shoved along its swing.
+                // (hit sets how hard: 0.6 is a full shove)
+                const k = Math.min(1, 11 / sp) * 1.5 * col.hit;
+                this.knock(_sv.x * k + n.x * 1.5, _sv.z * k + n.z * 1.5, 5 + Math.min(2, sp * 0.15), 1.1, true);
                 this.hitSomething = true;
               }
-              this.stateT = Math.max(this.stateT, 0.6);
-            } else if (!behind && sp > 1) {
-              // A sweeping arm fells whoever it catches, shoved along its swing.
-              // (hit sets how hard: 0.6 is a full shove)
-              const k = Math.min(1, 11 / sp) * 1.5 * col.hit;
-              this.knock(_sv.x * k + n.x * 1.5, _sv.z * k + n.z * 1.5, 5 + Math.min(2, sp * 0.15), 1.1, true);
-              this.hitSomething = true;
-            }
-          } else if (col.hit && !col.sweep && !hitDone.has(col) && fresh) {
-            hitDone.add(col);
-            col.surfaceVelocity(hitInfo.local, dt, _sv);
-            // Only the part of the obstacle's motion that comes at us counts.
-            const sp = Math.max(0, _sv.dot(n)) * 0.6 + _sv.length() * 0.4;
-            if (sp > 2.2) {
-              // Hard hits knock the bean over (away from the surface too); glancing ones only daze it.
-              const k = col.hit;
-              const away = Math.min(2.5, sp * 0.2);
-              if (sp * k > 4.2)
-                this.knock(_sv.x * k + n.x * away, _sv.z * k + n.z * away, 4.5 + sp * 0.3, 0.8 + Math.min(0.8, sp * 0.06));
-              else {
-                this.vel.x += _sv.x * k + n.x * away * 0.5;
-                this.vel.z += _sv.z * k + n.z * away * 0.5;
-                this.vel.y = Math.max(this.vel.y, 3.5);
-                this.stun(0.6);
+            } else if (col.hit && !col.sweep && !hitDone.has(col) && fresh) {
+              hitDone.add(col);
+              col.surfaceVelocity(hitInfo.local, dt, _sv);
+              // Only the part of the obstacle's motion that comes at us counts.
+              const sp = Math.max(0, _sv.dot(n)) * 0.6 + _sv.length() * 0.4;
+              if (sp > 2.2) {
+                // Hard hits knock the bean over (away from the surface too); glancing ones only daze it.
+                const k = col.hit;
+                const away = Math.min(2.5, sp * 0.2);
+                if (sp * k > 4.2)
+                  this.knock(_sv.x * k + n.x * away, _sv.z * k + n.z * away, 4.5 + sp * 0.3, 0.8 + Math.min(0.8, sp * 0.06));
+                else {
+                  this.vel.x += _sv.x * k + n.x * away * 0.5;
+                  this.vel.z += _sv.z * k + n.z * away * 0.5;
+                  this.vel.y = Math.max(this.vel.y, 3.5);
+                  this.stun(0.6);
+                }
+                this.hitSomething = true;
               }
-              this.hitSomething = true;
             }
+            if (n.y > 0.55) {
+              this.grounded = true;
+              newGround = col;
+              if (n.y > groundN.y) groundN.copy(n);
+            } else if (col.tag) this.hazard = col.tag;
+            else if (Math.abs(n.y) < 0.35 && holdable(col)) wallN.copy(n);
+            col.onTouch?.(col, n, this);
           }
-          if (n.y > 0.55) {
-            this.grounded = true;
-            newGround = col;
-            if (n.y > groundN.y) groundN.copy(n);
-          } else if (col.tag) this.hazard = col.tag;
-          else if (Math.abs(n.y) < 0.35 && holdable(col)) wallN.copy(n);
-          col.onTouch?.(col, n, this);
         }
+        if (!any) break;
       }
-      if (!any) break;
     }
 
     if (
