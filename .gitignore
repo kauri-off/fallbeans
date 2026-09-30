@@ -1,3 +1,5 @@
+e2e/visual.spec.ts-snapshots/
+
 # Dependencies and build output
 node_modules/
 dist/

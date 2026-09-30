@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "playwright-edge": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--browser", "msedge", "--headless", "--viewport-size", "1280,720"]
-    }
-  }
-}
