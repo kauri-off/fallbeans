@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAPS } from '../src/games';
-import { ServerArena } from '../src/server/arena';
+import { ServerArena } from '../src/server/rooms/arena';
 import { TICK_MS } from '../src/shared/consts';
 import type { MapModule } from '../src/sim/map';
 

@@ -1,15 +1,17 @@
 /**
  * Drives the game in a headless browser and runs code against the debug probe (window.__fallbeans).
- *   bun run probe [--url http://localhost:5173/fallbeans/] [--headed] [--practice map] [--shot out.png]
- *                 [--wait round] [--timeout 60] [--size 1280x720] "<async JS; `p` is the probe>" …
+ *   bun run probe [--url http://localhost:5173/fallbeans/] [--headed] [--practice map] [--room id | --home]
+ *                 [--shot out.png] [--wait round] [--timeout 60] [--size 1280x720] "<async JS; `p` is the probe>" …
  *
  * Each snippet runs in the page in turn and its result is printed as JSON, e.g.
  *   bun run probe "await p.dev({c:'start', games:['door-dash'], bots:3})" "await p.dev({c:'skipIntro'})" "p.snapshot()"
  * Snippets may also call `await shot('/tmp/a.png')` to save a screenshot at that point.
- * Logs in with the dev PIN; page errors and console errors are printed as they happen. Needs a
- * running server (bun run dev) or --url of one. Browser: installed Edge on Windows (PW_CHANNEL to change).
+ * Enters the dev server's permanent room (`dev`) unless --room names another or --home stays at the
+ * room list; page errors and console errors are printed as they happen. Needs a running server
+ * (bun run dev) or --url of one. Browser: installed Edge on Windows (PW_CHANNEL to change).
  */
 import { chromium } from '@playwright/test';
+import { DEV_ROOM_ID } from '../src/shared/consts';
 import { channel, gpuArgs } from './browser';
 
 const args = process.argv.slice(2);
@@ -17,7 +19,7 @@ const opt = (n: string) => {
   const i = args.indexOf(n);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const valued = new Set(['--url', '--practice', '--shot', '--wait', '--timeout', '--size']);
+const valued = new Set(['--url', '--practice', '--room', '--shot', '--wait', '--timeout', '--size']);
 const snippets = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1] ?? ''));
 const base = (opt('--url') ?? 'http://localhost:5173/fallbeans/').replace(/\/?$/, '/');
 const timeout = Number(opt('--timeout') ?? 60) * 1000;
@@ -68,15 +70,11 @@ page.on('console', (m) => {
     console.error(`[console.${m.type()}] ${m.text()}`);
 });
 try {
-  await page.goto(`${base}pin/index.html`);
-  const status = await page.evaluate(
-    async (u) => (await fetch(`${u}api/auth`, { method: 'POST', body: JSON.stringify({ pin: '5050' }) })).status,
-    base,
-  );
-  if (status !== 200) throw new Error(`login failed (${status})`);
   const practice = opt('--practice');
-  await page.goto(`${base}${practice ? `?practice=${practice}` : ''}`);
-  await page.waitForFunction(() => window.__fallbeans?.time().kind, null, { timeout: 30_000 });
+  const home = args.includes('--home');
+  await page.goto(`${base}${practice ? `?practice=${practice}` : home ? '' : `?room=${opt('--room') ?? DEV_ROOM_ID}`}`);
+  if (home) await page.waitForFunction(() => window.__fallbeans?.rooms().list, null, { timeout: 30_000 });
+  else await page.waitForFunction(() => window.__fallbeans?.time().kind, null, { timeout: 30_000 });
   const wait = opt('--wait');
   if (wait) await page.waitForFunction((k) => window.__fallbeans?.time().kind === k, wait, { timeout: 30_000 });
   for (const code of snippets) {

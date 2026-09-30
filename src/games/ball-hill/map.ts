@@ -177,8 +177,11 @@ function ballRamp(rise = 6): Segment {
   };
 }
 
-export default defineMap(meta, (b, ctx) => {
-  b.style.pattern = 'waves';
-  const middle = pickSections(b.rng, [ballRamp(6), pistons(3), tippingBridge(5), gloveAlley(3)], 2);
-  return raceCourse(b, ctx, { sections: withRests([iceSlope(), ...middle, slidingGates(4, 6)]) });
-});
+export default defineMap(
+  meta,
+  (b, ctx) => {
+    const middle = pickSections(b.rng, [ballRamp(6), pistons(3), tippingBridge(5), gloveAlley(3)], 2);
+    return raceCourse(b, ctx, { sections: withRests([iceSlope(), ...middle, slidingGates(4, 6)]) });
+  },
+  ['snow', 'meadow', 'candy'],
+);

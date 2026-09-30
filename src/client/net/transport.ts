@@ -139,10 +139,9 @@ export async function connect(info: SessionInfo, ev: TransportEvents, preferWs =
   return connectWebSocket(ev);
 }
 
-export async function fetchSession(): Promise<SessionInfo | 'auth' | 'error'> {
+export async function fetchSession(): Promise<SessionInfo | 'error'> {
   try {
     const r = await fetch(`${BASE_PATH}api/session`, { cache: 'no-store', credentials: 'same-origin' });
-    if (r.status === 401) return 'auth';
     if (!r.ok) return 'error';
     return (await r.json()) as SessionInfo;
   } catch {

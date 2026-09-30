@@ -1,5 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import { MAPS } from '../src/games';
+import { DEV_ROOM_ID } from '../src/shared/consts';
 
 /**
  * Visual regression: every map from a fixed camera, with a fixed seed, bots frozen in place, game
@@ -15,32 +16,22 @@ const probe = <T>(page: Page, fn: (p: Probe) => T | Promise<T>) =>
 
 test.describe.configure({ mode: 'serial' });
 
-/** One login for all tests (the PIN endpoint allows 5 attempts a minute). */
-let cookies: Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>> = [];
 /**
- * One player for all tests: each test is a new browser context, and without the resume token every
+ * One player for all tests: each test is a new browser context, and without the identity token every
  * test would join as a new player while the last ones wait out their reconnect grace, filling the
  * room after 8 maps.
  */
 let token: string | null = null;
 
 test.afterEach(async ({ page }) => {
-  token = (await page.evaluate(() => sessionStorage.getItem('fb_token')).catch(() => null)) ?? token;
+  token = (await page.evaluate(() => localStorage.getItem('fb_id')).catch(() => null)) ?? token;
 });
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('fb_settings', JSON.stringify({ quality: 'high', name: 'Шот' })));
-  if (token) await page.addInitScript((t) => sessionStorage.setItem('fb_token', t), token);
-  if (cookies.length) await page.context().addCookies(cookies);
-  else {
-    await page.goto('/fallbeans/pin/index.html');
-    const status = await page.evaluate(
-      async () => (await fetch('/fallbeans/api/auth', { method: 'POST', body: JSON.stringify({ pin: '5050' }) })).status,
-    );
-    expect(status).toBe(200);
-    cookies = await page.context().cookies();
-  }
-  await page.goto('/fallbeans/?shot');
+  if (token) await page.addInitScript((t) => localStorage.setItem('fb_id', t), token);
+  // The dev server's permanent room.
+  await page.goto(`/fallbeans/?shot&room=${DEV_ROOM_ID}`);
   await page.waitForFunction(() => window.__fallbeans?.time().kind === 'lobby', null, { timeout: 30_000 });
 });
 

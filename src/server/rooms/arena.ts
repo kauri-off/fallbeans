@@ -7,16 +7,17 @@ import {
   REMOTE_FLAG,
   type RemoteState,
   type Snapshot,
-} from '../shared/codec';
-import { ANIM, BOT_EVERY, DT, TICK_MS } from '../shared/consts';
-import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../shared/game';
-import type { Sections } from '../shared/prof';
-import type { GameEventRecord } from '../shared/protocol';
-import { mulberry32, type Rng } from '../shared/rng';
-import { emptyStats, type RoundStats } from '../shared/rules';
-import { Bonuses } from '../sim/bonus';
-import { smoothStick } from '../sim/bots';
-import { Builder } from '../sim/builder';
+} from '../../shared/codec';
+import { ANIM, BOT_EVERY, DT, TICK_MS } from '../../shared/consts';
+import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../../shared/game';
+import type { Sections } from '../../shared/prof';
+import type { GameEventRecord } from '../../shared/protocol';
+import { mulberry32, type Rng } from '../../shared/rng';
+import { emptyStats, type RoundStats } from '../../shared/rules';
+import { Bonuses } from '../../sim/bonus';
+import { smoothStick } from '../../sim/bots';
+import { Builder } from '../../sim/builder';
+import { lookFor } from '../../sim/looks';
 import {
   type BotInput,
   type BotMem,
@@ -27,9 +28,9 @@ import {
   type MapModule,
   type MapSpec,
   specProblems,
-} from '../sim/map';
-import { NavGrid } from '../sim/nav';
-import { type OtherBody, PlayerBody } from '../sim/physics';
+} from '../../sim/map';
+import { NavGrid } from '../../sim/nav';
+import { type OtherBody, PlayerBody } from '../../sim/physics';
 
 /** How far ahead of the server a client may send inputs (ticks). */
 const MAX_LEAD = 120;
@@ -52,6 +53,9 @@ const CREDIT_WINDOW = 3;
 const FORBIDDEN_GRACE = 0.6;
 
 export type PawnStatus = 'play' | 'finished' | 'out';
+
+/** How far (m) a lobby spawn point must be from every bean to count as free. */
+const SPAWN_CLEAR = 2.5;
 
 /**
  * A round as played (dev rooms record them): enough to simulate it again tick by tick and get the
@@ -264,6 +268,7 @@ export class ServerArena {
     this.fall = o.kind === 'round' ? fallBehaviour(o.module.meta.genre) : 'spawn';
     this.tick = Math.floor((o.now - o.startAt) / TICK_MS) - 1;
     this.builder = new Builder(o.seed, null);
+    this.builder.setLook(lookFor(o.module.looks, o.seed));
     const ctx: MapCtx = {
       server: true,
       seed: o.seed,
@@ -291,6 +296,9 @@ export class ServerArena {
       o.kind === 'round'
         ? new Bonuses(this.builder, o.seed, { arena: !this.spec.finish, duration: o.module.meta.duration })
         : null;
+    // Portals: tell the clients when one was used (it closes; they show the light). Not kept in
+    // `events` for late joiners: it is over in a second or two.
+    this.builder.onPortal = (pair, from, t) => this.hooks.onEvent('portal', { pair, from, t });
     this.builder.world.finalize(this.tick * DT);
     this.staticHash = this.builder.world.hash(true);
   }
@@ -305,9 +313,9 @@ export class ServerArena {
 
   addPawn(id: number, bot: boolean, spawnIndex?: number) {
     if (this.pawns.has(id)) return;
-    this.recording?.pawns.push([id, bot, spawnIndex ?? null, this.tick]);
     const spawns = this.spec.spawns;
-    const i = spawnIndex ?? this.spawnCursor++;
+    const i = spawnIndex ?? (this.kind === 'lobby' ? this.freeSpawn() : this.spawnCursor++);
+    this.recording?.pawns.push([id, bot, i, this.tick]);
     const spawn = (spawns[i % spawns.length] ?? new THREE.Vector3()).clone();
     const body = new PlayerBody(id);
     body.reset(spawn, this.faceYaw(spawn));
@@ -350,6 +358,32 @@ export class ServerArena {
     };
     this.pawns.set(id, pawn);
     this.bodyMap.set(id, body);
+  }
+
+  /**
+   * A spawn point nobody stands on (the lobby: people come and go, and fall and come back, at any
+   * time): the next one in turn that is clear, else the one farthest from every bean.
+   */
+  private freeSpawn(): number {
+    const spawns = this.spec.spawns;
+    let best = this.spawnCursor % spawns.length;
+    let bestD = -1;
+    for (let k = 0; k < spawns.length; k++) {
+      const i = (this.spawnCursor + k) % spawns.length;
+      const s = spawns[i]!;
+      let d = Number.POSITIVE_INFINITY;
+      for (const p of this.pawns.values()) if (p.status === 'play') d = Math.min(d, p.body.pos.distanceToSquared(s));
+      if (d > SPAWN_CLEAR * SPAWN_CLEAR) {
+        best = i;
+        break;
+      }
+      if (d > bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    this.spawnCursor = best + 1;
+    return best;
   }
 
   removePawn(id: number) {
@@ -525,16 +559,19 @@ export class ServerArena {
     for (const p of active) p.body.afterWorldUpdate();
     prof?.start('physics');
 
-    const others: OtherBody[] = active.map((p) => ({
-      id: p.id,
-      x: p.body.pos.x,
-      y: p.body.pos.y,
-      z: p.body.pos.z,
-      vx: p.body.vel.x,
-      vz: p.body.vel.z,
-      touching: false,
-      size: p.body.size,
-    }));
+    // (Someone inside a portal is nowhere to bump into.)
+    const others: OtherBody[] = active
+      .filter((p) => !p.body.inPortal)
+      .map((p) => ({
+        id: p.id,
+        x: p.body.pos.x,
+        y: p.body.pos.y,
+        z: p.body.pos.z,
+        vx: p.body.vel.x,
+        vz: p.body.vel.z,
+        touching: false,
+        size: p.body.size,
+      }));
     for (const p of active) {
       const f = frames.get(p)!;
       const input = { mx: f.mx / 127, mz: f.mz / 127, jump: (f.buttons & BTN.jump) !== 0, dive: (f.buttons & BTN.dive) !== 0 };
@@ -661,7 +698,7 @@ export class ServerArena {
     if (p.grabbing !== null) {
       const o = this.pawns.get(p.grabbing);
       const dist = o ? Math.hypot(o.body.pos.x - b.pos.x, o.body.pos.z - b.pos.z) : 99;
-      const escaped = !!o && (o.struggle >= STRUGGLE || o.body.state === 'dive' || o.body.down);
+      const escaped = !!o && (o.struggle >= STRUGGLE || o.body.state === 'dive' || o.body.down || o.body.inPortal);
       if (!wants || !o || o.status !== 'play' || escaped || t - p.holdSince > HOLD_MAX || dist > HOLD_BREAK) {
         p.grabbing = null;
         p.grabReadyAt = t + (escaped || t - p.holdSince > HOLD_MAX ? GRAB_COOLDOWN : 0.3);
@@ -673,7 +710,7 @@ export class ServerArena {
       let best = Number.POSITIVE_INFINITY;
       let target: Pawn | null = null;
       for (const o of active) {
-        if (o === p || o.body.down) continue;
+        if (o === p || o.body.down || o.body.inPortal) continue;
         const dx = o.body.pos.x - b.pos.x;
         const dz = o.body.pos.z - b.pos.z;
         const d = Math.hypot(dx, dz);
@@ -821,7 +858,12 @@ export class ServerArena {
     if (counts && !shortcut) p.stats.falls++;
     this.note(shortcut ? 'shortcut' : 'fall', p.id, { by, cause, pos: [r3(pos.x), r3(pos.y), r3(pos.z)] });
     if (counts || this.kind === 'lobby') this.hooks.onKo({ id: p.id, out: false, by, cause, shortcut });
-    const to = this.fall === 'checkpoint' && p.checkpoint ? p.checkpoint.p : p.spawn;
+    const to =
+      this.fall === 'checkpoint' && p.checkpoint
+        ? p.checkpoint.p
+        : this.kind === 'lobby'
+          ? this.spec.spawns[this.freeSpawn()]!
+          : p.spawn;
     const jitter = ((p.id * 7919) % 100) / 100 - 0.5;
     b.reset(new THREE.Vector3(to.x + jitter * 2, to.y + 0.5, to.z), this.faceYaw(to));
     p.teleported = true;
@@ -940,6 +982,7 @@ export class ServerArena {
 }
 
 export function animFor(b: PlayerBody, grabbing: boolean, reaching = false): number {
+  if (b.state === 'portal') return ANIM.portal;
   if (b.state === 'tumble') return ANIM.tumble;
   if (b.state === 'getup') return ANIM.getup;
   if (b.state === 'stun') return ANIM.stun;

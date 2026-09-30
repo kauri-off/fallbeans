@@ -16,8 +16,7 @@ export interface Config {
   dev: boolean;
   /** nginx in front: trust X-Real-IP, set Secure cookies. */
   trustProxy: boolean;
-  pinHash: string | null;
-  pinPlain: string | null;
+  /** Signs tickets, player identities and the debug cookie (FB_SECRET). */
   secret: Buffer;
   /** Production debug page/API key (FB_DEBUG_KEY); without it the debug API is off outside dev. */
   debugKey: string | null;
@@ -41,23 +40,16 @@ export function loadConfig(argv: string[], env: Env = process.env, root = proces
   const noWt = has('--no-wt') || env.FB_WT === '0';
   const wtPort = noWt || !certPem || !keyPem ? null : Number(val('--wt-port') ?? env.FB_WT_PORT ?? (dev ? 4433 : 443));
 
-  const pinB64 = env.FB_PIN_HASH_B64;
-  const pinHash = pinB64 ? Buffer.from(pinB64, 'base64').toString('utf8') : null;
-  const pinPlain = val('--pin') ?? env.FB_PIN ?? (dev && !pinHash ? '5050' : null);
-  if (!pinHash && !pinPlain) throw new Error('no PIN configured: set FB_PIN_HASH_B64 (production) or --pin');
-
   let secretHex = env.FB_SECRET;
-  if (!secretHex && !dev && !pinPlain) throw new Error('FB_SECRET is not set (see deploy/remote-install.sh)');
+  if (!secretHex && !dev) throw new Error('FB_SECRET is not set (see deploy/remote-install.sh)');
   if (!secretHex) {
-    // Development: a stable secret in .dev/ so cookies survive restarts.
+    // Development: a stable secret in .dev/ so player identities survive restarts.
     const file = join(root, '.dev', 'secret');
     if (existsSync(file)) secretHex = readFileSync(file, 'utf8').trim();
     else {
       secretHex = randomBytes(32).toString('hex');
-      if (dev || pinPlain) {
-        mkdirSync(join(root, '.dev'), { recursive: true });
-        writeFileSync(file, secretHex);
-      }
+      mkdirSync(join(root, '.dev'), { recursive: true });
+      writeFileSync(file, secretHex);
     }
   }
   if (!/^[0-9a-f]{64}$/i.test(secretHex)) throw new Error('FB_SECRET must be 64 hex characters');
@@ -72,8 +64,6 @@ export function loadConfig(argv: string[], env: Env = process.env, root = proces
     solo: has('--solo') || env.FB_SOLO === '1',
     dev,
     trustProxy: env.FB_TRUST_PROXY === '1',
-    pinHash,
-    pinPlain,
     secret: Buffer.from(secretHex, 'hex'),
     debugKey: env.FB_DEBUG_KEY && env.FB_DEBUG_KEY.length >= 16 ? env.FB_DEBUG_KEY : null,
   };

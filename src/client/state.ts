@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import type { ArenaInfo, ServerMsgOf } from '../shared/protocol';
+import type { ArenaInfo, RoomInfo, RoomRef, ServerMsgOf } from '../shared/protocol';
 
 export type ConnStatus = 'loading' | 'connecting' | 'online' | 'reconnecting' | 'rejected';
 
@@ -16,6 +16,15 @@ export const arenaInfo = signal<ArenaInfo | null>(null);
 export const results = signal<ServerMsgOf<'roundEnd'> | null>(null);
 export const gameEnd = signal<ServerMsgOf<'gameEnd'> | null>(null);
 export const practiceGame = signal<string | null>(null);
+
+/** The room the player is in; null at the room list (the home screen). */
+export const room = signal<RoomRef | null>(null);
+/** The room list, shown while in no room; null until the server sent it. */
+export const roomList = signal<RoomInfo[] | null>(null);
+/** The room this player created, if it still exists. */
+export const ownRoom = signal<string | null>(null);
+/** Why entering or creating a room failed (`reason: 'pin'`: that room asks for its PIN). */
+export const denied = signal<ServerMsgOf<'denied'> | null>(null);
 
 export type PlayStatus = 'play' | 'finished' | 'out' | 'spectating';
 
@@ -78,6 +87,39 @@ export function pushFeed(e: Omit<FeedEntry, 'id'>) {
   }, 6000);
 }
 export const note = (text: string) => pushFeed({ victim: -1, by: null, cause: '', out: false, shortcut: false, text });
+
+export interface ChatLine {
+  n: number;
+  name: string;
+  color: string;
+  text: string;
+  mine: boolean;
+}
+
+/** How long the chat stays on screen after a new line. */
+const CHAT_SHOW_MS = 8000;
+/** The room's chat: the last lines (it starts empty in every room). */
+export const chatLog = signal<ChatLine[]>([]);
+/** The player is typing a line (Enter): the chat is fully visible and takes the keyboard. */
+export const chatOpen = signal(false);
+/** Someone wrote just now: the chat shows through, half transparent, then fades away again. */
+export const chatFresh = signal(false);
+let chatSeq = 0;
+let chatTimer: ReturnType<typeof setTimeout> | null = null;
+export function pushChat(line: Omit<ChatLine, 'n'>) {
+  chatLog.value = [...chatLog.value.slice(-49), { ...line, n: ++chatSeq }];
+  chatFresh.value = true;
+  if (chatTimer) clearTimeout(chatTimer);
+  chatTimer = setTimeout(() => {
+    chatFresh.value = false;
+  }, CHAT_SHOW_MS);
+}
+export function clearChat() {
+  if (chatTimer) clearTimeout(chatTimer);
+  chatLog.value = [];
+  chatOpen.value = false;
+  chatFresh.value = false;
+}
 
 /** The server accepts dev commands (started with --dev): the menu shows the Dev tab. */
 export const devMode = signal(false);

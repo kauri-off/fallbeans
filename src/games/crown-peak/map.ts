@@ -209,15 +209,18 @@ function summit(b: Builder, z0: number, y0: number) {
   return { finish: { z: cz - 2.4, y: topY - 1, halfWidth: 2.2 }, route };
 }
 
-export default defineMap(meta, (b, ctx) => {
-  b.style.pattern = 'chevron';
-  const more = pickSections(
-    b.rng,
-    [slidingGates(4, 5), movingPlatforms(5), tippingBridge(6), trampolineGap(), timedDoors(2), portalFork()],
-    3,
-  );
-  return raceCourse(b, ctx, {
-    sections: withRests([climbFork(8), hammerBridges(3), gloveLaunch(5), ...more]),
-    finishWith: summit,
-  });
-});
+export default defineMap(
+  meta,
+  (b, ctx) => {
+    const more = pickSections(
+      b.rng,
+      [slidingGates(4, 5), movingPlatforms(5), tippingBridge(6), trampolineGap(), timedDoors(2), portalFork()],
+      3,
+    );
+    return raceCourse(b, ctx, {
+      sections: withRests([climbFork(8), hammerBridges(3), gloveLaunch(5), ...more]),
+      finishWith: summit,
+    });
+  },
+  ['royal', 'snow', 'castle'],
+);

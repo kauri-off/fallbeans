@@ -286,6 +286,9 @@ export class LodSystem {
       pair = [fadeMaterial(base, e.mainFade), fadeMaterial(base, e.ghostFade)];
       e.pairs.set(base, pair);
     }
+    // Colours that change after the copy was made (the rainbow bean) follow the original.
+    if (base instanceof THREE.MeshStandardMaterial)
+      for (const m of pair) if (m instanceof THREE.MeshStandardMaterial) m.color.copy(base.color);
     [e.mainMat, e.ghostMat] = pair;
   }
 

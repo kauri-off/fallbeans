@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { getGame, getMap, LOBBY, PODIUM } from '../games';
-import { decodeInput, encodeSnapshot } from '../shared/codec';
+import { getGame, getMap, LOBBY, PODIUM } from '../../games';
+import { decodeInput, encodeSnapshot } from '../../shared/codec';
 import {
   COLORS,
   INTRO_MS,
@@ -9,44 +9,36 @@ import {
   PRACTICE_RESULTS_MS,
   RECONNECT_GRACE_MS,
   RESULTS_MS,
+  ROOM_PIN_DIGITS,
   SNAPSHOT_EVERY,
   TICK_MS,
-} from '../shared/consts';
-import type { GameMeta } from '../shared/game';
-import { Sections } from '../shared/prof';
+} from '../../shared/consts';
+import type { GameMeta } from '../../shared/game';
+import { Sections } from '../../shared/prof';
 import {
   type ArenaInfo,
   type ClientMsg,
   DEFAULT_PLAYLIST,
   type DevCmd,
-  type Hello,
   type LobbyPlayer,
   type Phase,
   type Playlist,
+  type RoomInfo,
   type ServerMsg,
   type Standing,
+  sanitizeChat,
   sanitizeName,
-} from '../shared/protocol';
-import { mulberry32, type Rng, shuffle } from '../shared/rng';
-import { isRoundOver, type RoundStats, type RoundView, scoreRound } from '../shared/rules';
+} from '../../shared/protocol';
+import { mulberry32, type Rng, shuffle } from '../../shared/rng';
+import { isRoundOver, type RoundStats, type RoundView, scoreRound } from '../../shared/rules';
+import { TickMeter } from '../diag';
+import { type Logger, NOOP_LOG } from '../log';
+import type { Conn } from '../net/conn';
 import { type KoInfo, type Recording, ServerArena } from './arena';
-import { computeAwards, emptyGameStats, type GameStats } from './awards';
-import { TickMeter } from './diag';
+import { computeAwards, emptyGameStats } from './awards';
+import { GameClock } from './clock';
 import { planGame, validPlaylist } from './director';
-
-/** A client connection: reliable control messages plus unreliable datagrams. */
-export interface Conn {
-  readonly kind: 'ws' | 'wt';
-  readonly ip: string;
-  send(msg: ServerMsg): void;
-  datagram(data: Uint8Array): void;
-  close(reason?: string): void;
-}
-
-export interface Logger {
-  info(msg: string, data?: Record<string, unknown>): void;
-  warn(msg: string, data?: Record<string, unknown>): void;
-}
+import { botName, makePlayer, type Player } from './players';
 
 export interface RoomOptions {
   minPlayers: number;
@@ -61,24 +53,17 @@ export interface RoomOptions {
   autoTick?: boolean;
   /** Accept dev commands (server --dev). */
   dev?: boolean;
-}
-
-interface Player {
-  id: number;
-  name: string;
-  color: string;
-  /** Points in the current game. */
-  score: number;
-  crowns: number;
-  stats: GameStats;
-  token: string;
-  bot: boolean;
-  conn: Conn | null;
-  disconnectedAt: number;
-  spectator: boolean;
-  msgWindow: number;
-  msgCount: number;
-  rtt: number;
+  /** The room's code and name in the room list ('' for rooms that are not listed). */
+  id?: string;
+  title?: string;
+  /** Identity of the player who created the room: the host whenever they are in it. */
+  owner?: string | null;
+  /** PIN of a private room. */
+  pin?: string | null;
+  /** Kept when nobody is in it (the dev server's room). */
+  permanent?: boolean;
+  /** Something the room list shows changed (players, host, phase, access). */
+  onChange?: () => void;
 }
 
 /** One game: a planned series of rounds everyone plays, scored by points. */
@@ -97,34 +82,47 @@ interface Round {
   total: number;
 }
 
-const BOT_NAMES = ['Кекс', 'Пончик', 'Жужа', 'Бублик', 'Мармелад', 'Хрустик', 'Пельмень', 'Зефир', 'Кнопка', 'Шмель'];
 const MSG_RATE = 60;
-const NOOP_LOG: Logger = { info() {}, warn() {} };
+/** Shortest time between two chat lines of one player. */
+const CHAT_GAP_MS = 700;
 
-function makeToken(): string {
-  return globalThis.crypto.randomUUID();
+export function makePin(): string {
+  const n = globalThis.crypto.getRandomValues(new Uint32Array(1))[0]!;
+  return String(n % 10 ** ROOM_PIN_DIGITS).padStart(ROOM_PIN_DIGITS, '0');
 }
 
+/** A lobby and the games played from it: players and bots, the host, rounds, scores, chat. */
 export class Room {
+  readonly id: string;
+  readonly title: string;
+  /** Identity of the room's creator (null: nobody's, the dev room). */
+  readonly owner: string | null;
+  /** PIN of a private room; null when anyone may enter. */
+  pin: string | null;
+  /** Identities the room let in: they come back without the PIN. */
+  admitted = new Set<string>();
   readonly players = new Map<number, Player>();
+  /**
+   * The acting host. The owner whenever they are in the room; while they are away (or after they
+   * handed the role over) another connected player.
+   */
   host: number | null = null;
   phase: Phase = 'lobby';
   session: Session | null = null;
   round: Round | null = null;
   arena: ServerArena;
   playlist: Playlist = DEFAULT_PLAYLIST;
+  /** The host wants the empty places of the lobby filled with bots. */
+  fill = false;
+  /** Game time: timers and arenas run on it (dev commands slow, pause or warp it). */
+  readonly clock: GameClock;
   private nextId = 1;
   private arenaSeq = 1;
   private timer: { at: number; fn: () => void } | null = null;
   private readonly interval: ReturnType<typeof setInterval> | null;
   private readonly rng: Rng;
   private readonly log: Logger;
-  private readonly max: number;
-  /** Real clock; game time (now()) runs from it at `rate` (dev: slow motion, pause, warps). */
-  private readonly realClock: () => number;
-  private rate = 1;
-  private timeBase = 0;
-  private realBase = 0;
+  readonly max: number;
   /** Dev: seed for the next round's map. */
   private nextSeed: number | null = null;
   /** Dev: simulating a time warp (no snapshots for the ticks in between). */
@@ -138,11 +136,14 @@ export class Room {
   readonly prof = new Sections();
 
   constructor(private readonly opts: RoomOptions) {
+    this.id = opts.id ?? '';
+    this.title = opts.title ?? '';
+    this.owner = opts.owner ?? null;
+    this.pin = opts.pin ?? null;
     this.rng = opts.seed !== undefined ? mulberry32(opts.seed) : Math.random;
     this.log = opts.log ?? NOOP_LOG;
     this.max = Math.min(opts.maxPlayers ?? MAX_PLAYERS, MAX_PLAYERS);
-    this.realClock = opts.clock ?? (() => performance.now());
-    this.realBase = this.timeBase = this.realClock();
+    this.clock = new GameClock(opts.clock ?? (() => performance.now()));
     if (opts.practice && !getGame(opts.practice.game)) throw new Error(`unknown game ${opts.practice.game}`);
     this.arena = this.makeLobbyArena();
     this.interval = opts.autoTick === false ? null : setInterval(() => this.update(), 4);
@@ -152,19 +153,27 @@ export class Room {
     return !!this.opts.practice;
   }
 
+  /** Nobody is in the room (not even someone who may still reconnect). */
   get empty() {
     return this.humans().length === 0;
   }
 
-  /** Game time (ms): the real clock, unless a dev command slowed, paused or warped it. */
+  get permanent() {
+    return !!this.opts.permanent;
+  }
+
+  /** Game time (ms). */
   now() {
-    const real = this.realClock();
-    if (this.rate === 1 && this.timeBase === this.realBase) return real;
-    return this.timeBase + (real - this.realBase) * this.rate;
+    return this.clock.now();
   }
 
   get dev() {
     return !!this.opts.dev;
+  }
+
+  /** ms until the pending phase change (results → next round…), or null. */
+  get timerIn() {
+    return this.timer ? Math.round(this.timer.at - this.now()) : null;
   }
 
   dispose() {
@@ -175,48 +184,40 @@ export class Room {
 
   // ------------------------------------------------------------------ connections
 
-  /** A validated, authenticated hello. Returns the player id, or null if rejected. */
-  join(conn: Conn, m: Hello): number | null {
-    const resumed = m.token ? [...this.players.values()].find((p) => !p.bot && p.token === m.token) : undefined;
+  /**
+   * A player enters: someone new, or (same identity) the one who is already here, on a new
+   * connection. Returns the player id, or null when the room is full.
+   */
+  join(conn: Conn, who: { uid: string; name: string }): number | null {
+    const resumed = who.uid ? this.playerOf(who.uid) : undefined;
     if (resumed) {
       const old = resumed.conn;
       resumed.conn = conn;
       resumed.disconnectedAt = 0;
-      old?.close('replaced');
+      if (old !== conn) old?.close('replaced');
       this.log.info('player resumed', { id: resumed.id, name: resumed.name, via: conn.kind });
+      this.seatHost(resumed);
       this.welcome(resumed, true);
       return resumed.id;
     }
     if (this.players.size >= this.max) {
-      const bot = this.phase === 'lobby' ? [...this.players.values()].reverse().find((p) => p.bot) : undefined;
-      if (bot) this.removePlayer(bot);
-      else {
-        conn.send({ t: 'reject', reason: 'full', msg: `Сервер заполнен: в игре уже ${this.max} из ${this.max} мест` });
-        conn.close('full');
-        return null;
-      }
+      // A bot gives up its place to a person.
+      const bot = this.spareBot();
+      if (!bot) return null;
+      this.drop(bot);
     }
     const id = this.nextId++;
-    const p: Player = {
-      id,
-      name: sanitizeName(m.name) || `Боб ${id}`,
-      color: this.freeColor(),
-      score: 0,
-      crowns: 0,
-      stats: emptyGameStats(),
-      token: makeToken(),
-      bot: false,
+    const p = makePlayer(id, sanitizeName(who.name) || `Боб ${id}`, this.freeColor(), {
+      uid: who.uid,
       conn,
-      disconnectedAt: 0,
       spectator: this.phase !== 'lobby',
-      msgWindow: 0,
-      msgCount: 0,
-      rtt: 0,
-    };
+    });
     this.players.set(id, p);
+    if (who.uid) this.admitted.add(who.uid);
     this.log.info('player joined', { id, name: p.name, via: conn.kind, practice: this.practice });
-    this.updateHost();
+    this.seatHost(p);
     if (this.arena.kind === 'lobby') this.arena.addPawn(id, false);
+    this.syncBots();
     this.welcome(p, false);
     const pr = this.opts.practice;
     if (pr && !this.session) {
@@ -224,9 +225,11 @@ export class Room {
       for (let i = 0; i < need && this.players.size < this.max; i++) this.addBot();
       this.startGame();
     }
+    this.checkRound();
     return id;
   }
 
+  /** The connection of player `id` is gone: out of the lobby at once, out of a game after the grace period. */
   leave(id: number, conn: Conn) {
     const p = this.players.get(id);
     if (!p || p.conn !== conn) return;
@@ -241,11 +244,30 @@ export class Room {
     this.sendLobby();
   }
 
+  /** Player `id` leaves for good (back to the room list, or into another room). */
+  quit(id: number) {
+    const p = this.players.get(id);
+    if (!p || p.bot) return;
+    p.conn = null;
+    this.log.info('player left', { id });
+    this.removePlayer(p);
+  }
+
+  /** The player with this identity, if they are in the room (connected or not). */
+  playerOf(uid: string): Player | undefined {
+    for (const p of this.players.values()) if (!p.bot && p.uid === uid) return p;
+    return undefined;
+  }
+
   control(id: number, conn: Conn, m: ClientMsg) {
     const p = this.players.get(id);
     if (!p || p.conn !== conn || !this.allowRate(p)) return;
     switch (m.t) {
+      // Handled before a message reaches the room (see Gateway).
       case 'hello':
+      case 'create':
+      case 'join':
+      case 'leave':
         return;
       case 'ping':
         if (m.rtt !== undefined) p.rtt = m.rtt;
@@ -287,6 +309,24 @@ export class Room {
         if (this.isHost(p) && this.phase === 'lobby' && b?.bot) this.removePlayer(b);
         return;
       }
+      case 'fill':
+        if (this.isHost(p) && this.phase === 'lobby' && !this.practice) {
+          this.fill = m.on;
+          // Off: the bots that only filled places go; the ones the host added stay.
+          if (!m.on) for (const b of [...this.players.values()]) if (b.auto) this.drop(b);
+          this.syncBots();
+          this.sendLobby();
+        }
+        return;
+      case 'access':
+        if (this.isHost(p) && !this.practice && !!this.pin !== m.private) {
+          this.pin = m.private ? makePin() : null;
+          // A new PIN: whoever is here stays welcome, those who left need it.
+          this.admitted = new Set(this.humans().map((h) => h.uid));
+          this.log.info(m.private ? 'room made private' : 'room made public', { by: p.id });
+          this.sendLobby();
+        }
+        return;
       case 'host': {
         // The host hands the role over to another connected player (any phase).
         const to = this.players.get(m.id);
@@ -299,6 +339,14 @@ export class Room {
       case 'emote':
         if (this.arena.pawns.get(p.id)?.status === 'play') this.broadcast({ t: 'emote', id: p.id, e: m.e });
         return;
+      case 'chat': {
+        const text = sanitizeChat(m.text);
+        const now = this.clock.real();
+        if (!text || now - p.chatAt < CHAT_GAP_MS) return;
+        p.chatAt = now;
+        this.broadcast({ t: 'chat', id: p.id, name: p.name, text });
+        return;
+      }
       case 'dev': {
         if (!this.dev) return this.sendTo(p, { t: 'devAck', q: m.q ?? null, ok: false, msg: 'dev commands are off' });
         let msg: string;
@@ -350,7 +398,10 @@ export class Room {
         }
         if (this.session) this.backToLobby();
         // `bots`: exactly that many (the ones left from before are replaced).
-        if (cmd.bots !== undefined) for (const p of [...this.players.values()]) if (p.bot) this.removePlayer(p);
+        if (cmd.bots !== undefined) {
+          this.fill = false;
+          for (const p of [...this.players.values()]) if (p.bot) this.removePlayer(p);
+        }
         const want = Math.min(this.max, this.humans().length + (cmd.bots ?? 0));
         while (this.players.size < want) this.addBot();
         this.playlist = cmd.games?.length
@@ -366,7 +417,7 @@ export class Room {
         this.setRate(cmd.k);
         return cmd.k === 0 ? 'paused' : `game time ×${cmd.k}`;
       case 'step':
-        if (this.rate !== 0) throw new Error('pause first (rate 0)');
+        if (this.clock.rate !== 0) throw new Error('pause first (rate 0)');
         this.warp(cmd.ticks * TICK_MS);
         return `stepped ${cmd.ticks} ticks (tick ${this.arena.tick})`;
       case 'teleport': {
@@ -421,28 +472,23 @@ export class Room {
 
   /** Dev: game time runs `k` times as fast (0 pauses); clients re-sync their clocks. */
   private setRate(k: number) {
-    const now = this.now();
-    this.timeBase = now;
-    this.realBase = this.realClock();
-    this.rate = k;
+    const now = this.clock.setRate(k);
     this.broadcast({ t: 'clock', rate: k, s: now });
   }
 
   /** Dev: moves game time forward by `ms`, simulating every tick on the way (and running due timers). */
   private warp(ms: number) {
-    const now = this.now();
-    this.timeBase = now;
-    this.realBase = this.realClock();
+    this.clock.rebase();
     this.warping = true;
     try {
       for (let left = ms; left > 0; left -= 50) {
-        this.timeBase += Math.min(50, left);
+        this.clock.skip(Math.min(50, left));
         this.update(this.now(), true);
       }
     } finally {
       this.warping = false;
     }
-    this.broadcast({ t: 'clock', rate: this.rate, s: this.now() });
+    this.broadcast({ t: 'clock', rate: this.clock.rate, s: this.now() });
     this.snapshot(this.arena.tick - (this.arena.tick % SNAPSHOT_EVERY));
   }
 
@@ -455,7 +501,8 @@ export class Room {
   }
 
   private allowRate(p: Player): boolean {
-    const now = this.now();
+    // (The real clock: game time may be paused.)
+    const now = this.clock.real();
     if (now - p.msgWindow > 1000) {
       p.msgWindow = now;
       p.msgCount = 0;
@@ -468,16 +515,17 @@ export class Room {
     this.sendTo(p, {
       t: 'welcome',
       id: p.id,
-      token: p.token,
+      room: this.id,
       solo: this.opts.minPlayers <= 1,
       practice: this.practice,
       resumed,
-      dev: this.dev,
     });
-    if (this.rate !== 1 || this.timeBase !== this.realBase) this.sendTo(p, { t: 'clock', rate: this.rate, s: this.now() });
+    if (this.clock.shifted) this.sendTo(p, { t: 'clock', rate: this.clock.rate, s: this.now() });
     this.sendLobby();
     this.sendTo(p, { t: 'arena', ...this.arenaInfo(true) });
   }
+
+  // ------------------------------------------------------------------ players, host, bots
 
   private isHost(p: Player) {
     return p.id === this.host;
@@ -488,52 +536,67 @@ export class Room {
     return COLORS.find((c) => !used.has(c)) ?? COLORS[0];
   }
 
-  private addBot(): number {
+  private addBot(auto = false): number {
     const id = this.nextId++;
-    const used = new Set([...this.players.values()].map((p) => p.name));
-    const base = BOT_NAMES.find((n) => !used.has(`Бот ${n}`)) ?? String(id);
-    this.players.set(id, {
+    const name = botName(
+      [...this.players.values()].map((p) => p.name),
       id,
-      name: `Бот ${base}`,
-      color: this.freeColor(),
-      score: 0,
-      crowns: 0,
-      stats: emptyGameStats(),
-      token: '',
-      bot: true,
-      conn: null,
-      disconnectedAt: 0,
-      spectator: false,
-      msgWindow: 0,
-      msgCount: 0,
-      rtt: 0,
-    });
+    );
+    this.players.set(id, makePlayer(id, name, this.freeColor(), { auto }));
     if (this.arena.kind === 'lobby') this.arena.addPawn(id, true);
     return id;
+  }
+
+  /** With "fill with bots" on, the lobby is kept full while someone is there to play with them. */
+  private syncBots() {
+    if (!this.fill || this.phase !== 'lobby' || this.practice) return;
+    if (!this.humans().some((p) => p.conn)) return;
+    while (this.players.size < this.max) this.addBot(true);
+  }
+
+  /** The bot that gives up its place to a person: in a round, one that no longer plays if there is one. */
+  private spareBot(): Player | undefined {
+    const bots = [...this.players.values()].filter((p) => p.bot).reverse();
+    return bots.find((b) => this.arena.pawns.get(b.id)?.status !== 'play') ?? bots[0];
   }
 
   private humans() {
     return [...this.players.values()].filter((p) => !p.bot);
   }
 
+  /** `p` just connected: the room's owner takes the host role back, anyone else may fill a vacancy. */
+  private seatHost(p: Player) {
+    if (this.owner !== null && p.uid === this.owner) this.host = p.id;
+    else this.updateHost();
+  }
+
+  /** The host must be connected: the owner if they are here, else whoever has been here longest. */
   private updateHost() {
     const cur = this.host !== null ? this.players.get(this.host) : undefined;
-    if (!cur?.conn) {
-      const next = this.humans().find((p) => p.conn);
-      this.host = next?.id ?? (cur ? cur.id : (this.humans()[0]?.id ?? null));
-    }
+    if (cur?.conn) return;
+    const humans = this.humans();
+    const next = humans.find((p) => p.conn && p.uid === this.owner) ?? humans.find((p) => p.conn);
+    this.host = next?.id ?? cur?.id ?? humans[0]?.id ?? null;
+  }
+
+  /** Takes a player out of the room and its arena (what that means for the room: removePlayer). */
+  private drop(p: Player): boolean {
+    if (!this.players.delete(p.id)) return false;
+    this.arena.removePawn(p.id);
+    this.broadcast({ t: 'left', id: p.id });
+    return true;
   }
 
   private removePlayer(p: Player) {
-    if (!this.players.delete(p.id)) return;
-    this.arena.removePawn(p.id);
-    this.broadcast({ t: 'left', id: p.id });
-    if (!this.humans().length) {
+    if (!this.drop(p)) return;
+    if (!p.bot && !this.humans().length) {
+      // The last person left: the bots go too, and the room waits in its lobby.
       for (const b of [...this.players.values()]) this.players.delete(b.id);
       this.backToLobby();
       return;
     }
     this.updateHost();
+    this.syncBots();
     this.sendLobby();
     this.checkRound();
   }
@@ -802,6 +865,7 @@ export class Room {
     }
     this.updateHost();
     if (this.arena.kind !== 'lobby' || this.arena.pawns.size !== this.players.size) this.setArena(this.makeLobbyArena());
+    this.syncBots();
     this.sendLobby();
   }
 
@@ -845,85 +909,10 @@ export class Room {
     a.clearTeleports();
   }
 
-  // ------------------------------------------------------------------ debug
-
-  /** Everything about the room for the debug page (plain JSON). */
-  debugState() {
-    const a = this.arena;
-    const r3 = (v: number) => Math.round(v * 1000) / 1000;
-    const now = this.now();
-    return {
-      phase: this.phase,
-      practice: this.practice,
-      host: this.host,
-      rate: this.rate,
-      timerIn: this.timer ? Math.round(this.timer.at - now) : null,
-      session: this.session,
-      round: this.round && { game: this.round.game.id, index: this.round.index, total: this.round.total, over: this.round.over },
-      playlist: this.playlist,
-      players: [...this.players.values()].map((p) => ({
-        id: p.id,
-        name: p.name,
-        bot: p.bot,
-        connected: p.bot || !!p.conn,
-        via: p.conn?.kind ?? null,
-        rtt: Math.round(p.rtt),
-        score: p.score,
-        crowns: p.crowns,
-        spectator: p.spectator,
-        stats: p.stats,
-      })),
-      arena: {
-        id: a.id,
-        kind: a.kind,
-        game: a.module.meta.id,
-        seed: a.seed,
-        tick: a.tick,
-        t: r3(a.time),
-        startsIn: Math.round(a.startAt - now),
-        endsIn: Math.round(a.endAt - now),
-        frozen: a.frozen,
-        botsOn: a.botsOn,
-        finished: a.finished,
-        out: a.out,
-        scores: [...a.scores],
-        events: a.events.length,
-        pawns: [...a.pawns.values()].map((p) => ({
-          id: p.id,
-          bot: !!p.bot,
-          status: p.status,
-          pos: [r3(p.body.pos.x), r3(p.body.pos.y), r3(p.body.pos.z)],
-          speed: r3(Math.hypot(p.body.vel.x, p.body.vel.z)),
-          state: p.body.state,
-          grounded: p.body.grounded,
-          progress: r3(p.progress),
-          checkpoint: p.checkpoint ? p.checkpoint.z : null,
-          grabbing: p.grabbing,
-          ack: p.ack,
-          lagTicks: p.bot ? 0 : a.tick - p.ack,
-          queued: p.inputs.size,
-          rejected: p.rejected,
-          stats: p.stats,
-        })),
-      },
-      perf: { ...this.meter.summary(), profile: this.prof.report() },
-    };
-  }
-
   /** A recorded round: the last finished ones, or (`current`) the one running now. */
   debugReplay(i: number | 'current'): Recording | null {
     if (i === 'current') return this.arena.takeRecording();
     return this.replays.at(i < 0 ? i : -1 - i) ?? null;
-  }
-
-  /** Recent history of one bean (or of every bean) and the arena journal. */
-  debugTrace(id?: number, seconds = 10) {
-    const a = this.arena;
-    const from = a.time - seconds;
-    const pick = (list: readonly { t: number }[]) => list.filter((e) => e.t >= from);
-    const trace =
-      id !== undefined ? { [id]: pick(a.trace.get(id) ?? []) } : Object.fromEntries([...a.trace].map(([k, v]) => [k, pick(v)]));
-    return { game: a.module.meta.id, t: a.time, journal: a.journal.filter((e) => e.t >= from), trace };
   }
 
   // ------------------------------------------------------------------ messages
@@ -952,14 +941,32 @@ export class Room {
     };
   }
 
+  /** The room's line in the room list. */
+  info(): RoomInfo {
+    const humans = this.humans().length;
+    return {
+      id: this.id,
+      title: this.title,
+      private: !!this.pin,
+      host: (this.host !== null ? this.players.get(this.host)?.name : undefined) ?? '',
+      players: humans,
+      bots: this.players.size - humans,
+      max: this.max,
+      phase: this.phase,
+    };
+  }
+
   lobbyMsg(): Extract<ServerMsg, { t: 'lobby' }> {
     return {
       t: 'lobby',
+      room: { id: this.id, title: this.title, private: !!this.pin },
       phase: this.phase,
       host: this.host,
       min: this.opts.minPlayers,
       max: this.max,
       playlist: this.playlist,
+      fill: this.fill,
+      pin: null,
       players: [...this.players.values()].map(
         (p): LobbyPlayer => ({
           id: p.id,
@@ -977,7 +984,10 @@ export class Room {
   }
 
   private sendLobby() {
-    this.broadcast(this.lobbyMsg());
+    const msg = this.lobbyMsg();
+    // Only the host is told the PIN: the others ask them for it.
+    for (const p of this.players.values()) this.sendTo(p, this.pin && p.id === this.host ? { ...msg, pin: this.pin } : msg);
+    this.opts.onChange?.();
   }
 
   private sendTo(p: Player, msg: ServerMsg) {

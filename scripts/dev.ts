@@ -1,6 +1,6 @@
 /**
- * Development: the game server (with --dev: PIN 5050, WebTransport on udp/4433 with a self-signed
- * certificate) and Vite with hot reload at http://localhost:5173/fallbeans/.
+ * Development: the game server (with --dev: dev commands, a permanent room `dev`, WebTransport on
+ * udp/4433 with a self-signed certificate) and Vite with hot reload at http://localhost:5173/fallbeans/.
  *   bun run dev [-- --solo]
  */
 import { ensureDevCert } from './dev-cert';

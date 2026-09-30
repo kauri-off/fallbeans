@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GAMES, MAPS } from '../games';
-import { ServerArena } from '../server/arena';
-import { planGame } from '../server/director';
+import { ServerArena } from '../server/rooms/arena';
+import { planGame } from '../server/rooms/director';
 import { BTN, decodeInput, decodeSnapshot, encodeInput, encodeSnapshot, type InputFrame } from '../shared/codec';
 import { DT, MAX_PLAYERS, TICK_MS } from '../shared/consts';
 import type { Genre } from '../shared/game';

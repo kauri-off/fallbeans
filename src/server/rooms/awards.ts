@@ -1,4 +1,4 @@
-import type { Award } from '../shared/protocol';
+import type { Award } from '../../shared/protocol';
 
 /** A player's numbers over a whole game. */
 export interface GameStats {

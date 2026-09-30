@@ -1,8 +1,24 @@
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;
-export const COLORS = ['#ff5fa2', '#3fa9ff', '#ffd23f', '#4fdc6a', '#a66bff', '#ff8a3d', '#39e0d0', '#ffffff'] as const;
+/** Bean colours: hex, or RAINBOW (the colour runs through the rainbow). The first eight go to newcomers. */
+export const RAINBOW = 'rainbow';
+export const COLORS = [
+  '#ff5fa2',
+  '#3fa9ff',
+  '#ffd23f',
+  '#4fdc6a',
+  '#a66bff',
+  '#ff8a3d',
+  '#39e0d0',
+  '#ffffff',
+  '#ff3b3b',
+  '#2b2b33',
+  '#9ea3b0',
+  '#8b5a2b',
+  RAINBOW,
+] as const;
 export const NAME_MAX = 16;
 /** Emotes 1…EMOTES: wave, dance, laugh, cry, fright. */
 export const EMOTES = 5;
@@ -25,6 +41,15 @@ export const PRACTICE_RESULTS_MS = 3500;
 export const PODIUM_MS = 20000;
 export const RECONNECT_GRACE_MS = 30000;
 export const MAX_PRACTICE_ROOMS = 3;
+/** Rooms open at once (each simulates its own lobby or round). */
+export const MAX_ROOMS = 16;
+/** A room nobody is in is closed after this long (its owner may be reloading the page). */
+export const ROOM_EMPTY_MS = 30000;
+/** Dev servers keep one room open under this id for the tools (`?room=dev`). */
+export const DEV_ROOM_ID = 'dev';
+export const ROOM_TITLE_MAX = 24;
+export const ROOM_PIN_DIGITS = 4;
+export const CHAT_MAX = 160;
 
 export const ANIM = {
   idle: 0,
@@ -38,6 +63,8 @@ export const ANIM = {
   reach: 8,
   climb: 9,
   climbOver: 10,
+  /** Inside a portal: not drawn. */
+  portal: 11,
 } as const;
 export type AnimCode = (typeof ANIM)[keyof typeof ANIM];
 

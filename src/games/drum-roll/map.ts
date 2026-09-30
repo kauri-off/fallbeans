@@ -257,8 +257,11 @@ function rollerBridge(n = 10): Segment {
   };
 }
 
-export default defineMap(meta, (b, ctx) => {
-  b.style.pattern = 'dots';
-  const middle = pickSections(b.rng, [rotorDecks(1), pegDrums(3), rollerBridge(10), trampolineGap(), hammerBridges(2)], 3);
-  return raceCourse(b, ctx, { sections: withRests([drumStairs(), ...middle, logRun(5)]) });
-});
+export default defineMap(
+  meta,
+  (b, ctx) => {
+    const middle = pickSections(b.rng, [rotorDecks(1), pegDrums(3), rollerBridge(10), trampolineGap(), hammerBridges(2)], 3);
+    return raceCourse(b, ctx, { sections: withRests([drumStairs(), ...middle, logRun(5)]) });
+  },
+  ['circus', 'candy', 'royal'],
+);

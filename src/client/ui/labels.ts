@@ -1,3 +1,13 @@
+import { RAINBOW } from '../../shared/consts';
+
+const RAINBOW_CSS = 'linear-gradient(135deg, #ff5f5f, #ffb13f, #ffe53f, #4fdc6a, #3fa9ff, #a66bff)';
+
+/** A bean colour as a CSS background (colour dots, swatches, name tags). */
+export const colorBg = (c: string) => (c === RAINBOW ? RAINBOW_CSS : c);
+
+/** A bean colour as text on the dark chat panel (dark suits would not show). */
+export const colorInk = (c: string) => (c === RAINBOW ? '#ffb13f' : c === '#2b2b33' || c === '#8b5a2b' ? '#e0d6ff' : c);
+
 /** How the kill feed shows what knocked a bean off (collider tags and server causes). */
 export const CAUSES: Record<string, { icon: string; text: string }> = {
   hammer: { icon: '🔨', text: 'молот' },

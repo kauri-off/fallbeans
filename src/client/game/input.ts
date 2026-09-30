@@ -48,6 +48,8 @@ export class Input {
   onEscape: (() => void) | null = null;
   /** Spectating: switch to the previous (−1) or next (+1) player. */
   onCycle: ((dir: number) => void) | null = null;
+  /** Enter: the player wants to type a chat line. */
+  onChat: (() => void) | null = null;
   spectating = false;
   /** Debug/tests: replaces keyboard, mouse and gamepad while active (works with the menu open). */
   script: ScriptedInput | null = null;
@@ -112,6 +114,12 @@ export class Input {
     if (this.locked) document.exitPointerLock();
   }
 
+  /** Lets go of every held key and button (the keyboard goes elsewhere: the chat line). */
+  release() {
+    this.down.clear();
+    this.mouseGrab = false;
+  }
+
   private key(e: KeyboardEvent, isDown: boolean) {
     const target = e.target as HTMLElement | null;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
@@ -121,6 +129,11 @@ export class Input {
       return;
     }
     if (!this.enabled) return;
+    if (isDown && !e.repeat && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
+      e.preventDefault();
+      this.onChat?.();
+      return;
+    }
     if (this.spectating && isDown && !e.repeat) {
       if (e.code === 'ArrowLeft' || e.code === 'KeyQ' || e.code === 'KeyA') this.onCycle?.(-1);
       if (e.code === 'ArrowRight' || e.code === 'KeyE' || e.code === 'KeyD') this.onCycle?.(1);

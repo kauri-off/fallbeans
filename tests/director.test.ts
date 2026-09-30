@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getGame } from '../src/games';
-import { planGame, validPlaylist } from '../src/server/director';
+import { planGame, validPlaylist } from '../src/server/rooms/director';
 import { DEFAULT_PLAYLIST } from '../src/shared/protocol';
 import { mulberry32 } from '../src/shared/rng';
 

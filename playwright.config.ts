@@ -31,7 +31,7 @@ export default defineConfig({
   ],
   expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.015 } },
   webServer: {
-    // Built client served by the game server itself (no nginx), dev PIN 5050, WebTransport on udp/4434.
+    // Built client served by the game server itself (no nginx), dev commands on, WebTransport on udp/4434.
     command: `bun src/server/main.ts --dev --static dist/client --host 127.0.0.1 --port ${PORT} --wt-port 4434 --solo`,
     url: `http://127.0.0.1:${PORT}/fallbeans/health`,
     reuseExistingServer: false,

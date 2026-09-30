@@ -2,14 +2,13 @@
 # Installs a Fall Beans release on the host. Runs as root from an unpacked bundle made by
 # scripts/deploy.ts (release.tar.gz, fallbeans.service, nginx/ next to this script).
 #
-#   PIN_HASH_B64=…  optional: set/replace the PIN (argon2id hash, base64); rotates FB_SECRET,
-#                   which signs everyone out.
+#   DEBUG_KEY=…     optional: set/replace the key of the debug page.
 #
 # Layout:
 #   /opt/fallbeans/bin/bun                   Bun runtime (downloaded once from the official release)
 #   /opt/fallbeans/releases/<ts>             releases (www/fallbeans/ static site, server/)
 #   /opt/fallbeans/current → releases/<ts>   the live one
-#   /etc/fallbeans/env                       FB_SECRET, FB_PIN_HASH_B64 (root only)
+#   /etc/fallbeans/env                       FB_SECRET, FB_DEBUG_KEY (root only)
 #   /etc/nginx/apps.d/fallbeans.{http,conf,headers}   nginx (included by the shared site)
 #   /etc/systemd/system/fallbeans.service    service (DynamicUser, TLS via LoadCredential)
 # Nothing changes until the checks pass; a failed release rolls back to the previous one.
@@ -36,7 +35,6 @@ say "Проверки"
 [ "$(id -u)" = 0 ] || fail "запустите через sudo"
 [ -f release.tar.gz ] || fail "в пакете нет release.tar.gz"
 command -v nginx >/dev/null || fail "nginx не установлен"
-nginx -V 2>&1 | grep -q -- --with-http_auth_request_module || fail "в nginx нет модуля auth_request"
 [ -L /etc/nginx/sites-enabled/shared-site ] && [ -d $APPS ] ||
   fail "общий сайт nginx не установлен — сначала выложите SharedServer (node deploy.mjs)"
 grep -q "apps.d/\*.conf" /etc/nginx/sites-available/shared-site || fail "общий сайт не подключает /etc/nginx/apps.d/*.conf"
@@ -76,17 +74,11 @@ setvar() {
   install -m 600 "$tmp" $ENV_FILE
   rm -f "$tmp"
 }
-if [ -n "${PIN_HASH_B64:-}" ]; then
-  say "Новый PIN (все войдут заново)"
-  setvar FB_PIN_HASH_B64 "$PIN_HASH_B64"
-  setvar FB_SECRET "$(openssl rand -hex 32)"
-fi
 grep -q '^FB_SECRET=' $ENV_FILE || setvar FB_SECRET "$(openssl rand -hex 32)"
 if [ -n "${DEBUG_KEY:-}" ]; then
   say "Ключ страницы отладки обновлён"
   setvar FB_DEBUG_KEY "$DEBUG_KEY"
 fi
-grep -q '^FB_PIN_HASH_B64=' $ENV_FILE || fail "PIN не задан: bun run deploy -- --pin <цифры>"
 
 # ------------------------------------------------------------------ firewall
 
@@ -176,10 +168,10 @@ check() {
   printf '%-34s HTTP %s (ожидается %s)\n' "$1" "$got" "$3"
   [ "$got" = "$3" ] || status=1
 }
-check "Страница PIN" "https://$DOMAIN/fallbeans/pin/" 200
-check "Игра без PIN → на страницу PIN" "https://$DOMAIN/fallbeans/" 302
+check "Игра" "https://$DOMAIN/fallbeans/" 200
 check "Сервер игры" "https://$DOMAIN/fallbeans/health" 200
-check "Сессия без PIN" "https://$DOMAIN/fallbeans/api/session" 401
+check "Сессия" "https://$DOMAIN/fallbeans/api/session" 200
+check "Отладка без ключа" "https://$DOMAIN/fallbeans/api/debug/state" 403
 check "Сайт КиберЩита" "https://$DOMAIN/" 200
 if ss -Hlnup 'sport = :443' | grep -q .; then echo "WebTransport слушает udp/443"; else
   echo "ВНИМАНИЕ: udp/443 не слушается — WebTransport выключен, игра работает через WebSocket"

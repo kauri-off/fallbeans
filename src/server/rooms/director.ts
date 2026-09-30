@@ -1,7 +1,7 @@
-import { GAMES, getGame } from '../games';
-import type { GameMeta } from '../shared/game';
-import { type Playlist, ROUND_COUNTS } from '../shared/protocol';
-import { type Rng, shuffle } from '../shared/rng';
+import { GAMES, getGame } from '../../games';
+import type { GameMeta } from '../../shared/game';
+import { type Playlist, ROUND_COUNTS } from '../../shared/protocol';
+import { type Rng, shuffle } from '../../shared/rng';
 
 function poolFor(mode: Playlist['mode'], players: number): GameMeta[] {
   const fits = (g: GameMeta) => (g.minPlayers ?? 1) <= players;

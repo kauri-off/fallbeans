@@ -1,8 +1,8 @@
 import { useState } from 'preact/hooks';
-import { GAMES } from '../../games';
-import type { DevCmd } from '../../shared/protocol';
-import type { Game } from '../game/game';
-import { arenaInfo, debugOverlay, myId } from '../state';
+import { GAMES } from '../../../games';
+import type { DevCmd } from '../../../shared/protocol';
+import type { Game } from '../../game/game';
+import { arenaInfo, debugOverlay, myId } from '../../state';
 import { ProfilerPanel } from './ProfilerPanel';
 
 const RATES = [0, 0.1, 0.25, 0.5, 1, 2, 4];

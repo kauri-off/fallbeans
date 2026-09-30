@@ -86,12 +86,15 @@ function fork(): Segment {
   };
 }
 
-export default defineMap(meta, (b, ctx) => {
-  b.style.pattern = 'chevron';
-  const middle = pickSections(
-    b.rng,
-    [seesaws(3), conveyor(30), hammerBridges(3), tippingBridge(6), gloveAlley(4), movingPlatforms(4)],
-    4,
-  );
-  return raceCourse(b, ctx, { sections: withRests([fork(), ...middle, rotorDecks(1)]) });
-});
+export default defineMap(
+  meta,
+  (b, ctx) => {
+    const middle = pickSections(
+      b.rng,
+      [seesaws(3), conveyor(30), hammerBridges(3), tippingBridge(6), gloveAlley(4), movingPlatforms(4)],
+      4,
+    );
+    return raceCourse(b, ctx, { sections: withRests([fork(), ...middle, rotorDecks(1)]) });
+  },
+  ['factory', 'desert', 'lava'],
+);

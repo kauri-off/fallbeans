@@ -6,6 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import type { ResolvedLook } from '../../sim/looks';
 import { GpuTimer } from '../debug/gpuTimer';
 import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
@@ -63,8 +64,14 @@ const GradeShader = {
 
 const SKY_TOP = new THREE.Color('#6fb8ff');
 const SKY_HORIZON = new THREE.Color('#ffd9f2');
-/** High sun: shadows fall close under the beans, which helps judging jumps. */
+const SKY_CLOUD = new THREE.Color('#ffffff');
+const SUN_COLOR = new THREE.Color('#fff1dc');
+/**
+ * Towards the sun from what it lights (the map's look turns it; the length stays). High: shadows
+ * fall close under the beans, which helps judging jumps.
+ */
 export const SUN_OFFSET = new THREE.Vector3(9, 40, 7);
+const SUN_DISTANCE = SUN_OFFSET.length();
 
 /** Gradient sky with a slowly drifting layer of clouds and a soft sun glow. */
 function skyDome(time: { value: number }): THREE.Mesh {
@@ -76,13 +83,17 @@ function skyDome(time: { value: number }): THREE.Mesh {
     uniforms: {
       top: { value: SKY_TOP },
       horizon: { value: SKY_HORIZON },
+      cloudCol: { value: SKY_CLOUD },
+      sunCol: { value: SUN_COLOR },
+      stars: { value: 0 },
       sunDir: { value: SUN_OFFSET.clone().normalize() },
       time,
     },
     vertexShader:
       'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: `
-      uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir; uniform float time; varying vec3 vP;
+      uniform vec3 top; uniform vec3 horizon; uniform vec3 cloudCol; uniform vec3 sunCol; uniform float stars;
+      uniform vec3 sunDir; uniform float time; varying vec3 vP;
       float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float n2(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
         return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), u.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), u.x), u.y); }
@@ -92,14 +103,23 @@ function skyDome(time: { value: number }): THREE.Mesh {
         float h = clamp(d.y * 1.6 + 0.12, 0.0, 1.0);
         vec3 col = mix(horizon, top, pow(h, 0.8));
         float sd = max(dot(d, sunDir), 0.0);
-        col += vec3(1.0, 0.93, 0.8) * (pow(sd, 700.0) * 2.0 + pow(sd, 10.0) * 0.18);
+        col += sunCol * (pow(sd, 700.0) * 2.0 + pow(sd, 10.0) * 0.18);
+        if (stars > 0.0 && d.y > 0.0) {
+          // A still field of twinkling stars (night looks), fading towards the horizon.
+          vec3 q = d * 220.0;
+          vec3 cell = floor(q);
+          float s = h2(cell.xy + cell.z * 17.13);
+          float star = step(0.9965, s) * smoothstep(0.35, 0.05, length(fract(q) - 0.5));
+          star *= 0.6 + 0.4 * sin(time * (1.0 + s * 3.0) + s * 90.0);
+          col += vec3(1.0, 0.96, 0.9) * star * stars * smoothstep(0.0, 0.25, d.y);
+        }
         if (d.y > 0.0) {
           vec2 uv = d.xz / (d.y + 0.18) * 1.3;
           vec2 wind = vec2(time * 0.010, time * 0.004);
           float c = fbm(uv + wind) + 0.25 * fbm(uv * 3.1 - wind * 2.5);
           c = smoothstep(0.62, 0.95, c);
           float fade = smoothstep(0.02, 0.3, d.y);
-          vec3 cc = mix(vec3(1.0), horizon, 0.18) + vec3(1.0, 0.95, 0.85) * pow(sd, 4.0) * 0.25;
+          vec3 cc = mix(cloudCol, horizon, 0.18) + sunCol * pow(sd, 4.0) * 0.25;
           col = mix(col, cc, c * fade * 0.8);
         }
         gl_FragColor = vec4(col, 1.0);
@@ -135,11 +155,13 @@ function motes(time: { value: number }): THREE.Points {
       box: { value: new THREE.Vector3(box, box * 0.5, box) },
       center: { value: new THREE.Vector3() },
       px: { value: 1 },
+      rise: { value: 0.12 },
+      tint: { value: new THREE.Color('#fff7e0') },
     },
     vertexShader: `
-      attribute float seed; uniform float time; uniform vec3 box; uniform vec3 center; uniform float px; varying float vA;
+      attribute float seed; uniform float time; uniform vec3 box; uniform vec3 center; uniform float px; uniform float rise; varying float vA;
       void main(){
-        vec3 drift = vec3(sin(time * 0.3 + seed * 40.0) * 0.8 + time * 0.35, sin(time * 0.5 + seed * 17.0) * 0.6 + time * 0.12, cos(time * 0.27 + seed * 23.0) * 0.8);
+        vec3 drift = vec3(sin(time * 0.3 + seed * 40.0) * 0.8 + time * 0.35, sin(time * 0.5 + seed * 17.0) * 0.6 + time * rise * (0.7 + seed * 0.6), cos(time * 0.27 + seed * 23.0) * 0.8);
         vec3 p = mod(position + drift - center + box * 0.5, box) - box * 0.5 + center;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
@@ -148,8 +170,8 @@ function motes(time: { value: number }): THREE.Points {
         gl_PointSize = px * (0.8 + seed * 1.6) * 36.0 / max(d, 0.5);
       }`,
     fragmentShader: `
-      varying float vA;
-      void main(){ vec2 c = gl_PointCoord - 0.5; float r = dot(c, c); float a = smoothstep(0.25, 0.0, r) * vA; gl_FragColor = vec4(vec3(1.0, 0.97, 0.88) * a * 0.55, a); }`,
+      uniform vec3 tint; varying float vA;
+      void main(){ vec2 c = gl_PointCoord - 0.5; float r = dot(c, c); float a = smoothstep(0.25, 0.0, r) * vA; gl_FragColor = vec4(tint * a * 0.55, a); }`,
   });
   const p = new THREE.Points(g, mat);
   p.frustumCulled = false;
@@ -167,6 +189,10 @@ export class Renderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(70, 1, 0.25, 1100);
   readonly sun = new THREE.DirectionalLight('#fff1dc', 2.2);
+  readonly hemi = new THREE.HemisphereLight('#cfe8ff', '#b99be0', 0.9);
+  /** Saturation of the final grade (the look sets it). */
+  private saturation = 1.06;
+  private grade: ShaderPass | null = null;
   private composer: EffectComposer | null = null;
   private preset: Preset = PRESETS.high;
   quality: Quality = 'high';
@@ -201,7 +227,7 @@ export class Renderer {
     pmrem.dispose();
     this.scene.fog = new THREE.Fog(SKY_HORIZON.clone().lerp(SKY_TOP, 0.25), 120, 520);
     this.scene.add(this.sky, this.motes);
-    this.scene.add(new THREE.HemisphereLight('#cfe8ff', '#b99be0', 0.9));
+    this.scene.add(this.hemi);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0003;
     this.sun.shadow.normalBias = 0.035;
@@ -272,11 +298,46 @@ export class Renderer {
     }
     if (p.bloom) c.addPass(named(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97), 'bloom'));
     c.addPass(named(new OutputPass(), 'output'));
-    c.addPass(named(new ShaderPass(GradeShader), 'grade'));
+    this.grade = named(new ShaderPass(GradeShader), 'grade');
+    this.grade.uniforms.uSat!.value = this.saturation;
+    c.addPass(this.grade);
     if (fx.smaa) c.addPass(named(new SMAAPass(), 'smaa'));
     this.temporal = fx.temporal ? named(new TemporalPass(this.camera, () => scene.depth, w * pr, h * pr), 'temporal') : null;
     if (this.temporal) c.addPass(this.temporal);
     this.composer = c;
+  }
+
+  /**
+   * Lights and sky for a map's look: sky colours and stars, the sun's colour, strength and
+   * direction (the baked shadows follow it), ambient light, fog, exposure, the grade, the specks in the air.
+   */
+  applyLook(look: ResolvedLook) {
+    const sky = (this.sky.material as THREE.ShaderMaterial).uniforms;
+    SKY_TOP.set(look.sky.top);
+    SKY_HORIZON.set(look.sky.horizon);
+    SKY_CLOUD.set(look.sky.cloud);
+    SUN_COLOR.set(look.sun.color);
+    sky.stars!.value = look.sky.stars;
+    const az = THREE.MathUtils.degToRad(look.sun.azimuth);
+    const el = THREE.MathUtils.degToRad(look.sun.elevation);
+    SUN_OFFSET.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).multiplyScalar(SUN_DISTANCE);
+    (sky.sunDir!.value as THREE.Vector3).copy(SUN_OFFSET).normalize();
+    this.sun.color.set(look.sun.color);
+    this.sun.intensity = look.sun.intensity;
+    this.hemi.color.set(look.hemi.sky);
+    this.hemi.groundColor.set(look.hemi.ground);
+    this.hemi.intensity = look.hemi.intensity;
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.set(look.fog.color);
+    fog.near = look.fog.near;
+    fog.far = look.fog.far;
+    this.renderer.toneMappingExposure = look.exposure;
+    this.scene.environmentIntensity = look.env;
+    this.saturation = look.saturation;
+    if (this.grade) this.grade.uniforms.uSat!.value = look.saturation;
+    const motes = (this.motes.material as THREE.ShaderMaterial).uniforms;
+    (motes.tint!.value as THREE.Color).set(look.motes.color);
+    motes.rise!.value = look.motes.rise;
   }
 
   /** A camera cut: the previous frame is not reused by the temporal anti-aliasing. */

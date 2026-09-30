@@ -28,7 +28,7 @@ const num = (v: unknown, d = 1) => (typeof v === 'number' ? v.toFixed(d) : esc(v
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(API + path, { cache: 'no-store' });
   if (r.status === 403)
-    throw new Error('Нет доступа: откройте с этого компьютера (dev) или войдите по ключу: api/debug/login?key=…');
+    throw new Error('Нет доступа: откройте с компьютера сервера (dev) или войдите по ключу: api/debug/login?key=…');
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json() as Promise<T>;
 }
@@ -82,14 +82,14 @@ async function overview() {
         'макс мс': v.max,
       }));
       return `<section>
-        <h2>Комната ${r.room}${r.practice ? ' (тренировка)' : ''}: ${esc(r.phase)} · ${esc(a.game)} (${esc(a.kind)}) · тик ${esc(a.tick)} · t ${num(a.t)} с${
+        <h2>Комната ${r.room}${r.practice ? ' (тренировка)' : ` «${esc(r.title)}» [${esc(r.id)}]${r.private ? ' 🔒' : ''}`}: ${esc(r.phase)} · ${esc(a.game)} (${esc(a.kind)}) · тик ${esc(a.tick)} · t ${num(a.t)} с${
           Number(r.rate) !== 1 ? ` · время ×${esc(r.rate)}` : ''
         }</h2>
         <p class="muted">Нагрузка: ${esc((r.perf as Record<string, unknown>).load)}% ядра · ${esc((r.perf as Record<string, unknown>).msPerTick)} мс/тик · худшее обновление ${esc(
           (r.perf as Record<string, unknown>).worstUpdateMs,
         )} мс · seed ${esc(a.seed)}</p>
         <div class="grid2">
-          <div><h3>Игроки</h3>${table(r.players, ['id', 'name', 'bot', 'connected', 'via', 'rtt', 'score', 'spectator'])}</div>
+          <div><h3>Игроки (хост #${esc(r.host)})</h3>${table(r.players, ['id', 'name', 'bot', 'owner', 'connected', 'via', 'rtt', 'score', 'spectator'])}</div>
           <div><h3>Где тратится тик</h3>${table(prof)}</div>
         </div>
         <h3>Бобы</h3>${table(a.pawns, ['id', 'bot', 'status', 'pos', 'speed', 'state', 'grounded', 'progress', 'grabbing', 'lagTicks', 'queued', 'rejected'])}
@@ -157,7 +157,7 @@ async function trace() {
   const legend = ids.map((id, i) => `<span style="color:${colors[i % colors.length]}">■ #${esc(id)}</span>`).join(' ');
   const one = traceId ? (t.trace[traceId] ?? []) : [];
   view.innerHTML = `<div class="row">
-      <label>Комната <input id="troom" type="number" min="0" value="${traceRoom}" /></label>
+      <label>Комната № <input id="troom" type="number" min="0" value="${traceRoom}" /></label>
       <label>Боб <input id="tid" placeholder="все" value="${esc(traceId)}" /></label>
       <span class="muted">${esc(t.game)} · t ${num(t.t)} с · последние 20 с</span>
     </div>

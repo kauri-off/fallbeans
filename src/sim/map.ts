@@ -2,6 +2,7 @@ import type * as THREE from 'three';
 import type { GameMeta } from '../shared/game';
 import type { Rng } from '../shared/rng';
 import type { Builder } from './builder';
+import type { LookId } from './looks';
 import type { NavGrid, NavPoint } from './nav';
 import type { BodyInput, PlayerBody } from './physics';
 
@@ -106,6 +107,8 @@ export type BuildFn = (b: Builder, ctx: MapCtx) => MapSpec;
 export interface MapModule {
   meta: GameMeta;
   build: BuildFn;
+  /** Looks of the map (sim/looks.ts), its signature one first; none: the classic look. */
+  looks?: readonly LookId[];
 }
 
 /** Problems with a built map that would break a round (the audits check much more, offline). */
@@ -121,6 +124,6 @@ export function specProblems(spec: MapSpec): string[] {
   return out;
 }
 
-export function defineMap(meta: GameMeta, build: BuildFn): MapModule {
-  return { meta, build };
+export function defineMap(meta: GameMeta, build: BuildFn, looks?: readonly LookId[]): MapModule {
+  return looks ? { meta, build, looks } : { meta, build };
 }

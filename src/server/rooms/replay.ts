@@ -1,5 +1,5 @@
-import { getMap } from '../games';
-import { TICK_MS } from '../shared/consts';
+import { getMap } from '../../games';
+import { TICK_MS } from '../../shared/consts';
 import { type ArenaHooks, type Recording, ServerArena } from './arena';
 
 /**

@@ -43,18 +43,24 @@ export function updateSettings(patch: Partial<Settings>) {
   settings.value = { ...settings.value, ...patch };
 }
 
-/** Per-tab session storage (resume token), never required to work. */
-export const session = {
-  get(key: string): string | null {
+/**
+ * The player's identity token from the server, one per browser: every tab is the same player (a
+ * second tab takes over from the first), so a player is in one room at a time and their own room
+ * stays theirs across reloads. Never required to work: without storage every connection is a new player.
+ * Development: `?profile=b` keeps a separate identity, to play against oneself in two tabs.
+ */
+const ID_KEY = `fb_id${import.meta.env.DEV ? (new URLSearchParams(location.search).get('profile') ?? '') : ''}`;
+export const identity = {
+  get(): string | null {
     try {
-      return sessionStorage.getItem(key);
+      return localStorage.getItem(ID_KEY);
     } catch {
       return null;
     }
   },
-  set(key: string, value: string) {
+  set(token: string) {
     try {
-      sessionStorage.setItem(key, value);
+      localStorage.setItem(ID_KEY, token);
     } catch {}
   },
 };

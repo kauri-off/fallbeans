@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
-import type { Game } from '../game/game';
+import type { Game } from '../../game/game';
+import { colorBg } from '../labels';
 
 /**
  * Name tags over the beans as HTML, positioned every frame. Drawn outside the 3D scene, they stay
@@ -28,7 +29,10 @@ export function Tags({ game }: { game: Game }) {
         const dot = el.firstChild as HTMLElement;
         const label = el.lastChild as HTMLElement;
         if (label.textContent !== p.name) label.textContent = p.name;
-        if (dot.style.background !== p.color) dot.style.background = p.color;
+        if (el.dataset.color !== p.color) {
+          el.dataset.color = p.color;
+          dot.style.background = colorBg(p.color);
+        }
         const s = Math.max(0.55, Math.min(1, 14 / p.d));
         el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) translate(-50%, -100%) scale(${s.toFixed(3)})`;
         el.style.opacity = p.d > 60 ? '0' : p.d > 40 ? String((60 - p.d) / 20) : '1';

@@ -6,14 +6,15 @@ import { ClientReportSchema, MAX_REPORT_BYTES } from '../shared/debug';
 import { type Auth, DEBUG_COOKIE, debugCookieHeader, readCookie, sameKey } from './auth';
 import type { Config } from './config';
 import type { Diagnostics } from './diag';
-import type { Gateway } from './gateway';
-import type { Logger } from './room';
+import type { Logger } from './log';
+import type { Gateway } from './net/gateway';
+import { roomState, roomTrace } from './rooms/roomDebug';
 
 /**
  * Client error reports (POST api/report) and the read-only debug API (GET api/debug/…), used by
  * the /fallbeans/debug/ page and by tools (curl, Claude). Access to the debug API:
- *   dev server: from this machine (or with the PIN cookie);
- *   production: PIN cookie + debug cookie, earned once with api/debug/login?key=FB_DEBUG_KEY.
+ *   dev server: from this machine;
+ *   production: the debug cookie, earned once with api/debug/login?key=FB_DEBUG_KEY.
  * Any endpoint takes ?format=text for a compact plain-text answer.
  */
 
@@ -23,7 +24,6 @@ export interface DebugCtx {
   gateway: Gateway;
   diag: Diagnostics;
   log: Logger;
-  authed(req: Request): boolean;
   sameOrigin(req: Request): boolean;
   clientIp: string;
 }
@@ -95,8 +95,8 @@ function respond(data: unknown, url: URL, status = 200): Response {
 }
 
 export function debugAllowed(req: Request, ctx: DebugCtx): boolean {
-  if (ctx.cfg.dev) return LOOPBACK.has(ctx.clientIp) || ctx.authed(req);
-  if (!ctx.cfg.debugKey || !ctx.authed(req)) return false;
+  if (ctx.cfg.dev && LOOPBACK.has(ctx.clientIp)) return true;
+  if (!ctx.cfg.debugKey) return false;
   return ctx.auth.validDebugCookie(readCookie(req.headers.get('cookie'), DEBUG_COOKIE));
 }
 
@@ -104,7 +104,6 @@ export function debugAllowed(req: Request, ctx: DebugCtx): boolean {
 export async function handleReport(req: Request, ctx: DebugCtx): Promise<Response> {
   const json = (d: unknown, status = 200) => Response.json(d, { status, headers: { 'Cache-Control': 'no-store' } });
   if (!ctx.sameOrigin(req)) return json({ ok: false }, 403);
-  if (!ctx.authed(req)) return json({ ok: false }, 401);
   const body = await req.text();
   if (body.length > MAX_REPORT_BYTES) return json({ ok: false, error: 'too_large' }, 413);
   let data: unknown;
@@ -137,7 +136,7 @@ export async function handleDebug(path: string, req: Request, ctx: DebugCtx): Pr
   if (what === 'login') {
     const key = url.searchParams.get('key') ?? '';
     const secure = ctx.cfg.trustProxy;
-    if (!ctx.authed(req)) return Response.redirect(`${BASE_PATH}pin/`, 302);
+    if (!ctx.auth.allowAttempt(ctx.clientIp)) return new Response('too many attempts', { status: 429 });
     if (!ctx.cfg.debugKey || !sameKey(key, ctx.cfg.debugKey)) {
       ctx.log.warn('bad debug key', { ip: ctx.clientIp });
       return new Response('wrong key', { status: 403 });
@@ -151,10 +150,12 @@ export async function handleDebug(path: string, req: Request, ctx: DebugCtx): Pr
     return respond({ ok: false, error: ctx.cfg.dev || ctx.cfg.debugKey ? 'forbidden' : 'debug API is off' }, url, 403);
 
   const rooms = ctx.gateway.rooms;
+  /** ?room= a room id, or its number in the state listing (default: the first room). */
   const roomAt = () => {
-    const i = Number(url.searchParams.get('room') ?? 0);
-    return rooms[Number.isInteger(i) ? i : 0] ?? ctx.gateway.main;
+    const q = url.searchParams.get('room') ?? '0';
+    return ctx.gateway.hub.rooms.get(q) ?? rooms[Number(q)] ?? rooms[0];
   };
+  const noRoom = () => respond({ ok: false, error: 'no rooms are open' }, url, 404);
   switch (what) {
     case 'state': {
       const h = ctx.diag.health.at(-1) ?? null;
@@ -172,7 +173,7 @@ export async function handleDebug(path: string, req: Request, ctx: DebugCtx): Pr
             reports: ctx.diag.reports.length,
             warnings: ctx.diag.lines.filter((l) => l.level === 'warn').length,
           },
-          rooms: rooms.map((r, i) => ({ room: i, ...r.debugState() })),
+          rooms: rooms.map((r, i) => ({ room: i, ...roomState(r) })),
         },
         url,
       );
@@ -189,11 +190,13 @@ export async function handleDebug(path: string, req: Request, ctx: DebugCtx): Pr
     case 'trace': {
       const id = url.searchParams.get('id');
       const s = Number(url.searchParams.get('s') ?? 10);
-      return respond(roomAt().debugTrace(id === null ? undefined : Number(id), Math.min(30, Math.max(1, s))), url);
+      const room = roomAt();
+      if (!room) return noRoom();
+      return respond(roomTrace(room, id === null ? undefined : Number(id), Math.min(30, Math.max(1, s))), url);
     }
     case 'replay': {
       const which = url.searchParams.get('i') ?? 'current';
-      const rec = roomAt().debugReplay(which === 'current' ? 'current' : Number(which));
+      const rec = roomAt()?.debugReplay(which === 'current' ? 'current' : Number(which));
       if (!rec) return respond({ ok: false, error: 'no recording (dev rooms record rounds)' }, url, 404);
       return Response.json(rec, {
         headers: { 'Cache-Control': 'no-store', 'Content-Disposition': `inline; filename="${rec.game}-${rec.seed}.json"` },

@@ -393,10 +393,14 @@ export interface OtherBody {
 
 /**
  * normal · stun (short daze) · dive → slide (belly slide) · tumble (knocked over: the body tips over,
- * slides and rolls with little control) → getup · climb (caught a ledge in the air, pulling up onto it).
+ * slides and rolls with little control) → getup · climb (caught a ledge in the air, pulling up onto it) ·
+ * portal (inside a portal: out of sight, travelling to the other end, touching nothing).
  */
-export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup' | 'climb';
-export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide', 'tumble', 'getup', 'climb'];
+export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup' | 'climb' | 'portal';
+export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide', 'tumble', 'getup', 'climb', 'portal'];
+
+/** Seconds a trip through a portal takes. */
+export const PORTAL_T = 0.5;
 
 /** Lying down: the tilt a tumbling body settles at (a little under 90°). */
 const LIE = 1.4;
@@ -502,8 +506,10 @@ export class PlayerBody {
   bumped = 0;
   /** Tag of a hazard touched from the side during the last step. */
   hazard: string | null = null;
-  /** Went through a portal this step. */
-  warped = false;
+  /** Stepped into a portal this step. */
+  portalIn = false;
+  /** Came out of a portal this step. */
+  portalOut = false;
   /** Bonus in effect (POWER) and the sim time it wears off. */
   power: number = POWER.none;
   powerUntil = -1e9;
@@ -602,17 +608,43 @@ export class PlayerBody {
     return sphereAt(this.pos, this.tilt, this.tiltDir, this.size, i, out);
   }
 
-  /** Through a portal: out at `p`, facing `yaw`, keeping (at least `minSpeed` of) the speed. */
-  warp(p: THREE.Vector3, yaw: number, minSpeed = 6) {
+  /**
+   * Into a portal: for PORTAL_T the body is out of play, gliding to the exit `p` (so the camera
+   * follows it there), then comes out facing `yaw` with (at least `minSpeed` of) its speed.
+   * The exit is kept in climbTo, which travels with the full state (client prediction).
+   */
+  enterPortal(p: THREE.Vector3, yaw: number, minSpeed = 6) {
+    if (this.state === 'portal') return;
     const sp = Math.max(minSpeed, Math.hypot(this.vel.x, this.vel.z));
-    this.pos.copy(p);
+    this.climbTo.copy(p);
     this.vel.set(Math.sin(yaw) * sp, Math.max(this.vel.y, 3), Math.cos(yaw) * sp);
     this.yaw = yaw;
+    this.state = 'portal';
+    this.stateT = PORTAL_T;
+    this.tilt = 0;
     this.grounded = false;
     this.groundCol = null;
     this.carryCol = null;
     this.hasGroundLocal = false;
-    this.warped = true;
+    this.portalIn = true;
+  }
+
+  /** In the portal: a straight glide to the exit, arriving when the time is up. */
+  private portalStep(dt: number) {
+    if (this.stateT <= dt + 1e-9) {
+      this.pos.copy(this.climbTo);
+      this.state = 'normal';
+      this.stateT = 0;
+      this.portalOut = true;
+      return;
+    }
+    this.pos.lerp(this.climbTo, dt / this.stateT);
+    this.stateT -= dt;
+  }
+
+  /** Inside a portal: not drawn, not touched, not grabbed. */
+  get inPortal() {
+    return this.state === 'portal';
   }
 
   /** Before moving the world: remember where we stand on the ground collider. */
@@ -648,7 +680,8 @@ export class PlayerBody {
     this.knocked = false;
     this.bumped = 0;
     this.hazard = null;
-    this.warped = false;
+    this.portalIn = false;
+    this.portalOut = false;
   }
 
   /** Velocity of the ground under the feet (moving platforms, drums); zero on static ground. */
@@ -678,6 +711,7 @@ export class PlayerBody {
   }
 
   step(dt: number, input: BodyInput, world: CollisionWorld, t: number, others: readonly OtherBody[] = []) {
+    if (this.state === 'portal') return this.portalStep(dt);
     if (this.power !== POWER.none && t >= this.powerUntil) this.power = POWER.none;
     const pw = this.power;
     this.size = pw === POWER.giant ? GIANT_SIZE : 1;

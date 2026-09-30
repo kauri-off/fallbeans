@@ -1,4 +1,9 @@
-import type { Logger } from './room';
+export interface Logger {
+  info(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+}
+
+export const NOOP_LOG: Logger = { info() {}, warn() {} };
 
 export function createLogger(pretty: boolean): Logger {
   const out = (level: string, msg: string, data?: Record<string, unknown>) => {

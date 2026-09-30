@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { COLORS, EMOTES, NAME_MAX } from './consts';
+import { CHAT_MAX, COLORS, EMOTES, NAME_MAX, ROOM_PIN_DIGITS, ROOM_TITLE_MAX } from './consts';
 import type { ArenaKind } from './game';
 
 /**
@@ -20,12 +20,21 @@ export const PlaylistSchema = z.object({
 export type Playlist = z.infer<typeof PlaylistSchema>;
 export const DEFAULT_PLAYLIST: Playlist = { mode: 'mix', games: [], rounds: 5 };
 
+/** Room ids: short codes, as in a link to the room (`?room=k7qxm`). */
+const RoomId = z.string().regex(/^[a-z0-9]{2,8}$/);
+/** PIN of a private room (its host sees it in the menu). */
+const RoomPin = z.string().regex(new RegExp(`^\\d{${ROOM_PIN_DIGITS}}$`));
+
 export const HelloSchema = z.object({
   t: z.literal('hello'),
   v: z.number().int(),
   name: z.string().max(64),
   ticket: z.string().max(256),
-  token: z.string().max(64).optional(),
+  /** The player's identity from an earlier visit (see `ready`); without it the server makes a new one. */
+  token: z.string().max(128).optional(),
+  /** Go straight into this room (a link to it, a page reload, a reconnect). */
+  room: RoomId.optional(),
+  pin: RoomPin.optional(),
   practice: z.string().max(32).optional(),
 });
 export type Hello = z.infer<typeof HelloSchema>;
@@ -34,7 +43,7 @@ const Vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finit
 
 /**
  * Development commands (accepted only by a server started with --dev). `id` defaults to the sender.
- * See DevCmd handling in server/room.ts, and window.__fallbeans.dev() in the client.
+ * See DevCmd handling in server/rooms/room.ts, and window.__fallbeans.dev() in the client.
  */
 export const DevCmdSchema = z.discriminatedUnion('c', [
   /** Jump to the start of the round (fast-forwards through the intro). */
@@ -86,6 +95,12 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   HelloSchema,
   z.object({ t: z.literal('ping'), c: z.number().finite(), rtt: z.number().min(0).max(60000).optional() }),
   z.object({ t: z.literal('name'), name: z.string().max(64) }),
+  /** From the room list: open a room of one's own (each player has at most one) and enter it. */
+  z.object({ t: z.literal('create'), title: z.string().max(64), private: z.boolean() }),
+  /** From the room list: enter a room; a private one wants its PIN from those it has not let in before. */
+  z.object({ t: z.literal('join'), room: RoomId, pin: RoomPin.optional() }),
+  /** Back to the room list. */
+  z.object({ t: z.literal('leave') }),
   z.object({ t: z.literal('color'), c: z.enum(COLORS) }),
   z.object({ t: z.literal('start') }),
   z.object({ t: z.literal('abort') }),
@@ -94,7 +109,13 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('removeBot'), id: PlayerId }),
   /** The host makes another player the host. */
   z.object({ t: z.literal('host'), id: PlayerId }),
+  /** The host makes the room private (the server picks a PIN) or public. */
+  z.object({ t: z.literal('access'), private: z.boolean() }),
+  /** The host has the empty places of the lobby filled with bots. */
+  z.object({ t: z.literal('fill'), on: z.boolean() }),
   z.object({ t: z.literal('emote'), e: z.number().int().min(1).max(EMOTES) }),
+  /** A line for the room's chat. */
+  z.object({ t: z.literal('chat'), text: z.string().max(CHAT_MAX * 2) }),
   z.object({ t: z.literal('dev'), q: z.number().int().min(0).optional(), cmd: DevCmdSchema }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsgSchema>;
@@ -109,7 +130,43 @@ export function sanitizeName(raw: string): string {
     .slice(0, NAME_MAX);
 }
 
+export function sanitizeTitle(raw: string): string {
+  return raw
+    .replace(/[\p{C}<>]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, ROOM_TITLE_MAX);
+}
+
+/** A chat line as the room passes it on: one line, no control characters, at most CHAT_MAX characters. */
+export function sanitizeChat(raw: string): string {
+  const text = raw
+    .replace(/\p{Cc}+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return [...text].slice(0, CHAT_MAX).join('');
+}
+
 export type Phase = 'lobby' | 'round' | 'results' | 'podium';
+
+/** A room as its members know it. */
+export interface RoomRef {
+  /** '' for a practice room (not in the list). */
+  id: string;
+  title: string;
+  private: boolean;
+}
+
+/** A room in the list on the home screen. */
+export interface RoomInfo extends RoomRef {
+  /** Name of the current host. */
+  host: string;
+  /** People in the room (bots are counted apart). */
+  players: number;
+  bots: number;
+  max: number;
+  phase: Phase;
+}
 
 export interface LobbyPlayer {
   id: number;
@@ -192,10 +249,33 @@ export interface Award {
 export type KoCause = string;
 
 export type ServerMsg =
-  | { t: 'welcome'; id: number; token: string; solo: boolean; practice: boolean; resumed: boolean; dev: boolean }
-  | { t: 'reject'; reason: 'full' | 'version' | 'auth' | 'bad' | 'busy'; msg: string }
+  /** The hello was accepted: `token` is the player's identity, to be sent with every later hello. */
+  | { t: 'ready'; token: string; dev: boolean }
+  /** The connection is refused and closed (`moved`: the player opened the game in another tab). */
+  | { t: 'reject'; reason: 'version' | 'auth' | 'bad' | 'busy' | 'moved'; msg: string }
   | { t: 'pong'; c: number; s: number }
-  | { t: 'lobby'; phase: Phase; host: number | null; min: number; max: number; players: LobbyPlayer[]; playlist: Playlist }
+  /** The room list, sent while the player is in no room; `mine` is the room they created, if it still exists. */
+  | { t: 'rooms'; rooms: RoomInfo[]; mine: string | null }
+  /** Creating or entering a room failed (`pin` with an empty msg: the room asks for its PIN). */
+  | { t: 'denied'; room: string | null; reason: 'pin' | 'full' | 'gone' | 'limit'; msg: string }
+  /** The player is out of the room, back at the room list. */
+  | { t: 'home'; msg: string }
+  /** Entered a room (`id` is the player's id there); its lobby and arena follow. */
+  | { t: 'welcome'; id: number; room: string; solo: boolean; practice: boolean; resumed: boolean }
+  | {
+      t: 'lobby';
+      room: RoomRef;
+      phase: Phase;
+      host: number | null;
+      min: number;
+      max: number;
+      players: LobbyPlayer[];
+      playlist: Playlist;
+      /** Empty places are filled with bots. */
+      fill: boolean;
+      /** PIN of a private room: only the host is told. */
+      pin: string | null;
+    }
   | ({ t: 'arena' } & ArenaInfo)
   | { t: 'roundEnd'; game: string; index: number; total: number; rows: RoundRow[]; practice: boolean }
   | { t: 'gameEnd'; standings: Standing[]; awards: Award[] }
@@ -205,6 +285,7 @@ export type ServerMsg =
   | { t: 'ev'; n: string; d: unknown }
   | { t: 'scores'; s: [number, number][] }
   | { t: 'emote'; id: number; e: number }
+  | { t: 'chat'; id: number; name: string; text: string }
   | { t: 'left'; id: number }
   /** Reply to a dev command (`q` echoes the request's). */
   | { t: 'devAck'; q: number | null; ok: boolean; msg: string }
