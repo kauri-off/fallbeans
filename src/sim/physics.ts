@@ -454,8 +454,12 @@ const AIR_ACCEL = 24;
 /** Largest move per collision substep, as a share of the bean's radius (see PlayerBody.step). */
 const SUBSTEP_REACH = 0.6;
 const MAX_SUBSTEPS = 8;
+/** Moving ground tipping under the feet (a drum): firm up to STEEP_FROM (n.y), then the feet slip downhill, up to STEEP_SLIP m/s. */
+const STEEP_FROM = 0.77;
+const STEEP_SLIP = 7;
 
 const _gv = new THREE.Vector3();
+const _gv2 = new THREE.Vector3();
 const hitInfo: Contact = { local: new THREE.Vector3(), point: new THREE.Vector3(), normal: new THREE.Vector3(), depth: 0 };
 const nearby: Collider[] = [];
 const probe: Collider[] = [];
@@ -502,6 +506,11 @@ export function pushOut(world: CollisionWorld, pos: THREE.Vector3, tilt = 0, til
 /** Solid ground a hand can hold on to: no hazards, pads, bumpers, ice or triggers. */
 function holdable(c: Collider) {
   return c.enabled && c.isStatic && !c.trigger && !c.hit && !c.tag && !c.sweep && !c.bounce && !c.pad && c.slip < 0.5;
+}
+
+/** A moving platform the body rides on (its motion carries over); not a hazard like a rotor arm or a hammer. */
+function rides(c: Collider | null): c is Collider {
+  return !!c && !c.isStatic && c.enabled && !c.hit && !c.tag;
 }
 
 export class PlayerBody {
@@ -718,7 +727,7 @@ export class PlayerBody {
     out.set(0, 0, 0);
     const c = this.groundCol;
     // Platforms only: standing on a hazard (a rotor arm, a hammer) must not fling you off with it.
-    if (!c || c.isStatic || !c.enabled || c.hit || c.tag) return out;
+    if (!rides(c)) return out;
     _l.copy(this.pos).applyMatrix4(c.inv);
     c.surfaceVelocity(_l, dt, out);
     const l = out.length();
@@ -965,6 +974,14 @@ export class PlayerBody {
         if (!any) break;
       }
     }
+    // Over the curve of a moving surface (a drum) the feet stay on it instead of skipping off every tick.
+    if (g && !this.grounded && !this.jumped && this.state !== 'dive' && this.vel.y < 1 && rides(this.groundCol)) {
+      const col = this.snapDown(world, r, dt);
+      if (col) {
+        this.grounded = true;
+        newGround = col;
+      }
+    }
 
     if (
       stateBefore === 'normal' &&
@@ -1029,16 +1046,33 @@ export class PlayerBody {
       }
     }
 
+    const oldGround = this.groundCol;
     this.groundCol = newGround;
-    // Walked (or got pushed) off a moving surface: keep its motion.
-    if (g && !this.grounded && !this.jumped && this.state !== 'dive') {
+    // On the ground the velocity is relative to it (the ride itself is applied in afterWorldUpdate).
+    const relOld = g && !this.jumped && this.state !== 'dive';
+    if (relOld && !this.grounded) {
+      // Walked (or got pushed) off a moving surface: keep its motion.
       this.vel.x += platV.x;
       this.vel.z += platV.z;
       this.vel.y += Math.max(0, platV.y);
+    } else if (this.grounded && newGround !== oldGround) {
+      // Landed on (or stepped onto) a moving surface: from now on relative to it.
+      this.groundVelocity(dt, _gv2);
+      this.vel.x += (relOld ? platV.x : 0) - _gv2.x;
+      this.vel.z += (relOld ? platV.z : 0) - _gv2.z;
     }
     if (this.grounded) {
       this.vel.y = Math.max(this.vel.y, 0);
       if (newGround?.conveyor) this.pos.addScaledVector(newGround.conveyor, dt);
+      // Moving ground tipping steeply under the feet slips away beneath them: a slide downhill, not a ride up the wall.
+      if (rides(newGround) && groundN.y < STEEP_FROM && groundN.y > 0) {
+        const k = Math.min(1, (STEEP_FROM - groundN.y) / (STEEP_FROM - 0.55));
+        const s = Math.sqrt(1 - groundN.y * groundN.y);
+        const d = (STEEP_SLIP * k * dt) / s;
+        this.pos.x += groundN.x * groundN.y * d;
+        this.pos.y += (groundN.y * groundN.y - 1) * d;
+        this.pos.z += groundN.z * groundN.y * d;
+      }
       // On ice (and when tumbling) gravity pulls the bean down the slope.
       const slide = Math.max((newGround?.slip ?? 0) * 1.3, this.state === 'tumble' ? 0.6 : 0);
       if (slide > 0 && groundN.y > 0) {
@@ -1066,6 +1100,33 @@ export class PlayerBody {
     const h = Math.hypot(n.x, n.z);
     if (l < 0.3 || h < 1e-3) return 0;
     return -(input.mx * n.x + input.mz * n.z) / (l * h);
+  }
+
+  /** Ground within a short drop below the feet: the body is set down on it (straight down) and it is returned. */
+  private snapDown(world: CollisionWorld, r: number, dt: number): Collider | null {
+    const reach = Math.min(0.3, 0.05 + Math.hypot(this.vel.x, this.vel.z) * dt * 1.5) * this.size;
+    const y0 = this.pos.y;
+    this.pos.y -= reach;
+    this.sphere(0, _c);
+    let best: Collider | null = null;
+    let lift = 0;
+    for (const col of world.query(this.pos.x, this.pos.z, r + 0.5, probe)) {
+      if (!col.enabled || col.trigger || col.bounce || col.pad) continue;
+      if (!col.contact(_c, r, hitInfo) || hitInfo.normal.y <= 0.55) continue;
+      const up = hitInfo.depth / hitInfo.normal.y;
+      if (up > lift) {
+        lift = up;
+        best = col;
+        groundN.copy(hitInfo.normal);
+      }
+    }
+    if (!best) {
+      this.pos.y = y0;
+      return null;
+    }
+    this.pos.y = Math.min(y0, this.pos.y + lift);
+    this.vel.y = Math.max(this.vel.y, 0);
+    return best;
   }
 
   /** Room for the upright body with its feet at (x, y, z)? */
