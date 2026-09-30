@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import { getGame } from '../../../games';
 import { BASE_PATH, COLORS } from '../../../shared/consts';
 import type { Game } from '../../game/game';
+import { settings } from '../../settings';
 import { arenaInfo, lobby, myId, practiceGame } from '../../state';
 import { colorBg } from '../labels';
 import { NameForm, PracticeList } from '../shared';
@@ -34,8 +35,9 @@ export function RoomTab({ game }: { game: Game }) {
     );
   }
 
-  const profile = (
-    <div class="group stack">
+  const center = settings.value.menuLayout === 'center';
+  const swatches = (
+    <>
       <NameForm game={game} />
       {inLobby && (
         <div class="swatches">
@@ -55,8 +57,10 @@ export function RoomTab({ game }: { game: Game }) {
           })}
         </div>
       )}
-    </div>
+    </>
   );
+  // (In the middle panel the name and colour are a box of their own.)
+  const profile = center ? <div class="group stack">{swatches}</div> : swatches;
 
   if (!inLobby)
     return (
@@ -78,53 +82,69 @@ export function RoomTab({ game }: { game: Game }) {
       </div>
     );
 
-  return (
-    <div class="room-grid">
-      <div class="stack">
-        <h3>
-          Игроки: {l.players.length} из {l.max}
-        </h3>
-        <ul class="players">
-          {l.players.map((p) => (
-            <li key={p.id} class={p.connected ? '' : 'dim'}>
-              <i class="dot" style={{ background: colorBg(p.color) }} />
-              <span class="grow">
-                {p.name}
-                {p.id === me && ' (вы)'}
-              </span>
-              {p.id === l.host && <span title="Хост">⭐</span>}
-              {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
-              {p.bot ? (
-                // (With "fill with bots" on, a bot taken out would be replaced at once.)
-                isHost &&
-                !l.fill && (
-                  <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
-                    ✕
+  const players = (
+    <>
+      <h3>
+        Игроки: {l.players.length} из {l.max}
+      </h3>
+      <ul class="players">
+        {l.players.map((p) => (
+          <li key={p.id} class={p.connected ? '' : 'dim'}>
+            <i class="dot" style={{ background: colorBg(p.color) }} />
+            <span class="grow">
+              {p.name}
+              {p.id === me && ' (вы)'}
+            </span>
+            {p.id === l.host && <span title="Хост">⭐</span>}
+            {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
+            {p.bot ? (
+              // (With "fill with bots" on, a bot taken out would be replaced at once.)
+              isHost &&
+              !l.fill && (
+                <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
+                  ✕
+                </button>
+              )
+            ) : (
+              <>
+                {isHost && p.id !== me && p.connected && (
+                  <button
+                    type="button"
+                    class="btn tiny"
+                    title="Передать роль хоста этому игроку"
+                    onClick={() => send({ t: 'host', id: p.id })}
+                  >
+                    Отдать хоста
                   </button>
-                )
-              ) : (
-                <>
-                  {isHost && p.id !== me && p.connected && (
-                    <button
-                      type="button"
-                      class="btn tiny"
-                      title="Передать роль хоста этому игроку"
-                      onClick={() => send({ t: 'host', id: p.id })}
-                    >
-                      Отдать хоста
-                    </button>
-                  )}
-                  <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>
+                )}
+                <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+  const setup = isHost ? <HostSetup game={game} /> : <p class="muted">Игру запускает хост ⭐</p>;
+
+  // Beside the player panel: one column. In the middle: players on the left, the rest on the right.
+  if (!center)
+    return (
       <div class="stack">
         <RoomHead game={game} />
         {profile}
-        {isHost ? <HostSetup game={game} /> : <p class="muted">Игру запускает хост ⭐</p>}
+        {players}
+        {setup}
+        <PracticeList />
+      </div>
+    );
+  return (
+    <div class="room-grid">
+      <div class="stack">{players}</div>
+      <div class="stack">
+        <RoomHead game={game} />
+        {profile}
+        {setup}
         <PracticeList />
       </div>
     </div>

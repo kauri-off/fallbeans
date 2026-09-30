@@ -1,8 +1,12 @@
 import { effect, signal } from '@preact/signals';
 import type { Quality } from './game/renderer';
 
+/** Esc menu layout: a column beside the player panel (the game stays in view), or a wide panel in the middle. */
+export type MenuLayout = 'side' | 'center';
+
 export interface Settings {
   name: string;
+  menuLayout: MenuLayout;
   sensitivity: number;
   invertY: boolean;
   fov: number;
@@ -14,6 +18,7 @@ export interface Settings {
 const KEY = 'fb_settings';
 const DEFAULTS: Settings = {
   name: '',
+  menuLayout: 'side',
   sensitivity: 1,
   invertY: false,
   fov: 70,
