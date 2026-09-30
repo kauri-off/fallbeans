@@ -10,14 +10,16 @@ import meta from './meta';
 const PLATE = 3.6;
 const GAP = 0.25;
 const N = 9;
-/** Warning (shaking, blinking) before a plate drops, and how fast it falls away. */
+/** Warning (shaking, reddening) before a plate drops, and how fast it falls away. */
 const WARN = 1.1;
 const DROP = 48;
+const TINT_STEPS = 24;
 
 interface Plate {
   x: number;
   z: number;
   fallAt: number;
+  pal: Palette;
   obj: THREE.Object3D;
   col: Collider;
 }
@@ -39,8 +41,9 @@ export default defineMap(
         const z = (k - half) * (PLATE + GAP);
         if (Math.hypot(x, z) > (half + 0.6) * (PLATE + GAP)) continue;
         if (i === half && k === half) continue;
-        const p = b.box(x, -0.5, z, PLATE, 1, PLATE, pals[(i + k) % pals.length]!, { dynamic: true });
-        plates.push({ x, z, fallAt: Number.POSITIVE_INFINITY, obj: p.obj, col: p.col });
+        const pal = pals[(i + k) % pals.length]!;
+        const p = b.box(x, -0.5, z, PLATE, 1, PLATE, pal, { dynamic: true });
+        plates.push({ x, z, fallAt: Number.POSITIVE_INFINITY, pal, obj: p.obj, col: p.col });
       }
     // The centre never falls: it carries the pillar with the beams.
     b.box(0, -0.5, 0, PLATE, 1, PLATE, PAL.yellow);
@@ -78,14 +81,27 @@ export default defineMap(
       }
     });
     if (b.view) {
-      const warnMat = b.view.plain('#ff6070', { emissive: new THREE.Color('#ff2040'), emissiveIntensity: 0.35 });
-      const normal = new Map(plates.map((p) => [p, p.obj instanceof THREE.Mesh ? p.obj.material : null]));
+      // A steady one-way tint toward red instead of blinking (photosensitivity: no flashes).
+      const view = b.view;
+      const warn = new THREE.Color('#ff4a3a');
+      const c = new THREE.Color();
+      const tint = (hex: string, k: number) => `#${c.set(hex).lerp(warn, k).getHexString()}`;
+      const ramps = new Map(
+        pals.map((pal) => {
+          const [c1, c2] = b.pal(pal) as Palette;
+          const steps = Array.from({ length: TINT_STEPS + 1 }, (_, i) => {
+            const k = (0.8 * i) / TINT_STEPS;
+            return view.material([tint(c1, k), tint(c2, k)], undefined, 'plastic', b.style.pattern);
+          });
+          return [pal, steps] as const;
+        }),
+      );
       b.anim((t) => {
         for (const p of plates) {
           if (!(p.obj instanceof THREE.Mesh)) continue;
-          const left = p.fallAt - t;
-          const blink = left < WARN && left > 0 && Math.sin(t * (14 + (WARN - left) * 16)) > 0;
-          p.obj.material = blink ? warnMat : (normal.get(p) ?? p.obj.material);
+          const u = Math.min(1, Math.max(0, 1 - (p.fallAt - t) / WARN));
+          const k = u * u * (3 - 2 * u);
+          p.obj.material = ramps.get(p.pal)![Math.round(k * TINT_STEPS)]!;
         }
       });
     }
