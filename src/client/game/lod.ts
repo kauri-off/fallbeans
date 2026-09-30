@@ -176,6 +176,27 @@ export class LodSystem {
     this.owners.delete(owner);
   }
 
+  /**
+   * Level for something of bounding sphere (center, radius) seen from the camera, without a cross-fade
+   * band (instances of a batch switch level whole: see statics.ts).
+   */
+  levelOf(center: THREE.Vector3, radius: number, camera: THREE.PerspectiveCamera): number {
+    if (!this.enabled) return 0;
+    if (this.force !== null) return this.force;
+    const k = 1 / (Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * this.bias);
+    const size = (radius * k) / Math.max(0.01, center.distanceTo(camera.position));
+    let lvl = 0;
+    for (const t of THRESHOLDS) if (size < t) lvl++;
+    return lvl;
+  }
+
+  /** Whether a mesh casts a (live) shadow; kept through level changes. */
+  setCast(mesh: THREE.Mesh, cast: boolean) {
+    const e = this.entries.get(mesh);
+    if (e) e.cast = cast;
+    mesh.castShadow = cast;
+  }
+
   /** Back to the full mesh (LOD switched off). */
   private reset(e: Entry) {
     e.mesh.geometry = e.levels[0]!;

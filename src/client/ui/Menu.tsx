@@ -297,10 +297,6 @@ function SettingsTab() {
         </div>
       </div>
       <label class="row">
-        <input type="checkbox" checked={s.godrays} onChange={(e) => updateSettings({ godrays: e.currentTarget.checked })} />
-        Солнечные лучи
-      </label>
-      <label class="row">
         <input type="checkbox" checked={s.showFps} onChange={(e) => updateSettings({ showFps: e.currentTarget.checked })} />
         Показывать частоту кадров
       </label>

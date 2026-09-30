@@ -22,6 +22,7 @@ import { report } from '../debug/capture';
 import { lod } from './lod';
 import { applySurfaces } from './materials';
 import { placeScenery } from './scenery';
+import { Statics } from './statics';
 import { ClientView, timeUniform } from './view';
 
 const IDLE: InputFrame = { mx: 0, mz: 0, buttons: 0 };
@@ -95,6 +96,8 @@ export class ClientArena {
   /** The local grab button is held. */
   grabHeld = false;
   readonly bonuses: Bonuses | null;
+  /** The map's static meshes (instanced, baked shadows): see statics.ts. */
+  readonly statics: Statics;
   /** Called when somebody takes a bonus (sounds, notes). */
   onBonus: ((b: Bonus) => void) | null = null;
 
@@ -107,6 +110,7 @@ export class ClientArena {
     if (!mod) throw new Error(`unknown map ${info.game}`);
     this.mod = mod;
     this.builder = new Builder(info.seed, new ClientView());
+    this.statics = new Statics(this.builder.group);
     for (const [id, v] of info.scores) this.scores.set(id, v);
     for (const id of info.finished) this.finished.add(id);
     for (const id of info.out) this.out.add(id);
@@ -138,6 +142,20 @@ export class ClientArena {
     placeScenery(this.builder);
     applySurfaces(this.builder.group);
     scene.add(this.builder.group);
+    // What never moves: instanced, with a baked shadow (before the LOD system takes the rest).
+    const world = this.builder.world;
+    const t0 = this.predTick * DT;
+    this.statics.prepare(
+      world,
+      (t) => {
+        for (const m of world.movers) m(t);
+        for (const a of this.builder.anims) a(t, 0);
+      },
+      () => {
+        world.setTime(t0);
+        for (const a of this.builder.anims) a(t0, 0);
+      },
+    );
     lod.register(this.builder.group);
     for (const [name, data] of info.events) this.onEvent(name, data, true);
     this.lead = host.rtt() / 2 + 30;
@@ -514,6 +532,7 @@ export class ClientArena {
   }
 
   dispose() {
+    this.statics.dispose();
     lod.drop(this.builder.group);
     this.builder.dispose();
   }

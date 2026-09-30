@@ -106,10 +106,7 @@ export class Game {
 
     effect(() => {
       const s = settings.value;
-      if (this.renderer.quality !== s.quality || !this.started) {
-        this.renderer.fx.godrays = s.godrays;
-        this.renderer.setQuality(s.quality);
-      } else this.renderer.setEffects({ godrays: s.godrays });
+      if (this.renderer.quality !== s.quality || !this.started) this.renderer.setQuality(s.quality);
       this.renderer.camera.fov = s.fov;
       this.renderer.camera.updateProjectionMatrix();
       this.input.sensitivity = s.sensitivity;
@@ -332,6 +329,7 @@ export class Game {
       rtt: () => this.net.clock.rtt,
     });
     this.arena = arena;
+    this.renderer.statics = arena.statics;
     arena.onBonus = (b) => {
       const info = BONUS_KINDS[b.kind];
       if (!info || b.takenBy === null) return;

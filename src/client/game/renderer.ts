@@ -9,7 +9,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { GpuTimer } from '../debug/gpuTimer';
 import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
-import { GodRaysPass, ScenePass, TemporalPass } from './postfx';
+import { ScenePass, TemporalPass } from './postfx';
+import { ShadowBake } from './shadowBake';
+import type { Statics } from './statics';
 
 export type Quality = 'medium' | 'high' | 'ultra';
 
@@ -37,7 +39,6 @@ const PRESETS: Record<Quality, Preset> = {
 
 /** Post effects that can be switched on and off (settings, profiler, benchmarks). */
 export interface Effects {
-  godrays: boolean;
   smaa: boolean;
   temporal: boolean;
 }
@@ -63,7 +64,7 @@ const GradeShader = {
 const SKY_TOP = new THREE.Color('#6fb8ff');
 const SKY_HORIZON = new THREE.Color('#ffd9f2');
 /** High sun: shadows fall close under the beans, which helps judging jumps. */
-const SUN_OFFSET = new THREE.Vector3(9, 40, 7);
+export const SUN_OFFSET = new THREE.Vector3(9, 40, 7);
 
 /** Gradient sky with a slowly drifting layer of clouds and a soft sun glow. */
 function skyDome(time: { value: number }): THREE.Mesh {
@@ -157,7 +158,7 @@ function motes(time: { value: number }): THREE.Points {
 }
 
 /**
- * WebGL2 renderer: soft shadows following the camera, image-based lighting, sun shafts, neutral tone
+ * WebGL2 renderer: soft shadows following the camera, image-based lighting, neutral tone
  * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, and (ultra) GTAO
  * with a barely-there bloom.
  */
@@ -178,7 +179,10 @@ export class Renderer {
   private readonly wrapped = new WeakSet<object>();
   private temporal: TemporalPass | null = null;
   /** Switchable effects (see Effects); the composer is rebuilt when they change. */
-  readonly fx: Effects = { godrays: true, smaa: true, temporal: true };
+  readonly fx: Effects = { smaa: true, temporal: true };
+  /** Static meshes of the current map (their shadows are baked once, not drawn every frame). */
+  statics: Statics | null = null;
+  readonly bake: ShadowBake;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -204,6 +208,7 @@ export class Renderer {
     this.sun.shadow.radius = 4;
     this.sun.shadow.blurSamples = 12;
     this.scene.add(this.sun, this.sun.target);
+    this.bake = new ShadowBake(this.renderer, SUN_OFFSET, this.scene);
   }
 
   setQuality(q: Quality) {
@@ -265,7 +270,6 @@ export class Renderer {
       ao.blendIntensity = 0.55;
       c.addPass(named(ao, 'gtao'));
     }
-    if (fx.godrays) c.addPass(named(new GodRaysPass(this.camera, this.sun, () => scene.depth, w * pr, h * pr), 'godrays'));
     if (p.bloom) c.addPass(named(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97), 'bloom'));
     c.addPass(named(new OutputPass(), 'output'));
     c.addPass(named(new ShaderPass(GradeShader), 'grade'));
@@ -304,7 +308,10 @@ export class Renderer {
     // Profiling: the same frame several times back to back keeps the GPU busy, so timer queries
     // measure work rather than the gaps while it waits for the CPU (see GpuTimer).
     this.camera.updateMatrixWorld();
+    this.statics?.update(this.camera);
     lod.update(this.camera);
+    // Static shadows at the live shadow map's texel size (the bake is redone when that or the statics change).
+    this.bake.update(this.statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
     for (let i = 0; i < this.debugRepeat; i++) {
       if (i) this.renderer.info.reset();
       const taa = this.temporal?.enabled ? this.temporal : null;

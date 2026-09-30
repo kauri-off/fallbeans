@@ -262,6 +262,8 @@ export function createProbe(game: Game) {
     const problems: string[] = [];
     let meshes = 0;
     let casters = 0;
+    /** Live shadow casters by what they are (map parts that never move should not be among them). */
+    const live = new Map<string, number>();
     let transparent = 0;
     let vertices = 0;
     const materials = new Set<THREE.Material>();
@@ -271,7 +273,13 @@ export function createProbe(game: Game) {
       if (!Number.isFinite(e.x + e.y + e.z)) problems.push(`NaN position: ${o.name || o.type}`);
       if (o instanceof THREE.Mesh) {
         meshes++;
-        if (o.castShadow && o.visible) casters++;
+        if (o.castShadow && o.visible) {
+          casters++;
+          let top: THREE.Object3D = o;
+          while (top.parent && top.parent.type !== 'Scene' && top.parent.parent?.type !== 'Scene') top = top.parent;
+          const k = `${o.userData.cat ?? top.name ?? '?'}:${o.name || o.type}`;
+          live.set(k, (live.get(k) ?? 0) + 1);
+        }
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           if (!m) problems.push(`mesh without material: ${o.name || '?'}`);
@@ -285,7 +293,17 @@ export function createProbe(game: Game) {
           problems.push(`lit mesh without normals: ${o.name || '?'}`);
       }
     });
-    return { meshes, shadowCasters: casters, transparent, materials: materials.size, vertices, problems: problems.slice(0, 50) };
+    return {
+      meshes,
+      shadowCasters: casters,
+      transparent,
+      materials: materials.size,
+      vertices,
+      statics: game.renderer.statics?.stats ?? null,
+      shadowBake: game.renderer.bake.size,
+      liveCasters: Object.fromEntries([...live].sort((a, b) => b[1] - a[1]).slice(0, 25)),
+      problems: problems.slice(0, 50),
+    };
   };
 
   const snapshot = () => ({
@@ -306,6 +324,8 @@ export function createProbe(game: Game) {
   const api = {
     version: PROTOCOL_VERSION,
     build: __BUILD__,
+    /** The game itself (renderer, arena…), for digging in from the console. */
+    game,
     /** Short state (kept compatible with the e2e tests). */
     state: () => ({
       id: game.arena?.body?.actor ?? null,
@@ -424,9 +444,8 @@ export function createProbe(game: Game) {
       debugOverlay.value = on;
     },
     quality: (q: Quality) => updateSettings({ quality: q }),
-    /** Post effects on/off (god rays, SMAA, temporal AA) for benchmarks; returns the current set. */
+    /** Post effects on/off (SMAA, temporal AA) for benchmarks; returns the current set. */
     fx: (patch: Partial<Effects> = {}) => {
-      if (patch.godrays !== undefined) updateSettings({ godrays: patch.godrays });
       game.renderer.setEffects(patch);
       return { ...game.renderer.fx };
     },
