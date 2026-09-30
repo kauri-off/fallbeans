@@ -81,6 +81,7 @@ export const ServerMsgSchema = z.discriminatedUnion('t', [
     playlist: PlaylistSchema,
     fill: z.boolean(),
     pin: z.string().nullable(),
+    next: Num.nullable(),
   }),
   z.object({
     t: z.literal('arena'),

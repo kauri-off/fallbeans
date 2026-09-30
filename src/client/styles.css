@@ -589,6 +589,23 @@ h3 {
   animation: pop 0.3s ease-out;
 }
 
+.next {
+  font-size: 0.8125rem;
+  font-weight: bold;
+  color: var(--pink);
+  font-variant-numeric: tabular-nums;
+}
+
+.next.end {
+  margin-left: auto;
+}
+
+.next.line {
+  display: block;
+  margin-top: 0.25rem;
+  text-align: center;
+}
+
 .status {
   position: fixed;
   bottom: 3.5rem;
@@ -697,9 +714,19 @@ h3 {
   padding: 2px 0.25rem;
 }
 
-.sheet tr.me,
-.summary tr.me {
+.sheet tr.me td,
+.summary tr.me td {
   background: rgba(255, 255, 255, 0.45);
+}
+
+.sheet tr.me td:first-child,
+.summary tr.me td:first-child {
+  border-radius: 0.375rem 0 0 0.375rem;
+}
+
+.sheet tr.me td:last-child,
+.summary tr.me td:last-child {
+  border-radius: 0 0.375rem 0.375rem 0;
 }
 
 .sheet .pl,

@@ -797,8 +797,8 @@ export class Room {
     this.log.info('round over', { game: r.game.id, rows: rows.map((e) => [e.id, e.delta]) });
     this.phase = 'results';
     this.broadcast({ t: 'roundEnd', game: r.game.id, index: r.index, total: r.total, rows, practice: this.practice });
-    this.sendLobby();
     this.later(this.practice ? PRACTICE_RESULTS_MS : RESULTS_MS, () => this.nextRound());
+    this.sendLobby();
   }
 
   /** Final standings: points, then round wins, then fewer falls. */
@@ -846,8 +846,8 @@ export class Room {
     });
     this.setArena(arena);
     this.broadcast({ t: 'gameEnd', standings, awards });
-    this.sendLobby();
     this.later(PODIUM_MS, () => this.backToLobby());
+    this.sendLobby();
   }
 
   private backToLobby() {
@@ -967,6 +967,7 @@ export class Room {
       playlist: this.playlist,
       fill: this.fill,
       pin: null,
+      next: this.timer?.at ?? null,
       players: [...this.players.values()].map(
         (p): LobbyPlayer => ({
           id: p.id,

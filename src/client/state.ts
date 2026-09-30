@@ -32,6 +32,8 @@ export interface Hud {
   /** Round time in seconds (negative during the intro). */
   t: number;
   timeLeft: number;
+  /** Seconds until the next scene starts on its own (-1: none). */
+  nextIn: number;
   status: 'lobby' | 'podium' | PlayStatus;
   place: number;
   /** Who the camera follows while not playing ('' = overview). */
@@ -49,6 +51,7 @@ export interface Hud {
 export const hud = signal<Hud>({
   t: 0,
   timeLeft: 0,
+  nextIn: -1,
   status: 'lobby',
   place: 0,
   spectating: '',
