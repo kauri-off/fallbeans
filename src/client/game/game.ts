@@ -46,6 +46,8 @@ import { type Quality, Renderer } from './renderer';
 const QUALITY_ORDER: Quality[] = ['medium', 'high'];
 /** The intro fly-over ends this long before the start; then the camera sits behind the bean. */
 const INTRO_HANDOVER = 1.4;
+/** The intro shot's last seconds glide into the follow camera's pose behind the player's bean. */
+const INTRO_BLEND = 2;
 
 /** Ties everything together: connection, the current arena, beans, camera, render loop and HUD. */
 export class Game {
@@ -78,6 +80,8 @@ export class Game {
   private readonly vels = new Map<number, THREE.Vector3>();
   private readonly eye = new THREE.Vector3();
   private readonly look = new THREE.Vector3();
+  private readonly followEye = new THREE.Vector3();
+  private readonly followLook = new THREE.Vector3();
   /** Arena whose scripted shot is running (the first frame of a shot cuts instead of easing). */
   private cineArena = -1;
   /** Debug: a fixed camera (eye, look) instead of the follow/intro camera. */
@@ -612,6 +616,15 @@ export class Game {
       const r = THREE.MathUtils.lerp(30, 20, e);
       this.eye.set(c.x + Math.sin(a) * r, c.y + THREE.MathUtils.lerp(18, 11, e), c.z + Math.cos(a) * r);
       this.look.copy(c);
+    }
+    // Ends behind the player's own bean, where the follow camera takes over (no jump there).
+    if (arena.body) {
+      const h = THREE.MathUtils.smoothstep(t, -INTRO_HANDOVER - INTRO_BLEND, -INTRO_HANDOVER);
+      if (h > 0) {
+        this.rig.followPose(arena.body.pos, this.followEye, this.followLook);
+        this.eye.lerp(this.followEye, h);
+        this.look.lerp(this.followLook, h);
+      }
     }
     this.rig.cinematic(this.eye, this.look, dt, this.cut(arena));
     return true;
