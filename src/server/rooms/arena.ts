@@ -47,6 +47,13 @@ const GRAB_COOLDOWN = 1.2;
 /** Centre distance for a dive to tackle (beans never get closer than BEAN_GAP). */
 const DIVE_REACH = 1.6;
 const MAX_CATCHUP = 60;
+/**
+ * Input missing for a tick (lost or late): the pawn keeps moving the way it did for this many ticks
+ * (a Wi-Fi hiccup: the player most likely still holds the same keys), then stops (gone silent).
+ */
+const INPUT_HOLD = 60;
+/** Bots' navigation grid is built this long (s) before the start, while nobody may move yet. */
+const NAV_PREBUILD = 1.5;
 /** A hit (by a player or a hazard) counts for a fall this long after it (s). */
 const CREDIT_WINDOW = 3;
 /** Time (s) a bean may stand somewhere forbidden before it counts as a shortcut. */
@@ -129,6 +136,13 @@ export interface Pawn {
   late: number;
   /** Highest tick whose late input has been looked at. */
   lateSeen: number;
+  /** Newest input tick received. */
+  newest: number;
+  /**
+   * Fewest ticks the received inputs were ahead of the simulation since the last snapshot to this
+   * player (taken just before each packet arrived; negative: the simulation had to guess).
+   */
+  margin: number;
   spawn: THREE.Vector3;
   checkpoint: Checkpoint | null;
   progress: number;
@@ -236,6 +250,8 @@ export class ServerArena {
   private spawnCursor = 0;
   /** Bot navigation grid, built on first use once the round has started (gates are open). */
   private nav: NavGrid | null = null;
+  /** The grid built ahead of the start, and the static world it was built for. */
+  private navPre: { nav: NavGrid | null; hash: string } | null = null;
   /** Bonuses lying on the course (rounds only). */
   readonly bonuses: Bonuses | null;
 
@@ -337,6 +353,8 @@ export class ServerArena {
       ack: this.tick,
       late: 0,
       lateSeen: this.tick,
+      newest: this.tick,
+      margin: Number.POSITIVE_INFINITY,
       spawn,
       checkpoint: null,
       progress: spawn.z,
@@ -409,6 +427,11 @@ export class ServerArena {
       if (p.packets === MAX_PACKETS_PER_SEC + 1) this.hooks.warn('input flood', { id });
       return false;
     }
+    const newest = pkt.firstTick + pkt.frames.length - 1;
+    if (newest <= this.tick + MAX_LEAD) {
+      p.margin = Math.min(p.margin, p.newest - this.tick);
+      p.newest = Math.max(p.newest, newest);
+    }
     let bad = 0;
     pkt.frames.forEach((f, i) => {
       const k = pkt.firstTick + i;
@@ -477,8 +500,30 @@ export class ServerArena {
     }
     // Missing input: keep moving the same way for a moment, never repeating a jump or dive;
     // a client that went silent stops.
-    if (k - p.ack > 30) return { frame: late ? { ...IDLE, buttons: late } : IDLE, real: false };
+    if (k - p.ack > INPUT_HOLD) return { frame: late ? { ...IDLE, buttons: late } : IDLE, real: false };
     return { frame: { mx: p.last.mx, mz: p.last.mz, buttons: (p.last.buttons & BTN.grab) | late }, real: false };
+  }
+
+  /** Bots' navigation grid for the current static world, or null if it cannot be built. */
+  private buildNav(): NavGrid | null {
+    try {
+      return NavGrid.build(this.world, this.spec.forbidden);
+    } catch (e) {
+      this.hooks.warn('bot navigation failed', { game: this.module.meta.id, err: String(e) });
+      return null;
+    }
+  }
+
+  /**
+   * The navigation grid takes tens of milliseconds to build; built at the start it stalled every
+   * room's simulation right when everybody starts to move (their first inputs arrived "late"). It
+   * is built before the start instead, and used at the start if the static world has not changed.
+   */
+  private prebuildNav() {
+    if (this.nav || this.navPre || this.kind !== 'round' || !this.spec.bot) return;
+    if (this.time < -NAV_PREBUILD || this.time >= 0) return;
+    if (![...this.pawns.values()].some((p) => p.bot)) return;
+    this.navPre = { nav: this.buildNav(), hash: this.world.hash(true) };
   }
 
   private think(p: Pawn) {
@@ -494,11 +539,11 @@ export class ServerArena {
     if (!brain || !this.botsOn) return;
     this.prof?.start('bots');
     if (!this.nav && (this.time >= 0 || this.kind !== 'round')) {
-      try {
-        this.nav = NavGrid.build(this.world, this.spec.forbidden);
-      } catch (e) {
-        this.hooks.warn('bot navigation failed', { game: this.module.meta.id, err: String(e) });
-      }
+      // Built ahead during the intro (see prebuildNav): the same grid if the static world is the same.
+      const pre = this.navPre;
+      this.navPre = null;
+      if (pre && pre.hash === this.world.hash(true)) this.nav = pre.nav;
+      else this.nav = this.buildNav();
     }
     const others: BotView['others'][number][] = [];
     for (const o of this.pawns.values())
@@ -604,6 +649,7 @@ export class ServerArena {
     } catch (e) {
       this.hooks.warn('game tick failed', { game: this.module.meta.id, err: String(e) });
     }
+    this.prebuildNav();
     prof?.start('snapshot');
     this.hooks.onSnapshot(k);
     prof?.stop();
@@ -877,7 +923,10 @@ export class ServerArena {
     for (const p of this.pawns.values()) {
       if (p.status !== 'play') continue;
       if (p.id === viewer) {
-        own = { ack: p.ack, s: p.body.toFull(p.teleported), grab: p.grabbing ?? -1 };
+        // The worst input margin since the last snapshot (none arrived: how far ahead the newest is now).
+        const margin = Math.min(p.margin, p.newest - this.tick);
+        p.margin = Number.POSITIVE_INFINITY;
+        own = { ack: p.ack, s: p.body.toFull(p.teleported), grab: p.grabbing ?? -1, margin };
         continue;
       }
       bodies.push({

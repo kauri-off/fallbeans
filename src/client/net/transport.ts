@@ -42,6 +42,13 @@ async function connectWebTransport(info: NonNullable<SessionInfo['wt']>, ev: Tra
   const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000));
   await Promise.race([wt.ready, timeout]);
   const stream = await wt.createBidirectionalStream();
+  // Datagrams that could not leave for a while (a congested link) are stale: dropped rather than
+  // queued (every input packet repeats the inputs not yet acknowledged anyway).
+  try {
+    const dg = wt.datagrams as unknown as { outgoingMaxAge?: number | null; incomingMaxAge?: number | null };
+    dg.outgoingMaxAge = 150;
+    dg.incomingMaxAge = 250;
+  } catch {}
   const writer = stream.writable.getWriter();
   const dgWriter = wt.datagrams.writable.getWriter();
   let closed = false;
@@ -108,8 +115,9 @@ function connectWebSocket(ev: TransportEvents): Promise<Transport> {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
         },
         sendDatagram(data) {
-          // Behind on a slow link: drop, like a lost datagram.
-          if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 64 * 1024) ws.send(data);
+          // Behind on a slow link (TCP waiting on a lost packet): drop, like a lost datagram; the
+          // next packet repeats every input not yet acknowledged. A deep queue would only add lag.
+          if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 2 * 1024) ws.send(data);
         },
         close() {
           ws.close();

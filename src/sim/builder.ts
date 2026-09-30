@@ -601,7 +601,9 @@ export class Builder {
     const ph = (x * 12.9898 + z * 78.233) % 6.283;
     if (name === 'flag') {
       const cloth = m.getObjectByName('Pennant');
-      if (cloth instanceof THREE.Mesh && o.tint) cloth.material = v.plain(o.tint, {}, 'cloth');
+      // The tinted pennant keeps the model's baked AO.
+      if (cloth instanceof THREE.Mesh && o.tint)
+        cloth.material = v.plain(o.tint, { aoMap: (cloth.material as THREE.MeshStandardMaterial).aoMap }, 'cloth');
       if (cloth)
         this.anim((t) => {
           cloth.rotation.y = Math.sin(t * 2.2 + ph) * 0.22 + Math.sin(t * 5.1 + ph * 2) * 0.05;

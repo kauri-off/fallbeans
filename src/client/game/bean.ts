@@ -22,11 +22,12 @@ export function tickRainbow(t: number) {
 }
 
 const bodyMats = new Map<string, THREE.MeshStandardMaterial>();
-/** Smooth, solid suit colour: soft plastic with a faint clearcoat, no surface texture. */
-function bodyMaterial(color: string) {
+/** Smooth, solid suit colour: soft plastic with a faint clearcoat, no surface texture; `ao` is the model's baked occlusion. */
+function bodyMaterial(color: string, ao: THREE.Texture | null) {
   let m = bodyMats.get(color);
   if (!m) {
     m = new THREE.MeshPhysicalMaterial({
+      aoMap: ao,
       color: baseColor(color),
       roughness: 0.5,
       clearcoat: 0.3,
@@ -43,10 +44,13 @@ function bodyMaterial(color: string) {
 
 const bellyMats = new Map<string, THREE.MeshStandardMaterial>();
 /** The belly patch: the player colour, washed towards white. */
-function bellyMaterial(color: string) {
+function bellyMaterial(color: string, ao: THREE.Texture | null) {
   let m = bellyMats.get(color);
   if (!m) {
-    m = applySurface(new THREE.MeshStandardMaterial({ color: baseColor(color).lerp(WHITE, 0.62), roughness: 0.55 }), null);
+    m = applySurface(
+      new THREE.MeshStandardMaterial({ aoMap: ao, color: baseColor(color).lerp(WHITE, 0.62), roughness: 0.55 }),
+      null,
+    );
     bellyMats.set(color, m);
   }
   return m;
@@ -231,8 +235,13 @@ export class Bean {
 
   setColor(color: string) {
     this.color = color;
-    const m = bodyMaterial(color);
-    const belly = bellyMaterial(color);
+    // The model's baked AO (one map for all its materials) goes on the player's materials too.
+    let ao: THREE.Texture | null = null;
+    this.model.traverse((o) => {
+      if (o instanceof THREE.Mesh) ao ??= (o.material as THREE.MeshStandardMaterial).aoMap ?? null;
+    });
+    const m = bodyMaterial(color, ao);
+    const belly = bellyMaterial(color, ao);
     this.model.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || o.userData.lodGhost) return;
       const name = (o.material as THREE.Material).name;

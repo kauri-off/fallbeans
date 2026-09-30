@@ -444,6 +444,7 @@ export class Game {
     this.arena = arena;
     this.renderer.statics = arena.statics;
     this.renderer.applyLook(arena.builder.look);
+    this.renderer.precompile();
     arena.onBonus = (b) => {
       const info = BONUS_KINDS[b.kind];
       if (!info || b.takenBy === null) return;
@@ -697,7 +698,7 @@ export class Game {
       this.lastSeen.set(me, now);
       focus = b.root.position;
     }
-    const poses = arena.remotePoses();
+    const poses = arena.remotePoses(dt);
     for (const [id, p] of poses) {
       if (id === me) continue;
       const b = this.bean(id);

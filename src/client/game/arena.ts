@@ -5,6 +5,7 @@ import {
   BTN,
   encodeInput,
   type InputFrame,
+  MAX_INPUT_FRAMES,
   POWER_SHIFT,
   quantizeAxis,
   REMOTE_FLAG,
@@ -13,6 +14,7 @@ import {
 } from '../../shared/codec';
 import { ANIM, DT, INPUT_EVERY, INPUT_REDUNDANCY, SNAPSHOT_EVERY, TICK_MS } from '../../shared/consts';
 import { canMove } from '../../shared/game';
+import { LeadControl } from '../../shared/lead';
 import type { ArenaInfo } from '../../shared/protocol';
 import { BONUS_EVENT, type Bonus, Bonuses } from '../../sim/bonus';
 import { Builder } from '../../sim/builder';
@@ -28,6 +30,8 @@ import { ClientView, timeUniform } from './view';
 
 const IDLE: InputFrame = { mx: 0, mz: 0, buttons: 0 };
 const MAX_HISTORY = 240;
+/** Other beans may be extrapolated this far (s) past the newest snapshot when snapshots are late. */
+const MAX_EXTRAPOLATE = 0.1;
 
 interface Frame {
   tick: number;
@@ -77,10 +81,21 @@ export class ClientArena {
   private prevYaw = 0;
   /** Prediction error being smoothed away (render position = predicted + offset). */
   readonly offset = new THREE.Vector3();
-  private lead: number;
+  /** How far ahead of the server clock the local bean is predicted (see LeadControl). */
+  private readonly leadCtl: LeadControl;
+  /** Newest tick the server has used our input for. */
+  private ackTick = Number.NEGATIVE_INFINITY;
   private readonly frames: Frame[] = [];
   private lastArrival = 0;
   private jitter = 8;
+  /**
+   * How old snapshots are when they arrive, by the server clock (ms): the one-way latency (and any
+   * error of the clock estimate). Other beans are drawn that much further in the past.
+   */
+  private snapAge = 0;
+  private snapAgeSet = false;
+  /** Interpolation delay in use (ms), eased towards its target so render time never jumps. */
+  private interpMs = SNAPSHOT_EVERY * TICK_MS * 2;
   private readonly bodies = new Map<number, PlayerBody>();
   /** Other beans from the last snapshot (with velocities), and the same extrapolated for one tick. */
   private othersSnap: OtherBody[] = [];
@@ -160,7 +175,7 @@ export class ClientArena {
     );
     lod.register(this.builder.group);
     for (const [name, data] of info.events) this.onEvent(name, data, true);
-    this.lead = host.rtt() / 2 + 30;
+    this.leadCtl = new LeadControl(host.rtt() / 2 + 30);
   }
 
   /** An authoritative event from the server (map events, bonuses); replay: it happened before we joined. */
@@ -180,7 +195,11 @@ export class ClientArena {
 
   /** How far ahead of the server clock the local bean is predicted (ms). */
   get inputLead() {
-    return this.lead;
+    return this.leadCtl.lead;
+  }
+
+  private get lead() {
+    return this.leadCtl.lead;
   }
 
   get kind() {
@@ -307,8 +326,13 @@ export class ClientArena {
     return out;
   }
 
+  /**
+   * Every input the server has not acknowledged yet (at least the last INPUT_REDUNDANCY, at most a
+   * second): packets lost in a burst are made up by the next one that arrives.
+   */
   private sendInputs(upTo: number) {
-    const first = upTo - INPUT_REDUNDANCY + 1;
+    const unacked = Number.isFinite(this.ackTick) ? this.ackTick + 1 : upTo;
+    const first = Math.max(upTo - MAX_INPUT_FRAMES + 1, Math.min(upTo - INPUT_REDUNDANCY + 1, unacked));
     const frames: InputFrame[] = [];
     for (let k = first; k <= upTo; k++) frames.push(this.history.get(k) ?? IDLE);
     this.host.send(encodeInput({ arena: this.info.id, firstTick: first, frames }));
@@ -325,6 +349,12 @@ export class ClientArena {
       this.jitter += (Math.abs(arrival - this.lastArrival - expected) - this.jitter) * 0.1;
     }
     this.lastArrival = arrival;
+    // Age at arrival: fast to rise (the delay must cover it), slow to fall.
+    const age = this.host.serverNow() - (this.info.startAt + s.tick * TICK_MS);
+    if (!this.snapAgeSet) {
+      this.snapAge = age;
+      this.snapAgeSet = true;
+    } else this.snapAge += (age - this.snapAge) * (age > this.snapAge ? 0.25 : 0.02);
     const bodies = new Map(s.bodies.map((b) => [b.id, b]));
     if (!this.frames.length || s.tick > this.frames.at(-1)!.tick) this.frames.push({ tick: s.tick, bodies });
     while (this.frames.length > 40) this.frames.shift();
@@ -343,23 +373,16 @@ export class ClientArena {
     this.othersSnapTick = s.tick;
     if (s.own && this.body) {
       this.ownGrab = s.own.grab;
-      this.reconcile(s.tick, s.own.ack, s.own.s);
+      this.ackTick = Math.max(this.ackTick, s.own.ack);
+      // Only while prediction runs ahead: in a hidden tab (no frames) snapshots keep coming, and
+      // the lead would chase inputs nobody sends.
+      if (this.predTick > s.tick) this.leadCtl.update(s.own.margin, this.host.rtt(), arrival);
+      this.reconcile(s.tick, s.own.s);
     }
   }
 
-  private reconcile(tick: number, ack: number, st: BodyFullState) {
+  private reconcile(tick: number, st: BodyFullState) {
     const b = this.body!;
-    // Our inputs reach the server too late: run further ahead. On time: creep back.
-    const rttHalf = this.host.rtt() / 2;
-    // Jitter from a stalled main thread (snapshots handled in bursts) is not network jitter: capped.
-    const ceiling = rttHalf + 250;
-    const floor = Math.min(ceiling, rttHalf + 16 + Math.min(this.jitter, 40) * 1.5);
-    // Only while prediction runs ahead: in a hidden tab (no frames) snapshots keep coming, and the
-    // lead would climb to the ceiling and take half a minute to come back down.
-    if (this.predTick > tick) {
-      if (ack < tick) this.lead = Math.min(ceiling, this.lead + 10);
-      else this.lead = Math.max(floor, this.lead - 0.25);
-    }
     const world = this.builder.world;
     if (tick >= this.predTick) {
       b.fromFull(st, world);
@@ -408,14 +431,27 @@ export class ClientArena {
     return this.prevYaw + dy * alpha;
   }
 
-  /** Interpolation delay for other beans: two snapshot intervals plus measured jitter. */
+  /**
+   * Interpolation delay for other beans: how old snapshots are on arrival, plus two snapshot
+   * intervals (one may be lost) and the measured jitter. (Without the age, beyond ~60 ms of ping
+   * render time ran past the newest snapshot and other beans moved in 30 Hz jerks.)
+   */
   private interpDelayTicks() {
-    return (SNAPSHOT_EVERY * TICK_MS * 2 + this.jitter * 2) / TICK_MS;
+    return this.interpMs / TICK_MS;
   }
 
-  remotePoses(): Map<number, RemotePose> {
+  /** Eases the interpolation delay towards its target (once per rendered frame). */
+  private updateInterpDelay(dt: number) {
+    const target = Math.min(400, Math.max(0, this.snapAge) + SNAPSHOT_EVERY * TICK_MS * 2 + Math.min(this.jitter, 60) * 2);
+    // Up quickly (starving), down gently (render time slows a little instead of jumping).
+    const k = target > this.interpMs ? 1 - Math.exp(-dt * 8) : 1 - Math.exp(-dt * 0.5);
+    this.interpMs += (target - this.interpMs) * k;
+  }
+
+  remotePoses(dt = 0): Map<number, RemotePose> {
     const out = new Map<number, RemotePose>();
     if (!this.frames.length) return out;
+    this.updateInterpDelay(dt);
     const r = this.tickAt(this.host.serverNow()) - this.interpDelayTicks();
     let i = this.frames.length - 1;
     while (i > 0 && this.frames[i]!.tick > r) i--;
@@ -457,6 +493,14 @@ export class ClientArena {
           grab = sb.grab;
           flags = sb.flags;
         }
+      } else if (!b && r > a.tick && i > 0) {
+        // Past the newest snapshot (a late or lost one): carry on along the last motion for a moment.
+        const sp = this.frames[i - 1]!.bodies.get(id);
+        const span = (a.tick - this.frames[i - 1]!.tick) * DT;
+        if (sp && span > 0 && Math.hypot(sa.x - sp.x, sa.z - sp.z) < 4) {
+          const k = Math.min(MAX_EXTRAPOLATE, (r - a.tick) * DT) / span;
+          pos = new THREE.Vector3(sa.x + (sa.x - sp.x) * k, sa.y, sa.z + (sa.z - sp.z) * k);
+        } else pos = new THREE.Vector3(sa.x, sa.y, sa.z);
       } else pos = new THREE.Vector3(sa.x, sa.y, sa.z);
       out.set(id, {
         pos,
@@ -521,6 +565,10 @@ export class ClientArena {
       leadTicks: this.lead / TICK_MS,
       jitterMs: this.jitter,
       interpDelayMs: this.interpDelayTicks() * TICK_MS,
+      snapshotAgeAtArrivalMs: this.snapAge,
+      /** Worst input margin (ticks) the server reported over the last ~2 s. */
+      inputMargin: this.leadCtl.worst,
+      ackTick: Number.isFinite(this.ackTick) ? this.ackTick : -1,
       snapshotTick: last?.tick ?? -1,
       /** How old the newest snapshot is, in ms of server time. */
       snapshotAgeMs: last ? now - (this.info.startAt + last.tick * TICK_MS) : -1,

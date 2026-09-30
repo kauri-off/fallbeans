@@ -25,7 +25,11 @@ export class Clock {
     this.samples.push({ rtt, offset });
     if (this.samples.length > 12) this.samples.shift();
     const best = this.samples.reduce((a, s) => (s.rtt < a.rtt ? s : a));
-    this.rtt = this.samples.reduce((a, s) => a + s.rtt, 0) / this.samples.length;
+    // The median: a pong handled late by a busy page (a map being built) is one sample, not a
+    // spike in everybody's ping for the next half minute as with the mean.
+    const sorted = this.samples.map((s) => s.rtt).sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    this.rtt = sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
     if (!this.synced) {
       this.offset = best.offset;
       this.synced = true;
@@ -110,8 +114,9 @@ export class Connection {
     });
     this.ping();
     let n = 0;
+    // Every 0.5 s at first, then every second (a fresher median, and the clock follows drift sooner).
     this.pingTimer = setInterval(() => {
-      if (++n < 6 || n % 4 === 0) this.ping();
+      if (++n < 6 || n % 2 === 0) this.ping();
     }, 500);
   }
 
