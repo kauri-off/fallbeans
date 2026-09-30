@@ -1,4 +1,5 @@
 import { effect, signal } from '@preact/signals';
+import { DEFAULT_OUTFIT, type Outfit, validOutfit } from '../shared/outfit';
 import { DEFAULT_EFFECTS, type Effects, type Quality, type Upscale } from './game/renderer';
 
 /** Esc menu layout: a column beside the player panel (the game stays in view), or a wide panel in the middle. */
@@ -6,6 +7,9 @@ export type MenuLayout = 'side' | 'center';
 
 export interface Settings {
   name: string;
+  /** The suit colour picked last ('' none yet): rooms give it when it is free. */
+  color: string;
+  outfit: Outfit;
   menuLayout: MenuLayout;
   sensitivity: number;
   invertY: boolean;
@@ -22,6 +26,8 @@ export interface Settings {
 const KEY = 'fb_settings';
 const DEFAULTS: Settings = {
   name: '',
+  color: '',
+  outfit: DEFAULT_OUTFIT,
   menuLayout: 'side',
   sensitivity: 1,
   invertY: false,
@@ -44,6 +50,7 @@ function load(): Settings {
       if (!['medium', 'high'].includes(s.quality)) s.quality = 'high';
       if (!UPSCALES.includes(s.upscale)) s.upscale = DEFAULTS.upscale;
       s.gfx = { ...DEFAULT_EFFECTS, ...s.gfx };
+      s.outfit = validOutfit(s.outfit);
       return s;
     }
   } catch {}

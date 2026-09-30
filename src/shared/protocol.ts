@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CHAT_MAX, COLORS, EMOTES, NAME_MAX, ROOM_PIN_DIGITS, ROOM_TITLE_MAX } from './consts';
 import type { ArenaKind } from './game';
+import { type Outfit, OutfitSchema } from './outfit';
 
 /**
  * Reliable control messages are JSON (WebSocket text frames, or length-prefixed frames on the
@@ -36,6 +37,9 @@ export const HelloSchema = z.object({
   room: RoomId.optional(),
   pin: RoomPin.optional(),
   practice: z.string().max(32).optional(),
+  /** The suit colour the player picked last time (taken if nobody in the room has it) and their outfit. */
+  color: z.enum(COLORS).optional(),
+  outfit: OutfitSchema.optional(),
 });
 export type Hello = z.infer<typeof HelloSchema>;
 
@@ -102,6 +106,7 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   /** Back to the room list. */
   z.object({ t: z.literal('leave') }),
   z.object({ t: z.literal('color'), c: z.enum(COLORS) }),
+  z.object({ t: z.literal('outfit'), o: OutfitSchema }),
   z.object({ t: z.literal('start') }),
   z.object({ t: z.literal('abort') }),
   z.object({ t: z.literal('playlist'), pl: PlaylistSchema }),
@@ -172,6 +177,7 @@ export interface LobbyPlayer {
   id: number;
   name: string;
   color: string;
+  outfit: Outfit;
   /** Points in the current game. */
   score: number;
   /** Games won. */

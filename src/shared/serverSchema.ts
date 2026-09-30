@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CHAT_MAX, EMOTES, NAME_MAX, ROOM_TITLE_MAX } from './consts';
+import { OutfitSchema } from './outfit';
 import { PlaylistSchema, type ServerMsg } from './protocol';
 
 /**
@@ -15,6 +16,7 @@ const LobbyPlayer = z.object({
   id: Id,
   name: z.string().max(16),
   color: z.string(),
+  outfit: OutfitSchema,
   score: z.number().int().min(0),
   crowns: z.number().int().min(0),
   spectator: z.boolean(),

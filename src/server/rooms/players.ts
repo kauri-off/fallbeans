@@ -1,3 +1,4 @@
+import { DEFAULT_OUTFIT, type Outfit } from '../../shared/outfit';
 import type { Conn } from '../net/conn';
 import { emptyGameStats, type GameStats } from './awards';
 
@@ -6,6 +7,7 @@ export interface Player {
   id: number;
   name: string;
   color: string;
+  outfit: Outfit;
   /** Points in the current game. */
   score: number;
   crowns: number;
@@ -36,12 +38,13 @@ export function makePlayer(
   id: number,
   name: string,
   color: string,
-  o: { uid?: string; conn?: Conn; spectator?: boolean; auto?: boolean } = {},
+  o: { uid?: string; conn?: Conn; spectator?: boolean; auto?: boolean; outfit?: Outfit | undefined } = {},
 ): Player {
   return {
     id,
     name,
     color,
+    outfit: o.outfit ?? DEFAULT_OUTFIT,
     score: 0,
     crowns: 0,
     stats: emptyGameStats(),

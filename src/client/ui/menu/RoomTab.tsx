@@ -1,20 +1,20 @@
 import { useState } from 'preact/hooks';
 import { getGame } from '../../../games';
-import { BASE_PATH, COLORS } from '../../../shared/consts';
+import { BASE_PATH } from '../../../shared/consts';
 import type { Game } from '../../game/game';
 import { settings } from '../../settings';
 import { arenaInfo, lobby, myId, practiceGame } from '../../state';
 import { colorBg } from '../labels';
 import { NameForm, PracticeList } from '../shared';
 import { HostSetup } from './HostSetup';
+import { OutfitPicker } from './OutfitPicker';
 
-/** The room: its name and access, the player's name and colour, who is here, and the game setup (host). */
+/** The room: its name and access, the player's name and look, who is here, and the game setup (host). */
 export function RoomTab({ game }: { game: Game }) {
   const l = lobby.value;
   const me = myId.value;
   if (!l) return null;
   const isHost = l.host === me;
-  const mine = l.players.find((p) => p.id === me);
   const send = game.net.send.bind(game.net);
   const inLobby = l.phase === 'lobby';
   const info = arenaInfo.value;
@@ -39,27 +39,10 @@ export function RoomTab({ game }: { game: Game }) {
   const swatches = (
     <>
       <NameForm game={game} />
-      {inLobby && (
-        <div class="swatches">
-          {COLORS.map((c) => {
-            const taken = l.players.some((p) => p.color === c && p.id !== me);
-            return (
-              <button
-                type="button"
-                key={c}
-                class={`swatch${mine?.color === c ? ' on' : ''}`}
-                style={{ background: colorBg(c) }}
-                disabled={taken}
-                title={taken ? 'Цвет занят' : 'Выбрать цвет'}
-                onClick={() => send({ t: 'color', c })}
-              />
-            );
-          })}
-        </div>
-      )}
+      <OutfitPicker game={game} />
     </>
   );
-  // (In the middle panel the name and colour are a box of their own.)
+  // (In the middle panel the name and look are a box of their own.)
   const profile = center ? <div class="group stack">{swatches}</div> : swatches;
 
   if (!inLobby)

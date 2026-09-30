@@ -84,6 +84,19 @@ describe('room', () => {
     expect(a.snaps.at(-1)?.bodies.map((x) => x.id)).toEqual([b.id]);
   });
 
+  it('keeps the wished colour when free, and passes outfits on', () => {
+    const a = new Client(room);
+    a.id = room.join(a, { uid: 'wa', name: 'A', color: '#a66bff' })!;
+    const b = new Client(room);
+    b.id = room.join(b, { uid: 'wb', name: 'B', color: '#a66bff' })!;
+    const colors = new Map(b.last('lobby')!.players.map((p) => [p.id, p.color]));
+    expect(colors.get(a.id)).toBe('#a66bff');
+    expect(colors.get(b.id)).not.toBe('#a66bff');
+    const o = { hat: 'tophat', hatColor: '#ff3b3b', glasses: 'shades', belly: '', shoes: '#2b2b33' } as const;
+    a.ctl({ t: 'outfit', o });
+    expect(b.last('lobby')!.players.find((p) => p.id === a.id)?.outfit).toEqual(o);
+  });
+
   it('moves players only through their inputs (server authority)', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');

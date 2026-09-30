@@ -1,5 +1,6 @@
 import { getGame } from '../../games';
 import { DEV_ROOM_ID, MAX_PRACTICE_ROOMS, MAX_ROOMS, ROOM_EMPTY_MS } from '../../shared/consts';
+import { DEFAULT_OUTFIT, type Outfit } from '../../shared/outfit';
 import { type Hello, type RoomInfo, type ServerMsg, sanitizeName, sanitizeTitle } from '../../shared/protocol';
 import { sameKey } from '../auth';
 import type { Logger } from '../log';
@@ -12,6 +13,9 @@ export interface Member {
   /** Identity (see Auth.issueIdentity): the same person on every connection they make. */
   readonly uid: string;
   name: string;
+  /** Suit colour asked for (a room gives it if it is free) and the outfit: they travel from room to room. */
+  color: string | undefined;
+  outfit: Outfit;
   room: Room | null;
   /** Player id in `room`. */
   id: number;
@@ -81,7 +85,16 @@ export class Hub {
    * player is still in), or the room list. Null when the connection was refused.
    */
   enter(conn: Conn, uid: string, h: Hello): Member | null {
-    const m: Member = { conn, uid, name: sanitizeName(h.name), room: null, id: -1, gone: false };
+    const m: Member = {
+      conn,
+      uid,
+      name: sanitizeName(h.name),
+      color: h.color,
+      outfit: h.outfit ?? DEFAULT_OUTFIT,
+      room: null,
+      id: -1,
+      gone: false,
+    };
     if (h.practice) return this.enterPractice(m, h.practice) ? m : null;
     const old = this.members.get(uid);
     const target = h.room ?? old?.room?.id ?? this.roomOf(uid)?.id;
@@ -145,7 +158,7 @@ export class Hub {
     }
     // (Set first: the room's own messages must not be followed by a room list for this player.)
     m.room = room;
-    const pid = room.join(m.conn, { uid: m.uid, name: m.name });
+    const pid = room.join(m.conn, { uid: m.uid, name: m.name, color: m.color, outfit: m.outfit });
     if (pid === null) {
       m.room = null;
       return this.deny(m, id, 'full', 'В комнате нет свободных мест');
@@ -235,7 +248,7 @@ export class Hub {
     const room = new Room({ ...this.opts.room, minPlayers: 1, practice: { game: game.id, bots: 3 }, log: this.log });
     this.practice.add(room);
     m.room = room;
-    m.id = room.join(m.conn, { uid: m.uid, name: m.name }) ?? -1;
+    m.id = room.join(m.conn, { uid: m.uid, name: m.name, color: m.color, outfit: m.outfit }) ?? -1;
     return true;
   }
 

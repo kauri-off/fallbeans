@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { ANIM, RAINBOW } from '../../shared/consts';
+import { DEFAULT_OUTFIT, type Outfit, sameOutfit } from '../../shared/outfit';
 import { shotMode } from '../state';
 import { clone } from './assets';
 import { type Expr, Face } from './face';
 import { lod } from './lod';
 import { applySurface } from './materials';
+import { type Accessory, makeGlasses, makeHat } from './outfit';
 
 /** A colour three.js understands (the rainbow starts red and is recoloured every frame: tickRainbow). */
 const baseColor = (color: string) => new THREE.Color(color === RAINBOW ? '#ff5f5f' : color);
@@ -14,7 +16,7 @@ const hue = new THREE.Color();
 /** The rainbow suit: its colour runs round the colour wheel (`t` in seconds). */
 export function tickRainbow(t: number) {
   const body = bodyMats.get(RAINBOW);
-  const belly = bellyMats.get(RAINBOW);
+  const belly = bellyMats.get(`${RAINBOW}|1`);
   if (!body && !belly) return;
   hue.setHSL((t * 0.15) % 1, 0.85, 0.6);
   body?.color.copy(hue);
@@ -43,15 +45,27 @@ function bodyMaterial(color: string, ao: THREE.Texture | null) {
 }
 
 const bellyMats = new Map<string, THREE.MeshStandardMaterial>();
-/** The belly patch: the player colour, washed towards white. */
-function bellyMaterial(color: string, ao: THREE.Texture | null) {
-  let m = bellyMats.get(color);
+/** The belly patch: the player colour washed towards white, or a colour of its own. */
+function bellyMaterial(color: string, ao: THREE.Texture | null, washed: boolean) {
+  const key = `${color}|${washed ? 1 : 0}`;
+  let m = bellyMats.get(key);
   if (!m) {
+    const c = baseColor(color);
     m = applySurface(
-      new THREE.MeshStandardMaterial({ aoMap: ao, color: baseColor(color).lerp(WHITE, 0.62), roughness: 0.55 }),
+      new THREE.MeshStandardMaterial({ aoMap: ao, color: washed ? c.lerp(WHITE, 0.62) : c, roughness: 0.55 }),
       null,
     );
-    bellyMats.set(color, m);
+    bellyMats.set(key, m);
+  }
+  return m;
+}
+
+const shoeMats = new Map<string, THREE.MeshStandardMaterial>();
+function shoeMaterial(color: string, ao: THREE.Texture | null) {
+  let m = shoeMats.get(color);
+  if (!m) {
+    m = applySurface(new THREE.MeshStandardMaterial({ aoMap: ao, color, roughness: 0.5 }), null);
+    shoeMats.set(color, m);
   }
   return m;
 }
@@ -182,6 +196,9 @@ export class Bean {
   /** Podium pose, overriding idle. */
   pose: Pose = null;
   private crown: THREE.Object3D | null = null;
+  private outfit: Outfit = DEFAULT_OUTFIT;
+  private hat: Accessory | null = null;
+  private glasses: Accessory | null = null;
   private tail: THREE.Object3D | null = null;
   private phase = 0;
   private readonly squash = new Spring();
@@ -235,21 +252,57 @@ export class Bean {
 
   setColor(color: string) {
     this.color = color;
+    this.paint();
+  }
+
+  setOutfit(o: Outfit) {
+    if (sameOutfit(o, this.outfit)) return;
+    this.outfit = o;
+    this.paint();
+  }
+
+  private paint() {
+    const { color, outfit } = this;
     // The model's baked AO (one map for all its materials) goes on the player's materials too.
     let ao: THREE.Texture | null = null;
     this.model.traverse((o) => {
       if (o instanceof THREE.Mesh) ao ??= (o.material as THREE.MeshStandardMaterial).aoMap ?? null;
     });
     const m = bodyMaterial(color, ao);
-    const belly = bellyMaterial(color, ao);
+    const belly = outfit.belly ? bellyMaterial(outfit.belly, ao, false) : bellyMaterial(color, ao, true);
     this.model.traverse((o) => {
       if (!(o instanceof THREE.Mesh) || o.userData.lodGhost) return;
       const name = (o.material as THREE.Material).name;
       if (name === 'Body') o.userData.part = 'body';
       if (name === 'Belly') o.userData.part = 'belly';
+      if (name === 'Shoe') {
+        o.userData.part = 'shoe';
+        o.userData.shoe = o.material;
+      }
       if (o.userData.part === 'body') o.material = m;
       if (o.userData.part === 'belly') o.material = belly;
+      if (o.userData.part === 'shoe') o.material = outfit.shoes ? shoeMaterial(outfit.shoes, ao) : o.userData.shoe;
     });
+    this.dress(m);
+  }
+
+  /** Puts on the outfit's hat and glasses (rebuilt: a hat may take the suit's colour). */
+  private dress(suit: THREE.Material) {
+    for (const a of [this.hat, this.glasses]) {
+      if (!a) continue;
+      this.model.remove(a.root);
+      a.root.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+    }
+    this.hat = makeHat(this.outfit.hat, this.outfit.hatColor, suit);
+    this.glasses = makeGlasses(this.outfit.glasses);
+    for (const a of [this.hat, this.glasses]) if (a) this.model.add(a.root);
+    this.placeCrown();
+  }
+
+  private placeCrown() {
+    this.crown?.position.set(0, 1.465 + (this.hat?.crownLift ?? 0), -0.01);
   }
 
   setCrown(on: boolean) {
@@ -257,8 +310,8 @@ export class Bean {
       this.crown = clone('crown');
       // The band (radius 0.5 in the model) rests on the head where it is 0.31 m from the axis (y ≈ 1.49).
       this.crown.scale.setScalar(CROWN_SCALE);
-      this.crown.position.set(0, 1.465, -0.01);
       this.crown.rotation.x = -0.06;
+      this.placeCrown();
       this.model.add(this.crown);
       lod.register(this.crown, this.crown);
     } else if (!on && this.crown) {
@@ -317,6 +370,10 @@ export class Bean {
 
   dispose() {
     if (this.crown) lod.drop(this.crown);
+    for (const a of [this.hat, this.glasses])
+      a?.root.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
     lod.drop(this);
     this.root.removeFromParent();
   }
@@ -433,6 +490,7 @@ export class Bean {
     this.root.scale.setScalar(Math.max(0.5, size));
     this.updateAura(f.power ?? 0, t);
 
+    this.hat?.update?.(t, speed);
     if (this.tail) {
       // Each segment follows the one before: a wagging, trailing tail.
       let seg = this.tail as THREE.Object3D;

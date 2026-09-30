@@ -955,6 +955,16 @@ h3 {
   outline: 0.1875rem solid var(--ink);
 }
 
+.swatches.small .swatch {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-width: 0.125rem;
+}
+
+.swatch.auto {
+  background: repeating-linear-gradient(45deg, #fff 0 0.25rem, #d9dce3 0.25rem 0.5rem);
+}
+
 .swatch:disabled {
   opacity: 0.25;
   cursor: default;
@@ -998,12 +1008,14 @@ h3 {
   opacity: 0.7;
 }
 
+.outfit summary,
 .practice summary {
   cursor: pointer;
   color: var(--muted);
 }
 
-.practice .row {
+.practice .row,
+.outfit > .stack {
   margin-top: 0.5rem;
 }
 

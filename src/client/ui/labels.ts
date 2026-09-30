@@ -1,4 +1,5 @@
 import { RAINBOW } from '../../shared/consts';
+import type { Glasses, Hat } from '../../shared/outfit';
 
 const RAINBOW_CSS = 'linear-gradient(135deg, #ff5f5f, #ffb13f, #ffe53f, #4fdc6a, #3fa9ff, #a66bff)';
 
@@ -52,3 +53,29 @@ export function plural(n: number, one: string, few: string, many: string) {
   if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} ${few}`;
   return `${n} ${many}`;
 }
+
+export const HAT_LABEL: Record<Hat, string> = {
+  none: 'Без шапки',
+  cap: '🧢 Кепка',
+  beanie: '🧶 Шапка',
+  party: '🥳 Колпак',
+  tophat: '🎩 Цилиндр',
+  cowboy: '🤠 Ковбойская',
+  viking: '⚔️ Викинг',
+  propeller: '🚁 Пропеллер',
+  bunny: '🐰 Ушки зайки',
+  cat: '🐱 Ушки кошки',
+  horns: '😈 Рожки',
+  halo: '😇 Нимб',
+  flower: '🌸 Цветок',
+  antenna: '👽 Антенны',
+};
+
+export const GLASSES_LABEL: Record<Glasses, string> = {
+  none: 'Без очков',
+  round: '👓 Круглые',
+  shades: '🕶️ Тёмные',
+  hearts: '💕 Сердечки',
+  monocle: '🧐 Монокль',
+  visor: '🥽 Визор',
+};
