@@ -32,6 +32,7 @@
   /* Liquid glass: a light translucent tint, blur of what is behind, a bright rim and a soft sheen. */
   --glass: rgba(255, 255, 255, 0.28);
   --glass-strong: rgba(255, 255, 255, 0.42);
+  --glass-low: rgba(255, 255, 255, 0.2);
   --glass-rim: rgba(255, 255, 255, 0.65);
   --glass-shadow:
     0 0.625rem 1.875rem rgba(43, 26, 92, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(255, 255, 255, 0.25);
@@ -39,6 +40,13 @@
   font-family: "Nunito", "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
   color: var(--ink);
   font-weight: 600;
+}
+
+:root.night {
+  /* Dark skies would show through the glass and swallow the dark text. */
+  --glass: rgba(255, 255, 255, 0.7);
+  --glass-strong: rgba(255, 255, 255, 0.78);
+  --glass-low: rgba(255, 255, 255, 0.64);
 }
 
 * {
@@ -70,7 +78,7 @@ body {
 
 .glass {
   position: relative;
-  background: linear-gradient(160deg, var(--glass-strong), var(--glass) 45%, rgba(255, 255, 255, 0.2));
+  background: linear-gradient(160deg, var(--glass-strong), var(--glass) 45%, var(--glass-low));
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
   border: 1px solid var(--glass-rim);
