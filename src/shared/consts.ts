@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;
@@ -65,6 +65,8 @@ export const ANIM = {
   climbOver: 10,
   /** Inside a portal: not drawn. */
   portal: 11,
+  /** On a ladder. */
+  ladder: 12,
 } as const;
 export type AnimCode = (typeof ANIM)[keyof typeof ANIM];
 

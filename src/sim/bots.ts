@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 import { EMOTES } from '../shared/consts';
 import type { BotBrain, BotInput, BotView } from './map';
-import { DIVE_SPEED, GRAVITY } from './physics';
+import { DIVE_SPEED, GRAVITY, RUN_SPEED } from './physics';
 
 /** Bot brains run at 20 Hz (BOT_EVERY ticks); timers below use this step. */
 export const BOT_DT = 1 / 20;
@@ -477,6 +477,106 @@ export function smoothStick(bot: BotView, out: BotInput) {
   out.mz = pz + (out.mz - pz) * k;
   m.smx = out.mx;
   m.smz = out.mz;
+}
+
+/**
+ * In the air: steers so that the body comes down on (tx, tz) when it falls to height ty (a pad, a
+ * platform), asking for the horizontal speed that gets it there in time (air control does the rest).
+ * Returns false when it cannot get down there any more (already below it): it heads straight there.
+ */
+export function aimLanding(bot: BotView, tx: number, ty: number, tz: number, out: BotInput): boolean {
+  const b = bot.body;
+  const dx = tx - b.pos.x;
+  const dz = tz - b.pos.z;
+  const disc = b.vel.y * b.vel.y + 2 * GRAVITY * (b.pos.y - ty);
+  if (disc < 0) {
+    steer(bot, tx, tz, out);
+    return false;
+  }
+  const t = Math.max(0.08, (b.vel.y + Math.sqrt(disc)) / GRAVITY);
+  // (Air control: full stick asks for a run, or for the speed the body already flies at.)
+  const top = Math.max(RUN_SPEED, Math.hypot(b.vel.x, b.vel.z));
+  let mx = dx / t / top;
+  let mz = dz / t / top;
+  const l = Math.hypot(mx, mz);
+  if (l > 1) {
+    mx /= l;
+    mz /= l;
+  }
+  out.mx = mx;
+  out.mz = mz;
+  return true;
+}
+
+/** A pad in a chain of bounces (x may move with time). */
+export interface Hop {
+  x: number | ((t: number) => number);
+  y: number;
+  z: number;
+  /** Radius of the pad, and how hard it throws up (m/s). */
+  r: number;
+  power: number;
+}
+
+/**
+ * Bouncing across pads (mushrooms, trampolines) to a landing spot: a waypoint `drive`. On the ground
+ * before the first pad it runs at it (jumping at `edge`); in the air it aims for the next pad, and
+ * after each bounce for the one after, then for the landing. Returns false once on the ground past `edge`.
+ */
+export function hopChain(
+  key: string,
+  hops: readonly Hop[],
+  land: { x: number; y: number; z: number },
+  edge: number,
+  /** On the ground at the edge: is now a good time to go (e.g. the first pad is coming)? */
+  ready?: (bot: BotView) => boolean,
+) {
+  const hx = (h: Hop, t: number) => (typeof h.x === 'function' ? h.x(t) : h.x);
+  return (bot: BotView, out: BotInput): boolean => {
+    const b = bot.body;
+    const p = b.pos;
+    if (b.grounded) {
+      if (p.z > edge + 0.5) {
+        // Missed, and down in a basin with the pads: back onto the nearest one.
+        if (p.y > land.y - 1) return false;
+        let near = hops[0]!;
+        for (const h of hops)
+          if (Math.hypot(hx(h, bot.t) - p.x, h.z - p.z) < Math.hypot(hx(near, bot.t) - p.x, near.z - p.z)) near = h;
+        if (Math.abs(near.y - p.y) > 1) return false;
+        bot.mem[key] = hops.indexOf(near);
+        steer(bot, hx(near, bot.t), near.z, out);
+        return true;
+      }
+      bot.mem[key] = 0;
+      const h = hops[0]!;
+      if (ready && !ready(bot)) {
+        follow(bot, p.x, edge - 1.3, out);
+        return true;
+      }
+      const x = hx(h, bot.t + 0.5);
+      steer(bot, x, h.z, out);
+      if (p.z > edge - 1.4) out.jump = true;
+      return true;
+    }
+    if (b.state !== 'normal') return false;
+    let i = bot.mem[key] ?? 0;
+    // Just thrown up by a pad: the next one is the target.
+    hops.forEach((h, j) => {
+      if (b.vel.y > h.power * 0.7 && Math.hypot(p.x - hx(h, bot.t), p.z - h.z) < h.r + 1.2 && Math.abs(p.y - h.y) < 2.5)
+        i = Math.max(i, j + 1);
+    });
+    bot.mem[key] = i;
+    const h = hops[i];
+    if (!h) {
+      aimLanding(bot, land.x, land.y, land.z, out);
+      return true;
+    }
+    // Where a moving pad will be by the time the body comes down to it.
+    const disc = b.vel.y * b.vel.y + 2 * GRAVITY * (p.y - h.y);
+    const t = disc > 0 ? (b.vel.y + Math.sqrt(disc)) / GRAVITY : 0;
+    aimLanding(bot, hx(h, bot.t + t), h.y, h.z, out);
+    return true;
+  };
 }
 
 /** A bonus lying close by (ahead of the bot, on its level), if any: worth a small detour. */

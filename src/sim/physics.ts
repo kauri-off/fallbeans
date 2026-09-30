@@ -62,6 +62,10 @@ export interface ColliderOpts {
   sweep?: boolean;
   /** Not solid: only reports touches (onTouch), e.g. portals, fake glass panes. */
   trigger?: boolean;
+  /** A ladder (a trigger in front of a wall, facing its local +z): walk into it to climb up. */
+  ladder?: boolean;
+  /** A pad throws the bean this way too (horizontal velocity, m/s), not only up. */
+  launch?: THREE.Vector3 | null;
 }
 
 export interface Contact {
@@ -90,6 +94,8 @@ export class Collider {
   readonly sinks: boolean;
   readonly sweep: boolean;
   readonly trigger: boolean;
+  readonly ladder: boolean;
+  launch: THREE.Vector3 | null;
   readonly cur = new THREE.Matrix4();
   readonly prev = new THREE.Matrix4();
   readonly inv = new THREE.Matrix4();
@@ -114,7 +120,9 @@ export class Collider {
     this.navSkip = !!opts.navSkip;
     this.sinks = !!opts.sinks;
     this.sweep = !!opts.sweep;
-    this.trigger = !!opts.trigger;
+    this.trigger = !!opts.trigger || !!opts.ladder;
+    this.ladder = !!opts.ladder;
+    this.launch = opts.launch ?? null;
     this.radius =
       shape.type === 'box'
         ? Math.hypot(shape.hx, shape.hy, shape.hz)
@@ -394,10 +402,21 @@ export interface OtherBody {
 /**
  * normal · stun (short daze) · dive → slide (belly slide) · tumble (knocked over: the body tips over,
  * slides and rolls with little control) → getup · climb (caught a ledge in the air, pulling up onto it) ·
- * portal (inside a portal: out of sight, travelling to the other end, touching nothing).
+ * portal (inside a portal: out of sight, travelling to the other end, touching nothing) · ladder (on a
+ * ladder: up and down with the stick, off with a jump, over the top onto what it leans on).
  */
-export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup' | 'climb' | 'portal';
-export const BODY_STATES: readonly BodyState[] = ['normal', 'stun', 'dive', 'slide', 'tumble', 'getup', 'climb', 'portal'];
+export type BodyState = 'normal' | 'stun' | 'dive' | 'slide' | 'tumble' | 'getup' | 'climb' | 'portal' | 'ladder';
+export const BODY_STATES: readonly BodyState[] = [
+  'normal',
+  'stun',
+  'dive',
+  'slide',
+  'tumble',
+  'getup',
+  'climb',
+  'portal',
+  'ladder',
+];
 
 /** Seconds a trip through a portal takes. */
 export const PORTAL_T = 0.5;
@@ -418,6 +437,12 @@ const CLIMB_HANG = 0.08;
 const CLIMB_UP = 5.5;
 const CLIMB_OVER = 4.5;
 const CLIMB_T = 1.2;
+/** Ladders: climbing speed (m/s), how far the body keeps from the rungs' plane, and the leap off (m/s back). */
+const LADDER_SPEED = 4.2;
+const LADDER_GAP = 0.17;
+const LADDER_LEAP = 4;
+/** After leaping off a ladder, this long (s) before one is caught again. */
+const LADDER_AGAIN = 0.35;
 /** Distance between the two collision spheres. */
 const SPINE = SPHERES[1] - SPHERES[0];
 /** Closest two beans get (centre to centre, horizontally). */
@@ -610,14 +635,15 @@ export class PlayerBody {
 
   /**
    * Into a portal: for PORTAL_T the body is out of play, gliding to the exit `p` (so the camera
-   * follows it there), then comes out facing `yaw` with (at least `minSpeed` of) its speed.
-   * The exit is kept in climbTo, which travels with the full state (client prediction).
+   * follows it there), then comes out facing `yaw` with (at least `minSpeed` of) its speed, thrown
+   * up at `lift` m/s when given. The exit is kept in climbTo, which travels with the full state
+   * (client prediction).
    */
-  enterPortal(p: THREE.Vector3, yaw: number, minSpeed = 6) {
+  enterPortal(p: THREE.Vector3, yaw: number, minSpeed = 6, lift?: number) {
     if (this.state === 'portal') return;
     const sp = Math.max(minSpeed, Math.hypot(this.vel.x, this.vel.z));
     this.climbTo.copy(p);
-    this.vel.set(Math.sin(yaw) * sp, Math.max(this.vel.y, 3), Math.cos(yaw) * sp);
+    this.vel.set(Math.sin(yaw) * sp, lift ?? Math.max(this.vel.y, 3), Math.cos(yaw) * sp);
     this.yaw = yaw;
     this.state = 'portal';
     this.stateT = PORTAL_T;
@@ -766,9 +792,15 @@ export class PlayerBody {
       }
     } else if (this.state === 'climb') {
       this.climb(dt, input);
+    } else if (this.state === 'ladder') {
+      this.ladderStep(dt, input, world);
     } else {
       const acc = (g ? 60 - 58.5 * slip : AIR_ACCEL) * dt;
-      this.accelerate(input.mx * RUN_SPEED * slow, input.mz * RUN_SPEED * slow, acc);
+      // Flying faster than a run (thrown by a pad or a portal): the stick steers, it does not brake.
+      const cap = RUN_SPEED * slow;
+      const fly = g ? 0 : Math.hypot(this.vel.x, this.vel.z);
+      const top = fly > cap ? fly : cap;
+      this.accelerate(input.mx * top, input.mz * top, acc);
       if (Math.hypot(input.mx, input.mz) > 0.1) {
         let d = Math.atan2(input.mx, input.mz) - this.yaw;
         d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -818,7 +850,8 @@ export class PlayerBody {
     } else if (!this.down) this.tilt = this.tilt > 0.02 ? this.tilt * Math.exp(-12 * dt) : 0;
 
     const climbing = this.state === 'climb';
-    if (!climbing) {
+    const onLadder = this.state === 'ladder';
+    if (!climbing && !onLadder) {
       this.vel.y = Math.max(this.vel.y - GRAVITY * dt, -32);
       this.pos.addScaledVector(this.vel, dt);
     }
@@ -829,6 +862,7 @@ export class PlayerBody {
     groundN.set(0, 0, 0);
     wallN.set(0, 0, 0);
     const hitDone = new Set<Collider>();
+    let ladder: Collider | null = null;
     const cols = world.query(this.pos.x, this.pos.z, r + 1.2 * size + (this.tilt > 0 ? SPINE * size : 0), nearby);
     for (let iter = 0; iter < 3; iter++) {
       let any = false;
@@ -842,7 +876,8 @@ export class PlayerBody {
           if (col.trigger) {
             if (!hitDone.has(col)) {
               hitDone.add(col);
-              col.onTouch?.(col, hitInfo.normal, this);
+              if (col.ladder) ladder = col;
+              else col.onTouch?.(col, hitInfo.normal, this);
             }
             break;
           }
@@ -931,6 +966,16 @@ export class PlayerBody {
       this.intoWall(input, wallN) > 0.5
     )
       this.grabLedge(world, wallN);
+    if (ladder && stateBefore === 'normal' && this.state === 'normal' && this.stateT <= 0 && !this.jumped)
+      this.grabLadder(ladder, input);
+    // Stepping off the foot of a ladder (pulling back with the feet on the ground).
+    if (onLadder && this.state === 'ladder' && this.grounded) {
+      const back = input.mx * Math.sin(this.yaw) + input.mz * Math.cos(this.yaw);
+      if (back < -0.3) {
+        this.state = 'normal';
+        this.stateT = LADDER_AGAIN;
+      }
+    }
 
     const myMass = this.mass;
     for (const o of others) {
@@ -993,6 +1038,10 @@ export class PlayerBody {
       newGround?.onGround?.(newGround, this);
       if (newGround?.pad) {
         this.vel.y = newGround.pad;
+        if (newGround.launch) {
+          this.vel.x = newGround.launch.x;
+          this.vel.z = newGround.launch.z;
+        }
         this.grounded = false;
         this.groundCol = null;
         this.bounced = true;
@@ -1098,6 +1147,75 @@ export class PlayerBody {
     }
     this.vel.set((this.pos.x - x0) / dt, (this.pos.y - y0) / dt, (this.pos.z - z0) / dt);
     if (d > 1e-3) this.yaw = Math.atan2(dx, dz);
+  }
+
+  /**
+   * Walking (or jumping) into a ladder catches it: the body faces the rungs and keeps its height.
+   * The ladder's top (its trigger's top) and the spot in front of the rungs are kept in climbTo.
+   */
+  private grabLadder(col: Collider, input: BodyInput) {
+    _dir.set(0, 0, 1).transformDirection(col.cur);
+    const h = Math.hypot(_dir.x, _dir.z);
+    if (h < 1e-3 || col.shape.type !== 'box') return;
+    const nx = _dir.x / h;
+    const nz = _dir.z / h;
+    if (-(input.mx * nx + input.mz * nz) < 0.5 * Math.hypot(input.mx, input.mz) || Math.hypot(input.mx, input.mz) < 0.3) return;
+    if (this.vel.x * nx + this.vel.z * nz > 2 || this.size > 1) return;
+    const top = col.center.y + col.shape.hy;
+    if (this.pos.y > top - 0.9 || this.pos.y < col.center.y - col.shape.hy - 0.4) return;
+    this.state = 'ladder';
+    this.stateT = 0;
+    this.climbTo.set(col.center.x + nx * LADDER_GAP, top, col.center.z + nz * LADDER_GAP);
+    this.vel.set(0, 0, 0);
+    this.yaw = Math.atan2(-nx, -nz);
+    this.tilt = 0;
+    this.coyote = 0;
+    this.jumpBuf = 0;
+  }
+
+  /** One step on a ladder: up or down with the stick, a leap off with jump, over the top at the top. */
+  private ladderStep(dt: number, input: BodyInput, world: CollisionWorld) {
+    const fx = Math.sin(this.yaw);
+    const fz = Math.cos(this.yaw);
+    const to = this.climbTo;
+    if (this.jumpBuf > 0) {
+      this.state = 'normal';
+      this.stateT = LADDER_AGAIN;
+      this.vel.set(-fx * LADDER_LEAP, JUMP_V * 0.8, -fz * LADDER_LEAP);
+      this.jumpBuf = 0;
+      this.jumped = true;
+      return;
+    }
+    const x0 = this.pos.x;
+    const y0 = this.pos.y;
+    const z0 = this.pos.z;
+    // Drawn to the middle of the rungs; pushed far off them (by others), the hands let go.
+    const dx = to.x - this.pos.x;
+    const dz = to.z - this.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 1.3) {
+      this.state = 'normal';
+      return;
+    }
+    const pull = Math.min(d, 5 * dt);
+    if (d > 1e-4) {
+      this.pos.x += (dx / d) * pull;
+      this.pos.z += (dz / d) * pull;
+    }
+    const up = input.mx * fx + input.mz * fz;
+    const climb = Math.abs(up) > 0.3 ? up * LADDER_SPEED * this.size : 0;
+    this.pos.y = Math.min(this.pos.y + climb * dt, to.y - 0.85);
+    if (climb > 0 && this.pos.y >= to.y - 0.85 - 1e-6) {
+      // At the top: over onto what the ladder leans on, if there is room there.
+      const ox = to.x + fx * 1.05;
+      const oz = to.z + fz * 1.05;
+      if (this.fits(world, ox, to.y + 0.02, oz)) {
+        this.state = 'climb';
+        this.stateT = CLIMB_T - CLIMB_HANG - 1e-3;
+        this.climbTo.set(ox, to.y + 0.02, oz);
+      }
+    }
+    this.vel.set((this.pos.x - x0) / dt, (this.pos.y - y0) / dt, (this.pos.z - z0) / dt);
   }
 
   toFull(teleport = false): BodyFullState {

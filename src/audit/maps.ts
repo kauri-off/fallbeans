@@ -299,7 +299,7 @@ export const clipAudit: MapAudit = {
         for (const a of dyn) {
           world.query(a.center.x, a.center.z, a.radius, near);
           for (const b of near) {
-            if (b === a || !b.enabled || a.sinks || b.sinks || related(a, b, root)) continue;
+            if (b === a || !b.enabled || a.sinks || b.sinks || a.trigger || b.trigger || related(a, b, root)) continue;
             if (!b.isStatic && b.index < a.index) continue;
             test(a, b, t);
             test(b, a, t);

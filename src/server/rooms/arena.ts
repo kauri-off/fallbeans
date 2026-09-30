@@ -1033,6 +1033,7 @@ export class ServerArena {
 
 export function animFor(b: PlayerBody, grabbing: boolean, reaching = false): number {
   if (b.state === 'portal') return ANIM.portal;
+  if (b.state === 'ladder') return ANIM.ladder;
   if (b.state === 'tumble') return ANIM.tumble;
   if (b.state === 'getup') return ANIM.getup;
   if (b.state === 'stun') return ANIM.stun;

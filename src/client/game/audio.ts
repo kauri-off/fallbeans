@@ -17,6 +17,7 @@ export type Sfx =
   | 'win'
   | 'click'
   | 'steal'
+  | 'pickup'
   | 'warn';
 
 let actx: AudioContext | null = null;
@@ -63,6 +64,9 @@ export function sfx(type: Sfx, gain = 1) {
       return tone(200, 700, 0.22, 'sine', 0.14);
     case 'break':
       return tone(140, 50, 0.3, 'square', 0.08);
+    case 'pickup':
+      tone(988, 988, 0.07, 'triangle', 0.1);
+      return tone(1319, 1319, 0.16, 'triangle', 0.1, 0.07);
     case 'count':
     case 'warn':
       return tone(520, 520, 0.18, 'square', 0.07);

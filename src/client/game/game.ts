@@ -5,6 +5,7 @@ import { ANIM, BASE_PATH, DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
 import { BONUS_KINDS } from '../../sim/bonus';
+import type { BeanDeco } from '../../sim/map';
 import { GIANT_SIZE, POWER, pushOut } from '../../sim/physics';
 import { report } from '../debug/capture';
 import { Connection } from '../net/connection';
@@ -56,7 +57,7 @@ export class Game {
   arena: ClientArena | null = null;
   private readonly beans = new Map<number, Bean>();
   private readonly lastSeen = new Map<number, number>();
-  private readonly decor = new Map<number, { tail?: boolean }>();
+  private readonly decor = new Map<number, BeanDeco>();
   private players = new Map<number, LobbyPlayer>();
   /** Spectated player id; -1 = overview camera. */
   private spectate = -1;
@@ -434,8 +435,9 @@ export class Game {
       myId: myId.value,
       sfx: (s) => sfx(s),
       decorate: (id, d) => {
-        this.decor.set(id, { ...this.decor.get(id), ...d });
-        this.beans.get(id)?.setTail(!!d.tail);
+        const all = { ...this.decor.get(id), ...d };
+        this.decor.set(id, all);
+        this.beans.get(id)?.setTail(!!all.tail);
       },
       send: (d) => this.net.datagram(d),
       serverNow: () => this.net.clock.serverNow(),
@@ -836,7 +838,9 @@ export class Game {
       const d = this.tmp.distanceTo(cam.position);
       this.tmp.project(cam);
       if (this.tmp.z > 1 || Math.abs(this.tmp.x) > 1.1 || Math.abs(this.tmp.y) > 1.1) continue;
-      out.set(id, { x: (this.tmp.x * 0.5 + 0.5) * w, y: (-this.tmp.y * 0.5 + 0.5) * h, d, name: b.name, color: b.color });
+      const badge = this.decor.get(id)?.badge;
+      const name = badge ? `${b.name} ${badge}` : b.name;
+      out.set(id, { x: (this.tmp.x * 0.5 + 0.5) * w, y: (-this.tmp.y * 0.5 + 0.5) * h, d, name, color: b.color });
     }
   }
 }
