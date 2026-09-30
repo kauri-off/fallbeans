@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
 import * as THREE from 'three';
 import { decodeSnapshot } from '../../shared/codec';
-import { ANIM, BASE_PATH, DT, INTRO_MS } from '../../shared/consts';
+import { ANIM, BASE_PATH, COLORS, DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
 import { BONUS_KINDS } from '../../sim/bonus';
@@ -111,6 +111,10 @@ export class Game {
     this.wantRoom = /^[a-z0-9]{2,8}$/.test(linked) ? linked : null;
     this.net = new Connection({
       name: () => settings.value.name,
+      look: () => {
+        const c = COLORS.find((x) => x === settings.value.color);
+        return { outfit: settings.value.outfit, ...(c ? { color: c } : {}) };
+      },
       token: () => identity.get(),
       room: () => this.wantRoom,
       practice,
@@ -355,6 +359,7 @@ export class Game {
           const p = this.players.get(id);
           if (!p) continue;
           if (bean.color !== p.color) bean.setColor(p.color);
+          bean.setOutfit(p.outfit);
           if (bean.name !== p.name) bean.name = p.name;
           bean.setCrown(p.crowns > 0);
         }
@@ -508,6 +513,7 @@ export class Game {
     if (!b) {
       const p = this.players.get(id);
       b = new Bean(p?.color ?? '#ffffff', p?.name ?? '');
+      if (p) b.setOutfit(p.outfit);
       b.setCrown((p?.crowns ?? 0) > 0);
       b.setTail(!!this.decor.get(id)?.tail);
       this.renderer.scene.add(b.root);

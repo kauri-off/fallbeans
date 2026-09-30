@@ -14,6 +14,7 @@ import {
   TICK_MS,
 } from '../../shared/consts';
 import type { GameMeta } from '../../shared/game';
+import { botOutfit, type Outfit, sameOutfit } from '../../shared/outfit';
 import { Sections } from '../../shared/prof';
 import {
   type ArenaInfo,
@@ -188,12 +189,13 @@ export class Room {
    * A player enters: someone new, or (same identity) the one who is already here, on a new
    * connection. Returns the player id, or null when the room is full.
    */
-  join(conn: Conn, who: { uid: string; name: string }): number | null {
+  join(conn: Conn, who: { uid: string; name: string; color?: string | undefined; outfit?: Outfit | undefined }): number | null {
     const resumed = who.uid ? this.playerOf(who.uid) : undefined;
     if (resumed) {
       const old = resumed.conn;
       resumed.conn = conn;
       resumed.disconnectedAt = 0;
+      if (who.outfit) resumed.outfit = who.outfit;
       if (old !== conn) old?.close('replaced');
       this.log.info('player resumed', { id: resumed.id, name: resumed.name, via: conn.kind });
       this.seatHost(resumed);
@@ -207,8 +209,9 @@ export class Room {
       this.drop(bot);
     }
     const id = this.nextId++;
-    const p = makePlayer(id, sanitizeName(who.name) || `Боб ${id}`, this.freeColor(), {
+    const p = makePlayer(id, sanitizeName(who.name) || `Боб ${id}`, this.freeColor(who.color), {
       uid: who.uid,
+      outfit: who.outfit,
       conn,
       spectator: this.phase !== 'lobby',
     });
@@ -283,6 +286,12 @@ export class Room {
       case 'color':
         if (this.phase === 'lobby' && ![...this.players.values()].some((o) => o !== p && o.color === m.c)) {
           p.color = m.c;
+          this.sendLobby();
+        }
+        return;
+      case 'outfit':
+        if (!sameOutfit(p.outfit, m.o)) {
+          p.outfit = m.o;
           this.sendLobby();
         }
         return;
@@ -531,8 +540,9 @@ export class Room {
     return p.id === this.host;
   }
 
-  private freeColor(): string {
+  private freeColor(wish?: string): string {
     const used = new Set([...this.players.values()].map((p) => p.color));
+    if (wish && !used.has(wish) && (COLORS as readonly string[]).includes(wish)) return wish;
     return COLORS.find((c) => !used.has(c)) ?? COLORS[0];
   }
 
@@ -542,7 +552,7 @@ export class Room {
       [...this.players.values()].map((p) => p.name),
       id,
     );
-    this.players.set(id, makePlayer(id, name, this.freeColor(), { auto }));
+    this.players.set(id, makePlayer(id, name, this.freeColor(), { auto, outfit: botOutfit(id) }));
     if (this.arena.kind === 'lobby') this.arena.addPawn(id, true);
     return id;
   }
@@ -973,6 +983,7 @@ export class Room {
           id: p.id,
           name: p.name,
           color: p.color,
+          outfit: p.outfit,
           score: p.score,
           crowns: p.crowns,
           spectator: p.spectator,

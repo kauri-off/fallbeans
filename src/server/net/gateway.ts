@@ -84,8 +84,10 @@ export class Gateway {
           return;
         }
         if (member.gone) return;
-        // (The name travels with the player from room to room.)
+        // (The name, colour and outfit travel with the player from room to room.)
         if (m.t === 'name') this.hub.rename(member, m.name);
+        if (m.t === 'color') member.color = m.c;
+        if (m.t === 'outfit') member.outfit = m.o;
         if (member.room) {
           if (m.t === 'leave') this.hub.leave(member);
           else member.room.control(member.id, conn, m);

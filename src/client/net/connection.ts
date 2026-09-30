@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from '../../shared/consts';
-import type { ClientMsg, ServerMsg } from '../../shared/protocol';
+import type { ClientMsg, Hello, ServerMsg } from '../../shared/protocol';
 import { conn } from '../state';
 import { connect, fetchSession, type Transport } from './transport';
 
@@ -54,6 +54,8 @@ export class Clock {
 
 export interface ConnectionOptions {
   name: () => string;
+  /** The suit colour and outfit the player picked (kept in the browser). */
+  look: () => Pick<Hello, 'color' | 'outfit'>;
   /** The identity token from an earlier `ready`, if the browser kept one. */
   token: () => string | null;
   /** The room to enter right after the hello: the one from the link, or the one the player is in (reconnects). */
@@ -107,6 +109,7 @@ export class Connection {
       t: 'hello',
       v: PROTOCOL_VERSION,
       name: this.o.name(),
+      ...this.o.look(),
       ticket: s.ticket,
       ...(token ? { token } : {}),
       ...(room ? { room } : {}),
