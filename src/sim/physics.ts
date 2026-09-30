@@ -19,6 +19,19 @@ export const RUN_SPEED = 8.5;
 export const JUMP_V = 10.5;
 export const DIVE_SPEED = 12.5;
 
+/**
+ * Bonuses picked up on the course: giant (bigger and four times as heavy), mega jump, speed.
+ * A body has at most one at a time; `powerUntil` is the sim time it wears off.
+ */
+export const POWER = { none: 0, giant: 1, jump: 2, speed: 3 } as const;
+/** How long each bonus lasts (s), by kind. */
+export const POWER_TIME: readonly number[] = [0, 9, 10, 8];
+/** Size of a giant (×) and its mass (a bean weighs 1). */
+export const GIANT_SIZE = 1.8;
+export const GIANT_MASS = 4;
+const MEGA_JUMP = 1.5;
+const SPEED_UP = 1.4;
+
 export type Shape =
   | { type: 'box'; hx: number; hy: number; hz: number }
   | { type: 'cyl'; r: number; hh: number }
@@ -40,6 +53,15 @@ export interface ColliderOpts {
   navSkip?: boolean;
   /** Meant to slide into other geometry (retracting walls, sinking gates): the clipping audit skips it. */
   sinks?: boolean;
+  /**
+   * A sweeping arm (rotors, barriers): a hit always knocks the bean over, and a bean that is down
+   * passes under it instead of being dragged along.
+   */
+  sweep?: boolean;
+  /** Crumbling ground (fake glass): no jumping off it, and a dive from it gets no boost. */
+  crumbly?: boolean;
+  /** Not solid: only reports touches (onTouch), e.g. portals. */
+  trigger?: boolean;
 }
 
 export interface Contact {
@@ -66,6 +88,9 @@ export class Collider {
   onGround: ColliderOpts['onGround'];
   readonly navSkip: boolean;
   readonly sinks: boolean;
+  readonly sweep: boolean;
+  readonly crumbly: boolean;
+  readonly trigger: boolean;
   readonly cur = new THREE.Matrix4();
   readonly prev = new THREE.Matrix4();
   readonly inv = new THREE.Matrix4();
@@ -89,6 +114,9 @@ export class Collider {
     this.onGround = opts.onGround ?? null;
     this.navSkip = !!opts.navSkip;
     this.sinks = !!opts.sinks;
+    this.sweep = !!opts.sweep;
+    this.crumbly = !!opts.crumbly;
+    this.trigger = !!opts.trigger;
     this.radius =
       shape.type === 'box'
         ? Math.hypot(shape.hx, shape.hy, shape.hz)
@@ -281,6 +309,8 @@ export interface OtherBody {
   vx: number;
   vz: number;
   touching: boolean;
+  /** Size (1, or GIANT_SIZE for a giant). */
+  size?: number;
 }
 
 /**
@@ -336,6 +366,13 @@ export class PlayerBody {
   bumped = 0;
   /** Tag of a hazard touched from the side during the last step. */
   hazard: string | null = null;
+  /** Went through a portal this step. */
+  warped = false;
+  /** Bonus in effect (POWER) and the sim time it wears off. */
+  power: number = POWER.none;
+  powerUntil = -1e9;
+  /** Current size (1, or GIANT_SIZE while a giant); follows the bonus at every step. */
+  size = 1;
 
   constructor(readonly actor: number) {}
 
@@ -356,10 +393,23 @@ export class PlayerBody {
     this.landImpact = 0;
     this.tilt = 0;
     this.tiltDir = 0;
+    this.power = POWER.none;
+    this.powerUntil = -1e9;
+    this.size = 1;
   }
 
   get down() {
     return this.state === 'tumble' || this.state === 'getup';
+  }
+
+  get mass() {
+    return this.size > 1 ? GIANT_MASS : 1;
+  }
+
+  /** Gives a bonus from sim time t. */
+  givePower(kind: number, t: number) {
+    this.power = kind;
+    this.powerUntil = t + (POWER_TIME[kind] ?? 0);
   }
 
   stun(t = 1.1) {
@@ -368,10 +418,32 @@ export class PlayerBody {
     this.stateT = t;
   }
 
-  /** Knocked over: tips over in the direction of (vx, vz) and tumbles for about `t` seconds. */
-  knock(vx: number, vz: number, vy: number, t = 1) {
-    this.vel.x += vx;
-    this.vel.z += vz;
+  /**
+   * Knocked over: tips over in the direction of (vx, vz) and tumbles for about `t` seconds. A giant
+   * shrugs most of it off (a small push and a daze), unless `force` (a sweeping arm fells anyone).
+   */
+  knock(vx: number, vz: number, vy: number, t = 1, force = false) {
+    if (this.size > 1) {
+      const k = force ? 0.5 : 0.25;
+      vx *= k;
+      vz *= k;
+      vy *= force ? 0.7 : 0.4;
+      if (!force) {
+        this.vel.x += vx;
+        this.vel.z += vz;
+        this.vel.y = Math.max(this.vel.y, vy);
+        this.stun(0.35);
+        return;
+      }
+    }
+    if (force) {
+      // Caught by a sweeping arm: its shove replaces whatever the bean was doing.
+      this.vel.x = vx;
+      this.vel.z = vz;
+    } else {
+      this.vel.x += vx;
+      this.vel.z += vz;
+    }
     this.vel.y = Math.max(this.vel.y, vy);
     this.grounded = false;
     if (Math.hypot(vx, vz) > 0.1) this.tiltDir = Math.atan2(vx, vz);
@@ -383,10 +455,28 @@ export class PlayerBody {
 
   /** Centre of collision sphere i (0 feet, 1 head); the head swings over when tipped. */
   sphere(i: number, out: THREE.Vector3) {
-    out.set(this.pos.x, this.pos.y + SPHERES[0], this.pos.z);
+    const k = this.size;
+    out.set(this.pos.x, this.pos.y + SPHERES[0] * k, this.pos.z);
     if (i === 0) return out;
-    const s = Math.sin(this.tilt) * SPINE;
-    return out.set(out.x + Math.sin(this.tiltDir) * s, out.y + Math.cos(this.tilt) * SPINE, out.z + Math.cos(this.tiltDir) * s);
+    const s = Math.sin(this.tilt) * SPINE * k;
+    return out.set(
+      out.x + Math.sin(this.tiltDir) * s,
+      out.y + Math.cos(this.tilt) * SPINE * k,
+      out.z + Math.cos(this.tiltDir) * s,
+    );
+  }
+
+  /** Through a portal: out at `p`, facing `yaw`, keeping (at least `minSpeed` of) the speed. */
+  warp(p: THREE.Vector3, yaw: number, minSpeed = 6) {
+    const sp = Math.max(minSpeed, Math.hypot(this.vel.x, this.vel.z));
+    this.pos.copy(p);
+    this.vel.set(Math.sin(yaw) * sp, Math.max(this.vel.y, 3), Math.cos(yaw) * sp);
+    this.yaw = yaw;
+    this.grounded = false;
+    this.groundCol = null;
+    this.carryCol = null;
+    this.hasGroundLocal = false;
+    this.warped = true;
   }
 
   /** Before moving the world: remember where we stand on the ground collider. */
@@ -421,6 +511,7 @@ export class PlayerBody {
     this.knocked = false;
     this.bumped = 0;
     this.hazard = null;
+    this.warped = false;
   }
 
   /** Velocity of the ground under the feet (moving platforms, drums); zero on static ground. */
@@ -450,10 +541,17 @@ export class PlayerBody {
   }
 
   step(dt: number, input: BodyInput, world: CollisionWorld, t: number, others: readonly OtherBody[] = []) {
-    const slow = t < this.slowUntil ? this.slowK : 1;
+    if (this.power !== POWER.none && t >= this.powerUntil) this.power = POWER.none;
+    const pw = this.power;
+    this.size = pw === POWER.giant ? GIANT_SIZE : 1;
+    const size = this.size;
+    const r = R * size;
+    const slow = (t < this.slowUntil ? this.slowK : 1) * (pw === POWER.speed ? SPEED_UP : 1);
     const g = this.grounded;
     const slip = g ? (this.groundCol?.slip ?? 0) : 0;
-    this.coyote = g ? 0.12 : Math.max(0, this.coyote - dt);
+    // Crumbling ground: the coyote timer goes negative (no jump, no dive boost) for a moment.
+    const crumbly = g && !!this.groundCol?.crumbly;
+    this.coyote = crumbly ? -0.35 : g ? 0.12 : this.coyote > 0 ? Math.max(0, this.coyote - dt) : Math.min(0, this.coyote + dt);
     this.jumpBuf = input.jump ? 0.12 : Math.max(0, this.jumpBuf - dt);
     this.stateT -= dt;
     const stateBefore = this.state;
@@ -505,7 +603,7 @@ export class PlayerBody {
         this.yaw += d * Math.min(1, 14 * dt);
       }
       if (this.jumpBuf > 0 && this.coyote > 0) {
-        this.vel.y = JUMP_V * (slow < 1 ? 0.8 : 1);
+        this.vel.y = JUMP_V * (slow < 1 ? 0.8 : 1) * (pw === POWER.jump ? MEGA_JUMP : 1);
         this.coyote = 0;
         this.jumpBuf = 0;
         this.grounded = false;
@@ -529,10 +627,17 @@ export class PlayerBody {
         }
         // Keep some of the speed already going the same way (no dive may be slower than running).
         const along = Math.max(0, this.vel.x * fx + this.vel.z * fz);
-        const sp = Math.max(DIVE_SPEED * slow, Math.min(along, DIVE_SPEED * 1.25));
-        this.vel.x = fx * sp + (g ? platV.x : 0);
-        this.vel.z = fz * sp + (g ? platV.z : 0);
-        this.vel.y = g ? 6 + Math.max(0, platV.y) : Math.max(this.vel.y, 3);
+        if (this.coyote < 0) {
+          // Off crumbling ground: a flop, no boost.
+          this.vel.x = fx * along;
+          this.vel.z = fz * along;
+          this.vel.y = Math.min(this.vel.y, 0);
+        } else {
+          const sp = Math.max(DIVE_SPEED * slow, Math.min(along, DIVE_SPEED * 1.25));
+          this.vel.x = fx * sp + (g ? platV.x : 0);
+          this.vel.z = fz * sp + (g ? platV.z : 0);
+          this.vel.y = g ? 6 + Math.max(0, platV.y) : Math.max(this.vel.y, 3);
+        }
         this.grounded = false;
       }
     }
@@ -546,14 +651,23 @@ export class PlayerBody {
     let newGround: Collider | null = null;
     groundN.set(0, 0, 0);
     const hitDone = new Set<Collider>();
-    const cols = world.query(this.pos.x, this.pos.z, R + 1.2 + (this.tilt > 0 ? SPINE : 0), nearby);
+    const cols = world.query(this.pos.x, this.pos.z, r + 1.2 * size + (this.tilt > 0 ? SPINE * size : 0), nearby);
     for (let iter = 0; iter < 3; iter++) {
       let any = false;
       for (const col of cols) {
         if (!col.enabled) continue;
+        // Down (knocked over, getting up): a sweeping arm passes over the bean.
+        if (col.sweep && this.down) continue;
         for (let si = 0; si < SPHERES.length; si++) {
           this.sphere(si, _c);
-          if (!col.contact(_c, R, hitInfo)) continue;
+          if (!col.contact(_c, r, hitInfo)) continue;
+          if (col.trigger) {
+            if (!hitDone.has(col)) {
+              hitDone.add(col);
+              col.onTouch?.(col, hitInfo.normal, this);
+            }
+            break;
+          }
           any = true;
           const n = hitInfo.normal;
           this.pos.addScaledVector(n, hitInfo.depth);
@@ -577,7 +691,18 @@ export class PlayerBody {
           // Knockback once per hit: a bean pinned against a mover (tumbling, or just dazed by it)
           // is pushed along, not re-launched every tick.
           const fresh = this.state !== 'tumble' && !(this.state === 'stun' && this.stateT > 0.2);
-          if (col.hit && !hitDone.has(col) && fresh) {
+          if (col.sweep && n.y < 0.55 && !hitDone.has(col)) {
+            hitDone.add(col);
+            col.surfaceVelocity(hitInfo.local, dt, _sv);
+            const sp = Math.hypot(_sv.x, _sv.z);
+            // A sweeping arm fells whoever it catches, shoved along its swing (and then passes over).
+            if (sp > 1) {
+              // (hit sets how hard: 0.6 is a full shove)
+              const k = Math.min(1, 11 / sp) * 1.5 * col.hit;
+              this.knock(_sv.x * k + n.x * 1.5, _sv.z * k + n.z * 1.5, 5 + Math.min(2, sp * 0.15), 1.1, true);
+              this.hitSomething = true;
+            }
+          } else if (col.hit && !col.sweep && !hitDone.has(col) && fresh) {
             hitDone.add(col);
             col.surfaceVelocity(hitInfo.local, dt, _sv);
             // Only the part of the obstacle's motion that comes at us counts.
@@ -608,27 +733,33 @@ export class PlayerBody {
       if (!any) break;
     }
 
+    const myMass = this.mass;
     for (const o of others) {
       const dx = this.pos.x - o.x;
       const dz = this.pos.z - o.z;
       const dy = this.pos.y - o.y;
       const d = Math.hypot(dx, dz);
-      if (d < BEAN_GAP && Math.abs(dy) < HEIGHT) {
-        if (dy > 1.1 && this.vel.y <= 0) {
-          this.pos.y = o.y + HEIGHT;
+      const os = o.size ?? 1;
+      const gap = (BEAN_GAP * (size + os)) / 2;
+      if (d < gap && dy < HEIGHT * os && -dy < HEIGHT * size) {
+        if (dy > SPHERES[1] * os && this.vel.y <= 0) {
+          this.pos.y = o.y + HEIGHT * os;
           this.vel.y = 0;
           this.grounded = true;
         } else {
           const nx = d > 1e-4 ? dx / d : Math.sin(this.actor * 2.4);
           const nz = d > 1e-4 ? dz / d : Math.cos(this.actor * 2.4);
-          // Each bean moves out by half the overlap: the other one resolves its half in its own step.
-          const push = (BEAN_GAP - d) * 0.5;
+          // Each bean moves out by its share of the overlap (the lighter one more); the other one
+          // resolves its share in its own step.
+          const oMass = os > 1 ? GIANT_MASS : 1;
+          const share = oMass / (myMass + oMass);
+          const push = (gap - d) * share;
           this.pos.x += nx * push;
           this.pos.z += nz * push;
-          // Equal masses: an elastic-ish exchange of the approaching speed along the normal.
+          // An elastic-ish exchange of the approaching speed along the normal, by mass.
           const vrel = (this.vel.x - o.vx) * nx + (this.vel.z - o.vz) * nz;
           if (vrel < 0) {
-            const j = (-(1 + BUMP_E) * vrel) / 2;
+            const j = -(1 + BUMP_E) * vrel * share;
             this.vel.x += nx * j;
             this.vel.z += nz * j;
             // A proper collision pops you up a little.
@@ -687,6 +818,8 @@ export class PlayerBody {
       landImpact: this.landImpact,
       tilt: this.tilt,
       tiltDir: this.tiltDir,
+      power: this.power,
+      powerUntil: Math.max(this.powerUntil, -1e6),
       teleport,
     };
   }
@@ -708,5 +841,8 @@ export class PlayerBody {
     this.landImpact = s.landImpact;
     this.tilt = s.tilt;
     this.tiltDir = s.tiltDir;
+    this.power = s.power;
+    this.powerUntil = s.powerUntil;
+    this.size = s.power === POWER.giant ? GIANT_SIZE : 1;
   }
 }

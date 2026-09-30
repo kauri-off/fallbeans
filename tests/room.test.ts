@@ -221,6 +221,21 @@ describe('room', () => {
     expect(b.last('lobby')!.host).toBe(b.id);
   });
 
+  it('lets the host hand the role to another connected player', () => {
+    const a = new Client(room).hello('A');
+    const b = new Client(room).hello('B');
+    a.ctl({ t: 'addBot' });
+    const bot = a.last('lobby')!.players.find((p) => p.bot)!;
+    // Not to a bot, and nobody but the host can do it.
+    a.ctl({ t: 'host', id: bot.id });
+    b.ctl({ t: 'host', id: b.id });
+    expect(b.last('lobby')!.host).toBe(a.id);
+    a.ctl({ t: 'host', id: b.id });
+    expect(a.last('lobby')!.host).toBe(b.id);
+    a.ctl({ t: 'start' });
+    expect(room.phase).toBe('lobby');
+  });
+
   it('tail tag steals only by grabbing within reach', () => {
     const a = new Client(room).hello('A');
     const b = new Client(room).hello('B');

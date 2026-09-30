@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { COLORS, NAME_MAX } from './consts';
+import { COLORS, EMOTES, NAME_MAX } from './consts';
 import type { ArenaKind } from './game';
 
 /**
@@ -92,7 +92,9 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('playlist'), pl: PlaylistSchema }),
   z.object({ t: z.literal('addBot') }),
   z.object({ t: z.literal('removeBot'), id: PlayerId }),
-  z.object({ t: z.literal('emote'), e: z.number().int().min(1).max(3) }),
+  /** The host makes another player the host. */
+  z.object({ t: z.literal('host'), id: PlayerId }),
+  z.object({ t: z.literal('emote'), e: z.number().int().min(1).max(EMOTES) }),
   z.object({ t: z.literal('dev'), q: z.number().int().min(0).optional(), cmd: DevCmdSchema }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsgSchema>;

@@ -1,3 +1,4 @@
+import { EMOTES } from '../shared/consts';
 import type { BotBrain, BotInput, BotView } from './map';
 
 /** Bot brains run at 20 Hz (BOT_EVERY ticks); timers below use this step. */
@@ -17,6 +18,13 @@ export interface Waypoint {
   wait?: (bot: BotView) => boolean;
   /** Stick deflection towards it (default: full). Careful sections go slower. */
   speed?: number;
+  /**
+   * Somewhere to go instead for now (e.g. stand on a button that opens a gate for the others);
+   * null: carry on along the path.
+   */
+  detour?: (bot: BotView) => { x: number; z: number } | null;
+  /** Full control for a special stretch (returns false to follow the waypoint as usual). */
+  drive?: (bot: BotView, out: BotInput) => boolean;
 }
 
 /**
@@ -260,6 +268,22 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   }
 }
 
+/** A bonus lying close by (ahead of the bot, on its level), if any: worth a small detour. */
+export function bonusNear(bot: BotView, range = 6, ahead = true): { x: number; z: number } | null {
+  const b = bot.body;
+  let best: { x: number; z: number } | null = null;
+  let bd = range;
+  for (const x of bot.bonuses ?? []) {
+    if (Math.abs(x.y - b.pos.y) > 1.2) continue;
+    const d = Math.hypot(x.x - b.pos.x, x.z - b.pos.z);
+    if (d < bd && (!ahead || x.z > b.pos.z - 1.5)) {
+      bd = d;
+      best = x;
+    }
+  }
+  return best;
+}
+
 export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: number } = {}): BotBrain {
   return (bot, out) => {
     initBot(bot);
@@ -283,6 +307,14 @@ export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: numb
     }
     bot.mem.wp = i;
     if (!wp) return;
+    if (wp.drive?.(bot, out)) return;
+    const away = wp.detour?.(bot);
+    if (away) {
+      navTo(bot, away.x, away.z, out, 1, 0.4);
+      humanize(bot, out, { precise: true });
+      unstick(bot, out);
+      return;
+    }
     const precise = wp.w === 0 || !!wp.wait || typeof wp.x === 'function' || !!wp.jumpWhen;
     const skill = bot.mem.skill ?? 0.7;
     // Once a wait is over the bot commits to that waypoint (no turning back halfway). The less
@@ -314,11 +346,18 @@ export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: numb
       humanize(bot, out, { precise: true });
       return;
     }
-    const tx = targetX(wp);
+    let tx = targetX(wp);
+    let tz = wp.z;
+    // A bonus a few steps off the line (in open sections): go and take it.
+    const bonus = precise ? null : bonusNear(bot);
+    if (bonus && bonus.z < wp.z + 2) {
+      tx = bonus.x;
+      tz = bonus.z;
+    }
     let d: number;
     const speed = (wp.speed ?? 1) * (typeof wp.x === 'function' ? 1 : (bot.mem.spd ?? 1));
-    if (precise) d = wp.w === 0 ? follow(bot, tx, wp.z, out) : steer(bot, tx, wp.z, out, speed);
-    else d = navTo(bot, tx, wp.z, out, speed, reach(wp));
+    if (precise) d = wp.w === 0 ? follow(bot, tx, tz, out) : steer(bot, tx, tz, out, speed);
+    else d = navTo(bot, tx, tz, out, speed, reach(wp));
     if (precise && wp.w === 0 && wp.speed) {
       out.mx *= wp.speed;
       out.mz *= wp.speed;
@@ -362,6 +401,27 @@ export interface ArenaOpts {
   pois?: readonly { x: number; z: number }[];
   /** Emote now and then (lobby). */
   social?: boolean;
+  /** The floor moves or drops (not in the navigation grid): only safe() decides where to stand. */
+  ignoreNav?: boolean;
+  /** Is there ground to stand on at (x, z) at time t? Bots steer round holes (with ignoreNav). */
+  floor?: (x: number, z: number, t: number) => boolean;
+}
+
+/** Turns the stick away from holes just ahead (tries small turns first); stops at the edge if all else fails. */
+function avoidHoles(bot: BotView, out: BotInput, floor: (x: number, z: number, t: number) => boolean) {
+  const b = bot.body;
+  const base = Math.atan2(out.mx, out.mz);
+  const len = Math.hypot(out.mx, out.mz);
+  const clear = (a: number) =>
+    [0.9, 1.8, 2.7].every((d) => floor(b.pos.x + Math.sin(a) * d, b.pos.z + Math.cos(a) * d, bot.t + d / 8));
+  for (const turn of [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 1.9, -1.9, Math.PI]) {
+    if (!clear(base + turn)) continue;
+    out.mx = Math.sin(base + turn) * len;
+    out.mz = Math.cos(base + turn) * len;
+    return;
+  }
+  out.mx = 0;
+  out.mz = 0;
 }
 
 /**
@@ -377,7 +437,8 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
     const t = bot.t;
     const aggro = bot.mem.aggro ?? 0.3;
     bot.mem.pref ??= opts.radius * (0.25 + bot.rng() * 0.45);
-    const okAt = (x: number, z: number) => (!opts.safe || opts.safe(x, z, t)) && (!bot.nav || bot.nav.safe(x, z, b.pos.y));
+    const okAt = (x: number, z: number) =>
+      (!opts.safe || opts.safe(x, z, t)) && (opts.ignoreNav || !bot.nav || bot.nav.safe(x, z, b.pos.y));
     // Hunting someone (grab them, knock them into the sweeper…)?
     let hunt = bot.mem.hunt !== undefined ? bot.others.find((o) => o.id === bot.mem.hunt) : undefined;
     if (hunt && (t > (bot.mem.huntUntil ?? 0) || hunt.down)) {
@@ -428,8 +489,9 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
       }
       bot.mem.until = t + (opts.retarget ?? 2) + bot.rng() * 2.5;
     }
-    const tx = hunt ? hunt.pos.x : (bot.mem.tx ?? cx);
-    const tz = hunt ? hunt.pos.z : (bot.mem.tz ?? cz);
+    const bonus = hunt ? null : bonusNear(bot, 8, false);
+    const tx = hunt ? hunt.pos.x : bonus && okAt(bonus.x, bonus.z) ? bonus.x : (bot.mem.tx ?? cx);
+    const tz = hunt ? hunt.pos.z : bonus && okAt(bonus.x, bonus.z) ? bonus.z : (bot.mem.tz ?? cz);
     const d = navTo(bot, tx, tz, out, hunt ? 1 : 0.85 + (bot.mem.spd ?? 1) * 0.15, hunt ? 1.1 : 0.9);
     if (hunt) {
       if (d < 1.4) {
@@ -442,7 +504,8 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
       out.mx = Math.sin(w) * 0.25;
       out.mz = Math.cos(w * 1.3) * 0.25;
     }
-    if (opts.social && d < 1.5 && b.grounded && bot.rng() < 0.12 * BOT_DT) out.emote = 1 + Math.floor(bot.rng() * 3);
+    if (opts.floor && Math.hypot(out.mx, out.mz) > 0.1) avoidHoles(bot, out, opts.floor);
+    if (opts.social && d < 1.5 && b.grounded && bot.rng() < 0.12 * BOT_DT) out.emote = 1 + Math.floor(bot.rng() * EMOTES);
     // jumpWhen models reaction time itself (a timing window that depends on bot.mem.react).
     if (opts.jumpWhen?.(bot) && b.grounded) out.jump = true;
     humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt });

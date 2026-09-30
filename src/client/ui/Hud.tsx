@@ -251,6 +251,7 @@ export function Hud() {
         <div class="top">
           <div class={`timer${h.timeLeft < 10 ? ' hurry' : ''}`}>{fmtTime(h.timeLeft)}</div>
           {h.mapText && <div class="pill glass">{h.mapText}</div>}
+          {h.bonus && <div class="pill glass bonus">{h.bonus}</div>}
           {h.t < 1.2 && <div class="go">ВПЕРЁД!</div>}
         </div>
       )}
@@ -258,13 +259,13 @@ export function Hud() {
       {round && h.status === 'play' && h.t >= 0 && h.t < 10 && (
         <div class="keys">
           <kbd>WASD</kbd> бег · <kbd>Пробел</kbd> прыжок · <kbd>E</kbd>/<kbd>ЛКМ</kbd> нырок · <kbd>Q</kbd>/<kbd>ПКМ</kbd>{' '}
-          {g?.grab ? 'схватить хвост' : 'захват'} · <kbd>1</kbd>–<kbd>3</kbd> эмоции · <kbd>Esc</kbd> меню
+          {g?.grab ? 'схватить хвост' : 'захват'} · <kbd>1</kbd>–<kbd>5</kbd> эмоции · <kbd>Esc</kbd> меню
         </div>
       )}
       {info.kind === 'lobby' && !menuOpen.value && (
         <div class="keys">
           <kbd>Esc</kbd> — меню{lobby.value?.host === myId.value ? ' и запуск игры' : ''} · <kbd>WASD</kbd> бег ·{' '}
-          <kbd>Пробел</kbd> прыжок · <kbd>E</kbd> нырок · <kbd>Q</kbd> захват · <kbd>1</kbd>–<kbd>3</kbd> эмоции
+          <kbd>Пробел</kbd> прыжок · <kbd>E</kbd> нырок · <kbd>Q</kbd> захват · <kbd>1</kbd>–<kbd>5</kbd> эмоции
         </div>
       )}
       {needClick.value && !menuOpen.value && (

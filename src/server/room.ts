@@ -287,6 +287,15 @@ export class Room {
         if (this.isHost(p) && this.phase === 'lobby' && b?.bot) this.removePlayer(b);
         return;
       }
+      case 'host': {
+        // The host hands the role over to another connected player (any phase).
+        const to = this.players.get(m.id);
+        if (this.isHost(p) && to && to !== p && !to.bot && to.conn) {
+          this.host = to.id;
+          this.sendLobby();
+        }
+        return;
+      }
       case 'emote':
         if (this.arena.pawns.get(p.id)?.status === 'play') this.broadcast({ t: 'emote', id: p.id, e: m.e });
         return;

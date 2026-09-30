@@ -54,6 +54,8 @@ describe('codec', () => {
           slowK: 0.5,
           tilt: 1.2,
           tiltDir: -2,
+          power: 2,
+          powerUntil: 31.5,
           teleport: true,
         },
         grab: 9,
@@ -68,7 +70,7 @@ describe('codec', () => {
     expect(back.bodies[0]).toMatchObject({ grab: -1 });
     expect(back.bodies[0]!.tilt).toBeCloseTo(1, 2);
     expect(back.bodies[0]!.tiltDir).toBeCloseTo(2, 1);
-    expect(back.own).toMatchObject({ grab: 9, s: { slowK: 0.5 } });
+    expect(back.own).toMatchObject({ grab: 9, s: { slowK: 0.5, power: 2, powerUntil: 31.5 } });
     expect(back.own!.s.tilt).toBeCloseTo(1.2, 5);
     const spec = decodeSnapshot(encodeSnapshot({ ...s, own: null }))!;
     expect(spec.own).toBeNull();

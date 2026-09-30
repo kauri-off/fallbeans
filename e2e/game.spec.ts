@@ -78,7 +78,6 @@ const MAPS = [
   'jump-club',
   'roll-out',
   'wall-rush',
-  'fruit-memory',
   'tail-tag',
   'hex-a-gone',
   'crown-peak',

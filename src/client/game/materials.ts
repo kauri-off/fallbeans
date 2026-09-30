@@ -88,39 +88,18 @@ function cells(u: number, v: number, period: number, seed: number): [number, num
   return [f1, f2];
 }
 
-/** Thin random scratches: 0 on a scratch, 1 elsewhere. */
-function scratches(u: number, v: number, count: number, seed: number) {
-  let s = 1;
-  for (let k = 0; k < count; k++) {
-    const x0 = hash(k, 1, seed);
-    const y0 = hash(k, 2, seed);
-    const a = hash(k, 3, seed) * Math.PI;
-    const len = 0.05 + hash(k, 4, seed) * 0.2;
-    let dx = u - x0;
-    let dy = v - y0;
-    dx -= Math.round(dx);
-    dy -= Math.round(dy);
-    const along = dx * Math.cos(a) + dy * Math.sin(a);
-    const across = -dx * Math.sin(a) + dy * Math.cos(a);
-    if (Math.abs(along) > len) continue;
-    s = Math.min(s, THREE.MathUtils.smoothstep(Math.abs(across), 0, 0.0035));
-  }
-  return s;
-}
-
 const smooth = THREE.MathUtils.smoothstep;
 
 const SURFACES: Record<SurfaceKind, SurfaceDef> = {
-  // Glossy painted plastic: a little orange peel, mottled roughness, the odd scratch.
+  // Glossy painted plastic: a faint orange peel and gently mottled roughness (clean: no scratches).
   plastic: {
     scale: 0.5,
-    normal: 0.35,
-    roughVar: 0.35,
-    cavity: 0.06,
+    normal: 0.2,
+    roughVar: 0.25,
+    cavity: 0.03,
     build: (u, v) => {
       const peel = fbm(u, v, 24, 2, 1);
-      const sc = scratches(u, v, 18, 7);
-      return { h: 0.55 + (peel - 0.5) * 0.35 - (1 - sc) * 0.25, r: 0.35 + fbm(u, v, 4, 3, 2) * 0.45 + (1 - sc) * 0.3 };
+      return { h: 0.55 + (peel - 0.5) * 0.3, r: 0.4 + fbm(u, v, 4, 3, 2) * 0.35 };
     },
   },
   // Big floors: quilted foam pads with a fine grain.
@@ -152,7 +131,7 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
       return { h: 0.35 + dot * 0.5 + fbm(u, v, 32, 2, 6) * 0.15, r: 0.5 + fbm(u, v, 16, 2, 7) * 0.5 };
     },
   },
-  // Brushed metal: fine streaks in one direction and a few scratches.
+  // Brushed metal: fine streaks in one direction.
   metal: {
     scale: 0.8,
     normal: 0.3,
@@ -162,8 +141,7 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
     metalness: 0.6,
     build: (u, v) => {
       const streak = vnoise(u * 0.25, v, 180, 8) * 0.6 + vnoise(u, v, 90, 9) * 0.4;
-      const sc = scratches(u, v, 30, 10);
-      return { h: 0.5 + (streak - 0.5) * 0.5 - (1 - sc) * 0.3, r: 0.25 + streak * 0.5 + (1 - sc) * 0.25 };
+      return { h: 0.5 + (streak - 0.5) * 0.4, r: 0.3 + streak * 0.45 };
     },
   },
   // The beans' suits: a knitted weave with fuzz.
@@ -208,18 +186,15 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
       return { h: b, r: 1 };
     },
   },
-  // Gold: hammered dents.
+  // Gold: polished, with only a soft sheen variation (dents read as dark blotches on a crown).
   gold: {
-    scale: 1.6,
-    normal: 0.55,
-    roughVar: 0.35,
-    cavity: 0.05,
-    roughness: 0.26,
+    scale: 1,
+    normal: 0.04,
+    roughVar: 0.15,
+    cavity: 0,
+    roughness: 0.3,
     metalness: 1,
-    build: (u, v) => {
-      const [f1] = cells(u, v, 10, 16);
-      return { h: 1 - Math.min(1, f1 * f1 * 1.6), r: 0.3 + fbm(u, v, 16, 2, 17) * 0.7 };
-    },
+    build: (u, v) => ({ h: 0.5 + (fbm(u, v, 8, 3, 16) - 0.5) * 0.2, r: 0.4 + fbm(u, v, 6, 2, 17) * 0.3 }),
   },
   // Painted wood (doors): grain along one axis.
   wood: {
@@ -307,17 +282,14 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
       return { h: w * 0.85 + fbm(u, v, 32, 2, 40) * 0.15, r: 0.6 + fbm(u, v, 16, 2, 41) * 0.4 };
     },
   },
-  // Glass panes: smooth, with faint smudges and a few scratches.
+  // Glass panes: smooth, with faint smudges.
   glass: {
     scale: 0.5,
     normal: 0.06,
     roughVar: 1,
     cavity: 0,
     roughness: 0.06,
-    build: (u, v) => {
-      const sc = scratches(u, v, 12, 42);
-      return { h: 0.5 - (1 - sc) * 0.2, r: smooth(fbm(u, v, 4, 4, 43), 0.45, 0.8) * 0.8 + (1 - sc) * 0.6 };
-    },
+    build: (u, v) => ({ h: 0.5, r: smooth(fbm(u, v, 4, 4, 43), 0.45, 0.8) * 0.6 }),
   },
   // Carpet runners: dense fuzz.
   carpet: {
@@ -583,7 +555,6 @@ export function surfaceForModelMaterial(name: string): SurfaceKind | null {
     case 'Body':
     case 'Belly':
     case 'Blush':
-    case 'Mouth':
       return null;
     case 'Shoe':
     case 'Bumper':

@@ -68,6 +68,8 @@ export interface BotView {
   others: readonly { id: number; pos: THREE.Vector3; vel: THREE.Vector3; down: boolean }[];
   /** Walkable ground of the static course (null before the start). */
   nav: NavGrid | null;
+  /** Bonuses lying on the course right now. */
+  bonuses?: readonly { x: number; y: number; z: number }[];
 }
 
 export type BotBrain = (bot: BotView, out: BotInput) => void;

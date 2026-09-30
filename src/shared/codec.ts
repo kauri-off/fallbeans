@@ -84,11 +84,14 @@ export interface BodyFullState {
   landImpact: number;
   tilt: number;
   tiltDir: number;
+  /** Bonus in effect (physics POWER) and the sim time it wears off. */
+  power: number;
+  powerUntil: number;
   /** A teleport (respawn): the client snaps instead of smoothing. */
   teleport: boolean;
 }
 
-export const FULL_BYTES = 8 * 7 + 1 + 4 + 1 + 4 + 4 + 4 + 2 + 4 + 4 + 4 + 4;
+export const FULL_BYTES = 8 * 7 + 1 + 4 + 1 + 4 + 4 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4;
 
 export interface RemoteState {
   id: number;
@@ -106,7 +109,9 @@ export interface RemoteState {
 }
 
 export const REMOTE_BYTES = 22;
-export const REMOTE_FLAG = { grab: 1 } as const;
+/** Remote flags: holding someone, reaching out (grab held, nobody in hand); bits 2–3: the bonus in effect. */
+export const REMOTE_FLAG = { grab: 1, reach: 2 } as const;
+export const POWER_SHIFT = 2;
 
 export interface Snapshot {
   arena: number;
@@ -152,8 +157,10 @@ export function encodeSnapshot(s: Snapshot): Uint8Array<ArrayBuffer> {
     v.setFloat32(o + 24, f.slowK, true);
     v.setFloat32(o + 28, f.tilt, true);
     v.setFloat32(o + 32, f.tiltDir, true);
-    v.setInt16(o + 36, s.own.grab, true);
-    o += 38;
+    v.setUint8(o + 36, f.power);
+    v.setFloat32(o + 37, f.powerUntil, true);
+    v.setInt16(o + 41, s.own.grab, true);
+    o += 43;
   }
   v.setUint8(o, s.bodies.length);
   o += 1;
@@ -214,10 +221,12 @@ export function decodeSnapshot(data: Uint8Array): Snapshot | null {
         slowK: v.getFloat32(o + 24, true),
         tilt: v.getFloat32(o + 28, true),
         tiltDir: v.getFloat32(o + 32, true),
+        power: v.getUint8(o + 36),
+        powerUntil: v.getFloat32(o + 37, true),
       },
-      grab: v.getInt16(o + 36, true),
+      grab: v.getInt16(o + 41, true),
     };
-    o += 38;
+    o += 43;
   }
   const count = v.getUint8(o);
   o += 1;

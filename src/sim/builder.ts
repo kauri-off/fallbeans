@@ -125,11 +125,47 @@ export interface Prim {
   col: Collider;
 }
 
+/** A spiral for portal discs (client only: needs a canvas). */
+function swirlTexture(color: string): THREE.Texture {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.35, color);
+  grad.addColorStop(1, '#1a0f3d');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.55)';
+  g.lineWidth = 6;
+  for (let arm = 0; arm < 4; arm++) {
+    g.beginPath();
+    for (let k = 0; k <= 60; k++) {
+      const f = k / 60;
+      const a = arm * (Math.PI / 2) + f * Math.PI * 2.2;
+      const r = f * size * 0.48;
+      const px = size / 2 + Math.cos(a) * r;
+      const py = size / 2 + Math.sin(a) * r;
+      if (k) g.lineTo(px, py);
+      else g.moveTo(px, py);
+    }
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export class Builder {
   readonly group = new THREE.Group();
   readonly world = new World(this.group);
   readonly anims: Anim[] = [];
   readonly scenery: SceneryRequest[] = [];
+  /** Candidate spots for bonuses (sim/bonus.ts picks a few of them per round). */
+  readonly bonusSpots: { x: number; y: number; z: number }[] = [];
   readonly rng: Rng;
   /** Look of the map (client only): the pattern its palette materials use by default. */
   readonly style: { pattern: PatternKind } = { pattern: 'stripes' };
@@ -272,7 +308,7 @@ export class Builder {
       this.collider(
         this.anchor(len / 2 + 0.3, 0, 0, pivot),
         { type: 'box', hx: len / 2 - 0.3, hy: 0.36, hz: 0.36 },
-        { hit, tag: 'rotor' },
+        { hit, tag: 'rotor', sweep: true },
       );
     }
     this.move((t) => {
@@ -318,6 +354,95 @@ export class Builder {
       top.obj.position.y = base + Math.max(0, Math.sin(t * 8)) * 0.04;
     });
     return top;
+  }
+
+  /** A spot where a bonus may lie (on the ground at y). */
+  bonus(x: number, y: number, z: number) {
+    this.bonusSpots.push({ x, y, z });
+  }
+
+  /** A trampoline: a springy mat on a ring frame that throws beans up (power: m/s upwards). */
+  trampoline(x: number, y: number, z: number, r = 1.8, power = 19) {
+    const legs = 6;
+    for (let k = 0; k < legs; k++) {
+      const a = (k / legs) * Math.PI * 2;
+      this.cyl(x + Math.cos(a) * (r + 0.1), y - 0.6, z + Math.sin(a) * (r + 0.1), 0.09, 1.2, '#39406b', {
+        noCollide: true,
+        surface: 'metal',
+        seg: 10,
+      });
+    }
+    this.cyl(x, y - 0.12, z, r + 0.3, 0.3, PAL.orange, { surface: 'rubber' });
+    const mat = this.view?.pattern('#2b3a8f', '#3f57c9', 1.4, [1, 0], 0, 'fabric', 'dots');
+    const top = this.cyl(x, y + 0.05, z, r, 0.1, PAL.blue, { pad: power, material: mat, surface: 'fabric' });
+    const base = top.obj.position.y;
+    this.anim((t) => {
+      // The mat sags and springs back.
+      const k = Math.max(0, Math.sin(t * 6 + x)) ** 4;
+      top.obj.position.y = base - k * 0.08;
+      top.obj.scale.set(1, 1 - k * 0.3, 1);
+    });
+    return top;
+  }
+
+  /**
+   * Two linked portals (rings standing up, facing yaw): running into either comes out in front of
+   * the other, facing its way, with at least minSpeed.
+   */
+  portal(
+    a: { x: number; y: number; z: number; yaw: number },
+    b: { x: number; y: number; z: number; yaw: number },
+    color = '#a66bff',
+  ) {
+    const ends = [a, b];
+    ends.forEach((e, i) => {
+      const other = ends[1 - i]!;
+      const to = new THREE.Vector3(other.x + Math.sin(other.yaw) * 1.9, other.y + 0.05, other.z + Math.cos(other.yaw) * 1.9);
+      const ring = this.anchor(e.x, e.y, e.z);
+      ring.rotation.y = e.yaw;
+      this.collider(
+        this.anchor(0, 1.35, 0, ring),
+        { type: 'box', hx: 1.05, hy: 1.25, hz: 0.3 },
+        {
+          isStatic: true,
+          trigger: true,
+          navSkip: true,
+          onTouch: (_c, _n, body) => body.warp(to, other.yaw),
+        },
+      );
+      const v = this.view;
+      if (!v) return;
+      const frame = new THREE.Mesh(
+        v.own(new THREE.TorusGeometry(1.35, 0.18, 14, 48)),
+        v.plain(color, { roughness: 0.3, metalness: 0.3 }, 'glossy'),
+      );
+      frame.position.y = 1.4;
+      frame.castShadow = true;
+      ring.add(frame);
+      const disc = new THREE.Mesh(
+        v.own(new THREE.CircleGeometry(1.2, 48)),
+        v.own(
+          new THREE.MeshBasicMaterial({
+            map: v.own(swirlTexture(color)),
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            toneMapped: false,
+          }),
+        ),
+      );
+      disc.position.y = 1.4;
+      ring.add(disc);
+      for (const sx of [-1, 1])
+        this.box(e.x + Math.cos(e.yaw) * sx * 1.35, e.y + 0.15, e.z - Math.sin(e.yaw) * sx * 1.35, 0.5, 0.3, 0.5, color, {
+          noCollide: true,
+        });
+      this.anim((t) => {
+        disc.rotation.z = t * (i ? -2.2 : 2.2);
+        disc.scale.setScalar(1 + Math.sin(t * 4 + i) * 0.03);
+      });
+    });
   }
 
   finish(x: number, y: number, z: number) {

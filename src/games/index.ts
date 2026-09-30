@@ -4,7 +4,6 @@ import ballHill from './ball-hill/map';
 import crownPeak from './crown-peak/map';
 import doorDash from './door-dash/map';
 import drumRoll from './drum-roll/map';
-import fruitMemory from './fruit-memory/map';
 import hammerSwing from './hammer-swing/map';
 import hexAGone from './hex-a-gone/map';
 import hiddenBridge from './hidden-bridge/map';
@@ -25,7 +24,6 @@ export const MAPS: readonly MapModule[] = [
   jumpClub,
   rollOut,
   wallRush,
-  fruitMemory,
   tailTag,
   hexAGone,
   crownPeak,

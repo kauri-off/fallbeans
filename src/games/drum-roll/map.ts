@@ -1,17 +1,36 @@
 import * as THREE from 'three';
-import { pathBrain, type Waypoint } from '../../sim/bots';
+import type { Waypoint } from '../../sim/bots';
 import { type Builder, PAL, type Palette } from '../../sim/builder';
+import {
+  edgeJump,
+  hammerBridges,
+  pickSections,
+  raceCourse,
+  rotorDecks,
+  type Segment,
+  trampolineGap,
+  withRests,
+} from '../../sim/course';
 import { type BotView, defineMap } from '../../sim/map';
-import { armContactEta } from '../../sim/props';
 import meta from './meta';
 
 /**
- * A drum along x (rolling you forwards or back) or along z (a log rolling you sideways).
- * `spin` is the angular speed (rad/s).
+ * A drum along x (rolling you forwards or back) or along z (a log rolling you sideways), turned by
+ * `angle(t)`. Pegs (boxes on the surface) knock over whoever they catch.
  */
-function drum(b: Builder, x: number, top: number, z: number, r: number, len: number, spin: number, pal: Palette, alongZ = false) {
+function drum(
+  b: Builder,
+  x: number,
+  top: number,
+  z: number,
+  r: number,
+  len: number,
+  angle: (t: number) => number,
+  pal: Palette,
+  o: { alongZ?: boolean; pegs?: number } = {},
+) {
   const axis = b.anchor(x, top - r, z);
-  if (alongZ) axis.rotation.y = Math.PI / 2;
+  if (o.alongZ) axis.rotation.y = Math.PI / 2;
   const d = b.cyl(0, 0, 0, r, len, pal, { parent: axis, dynamic: true, rot: [0, 0, Math.PI / 2], seg: 36, tag: 'drum' });
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2;
@@ -21,134 +40,225 @@ function drum(b: Builder, x: number, top: number, z: number, r: number, len: num
       castShadow: false,
     });
   }
+  // Pegs: bars across the drum that come round and sweep the top.
+  for (let k = 0; k < (o.pegs ?? 0); k++) {
+    const a = (k / (o.pegs ?? 1)) * Math.PI * 2 + 0.4;
+    b.box(Math.cos(a) * (r + 0.2), 0, Math.sin(a) * (r + 0.2), 0.4, len - 1.2, 0.4, PAL.red, {
+      parent: d.obj,
+      dynamic: true,
+      hit: 0.9,
+      tag: 'peg',
+      rot: [0, a, 0],
+    });
+  }
   b.move((t) => {
-    d.obj.rotation.set(Math.max(0, t) * spin, 0, Math.PI / 2);
+    d.obj.rotation.set(angle(t), 0, Math.PI / 2);
   });
   return d;
 }
 
-// A: the drum staircase, zig-zagging and climbing; the tops roll back towards the start.
-const STAIR = Array.from({ length: 5 }, (_, i) => ({ x: i % 2 ? 3 : -3, z: 17.3 + i * 4.8, top: 0.3 + i * 0.5 }));
-const STAIR_R = 1.4;
-const STAIR_LEN = 5;
-/** Start of the platform after the staircase. */
-const A_END = { z: STAIR.at(-1)!.z + STAIR_R + 0.05, y: STAIR.at(-1)!.top - 0.45 };
+/** Spin that speeds up and slows down (and may reverse): rate base + amp·sin(w t + ph); the angle is its integral. */
+function pulse(base: number, amp: number, w: number, ph: number) {
+  const angle = (t: number) => {
+    const tt = Math.max(0, t);
+    return base * tt - (amp / w) * (Math.cos(tt * w + ph) - Math.cos(ph));
+  };
+  const rate = (t: number) => (t <= 0 ? 0 : base + amp * Math.sin(t * w + ph));
+  return { angle, rate };
+}
 
-// B: the spinner deck.
-const DECK_Z = 52;
-const DECK_Y = A_END.y;
-const LOW_W = 1.45;
-const HIGH_W = 0.95;
-const lowAng = (t: number) => (t <= 0 ? 0 : t * LOW_W);
-const highAng = (t: number) => (t <= 0 ? Math.PI / 2 : Math.PI / 2 - t * HIGH_W);
+const pals = [PAL.orange, PAL.teal, PAL.pink, PAL.green];
 
-// C: logs rolling sideways.
-const LOGS = [
-  { z: 72, x: 0, spin: 0.95 },
-  { z: 82.4, x: 0, spin: -1.1 },
-  { z: 92.8, x: 0, spin: 1.25 },
-  { z: 108.6, x: 0, spin: -1.35 },
-  { z: 119, x: 0, spin: 1.5 },
-] as const;
-/** A rest platform between the third and fourth log. */
-const REST = { z0: 97.7, z1: 103.7 };
-const FINISH_Z = 130;
-const LOG_R = 1.8;
-const LOG_LEN = 9;
-
-export default defineMap(meta, (b) => {
-  b.style.pattern = 'dots';
-  const spawns = b.startArea(0);
-  // Reaches right up to the first drum (no gap to fall into).
-  b.box(0, -1, 11.3, 16, 2, 8.6, PAL.purple);
-
-  const pals = [PAL.orange, PAL.teal, PAL.pink, PAL.green];
-  STAIR.forEach((s, i) => {
-    drum(b, s.x, s.top, s.z, STAIR_R, STAIR_LEN, -1.35 - i * 0.1, pals[i % 4]!);
-  });
-  b.box(0, A_END.y - 1, A_END.z + 3, 23, 2, 6, PAL.purple);
-
-  // B: a round deck with a low sweeper to jump and a high one to duck. Launch pads at the sides
-  // lead up to narrow walkways over it: faster, but one slip and you are back at the checkpoint.
-  b.cyl(0, DECK_Y - 1, DECK_Z, 8, 2, PAL.blue, { freq: 0.35 });
-  b.box(0, DECK_Y - 1, 44.5, 5, 2, 3, PAL.yellow);
-  b.hub(0, DECK_Y, DECK_Z, 1);
-  b.rotor(0, DECK_Y + 0.6, DECK_Z, 7.6, 2, lowAng, 0.75);
-  b.rotor(0, DECK_Y + 2.45, DECK_Z, 7.6, 1, highAng, 0.75);
-  for (const sx of [-1, 1]) {
-    b.box(sx * 9.5, DECK_Y - 1, A_END.z + 7, 3.5, 2, 2, PAL.yellow);
-    b.pad(sx * 9.5, DECK_Y, A_END.z + 6.9, 1.1, 17);
-    b.box(sx * 9.5, DECK_Y + 3.5, 54, 1.6, 1, 11, PAL.pink);
-  }
-  b.box(0, DECK_Y - 1, 63, 23, 2, 6, PAL.purple);
-
-  // C: logs; you run along them while they roll you sideways, and hop across the gaps.
-  LOGS.forEach((l, i) => {
-    drum(b, l.x, DECK_Y, l.z, LOG_R, LOG_LEN, l.spin, pals[(i + 2) % 4]!, true);
-  });
-  b.box(0, DECK_Y - 1, (REST.z0 + REST.z1) / 2, 10, 2, REST.z1 - REST.z0, PAL.purple);
-  b.box(0, DECK_Y - 1, 133.5, 18, 2, 18, PAL.yellow);
-  b.finish(0, DECK_Y, FINISH_Z);
-  b.clouds(0, 60, 60, 36);
-
-  // --- bots
-  const path: Waypoint[] = [{ x: 0, z: 12, w: 2 }];
-  STAIR.forEach((s) => {
-    // Hop diagonally onto the inner end of each drum, taking off around the crest of the one before.
-    path.push({
-      x: s.x > 0 ? 1.3 : -1.3,
-      z: s.z,
-      w: 0.15,
-      speed: 0.9,
-      jumpWhen: (bot) => bot.body.pos.z > s.z - 5.6 && bot.body.pos.z < s.z - 4.4,
+/**
+ * A zig-zag staircase of drums rolling back at you, their speed surging and easing (wait for a slow
+ * moment), or a launch pad to a narrow walkway over them (faster, one slip and you are back).
+ */
+function drumStairs(): Segment {
+  return (s) => {
+    const { b, rng } = s;
+    b.box(0, s.y - 1, s.z + 2, 16, 2, 4, PAL.purple);
+    const R = 1.4;
+    const stairs = Array.from({ length: 6 }, (_, i) => ({
+      x: i % 2 ? 3 : -3,
+      z: s.z + 5.8 + i * 4.8,
+      top: s.y + 0.3 + i * 0.5,
+      spin: pulse(-(1.1 + rng() * 0.3), 0.45 + rng() * 0.35, 0.7 + rng() * 0.5, rng() * 6),
+    }));
+    stairs.forEach((st, i) => {
+      drum(b, st.x, st.top, st.z, R, 5, st.spin.angle, pals[i % 4]!);
     });
-  });
-  path.push({
-    x: 0,
-    z: A_END.z + 1.5,
-    w: 0.5,
-    jumpWhen: (bot) => bot.body.pos.z > STAIR.at(-1)!.z + 0.3 && bot.body.pos.z < A_END.z,
-  });
-  // Across the deck, hopping the low arm; never into the high one.
-  const deckJump = (bot: BotView) => {
-    const p = bot.body.pos;
-    const r = Math.hypot(p.x, p.z - DECK_Z);
-    if (r > 8 || r < 1.3 || bot.t <= 0) return false;
-    const eta = armContactEta(bot, lowAng(bot.t), LOW_W, 2, 0, DECK_Z);
-    const high = armContactEta(bot, highAng(bot.t), -HIGH_W, 1, 0, DECK_Z);
-    return eta > 0.1 && eta < 0.24 && high > 0.8;
-  };
-  path.push(
-    { x: 2.8, z: DECK_Z - 4, w: 0.3, jumpWhen: deckJump },
-    { x: 2.8, z: DECK_Z + 4, w: 0.3, jumpWhen: deckJump },
-    { x: 0, z: 61, w: 0.5, jumpWhen: deckJump },
-  );
-  let edge = 65.6;
-  for (const l of LOGS) {
-    const start = l.z - LOG_LEN / 2;
-    const e = edge;
-    if (start > REST.z1)
-      path.push({ x: 0, z: REST.z0 + 2, w: 1, jumpWhen: (bot) => bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2 });
-    const from = start > REST.z1 ? REST.z1 : e;
-    path.push({ x: l.x, z: start + 1.2, w: 0.1, jumpWhen: (bot) => bot.body.pos.z > from - 1.5 && bot.body.pos.z < from + 0.2 });
-    path.push({ x: l.x, z: l.z + LOG_LEN / 2 - 2.2, w: 0 });
-    edge = l.z + LOG_LEN / 2;
-  }
-  path.push({ x: 0, z: FINISH_Z - 6, w: 1, jumpWhen: (bot) => bot.body.pos.z > edge - 1.5 && bot.body.pos.z < edge + 0.2 });
-  path.push({ x: 0, z: FINISH_Z + 4, w: 3 });
+    const last = stairs.at(-1)!;
+    const endZ = last.z + R + 0.05;
+    const endY = last.top - 0.45;
+    b.box(0, endY - 1, endZ + 3, 23, 2, 6, PAL.purple);
+    // The walkway: launch pads at the sides, up to a narrow beam over the drums.
+    for (const sx of [-1, 1]) {
+      b.box(sx * 9.5, s.y - 1, s.z + 3.5, 3.5, 2, 3, PAL.yellow);
+      b.pad(sx * 9.5, s.y, s.z + 3.4, 1.1, 17);
+    }
+    const beamY = s.y + 3.5;
+    const beamZ0 = s.z + 5.5;
+    b.box(9.5, beamY, (beamZ0 + endZ) / 2, 2.2, 1, endZ - beamZ0, PAL.pink);
+    b.bonus(9.5, beamY + 0.5, (beamZ0 + endZ) / 2);
 
-  return {
-    spawns,
-    killY: -12,
-    finish: { z: FINISH_Z, y: DECK_Y - 1 },
-    // On the drum frames or the walkway rails? There are none: only the course counts.
-    forbidden: (p) => p.y > DECK_Y + 6.5,
-    checkpoints: [
-      { z: -100, p: new THREE.Vector3(0, 0.1, 10) },
-      { z: A_END.z + 0.5, p: new THREE.Vector3(0, A_END.y + 0.1, A_END.z + 2.5) },
-      { z: 61, p: new THREE.Vector3(0, DECK_Y + 0.1, 63) },
-      { z: REST.z0 + 0.5, p: new THREE.Vector3(0, DECK_Y + 0.1, REST.z0 + 3) },
-    ],
-    bot: pathBrain(path),
+    const stairsRoute: Waypoint[] = [{ x: 0, z: s.z + 1.5, w: 1 }];
+    stairs.forEach((st) => {
+      stairsRoute.push({
+        x: st.x > 0 ? 1.3 : -1.3,
+        z: st.z,
+        w: 0.15,
+        speed: 0.9,
+        jumpWhen: (bot) => bot.body.pos.z > st.z - 5.6 && bot.body.pos.z < st.z - 4.4,
+      });
+    });
+    stairsRoute.push({
+      x: 0,
+      z: endZ + 1.5,
+      w: 0.5,
+      jumpWhen: (bot: BotView) => bot.body.pos.z > last.z + 0.3 && bot.body.pos.z < endZ,
+    });
+    const beamRoute: Waypoint[] = [
+      { x: 6.5, z: s.z + 2.5, w: 0 },
+      { x: 9.5, z: s.z + 3.4, w: 0 },
+      { x: 9.5, z: beamZ0 + 2, w: 0 },
+      { x: 9.5, z: endZ - 0.5, w: 0 },
+      { x: 5, z: endZ + 2, w: 0.3 },
+    ];
+    for (const r of [stairsRoute, beamRoute]) r.push({ x: 0, z: endZ + 3, w: 1 });
+    return {
+      z: endZ + 6,
+      y: endY,
+      routes: [stairsRoute, stairsRoute, beamRoute],
+      forbidden: (p) => p.y > beamY + 3,
+      checkpoint: { from: endZ + 0.5, p: new THREE.Vector3(0, endY + 0.1, endZ + 3) },
+    };
   };
+}
+
+/** Logs rolling sideways, each on its own rhythm, reversing now and then; run along them and hop the gaps. */
+function logRun(n = 5): Segment {
+  return (s) => {
+    const { b, rng } = s;
+    const R = 1.8;
+    const L = 9;
+    let zz = s.z + 2;
+    b.box(0, s.y - 1, s.z + 1, 12, 2, 2, PAL.purple);
+    const route: Waypoint[] = [{ x: 0, z: s.z + 1, w: 1 }];
+    let edge = s.z + 2;
+    for (let i = 0; i < n; i++) {
+      const c = zz + 1.4 + L / 2;
+      const dir = rng() < 0.5 ? -1 : 1;
+      // Some logs reverse (the rate swings through zero), some just surge.
+      const reverse = rng() < 0.4;
+      const sp = reverse
+        ? pulse(0, 1.4 + rng() * 0.4, 0.5 + rng() * 0.3, rng() * 6)
+        : pulse(dir * (1 + rng() * 0.5), 0.5, 0.9, rng() * 6);
+      drum(b, 0, s.y, c, R, L, sp.angle, pals[(i + 2) % 4]!, { alongZ: true });
+      const e = edge;
+      route.push({ x: 0, z: c - L / 2 + 1.2, w: 0.1, jumpWhen: (bot) => bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2 });
+      route.push({ x: 0, z: c + L / 2 - 2.2, w: 0 });
+      edge = c + L / 2;
+      zz = c + L / 2;
+    }
+    b.bonus(0, s.y + 0.1, s.z + 2 + 1.4 + L + 1.4 + L / 2);
+    zz += 1.4;
+    b.box(0, s.y - 1, zz + 3, 14, 2, 6, PAL.purple);
+    const e = edge;
+    route.push({ x: 0, z: zz + 3, w: 1, jumpWhen: (bot) => bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2 });
+    return {
+      z: zz + 6,
+      y: s.y,
+      routes: [route],
+      checkpoint: { from: zz + 0.5, p: new THREE.Vector3(0, s.y + 0.1, zz + 3) },
+    };
+  };
+}
+
+/** Big drums rolling towards you with pegs across them: jump each peg as it comes over the top. */
+function pegDrums(n = 3): Segment {
+  return (s) => {
+    const { b, rng } = s;
+    const R = 2.2;
+    let zz = s.z + 2;
+    b.box(0, s.y - 1, s.z + 1, 12, 2, 2, PAL.purple);
+    const route: Waypoint[] = [{ x: 0, z: s.z + 1, w: 1 }];
+    for (let i = 0; i < n; i++) {
+      // Room for the pegs (they stand 0.4 m proud) between drums and platforms.
+      const c = zz + 0.55 + R;
+      const w = -(0.55 + rng() * 0.25);
+      const ph = rng() * 6;
+      const pegs = 3;
+      const ang = (t: number) => ph + Math.max(0, t) * w;
+      drum(b, 0, s.y + 0.2, c, R, 9, ang, pals[i % 4]!, { pegs });
+      // Pegs sit at angle β = offset + ang(t) on the drum (β = 0 on top, growing towards +z) and come
+      // round to the bot at |w| rad/s: jump just before one reaches it.
+      const axisY = s.y + 0.2 - R;
+      const margin = 0.7 / (R + 0.2);
+      const jumpWhen = (bot: BotView) => {
+        const p = bot.body.pos;
+        if (Math.abs(p.z - c) > R + 0.6 || bot.t <= 0) return false;
+        const phi = Math.atan2(p.z - c, p.y - axisY);
+        for (let k = 0; k < pegs; k++) {
+          let d = ((k / pegs) * Math.PI * 2 + 0.4 + ang(bot.t) - phi) % (Math.PI * 2);
+          if (d < 0) d += Math.PI * 2;
+          const eta = (d - margin) / -w;
+          if (eta > 0.08 && eta < 0.22) return true;
+        }
+        return false;
+      };
+      const gapAt = c - R - 0.55;
+      route.push(
+        { x: 0, z: c - 0.5, w: 0.2, jumpWhen: (bot) => jumpWhen(bot) || edgeJump(gapAt, 0.8)(bot) },
+        { x: 0, z: c + R - 0.3, w: 0.2, jumpWhen },
+      );
+      zz = c + R + 0.55;
+    }
+    b.box(0, s.y - 1, zz + 3, 14, 2, 6, PAL.purple);
+    route.push({ x: 0, z: zz + 3, w: 1, jumpWhen: edgeJump(zz, 1.2) });
+    return {
+      z: zz + 6,
+      y: s.y,
+      routes: [route],
+      checkpoint: { from: zz + 0.5, p: new THREE.Vector3(0, s.y + 0.1, zz + 3) },
+    };
+  };
+}
+
+/** A bridge of small rollers turning in alternating directions, with bumpers to dodge. */
+function rollerBridge(n = 10): Segment {
+  return (s) => {
+    const { b, rng } = s;
+    const r = 0.55;
+    const pitch = 1.3;
+    b.box(0, s.y - 1, s.z + 1, 10, 2, 2, PAL.purple);
+    for (let i = 0; i < n; i++) {
+      const c = s.z + 2 + r + i * pitch;
+      const sp = (i % 2 ? 1 : -1) * (2 + rng() * 2);
+      drum(b, 0, s.y, c, r, 7, (t) => Math.max(0, t) * sp, pals[i % 4]!);
+    }
+    const end = s.z + 2 + n * pitch + 0.2;
+    for (const [x, f] of [
+      [-2, 0.3],
+      [2, 0.65],
+    ] as const)
+      b.bumper(x, s.y + 0.2, s.z + 2 + n * pitch * f, 0.7, 9);
+    b.box(0, s.y - 1, end + 3, 14, 2, 6, PAL.purple);
+    return {
+      z: end + 6,
+      y: s.y,
+      routes: [
+        [
+          { x: 0, z: s.z + 2 + n * pitch * 0.5, w: 0.5 },
+          { x: 0, z: end + 3, w: 1 },
+        ],
+      ],
+      checkpoint: { from: end + 0.5, p: new THREE.Vector3(0, s.y + 0.1, end + 3) },
+    };
+  };
+}
+
+export default defineMap(meta, (b, ctx) => {
+  b.style.pattern = 'dots';
+  const middle = pickSections(b.rng, [rotorDecks(1), pegDrums(3), rollerBridge(10), trampolineGap(), hammerBridges(2)], 3);
+  return raceCourse(b, ctx, { sections: withRests([drumStairs(), ...middle, logRun(5)]) });
 });

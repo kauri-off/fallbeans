@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ANIM } from '../../shared/consts';
 import { shotMode } from '../state';
 import { clone } from './assets';
+import { type Expr, Face } from './face';
 import { lod } from './lod';
 import { applySurface } from './materials';
 
@@ -98,6 +99,10 @@ export interface BeanFrame {
   tiltDir?: number;
   /** World position of the bean being held, if any. */
   grabAt?: THREE.Vector3 | null;
+  /** Size (1, or bigger while a giant). */
+  size?: number;
+  /** Bonus in effect (physics POWER), for the glow at the feet. */
+  power?: number;
 }
 
 interface Targets {
@@ -119,6 +124,7 @@ interface Targets {
 }
 
 const _v = new THREE.Vector3();
+const _reach = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _axis = new THREE.Vector3();
@@ -138,8 +144,14 @@ export class Bean {
   private readonly pivot = new THREE.Group();
   readonly model: THREE.Object3D;
   private readonly limbs: Record<'ArmL' | 'ArmR' | 'LegL' | 'LegR', Limb>;
-  private readonly eyes: THREE.Object3D[] = [];
+  private readonly face: Face;
   private readonly reach: THREE.Mesh[] = [];
+  /** A face shown for a moment whatever else happens (finishing, being knocked out…). */
+  private reactExpr: Expr | null = null;
+  private reactT = 0;
+  private fallT = 0;
+  private readonly grow = new Spring();
+  private aura: THREE.Mesh | null = null;
   color = '';
   /** Shown by the HTML name tags (see ui/Tags.tsx). */
   name = '';
@@ -182,10 +194,8 @@ export class Bean {
       return { o, base: o.rotation.clone(), sx: new Spring(), sz: new Spring() };
     };
     this.limbs = { ArmL: limb('ArmL'), ArmR: limb('ArmR'), LegL: limb('LegL'), LegR: limb('LegR') };
-    for (const n of ['EyeL', 'EyeR']) {
-      const e = this.model.getObjectByName(n);
-      if (e) this.eyes.push(e);
-    }
+    this.face = new Face(this.model);
+    this.grow.x = 1;
     // Stretchy arms for grabbing: a tapered tube from each shoulder to the held bean.
     const tube = new THREE.CylinderGeometry(0.1, 0.13, 1, 10, 1, false);
     tube.translate(0, 0.5, 0);
@@ -252,6 +262,33 @@ export class Bean {
     this.emoteT = 2.6;
   }
 
+  /** Shows a face for a while (e.g. joy on finishing, tears when knocked out). */
+  react(e: Expr, seconds: number) {
+    this.reactExpr = e;
+    this.reactT = seconds;
+  }
+
+  private pickExpr(a: number, f: BeanFrame, speed: number): Expr {
+    if (this.reactT > 0 && this.reactExpr) return this.reactExpr;
+    if (this.pose === 'cheer') return 'laugh';
+    if (this.pose === 'clap') return 'grin';
+    if (this.pose === 'sad') return 'cry';
+    if (this.emoteT > 0 && speed < 1.2 && (a === ANIM.idle || a === ANIM.air)) {
+      const byEmote: Record<number, Expr> = { 1: 'grin', 2: 'grin', 3: 'laugh', 4: 'cry', 5: 'scared' };
+      return byEmote[this.emote] ?? 'smile';
+    }
+    if (a === ANIM.tumble) return 'scared';
+    if (a === ANIM.stun) return 'dizzy';
+    if (a === ANIM.getup) return 'strain';
+    if (a === ANIM.grab || a === ANIM.reach) return 'strain';
+    if (a === ANIM.dive || a === ANIM.slide) return 'determined';
+    // A long fall: fright.
+    if (a === ANIM.air && this.fallT > 0.45) return 'scared';
+    if (a === ANIM.air && f.vel.y > 8) return 'surprised';
+    if (speed > 6) return 'grin';
+    return 'smile';
+  }
+
   dispose() {
     if (this.crown) lod.drop(this.crown);
     lod.drop(this);
@@ -281,7 +318,9 @@ export class Bean {
     const prevAnim = this.lastAnim;
     this.lastAnim = a;
     this.emoteT -= dt;
+    this.reactT -= dt;
     this.airT = a === ANIM.air ? this.airT + dt : 0;
+    this.fallT = a === ANIM.air && f.vel.y < -9 ? this.fallT + dt : 0;
 
     // Squash and stretch impulses on events.
     const impact = f.landImpact ?? 0;
@@ -352,8 +391,12 @@ export class Bean {
     // (Screenshots: no blinking, the same picture every time.)
     const blink = this.blinkAt < 0.12 && this.blinkAt > 0 && !shotMode.value ? 0.12 : 1;
     if (this.blinkAt < 0) this.blinkAt = 2 + Math.random() * 3.5;
-    const eye = a === ANIM.tumble ? 0.25 : a === ANIM.stun ? 0.55 : this.pose === 'sad' ? 0.6 : blink;
-    for (const e of this.eyes) e.scale.y += (eye - e.scale.y) * Math.min(1, dt * 30);
+    this.face.set(this.pickExpr(a, f, speed));
+    this.face.update(dt, t, blink, a === ANIM.tumble ? 0.3 : 1);
+    // Giants grow (and shrink back) with a wobble.
+    const size = this.grow.step(f.size ?? 1, 90, 9, dt);
+    this.root.scale.setScalar(Math.max(0.5, size));
+    this.updateAura(f.power ?? 0, t);
 
     if (this.tail) {
       // Each segment follows the one before: a wagging, trailing tail.
@@ -364,7 +407,40 @@ export class Bean {
         seg = seg.children.find((c) => c.name.startsWith('tail')) as THREE.Object3D;
       }
     }
-    this.updateReach(f.grabAt ?? null);
+    if (a === ANIM.reach && !f.grabAt) {
+      // Reaching out: the arms stretch forward, grasping.
+      const fw = 0.7 + Math.abs(Math.sin(t * 9)) * 0.45;
+      _reach.set(Math.sin(yaw) * fw, 0.05, Math.cos(yaw) * fw).add(this.root.position);
+      this.updateReach(_reach, 0.55);
+    } else this.updateReach(f.grabAt ?? null);
+  }
+
+  /** A soft glow at the feet while a bonus is in effect. */
+  private updateAura(power: number, t: number) {
+    if (!power) {
+      if (this.aura) this.aura.visible = false;
+      return;
+    }
+    if (!this.aura) {
+      this.aura = new THREE.Mesh(
+        new THREE.RingGeometry(0.45, 0.8, 40),
+        new THREE.MeshBasicMaterial({
+          transparent: true,
+          opacity: 0.7,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      this.aura.rotation.x = -Math.PI / 2;
+      this.aura.position.y = 0.05;
+      this.aura.userData.noLod = true;
+      this.root.add(this.aura);
+    }
+    const colors = ['#ffffff', '#ff6f91', '#58d68d', '#ffd23f'];
+    (this.aura.material as THREE.MeshBasicMaterial).color.set(colors[power] ?? '#ffffff');
+    this.aura.visible = true;
+    this.aura.scale.setScalar(1 + Math.sin(t * 6) * 0.12);
   }
 
   private airborne(f: BeanFrame) {
@@ -530,6 +606,14 @@ export class Bean {
       T.legRz = 0.05 + Math.max(0, -s) * 0.35;
       T.roll -= clamp(side * 0.02, -0.15, 0.15);
     }
+    if (a === ANIM.reach) {
+      T.armLx = -1.5 + Math.sin(t * 9) * 0.15;
+      T.armRx = -1.5 - Math.sin(t * 9) * 0.15;
+      T.armLz = 0.18;
+      T.armRz = 0.18;
+      T.lean = 0.15 + T.lean * 0.5;
+      return T;
+    }
     if (a === ANIM.grab) {
       T.armLx = -1.55;
       T.armRx = -1.55;
@@ -592,6 +676,26 @@ export class Bean {
       T.legLx = Math.max(0, b) * -0.6;
       T.legRx = Math.max(0, -b) * -0.6;
       T.lift = Math.abs(b) * 0.1;
+    } else if (this.emote === 4) {
+      // Crying: slumped, hands rubbing the eyes, shoulders shaking.
+      const sob = Math.sin(t * 14) * 0.06;
+      T.lean = 0.3 + sob;
+      T.armLx = -2.3 + sob;
+      T.armRx = -2.3 - sob;
+      T.armLz = -0.35;
+      T.armRz = -0.35;
+      T.lift = Math.abs(sob) * 0.3;
+    } else if (this.emote === 5) {
+      // Fright: arms thrown up, knees knocking, trembling.
+      const tr = Math.sin(t * 30) * 0.05;
+      T.armLx = -2.8 + tr;
+      T.armRx = -2.8 - tr;
+      T.armLz = 0.9;
+      T.armRz = 0.9;
+      T.lean = -0.2;
+      T.legLz = -0.15 + tr;
+      T.legRz = -0.15 - tr;
+      T.roll = tr;
     } else {
       // Laugh: rocking back, hands on the belly.
       T.lean = -0.35 + Math.sin(t * 18) * 0.06;
@@ -640,8 +744,8 @@ export class Bean {
     return T;
   }
 
-  /** Arms stretching from the shoulders to the held bean. */
-  private updateReach(target: THREE.Vector3 | null) {
+  /** Arms stretching from the shoulders to the held bean (or out in front, reaching). */
+  private updateReach(target: THREE.Vector3 | null, height = 0.9) {
     for (let i = 0; i < 2; i++) {
       const m = this.reach[i]!;
       if (!target) {
@@ -653,7 +757,7 @@ export class Bean {
       _v.set(side * 0.5, 1.08, 0.05);
       this.root.localToWorld(_v);
       const end = target.clone();
-      end.y += 0.9;
+      end.y += height * this.root.scale.y;
       end.x += side * 0.25 * Math.cos(this.root.rotation.y);
       end.z -= side * 0.25 * Math.sin(this.root.rotation.y);
       const dir = end.sub(_v);

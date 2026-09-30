@@ -28,6 +28,8 @@ export interface Hud {
   /** Who the camera follows while not playing ('' = overview). */
   spectating: string;
   mapText: string | null;
+  /** The local player's bonus in effect ("⚡ Ускорение · 5 с"), if any. */
+  bonus: string | null;
   /** Round status of every participant. */
   roster: Record<number, { status: PlayStatus; place: number }>;
   roundScores: Record<number, number>;
@@ -42,6 +44,7 @@ export const hud = signal<Hud>({
   place: 0,
   spectating: '',
   mapText: null,
+  bonus: null,
   roster: {},
   roundScores: {},
   fps: 0,

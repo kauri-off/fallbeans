@@ -10,6 +10,8 @@ const TailsEvent = z.object({ ids: z.array(z.number().int()).max(16), by: z.numb
 const STEAL_RANGE = 2.4;
 const IMMUNE = 1.5;
 const ARENA_R = 15;
+/** Tail holders run at this share of full speed (the chasers are a little quicker). */
+const TAIL_SLOW = 0.86;
 
 export default defineMap(meta, (b, ctx) => {
   b.style.pattern = 'dots';
@@ -28,14 +30,43 @@ export default defineMap(meta, (b, ctx) => {
     // From the island's top edge (1.5 m) down to the floor 4 m further out.
     b.box(0, 0.47, 0, 4, 0.6, 4.5, PAL.pink, { parent: ramp, rot: [Math.atan2(1.5, 4), 0, 0] });
   }
-  // Between the spawn points (which sit at 22.5° + k·45°), never on top of one; two small sweepers
-  // turning at the far sides (their arms stop short of the spawns).
-  for (const a of [0.5, 1.5]) b.bumper(Math.cos(a * Math.PI) * 10, 0, Math.sin(a * Math.PI) * 10, 1, 12);
-  for (const sx of [-1, 1]) {
-    b.hub(sx * 11.6, 0, 0, 0.6);
-    b.rotor(sx * 11.6, 0.6, 0, 2.9, 2, (t) => (t <= 0 ? sx * 0.8 : sx * (0.8 + t * 1.1)), 0.7);
+  // Between the spawn points (which sit at 22.5° + k·45°), never on top of one: two small sweepers
+  // (their arms stop short of the spawns), trampolines up to floating islands, a pair of portals.
+  for (const sz of [-1, 1]) {
+    b.hub(0, 0, sz * 11.6, 0.6);
+    b.rotor(0, 0.6, sz * 11.6, 2.9, 2, (t) => (t <= 0 ? sz * 0.8 : sz * (0.8 + t * 1.1)), 0.7);
   }
-  b.clouds(0, 0, 40);
+  for (const sx of [-1, 1]) {
+    b.trampoline(sx * 12.3, 0, 0, 1.5, 18);
+    // A floating island beyond the rim (a refuge, until someone bounces after you).
+    b.cyl(sx * 18.2, 3.2, 0, 3, 1.2, PAL.green, { surface: 'grass' });
+    b.prop('mushroom', sx * 19, 3.8, 1.2, { scale: 0.8 });
+  }
+  const rng = b.rng;
+  const flipP = rng() < 0.5 ? 1 : -1;
+  b.portal(
+    { x: 9.9 * flipP, y: 0, z: 9.9, yaw: Math.atan2(-9.9 * flipP, -9.9) },
+    { x: -9.9 * flipP, y: 0, z: -9.9, yaw: Math.atan2(9.9 * flipP, 9.9) },
+    '#ff8a3d',
+  );
+  // Two platforms circling just outside the rim: hop on, ride round, hop off somewhere else.
+  const orbit = 0.22 + rng() * 0.08;
+  for (const k of [0, 1]) {
+    const pl = b.box(0, -0.5, 0, 3.2, 1, 3.2, k ? PAL.orange : PAL.pink, { dynamic: true });
+    const ph = k * Math.PI + rng();
+    b.move((t) => {
+      const a = ph + Math.max(0, t) * orbit;
+      pl.obj.position.set(Math.cos(a) * 17.6, -0.5, Math.sin(a) * 17.6);
+      pl.obj.rotation.y = -a;
+    });
+  }
+  for (const [x, z] of [
+    [0, 0],
+    [7, -4],
+    [-7, 4],
+  ] as const)
+    b.bonus(x, x ? 0 : 1.5, z);
+  b.clouds(0, 0, 45);
 
   // Initial tails follow from the seed and the participant order, identical everywhere.
   const order = shuffle([...ctx.participants], b.rng);
@@ -56,6 +87,13 @@ export default defineMap(meta, (b, ctx) => {
     view: new THREE.Vector3(0, 1, 0),
     tick(t) {
       if (t < 0) return;
+      // Tails weigh you down a little: the chasers can catch up.
+      for (const id of tails) {
+        const body = ctx.bodies().get(id);
+        if (!body) continue;
+        body.slowK = t < body.slowUntil ? Math.min(body.slowK, TAIL_SLOW) : TAIL_SLOW;
+        body.slowUntil = Math.max(body.slowUntil, t + 0.25);
+      }
       const s = Math.floor(t);
       if (s === lastSecond) return;
       lastSecond = s;
@@ -82,6 +120,7 @@ export default defineMap(meta, (b, ctx) => {
       const before = tails.has(ctx.me());
       tails = new Set(d.data.ids);
       if (d.data.by !== undefined) immune.set(d.data.by, ctx.now() + IMMUNE);
+      // (The old tail holder's slow-down wears off by itself within a quarter of a second.)
       decorateAll();
       if (before !== tails.has(ctx.me())) ctx.sfx('steal');
     },

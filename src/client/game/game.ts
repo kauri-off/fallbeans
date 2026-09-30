@@ -4,6 +4,8 @@ import { decodeSnapshot } from '../../shared/codec';
 import { DT, INTRO_MS } from '../../shared/consts';
 import { Sections } from '../../shared/prof';
 import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
+import { BONUS_KINDS } from '../../sim/bonus';
+import { GIANT_SIZE, POWER } from '../../sim/physics';
 import { report } from '../debug/capture';
 import { Connection } from '../net/connection';
 import { session, settings, updateSettings } from '../settings';
@@ -259,10 +261,14 @@ export class Game {
           this.arena?.stopPlaying();
           this.spectateAuto = true;
         }
+        this.beans.get(m.id)?.react('laugh', 3);
         note(`🏁 ${this.nameOf(m.id)}: финиш, ${ordinal(m.place)} место (${fmtSec(m.time)})`);
         return;
       case 'ko':
         if (m.out) this.arena?.out.add(m.id);
+        this.beans.get(m.id)?.react(m.out ? 'cry' : 'scared', m.out ? 3 : 1.2);
+        // Out of the round: the bean (and its name tag) leaves the map right away.
+        if (m.out && m.id !== myId.value) this.lastSeen.set(m.id, 0);
         if (m.id === myId.value) {
           sfx(m.out ? 'out' : 'fall');
           if (m.out) {
@@ -274,7 +280,7 @@ export class Game {
           pushFeed({ victim: m.id, by: m.by, cause: m.cause, out: m.out, shortcut: !!m.shortcut });
         return;
       case 'ev':
-        this.arena?.spec.onEvent?.(m.n, m.d);
+        this.arena?.onEvent(m.n, m.d);
         return;
       case 'scores':
         for (const [id, v] of m.s) this.arena?.scores.set(id, v);
@@ -326,6 +332,13 @@ export class Game {
       rtt: () => this.net.clock.rtt,
     });
     this.arena = arena;
+    arena.onBonus = (b) => {
+      const info = BONUS_KINDS[b.kind];
+      if (!info || b.takenBy === null) return;
+      sfx('boing');
+      this.beans.get(b.takenBy)?.react('grin', 1.5);
+      note(`${info.icon} ${b.takenBy === myId.value ? 'Вы' : this.nameOf(b.takenBy)}: ${info.title}!`);
+    };
     const me = myId.value;
     const inPlay =
       info.kind === 'lobby' ||
@@ -551,6 +564,8 @@ export class Game {
         tilt: arena.body.tilt,
         tiltDir: arena.body.tiltDir,
         grabAt: held?.root.visible ? held.root.position : null,
+        size: arena.body.size,
+        power: arena.body.power,
       });
       this.lastSeen.set(me, now);
       focus = b.root.position;
@@ -583,8 +598,12 @@ export class Game {
         tilt: p.tilt,
         tiltDir: p.tiltDir,
         grabAt: held?.root.visible ? held.root.position : null,
+        size: p.power === POWER.giant ? GIANT_SIZE : 1,
+        power: p.power,
       });
-      this.lastSeen.set(id, now);
+      // (A bean knocked out just now stays hidden: the last snapshots may still carry it.)
+      if (arena.out.has(id) || arena.finished.has(id)) b.root.visible = false;
+      else this.lastSeen.set(id, now);
     }
     for (const [id, b] of this.beans) {
       if (now - (this.lastSeen.get(id) ?? 0) > 400) b.root.visible = false;
@@ -639,6 +658,13 @@ export class Game {
       else if (arena.finished.has(me)) status = 'finished';
       else if (arena.out.has(me)) status = 'out';
     }
+    let bonus: string | null = null;
+    const body = arena.body;
+    if (body && body.power !== POWER.none) {
+      const info = BONUS_KINDS[body.power];
+      const left = Math.max(0, Math.ceil(body.powerUntil - arena.predTick * DT));
+      if (info && left > 0) bonus = `${info.icon} ${info.title} · ${left} с`;
+    }
     let mapText: string | null = null;
     try {
       mapText = info.kind === 'round' && t >= 0 ? (arena.spec.hud?.() ?? null) : null;
@@ -651,6 +677,7 @@ export class Game {
       spectating:
         status === 'play' || status === 'lobby' || status === 'podium' || this.spectate < 0 ? '' : this.nameOf(this.spectate),
       mapText,
+      bonus,
       roster,
       roundScores: Object.fromEntries(arena.scores),
       fps: this.fps,
@@ -669,7 +696,7 @@ export class Game {
     for (const [id, b] of this.beans) {
       if (!b.root.visible || id === me) continue;
       this.tmp.copy(b.root.position);
-      this.tmp.y += 2.25;
+      this.tmp.y += 0.65 + 1.6 * b.root.scale.y;
       const d = this.tmp.distanceTo(cam.position);
       this.tmp.project(cam);
       if (this.tmp.z > 1 || Math.abs(this.tmp.x) > 1.1 || Math.abs(this.tmp.y) > 1.1) continue;

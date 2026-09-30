@@ -324,6 +324,10 @@ h3 {
   background: var(--orange);
 }
 
+.pill.bonus {
+  font-weight: 800;
+}
+
 .g-points {
   background: var(--green);
 }
@@ -353,6 +357,11 @@ h3 {
   white-space: nowrap;
   transform-origin: 50% 100%;
   will-change: transform;
+}
+
+/* (display: flex above would otherwise override the hidden attribute: stale tags hung in mid-air) */
+.tag[hidden] {
+  display: none;
 }
 
 .tag i {

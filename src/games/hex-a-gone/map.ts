@@ -58,6 +58,11 @@ export default defineMap(meta, (b, ctx) => {
   b.move((t) => {
     for (const tile of tiles) tile.col.enabled = tile.fallAt === null || t < tile.fallAt;
   });
+  for (const fy of FLOORS.slice(0, 2))
+    for (let k = 0; k < 3; k++) {
+      const a = (k / 3) * Math.PI * 2 + fy;
+      b.bonus(Math.cos(a) * 7, fy, Math.sin(a) * 7);
+    }
 
   if (b.view) {
     const inst = b.view.instanced(

@@ -1,11 +1,20 @@
 import * as THREE from 'three';
-import { BTN, type InputFrame, type InputPacket, REMOTE_FLAG, type RemoteState, type Snapshot } from '../shared/codec';
+import {
+  BTN,
+  type InputFrame,
+  type InputPacket,
+  POWER_SHIFT,
+  REMOTE_FLAG,
+  type RemoteState,
+  type Snapshot,
+} from '../shared/codec';
 import { ANIM, BOT_EVERY, DT, TICK_MS } from '../shared/consts';
 import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../shared/game';
 import type { Sections } from '../shared/prof';
 import type { GameEventRecord } from '../shared/protocol';
 import { mulberry32, type Rng } from '../shared/rng';
 import { emptyStats, type RoundStats } from '../shared/rules';
+import { Bonuses } from '../sim/bonus';
 import { Builder } from '../sim/builder';
 import {
   type BotInput,
@@ -24,7 +33,8 @@ import { type OtherBody, PlayerBody } from '../sim/physics';
 /** How far ahead of the server a client may send inputs (ticks). */
 const MAX_LEAD = 120;
 const MAX_PACKETS_PER_SEC = 150;
-const GRAB_REACH = 1.5;
+/** How far a grab reaches (centre to centre; beans never get closer than BEAN_GAP). */
+const GRAB_REACH = 2.1;
 /** Holding: rope length, how far it stretches before breaking, how long it lasts (s). */
 const HOLD_LEN = 1.35;
 const HOLD_BREAK = 2.8;
@@ -135,6 +145,8 @@ export interface Pawn {
   forbiddenFor: number;
   /** Dev: holds on as if the grab button were pressed until this sim time. */
   forceGrabUntil: number;
+  /** Grab button held with nobody in hand (the arms reach out). */
+  reaching: boolean;
 }
 
 export interface KoInfo {
@@ -219,6 +231,8 @@ export class ServerArena {
   private spawnCursor = 0;
   /** Bot navigation grid, built on first use once the round has started (gates are open). */
   private nav: NavGrid | null = null;
+  /** Bonuses lying on the course (rounds only). */
+  readonly bonuses: Bonuses | null;
 
   constructor(o: ArenaOptions) {
     this.id = o.id;
@@ -272,6 +286,10 @@ export class ServerArena {
     this.spec = o.module.build(this.builder, ctx);
     const bad = specProblems(this.spec);
     if (bad.length) throw new Error(`map ${o.module.meta.id}: ${bad.join(', ')}`);
+    this.bonuses =
+      o.kind === 'round'
+        ? new Bonuses(this.builder, o.seed, { arena: !this.spec.finish, duration: o.module.meta.duration })
+        : null;
     this.builder.world.finalize(this.tick * DT);
     this.staticHash = this.builder.world.hash(true);
   }
@@ -327,6 +345,7 @@ export class ServerArena {
       activeAt: Math.max(0, this.time),
       forbiddenFor: 0,
       forceGrabUntil: -1e9,
+      reaching: false,
     };
     this.pawns.set(id, pawn);
     this.bodyMap.set(id, body);
@@ -450,7 +469,20 @@ export class ServerArena {
     for (const o of this.pawns.values())
       if (o !== p && o.status === 'play') others.push({ id: o.id, pos: o.body.pos, vel: o.body.vel, down: o.body.down });
     try {
-      brain({ id: p.id, body: p.body, t: this.time, rng: st.rng, mem: st.mem, plan: st.plan, others, nav: this.nav }, out);
+      brain(
+        {
+          id: p.id,
+          body: p.body,
+          t: this.time,
+          rng: st.rng,
+          mem: st.mem,
+          plan: st.plan,
+          others,
+          nav: this.nav,
+          bonuses: this.bonuses?.available(this.time) ?? [],
+        },
+        out,
+      );
     } catch (e) {
       this.hooks.warn('bot brain failed', { game: this.module.meta.id, err: String(e) });
     }
@@ -501,6 +533,7 @@ export class ServerArena {
       vx: p.body.vel.x,
       vz: p.body.vel.z,
       touching: false,
+      size: p.body.size,
     }));
     for (const p of active) {
       const f = frames.get(p)!;
@@ -514,6 +547,17 @@ export class ServerArena {
     }
     prof?.start('interact');
     for (const p of active) this.interact(p, frames.get(p)!, active, t, frames);
+    if (this.bonuses && t >= 0 && !this.frozen)
+      this.bonuses.check(
+        t,
+        active.map((p) => p.body),
+        (name, data) => {
+          this.bonuses?.onEvent(data);
+          this.note('bonus', undefined, data);
+          this.events.push([name, data]);
+          this.hooks.onEvent(name, data);
+        },
+      );
     prof?.start('rules');
     for (const p of active) this.rules(p, t);
     if (k % TRACE_EVERY === 0) for (const p of active) this.record(p, t, frames.get(p)!);
@@ -613,6 +657,7 @@ export class ServerArena {
   private interact(p: Pawn, f: InputFrame, active: Pawn[], t: number, frames: Map<Pawn, InputFrame>) {
     const b = p.body;
     const wants = ((f.buttons & BTN.grab) !== 0 || t < p.forceGrabUntil) && b.state === 'normal';
+    p.reaching = wants && p.grabbing === null;
     if (p.grabbing !== null) {
       const o = this.pawns.get(p.grabbing);
       const dist = o ? Math.hypot(o.body.pos.x - b.pos.x, o.body.pos.z - b.pos.z) : 99;
@@ -625,16 +670,23 @@ export class ServerArena {
     } else if (wants && t >= p.grabReadyAt) {
       const fx = Math.sin(b.yaw);
       const fz = Math.cos(b.yaw);
-      let best = GRAB_REACH;
+      let best = Number.POSITIVE_INFINITY;
       let target: Pawn | null = null;
       for (const o of active) {
         if (o === p || o.body.down) continue;
         const dx = o.body.pos.x - b.pos.x;
         const dz = o.body.pos.z - b.pos.z;
         const d = Math.hypot(dx, dz);
-        if (d > best || Math.abs(o.body.pos.y - b.pos.y) > 1.2) continue;
-        if (d > 0.3 && (dx * fx + dz * fz) / d < 0.2) continue;
-        best = d;
+        // Reach grows with the size of either bean (giants have long arms, and are big targets).
+        const reach = GRAB_REACH * Math.max(b.size, o.body.size);
+        if (d > reach || Math.abs(o.body.pos.y - b.pos.y) > 1.6 * Math.max(b.size, o.body.size)) continue;
+        // Anything in front, or right beside (turning to it): forgiving, as grabbing should feel.
+        const facing = d > 0.3 ? (dx * fx + dz * fz) / d : 1;
+        if (facing < (d < 1.5 ? -0.35 : 0.1)) continue;
+        // Prefer what is ahead over what is merely close.
+        const score = d - facing * 0.6;
+        if (score > best) continue;
+        best = score;
         target = o;
       }
       if (target) {
@@ -648,7 +700,8 @@ export class ServerArena {
         } catch (e) {
           this.hooks.warn('grab handler failed', { err: String(e) });
         }
-        this.hold(p, target, best, t, frames.get(target));
+        p.reaching = false;
+        this.hold(p, target, Math.hypot(target.body.pos.x - b.pos.x, target.body.pos.z - b.pos.z), t, frames.get(target));
       }
     }
 
@@ -682,8 +735,10 @@ export class ServerArena {
   private hold(p: Pawn, o: Pawn, dist: number, t: number, of: InputFrame | undefined) {
     const b = p.body;
     const ob = o.body;
+    // A giant held by a normal bean is barely slowed (and not dragged much).
+    const heavy = ob.mass / b.mass;
     ob.slowUntil = t + 0.15;
-    ob.slowK = 0.5;
+    ob.slowK = heavy > 1 ? 0.85 : 0.5;
     b.slowUntil = t + 0.15;
     b.slowK = 0.7;
     o.lastHit = { by: p.id, cause: 'grab', t };
@@ -694,10 +749,10 @@ export class ServerArena {
       // Spring back towards the grabber; the held bean cannot outrun the hand.
       const away = ob.vel.x * dx + ob.vel.z * dz;
       if (away > 0) {
-        ob.vel.x -= dx * away * 0.6;
-        ob.vel.z -= dz * away * 0.6;
+        ob.vel.x -= (dx * away * 0.6) / heavy;
+        ob.vel.z -= (dz * away * 0.6) / heavy;
       }
-      const k = Math.min(1, (dist - HOLD_LEN) * 0.5);
+      const k = Math.min(1, (dist - HOLD_LEN) * 0.5) / heavy;
       ob.pos.x -= dx * k * 0.1;
       ob.pos.z -= dz * k * 0.1;
     }
@@ -787,8 +842,11 @@ export class ServerArena {
         y: p.body.pos.y,
         z: p.body.pos.z,
         yaw: p.body.yaw,
-        anim: animFor(p.body, p.grabbing !== null),
-        flags: p.grabbing !== null ? REMOTE_FLAG.grab : 0,
+        anim: animFor(p.body, p.grabbing !== null, p.reaching),
+        flags:
+          (p.grabbing !== null ? REMOTE_FLAG.grab : 0) |
+          (p.reaching ? REMOTE_FLAG.reach : 0) |
+          ((p.body.power & 3) << POWER_SHIFT),
         tilt: p.body.tilt,
         tiltDir: p.body.tiltDir,
         grab: p.grabbing ?? -1,
@@ -880,7 +938,7 @@ export class ServerArena {
   }
 }
 
-export function animFor(b: PlayerBody, grabbing: boolean): number {
+export function animFor(b: PlayerBody, grabbing: boolean, reaching = false): number {
   if (b.state === 'tumble') return ANIM.tumble;
   if (b.state === 'getup') return ANIM.getup;
   if (b.state === 'stun') return ANIM.stun;
@@ -888,5 +946,6 @@ export function animFor(b: PlayerBody, grabbing: boolean): number {
   if (b.state === 'slide') return ANIM.slide;
   if (!b.grounded) return ANIM.air;
   if (grabbing) return ANIM.grab;
+  if (reaching) return ANIM.reach;
   return ANIM.idle;
 }

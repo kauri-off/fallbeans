@@ -14,7 +14,7 @@ export interface GameMeta {
   genre: Genre;
   desc: string;
   goal: string;
-  /** Round length in seconds (60–120). */
+  /** Round length in seconds (60–180). */
   duration: number;
   minPlayers?: number;
   /** Grab (Q / right mouse) does something special in this game. */
@@ -30,7 +30,7 @@ export const GameMetaSchema = z.object({
   genre: z.enum(['race', 'survival', 'points']),
   desc: z.string().min(10).max(220),
   goal: z.string().min(3).max(40),
-  duration: z.number().int().min(60).max(120),
+  duration: z.number().int().min(60).max(180),
   minPlayers: z.number().int().min(1).max(8).optional(),
   grab: z.boolean().optional(),
   finale: z.boolean().optional(),

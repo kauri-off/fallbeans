@@ -9,6 +9,11 @@ const N = 20;
 const CY = -R;
 const STEP = (2 * Math.PI) / N;
 
+/**
+ * Three huge drums with missing slats turn under you: run against the turn and hop the holes. Fall in
+ * through a hole and you land inside the drum: keep running on the inside (the holes come round down
+ * there too). Only falling out of a drum ends your round.
+ */
 export default defineMap(meta, (b) => {
   b.style.pattern = 'stripes';
   const rings = [
@@ -53,9 +58,19 @@ export default defineMap(meta, (b) => {
       if (last && k - 0.5 === last.to) last.to = k + 0.5;
       else holes.push({ from: k - 0.5, to: k + 0.5 });
     }
-    return { ...r, missing, angle, holes };
+    return { ...r, missing, angle, holes, group };
   });
-  b.cyl(0, CY, 0, 1.2, 30, '#5a3fb8', { rot: [Math.PI / 2, 0, 0], noCollide: true });
+  // Spokes at the rims instead of an axle through the middle (the inside is part of the course).
+  if (b.view)
+    for (const r of rings)
+      for (const dz of [-4.1, 4.1])
+        for (let k = 0; k < 3; k++)
+          b.box(0, 0, dz * 1.06, 0.3, R * 2 - 0.6, 0.3, '#5a3fb8', {
+            noCollide: true,
+            parent: r.group,
+            rot: [0, 0, (k / 3) * Math.PI],
+          });
+  for (const r of rings) b.bonus(0, 0.05, r.z + 2.5);
   b.clouds(0, 0, 40, 30, -40, -10);
 
   const spawns = [-9, 0, 9].flatMap((z) => [-1.2, 1.2].map((x) => new THREE.Vector3(x, 0.1, z)));
@@ -65,16 +80,19 @@ export default defineMap(meta, (b) => {
   return {
     spawns,
     killY: -16,
-    isOut: (p) => Math.hypot(p.x, p.y - CY) < R - 1.4,
     view: new THREE.Vector3(0, 2, 0),
     bot(bot, out) {
       initBot(bot);
       const p = bot.body.pos;
       const ring = ringAt(p.z);
+      // Inside the drum (fallen in): the same game on the inner surface, at the bottom.
+      const inside = p.y < CY;
+      const RS = inside ? R - 0.5 : R;
+      const mirror = inside ? -1 : 1;
       const t = Math.max(0, bot.t);
       const omega = t > 0 ? ring.dir * (0.35 + 0.004 * t) : 0;
       // The top of the drum carries us sideways at −ω·R; "up" is against it.
-      const carry = -omega * R;
+      const carry = -omega * RS * mirror;
       const up = carry === 0 ? 0 : -Math.sign(carry);
       const lane = ring.z + ((bot.id % 3) - 1) * 1.5 + (bot.mem.off ?? 0) * 0.4;
       // Holes as intervals along the surface, in metres towards "up" from the bot.
@@ -86,8 +104,9 @@ export default defineMap(meta, (b) => {
         let a0 = h.from * STEP - theta - phi;
         a0 = Math.atan2(Math.sin(a0), Math.cos(a0));
         const a1 = a0 + (h.to - h.from) * STEP;
-        const near = up >= 0 ? a0 * R : -a1 * R;
-        const far = up >= 0 ? a1 * R : -a0 * R;
+        const upA = up * mirror;
+        const near = upA >= 0 ? a0 * RS : -a1 * RS;
+        const far = upA >= 0 ? a1 * RS : -a0 * RS;
         if (far > -0.2 && near > -0.4) {
           if (!ahead || near < ahead.near) ahead = { near, far };
         } else if (far <= -0.2) behind = Math.min(behind, -far);
@@ -107,7 +126,9 @@ export default defineMap(meta, (b) => {
         // Clear the near edge, the hole and a body length, minus what the drum brings us.
         const span = ahead.far - Math.max(0, ahead.near) + 1.6;
         out.jump = true;
-        mx = up * Math.min(1, Math.max(0.2, (span - Math.abs(carry) * 0.75) / 0.75 / 8.5));
+        // …but never so far that it lands on the steep side of the drum.
+        const room = Math.max(0.2, (3.2 - up * p.x * mirror) / 6.4);
+        mx = up * Math.min(1, room, Math.max(0.2, (span - Math.abs(carry) * 0.75) / 0.75 / 8.5));
         bot.mem.hopMx = mx;
         bot.mem.hopUntil = bot.t + 0.7;
       } else if (!bot.body.grounded && (bot.mem.hopUntil ?? -1) > bot.t) mx = bot.mem.hopMx ?? mx;

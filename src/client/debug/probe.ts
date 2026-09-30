@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DT, PROTOCOL_VERSION, TICK_MS } from '../../shared/consts';
 import type { DevCmd, ServerMsg } from '../../shared/protocol';
 import { type Collider, R, SPHERES } from '../../sim/physics';
+import type { Expr } from '../game/face';
 import type { Game } from '../game/game';
 import { lod } from '../game/lod';
 import type { Effects, Quality } from '../game/renderer';
@@ -396,6 +397,20 @@ export function createProbe(game: Game) {
       if (d.crown !== undefined) b.setCrown(d.crown);
       if (d.tail !== undefined) b.setTail(d.tail);
       return true;
+    },
+    /** Shows a facial expression on a bean for `s` seconds (see game/face.ts Expr). */
+    face(e: Expr, s = 5, id = myId.value) {
+      const b = game.inspect().beans.get(id);
+      b?.react(e, s);
+      return !!b;
+    },
+    /** Bonuses of the round: kind, position, when they show up, who took them. */
+    bonuses: () =>
+      game.arena?.bonuses?.list.map((x) => ({ kind: x.kind, pos: [x.x, x.y, x.z], appearAt: x.appearAt, takenBy: x.takenBy })) ??
+      [],
+    /** Plays an emote (1–5) as if the key had been pressed. */
+    emote(e: number) {
+      game.net.send({ t: 'emote', e });
     },
     ui: (hidden: boolean) => {
       uiHidden.value = hidden;

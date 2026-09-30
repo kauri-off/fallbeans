@@ -138,7 +138,19 @@ function GameTab({ game }: { game: Game }) {
                     </button>
                   )
                 ) : (
-                  <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
+                  <>
+                    {isHost && p.id !== me && p.connected && (
+                      <button
+                        type="button"
+                        class="btn tiny"
+                        title="Передать роль хоста этому игроку"
+                        onClick={() => send({ t: 'host', id: p.id })}
+                      >
+                        ⭐ хост
+                      </button>
+                    )}
+                    <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
+                  </>
                 )}
               </li>
             ))}

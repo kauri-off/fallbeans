@@ -128,7 +128,7 @@ export class Input {
     if (isDown && !e.repeat) {
       if (KEYS.jump.includes(e.code)) this.jumpEdge = true;
       if (KEYS.dive.includes(e.code)) this.diveEdge = true;
-      if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') this.onEmote?.(Number(e.code.slice(5)));
+      if (/^Digit[1-5]$/.test(e.code)) this.onEmote?.(Number(e.code.slice(5)));
     }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
     if (isDown) this.down.add(e.code);
@@ -188,6 +188,7 @@ export class Input {
       if (b(12)) this.onEmote?.(1);
       if (b(14)) this.onEmote?.(2);
       if (b(15)) this.onEmote?.(3);
+      if (b(13)) this.onEmote?.(4);
     }
     const l = Math.hypot(mx, my);
     if (l > 1) {

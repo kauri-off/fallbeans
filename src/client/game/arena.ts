@@ -5,13 +5,16 @@ import {
   BTN,
   encodeInput,
   type InputFrame,
+  POWER_SHIFT,
   quantizeAxis,
+  REMOTE_FLAG,
   type RemoteState,
   type Snapshot,
 } from '../../shared/codec';
 import { ANIM, DT, INPUT_EVERY, INPUT_REDUNDANCY, SNAPSHOT_EVERY, TICK_MS } from '../../shared/consts';
 import { canMove } from '../../shared/game';
 import type { ArenaInfo } from '../../shared/protocol';
+import { BONUS_EVENT, type Bonus, Bonuses } from '../../sim/bonus';
 import { Builder } from '../../sim/builder';
 import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
 import { type OtherBody, PlayerBody } from '../../sim/physics';
@@ -37,6 +40,10 @@ export interface RemotePose {
   tiltDir: number;
   /** Id of the bean held, or −1. */
   grab: number;
+  /** Reaching out with the grab button (nobody in hand). */
+  reach: boolean;
+  /** Bonus in effect (physics POWER). */
+  power: number;
 }
 
 export interface ArenaHost {
@@ -85,6 +92,11 @@ export class ClientArena {
   snapshots = 0;
   /** Id of the bean the local player holds (from the server), or −1. */
   ownGrab = -1;
+  /** The local grab button is held. */
+  grabHeld = false;
+  readonly bonuses: Bonuses | null;
+  /** Called when somebody takes a bonus (sounds, notes). */
+  onBonus: ((b: Bonus) => void) | null = null;
 
   constructor(
     readonly info: ArenaInfo,
@@ -112,6 +124,10 @@ export class ClientArena {
       decorate: (id, d) => host.decorate(id, d),
     };
     this.spec = mod.build(this.builder, ctx);
+    this.bonuses =
+      info.kind === 'round'
+        ? new Bonuses(this.builder, info.seed, { arena: !this.spec.finish, duration: mod.meta.duration })
+        : null;
     const now = host.serverNow();
     this.predTick = Math.floor(this.tickAt(now)) - 1;
     this.builder.world.finalize(this.predTick * DT);
@@ -123,8 +139,18 @@ export class ClientArena {
     applySurfaces(this.builder.group);
     scene.add(this.builder.group);
     lod.register(this.builder.group);
-    for (const [name, data] of info.events) this.spec.onEvent?.(name, data);
+    for (const [name, data] of info.events) this.onEvent(name, data, true);
     this.lead = host.rtt() / 2 + 30;
+  }
+
+  /** An authoritative event from the server (map events, bonuses); replay: it happened before we joined. */
+  onEvent(name: string, data: unknown, replay = false) {
+    if (name === BONUS_EVENT) {
+      const b = this.bonuses?.onEvent(data);
+      if (b && !replay) this.onBonus?.(b);
+      return;
+    }
+    this.spec.onEvent?.(name, data);
   }
 
   /** How far ahead of the server clock the local bean is predicted (ms). */
@@ -198,6 +224,12 @@ export class ClientArena {
       if (b.bumped > this.events.bumped) this.events.bumped = b.bumped;
       if (!wasDive && b.state === 'dive') this.events.dived = true;
       if (!wasGrounded && b.grounded && b.landImpact > 0.3) this.events.landed = Math.max(this.events.landed, b.landImpact);
+      if (b.warped) {
+        // Through a portal: no smoothing across it, and the camera cuts.
+        this.prevPos.copy(b.pos);
+        this.offset.set(0, 0, 0);
+        this.teleported = true;
+      }
     }
   }
 
@@ -222,6 +254,7 @@ export class ClientArena {
     while (this.predTick < target) {
       const k = ++this.predTick;
       const s = sample();
+      this.grabHeld = s.grab;
       const f: InputFrame = {
         mx: quantizeAxis(s.mx),
         mz: quantizeAxis(s.mz),
@@ -372,7 +405,20 @@ export class ClientArena {
       let tilt = sa.tilt;
       let tiltDir = sa.tiltDir;
       let grab = sa.grab;
-      if (sb && b) {
+      let flags = sa.flags;
+      // A jump of metres between two snapshots (a portal, a respawn): no sliding across it.
+      const jump = sb ? Math.hypot(sb.x - sa.x, sb.y - sa.y, sb.z - sa.z) > 4 : false;
+      if (sb && b && jump) {
+        const late = (r - a.tick) / (b.tick - a.tick) > 0.5;
+        const s = late ? sb : sa;
+        pos = new THREE.Vector3(s.x, s.y, s.z);
+        yaw = s.yaw;
+        anim = s.anim;
+        tilt = s.tilt;
+        tiltDir = s.tiltDir;
+        grab = s.grab;
+        flags = s.flags;
+      } else if (sb && b) {
         const f = THREE.MathUtils.clamp((r - a.tick) / (b.tick - a.tick), 0, 1);
         pos = new THREE.Vector3(sa.x + (sb.x - sa.x) * f, sa.y + (sb.y - sa.y) * f, sa.z + (sb.z - sa.z) * f);
         let dy = sb.yaw - sa.yaw;
@@ -385,9 +431,19 @@ export class ClientArena {
         if (f > 0.5) {
           anim = sb.anim;
           grab = sb.grab;
+          flags = sb.flags;
         }
       } else pos = new THREE.Vector3(sa.x, sa.y, sa.z);
-      out.set(id, { pos, yaw, anim, tilt, tiltDir, grab });
+      out.set(id, {
+        pos,
+        yaw,
+        anim,
+        tilt,
+        tiltDir,
+        grab,
+        reach: (flags & REMOTE_FLAG.reach) !== 0,
+        power: (flags >> POWER_SHIFT) & 3,
+      });
     }
     // Newest frame for beans that just appeared.
     const last = this.frames.at(-1)!;
@@ -400,6 +456,8 @@ export class ClientArena {
           tilt: s.tilt,
           tiltDir: s.tiltDir,
           grab: s.grab,
+          reach: (s.flags & REMOTE_FLAG.reach) !== 0,
+          power: (s.flags >> POWER_SHIFT) & 3,
         });
     return out;
   }
@@ -422,7 +480,8 @@ export class ClientArena {
     if (b.state === 'dive') return ANIM.dive;
     if (b.state === 'slide') return ANIM.slide;
     if (!b.grounded) return ANIM.air;
-    return this.ownGrab >= 0 ? ANIM.grab : ANIM.idle;
+    if (this.ownGrab >= 0) return ANIM.grab;
+    return this.grabHeld && b.state === 'normal' ? ANIM.reach : ANIM.idle;
   }
 
   /** Prediction and interpolation numbers for the debug probe and overlay. */
