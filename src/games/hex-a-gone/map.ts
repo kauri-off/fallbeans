@@ -181,7 +181,9 @@ export default defineMap(meta, (b, ctx) => {
       const ahead = tileAt(p.x + Math.sin(best) * 1.5, p.z + Math.cos(best) * 1.5, floor);
       const beyond = tileAt(p.x + Math.sin(best) * 3.2, p.z + Math.cos(best) * 3.2, floor);
       if (bot.body.grounded && !intact(ahead, t + 0.1) && intact(beyond, t + 0.4)) out.jump = true;
-      humanize(bot, out, { precise: true });
+      // Rescue dives judged by the tiles still there (the navigation grid still has the dropped ones).
+      const land = { y: FLOORS[floor]!, ok: (x: number, zz: number, at: number) => intact(tileAt(x, zz, floor), at) };
+      humanize(bot, out, { precise: true, land });
       unstick(bot, out);
     },
   };

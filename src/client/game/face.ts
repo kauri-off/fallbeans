@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { clone } from './assets';
 
 /**
- * The bean's face: mouth and brows are drawn into a texture on a thin patch that follows the visor
- * (so nothing sticks out of it or cuts into it), one texture per expression; the modelled eyes squint,
- * widen and roll along with it, and tears run while crying.
+ * The bean's face: the mouth is drawn into a texture on a thin patch that follows the visor (so
+ * nothing sticks out of it or cuts into it), one texture per expression; the brows are small solid
+ * strokes lying on the visor just above the modelled eyes, which squint, widen and roll along with
+ * it; tears run while crying.
  */
 
 export type Expr = 'smile' | 'grin' | 'laugh' | 'surprised' | 'scared' | 'sad' | 'cry' | 'dizzy' | 'strain' | 'determined';
@@ -17,13 +18,13 @@ const Y1 = 1.42;
 const TEX = 512;
 const GRID = 28;
 
-/** Eye opening and pupil size per expression. */
+/** Eye opening and pupil size per expression (wide eyes stop short of the brows). */
 const EYES: Record<Expr, { open: number; pupil: number }> = {
   smile: { open: 1, pupil: 1 },
   grin: { open: 0.85, pupil: 1 },
   laugh: { open: 0.22, pupil: 1 },
-  surprised: { open: 1.12, pupil: 0.8 },
-  scared: { open: 1.18, pupil: 0.6 },
+  surprised: { open: 1.06, pupil: 0.8 },
+  scared: { open: 1.06, pupil: 0.72 },
   sad: { open: 0.72, pupil: 1.05 },
   cry: { open: 0.35, pupil: 1 },
   dizzy: { open: 0.9, pupil: 0.85 },
@@ -31,7 +32,36 @@ const EYES: Record<Expr, { open: number; pupil: number }> = {
   determined: { open: 0.7, pupil: 1 },
 };
 
+/**
+ * Brows per expression: lift (m) and tilt (rad; > 0 raises the inner ends: worried, < 0 lowers them:
+ * cross).
+ */
+const BROWS: Record<Expr, { lift: number; tilt: number }> = {
+  smile: { lift: 0, tilt: 0 },
+  grin: { lift: 0.006, tilt: 0.05 },
+  laugh: { lift: 0.01, tilt: 0.1 },
+  surprised: { lift: 0.012, tilt: 0.12 },
+  scared: { lift: 0.008, tilt: 0.36 },
+  sad: { lift: 0, tilt: 0.34 },
+  cry: { lift: 0, tilt: 0.42 },
+  dizzy: { lift: 0.004, tilt: 0.16 },
+  strain: { lift: -0.004, tilt: -0.32 },
+  determined: { lift: -0.003, tilt: -0.26 },
+};
+/** Eye centre height and half height (model space), and where a brow sits: its x and the gap above the eye. */
+const EYE_Y = 1.23;
+const EYE_HALF = 0.1;
+const BROW_X = 0.112;
+const BROW_GAP = 0.023;
+const BROW_MIN_Y = 1.335;
+const BROW_MAX_Y = 1.37;
+/** How far a brow floats off the visor (m). */
+const BROW_LIFT = 0.011;
+
 let patch: THREE.BufferGeometry | null = null;
+let browGeo: THREE.BufferGeometry | null = null;
+let browMat: THREE.Material | null = null;
+let surface: Surface | null = null;
 const mats = new Map<Expr, THREE.MeshStandardMaterial>();
 let tearGeo: THREE.BufferGeometry | null = null;
 let tearMat: THREE.Material | null = null;
@@ -73,6 +103,84 @@ function buildPatch(): THREE.BufferGeometry {
   g.setIndex(idx);
   g.computeVertexNormals();
   g.computeBoundingSphere();
+  return g;
+}
+
+/** The front of the head where the brows go: height and normal of the visor (or body) by x and y. */
+interface Surface {
+  x0: number;
+  y0: number;
+  step: number;
+  nx: number;
+  ny: number;
+  z: Float32Array;
+  n: Float32Array;
+}
+
+function buildSurface(): Surface {
+  const model = clone('bean');
+  model.updateMatrixWorld(true);
+  const targets: THREE.Object3D[] = [];
+  model.traverse((o) => {
+    if (o instanceof THREE.Mesh && (o.name === 'Visor' || o.name === 'BeanBody')) targets.push(o);
+  });
+  const S: Surface = { x0: -0.22, y0: 1.28, step: 0.005, nx: 89, ny: 27, z: new Float32Array(0), n: new Float32Array(0) };
+  S.z = new Float32Array(S.nx * S.ny);
+  S.n = new Float32Array(S.nx * S.ny * 3);
+  const ray = new THREE.Raycaster();
+  const dir = new THREE.Vector3(0, 0, -1);
+  const nm = new THREE.Vector3();
+  for (let j = 0; j < S.ny; j++)
+    for (let i = 0; i < S.nx; i++) {
+      const k = j * S.nx + i;
+      const x = S.x0 + i * S.step;
+      const y = S.y0 + j * S.step;
+      ray.set(new THREE.Vector3(x, y, 2), dir);
+      const hit = ray.intersectObjects(targets, false)[0];
+      S.z[k] = hit ? hit.point.z : Math.sqrt(Math.max(0, 0.25 - x * x));
+      if (hit?.face) nm.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+      else nm.set(0, 0, 1);
+      S.n.set([nm.x, nm.y, nm.z], k * 3);
+    }
+  return S;
+}
+
+/** Point on the head surface at (x, y) and its normal (bilinear). */
+function onSurface(S: Surface, x: number, y: number, p: THREE.Vector3, n: THREE.Vector3) {
+  const fx = THREE.MathUtils.clamp((x - S.x0) / S.step, 0, S.nx - 1.001);
+  const fy = THREE.MathUtils.clamp((y - S.y0) / S.step, 0, S.ny - 1.001);
+  const i = Math.floor(fx);
+  const j = Math.floor(fy);
+  const u = fx - i;
+  const v = fy - j;
+  const w = [(1 - u) * (1 - v), u * (1 - v), (1 - u) * v, u * v];
+  const ks = [j * S.nx + i, j * S.nx + i + 1, (j + 1) * S.nx + i, (j + 1) * S.nx + i + 1];
+  let z = 0;
+  n.set(0, 0, 0);
+  for (let q = 0; q < 4; q++) {
+    const k = ks[q]!;
+    z += S.z[k]! * w[q]!;
+    n.x += S.n[k * 3]! * w[q]!;
+    n.y += S.n[k * 3 + 1]! * w[q]!;
+    n.z += S.n[k * 3 + 2]! * w[q]!;
+  }
+  p.set(x, y, z);
+  n.normalize();
+}
+
+/** A brow: a flattened, arched stroke along x, bent to follow the curve of the visor. */
+function buildBrow(): THREE.BufferGeometry {
+  const g = new THREE.CapsuleGeometry(0.0145, 0.076, 4, 12);
+  g.rotateZ(Math.PI / 2);
+  const pos = g.attributes.position!;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const e = Math.min(1, Math.abs(x) / 0.05);
+    // Thinner towards the ends, arched, flat against the face and curved round it.
+    pos.setY(i, pos.getY(i) * (1 - 0.35 * e * e) - x * x * 2.2);
+    pos.setZ(i, pos.getZ(i) * 0.5 - x * x * 1.65);
+  }
+  g.computeVertexNormals();
   return g;
 }
 
@@ -139,20 +247,6 @@ function drawExpr(e: Expr): THREE.CanvasTexture {
     g.quadraticCurveTo(cx, py(y - bend), px(w / 2), py(y));
     g.stroke();
   };
-  /** Brows: `tilt` > 0 raises the inner ends (worried), < 0 lowers them (cross). */
-  const brows = (tilt: number, lift = 0) => {
-    g.strokeStyle = INK;
-    g.lineWidth = m(0.016);
-    for (const s of [-1, 1]) {
-      const inner = s * 0.055;
-      const outer = s * 0.17;
-      const y = 1.355 + lift;
-      g.beginPath();
-      g.moveTo(px(outer), py(y - tilt * 0.35));
-      g.quadraticCurveTo(px((inner + outer) / 2), py(y + 0.018), px(inner), py(y + tilt));
-      g.stroke();
-    }
-  };
   const tears = () => {
     for (const s of [-1, 1]) {
       const x = s * 0.115;
@@ -176,18 +270,15 @@ function drawExpr(e: Expr): THREE.CanvasTexture {
       break;
     case 'grin':
       openMouth(0.15, 0.075);
-      brows(0, 0.012);
       break;
     case 'laugh':
       openMouth(0.16, 0.1, false, m(0.01));
-      brows(0.004, 0.02);
       break;
     case 'surprised':
       g.fillStyle = INK;
       g.beginPath();
       g.ellipse(cx, py(1.085), m(0.03), m(0.036), 0, 0, Math.PI * 2);
       g.fill();
-      brows(0.01, 0.025);
       break;
     case 'scared':
       g.fillStyle = INK;
@@ -196,16 +287,13 @@ function drawExpr(e: Expr): THREE.CanvasTexture {
       g.fill();
       g.fillStyle = '#ffffff';
       g.fillRect(cx - m(0.03), py(1.12), m(0.06), m(0.012));
-      brows(0.03, 0.02);
       break;
     case 'sad':
       arc(0.1, -0.03);
-      brows(0.028);
       break;
     case 'cry':
       tears();
       openMouth(0.12, 0.06, true);
-      brows(0.034);
       break;
     case 'dizzy': {
       g.strokeStyle = INK;
@@ -219,7 +307,6 @@ function drawExpr(e: Expr): THREE.CanvasTexture {
         else g.moveTo(px(x), py(y));
       }
       g.stroke();
-      brows(0.015, 0.01);
       break;
     }
     case 'strain': {
@@ -242,12 +329,10 @@ function drawExpr(e: Expr): THREE.CanvasTexture {
         g.lineTo(cx - w / 2 + (w * k) / 5, my + h / 2);
       }
       g.stroke();
-      brows(-0.022);
       break;
     }
     case 'determined':
       arc(0.07, -0.008, 0.012);
-      brows(-0.018);
       break;
   }
   const tex = new THREE.CanvasTexture(c);
@@ -273,8 +358,19 @@ function material(e: Expr): THREE.MeshStandardMaterial {
   return mat;
 }
 
+const _bp = new THREE.Vector3();
+const _bn = new THREE.Vector3();
+const _bt = new THREE.Vector3();
+const _bb = new THREE.Vector3();
+const _bm = new THREE.Matrix4();
+
 export class Face {
   private readonly mesh: THREE.Mesh;
+  private readonly brows: THREE.Mesh[] = [];
+  private browLift = 0;
+  private browTilt = 0;
+  /** Eye opening without blinks (the brows follow it, not every blink). */
+  private wide = 1;
   private readonly eyes: THREE.Object3D[] = [];
   private readonly pupils: THREE.Object3D[] = [];
   private readonly pupilBase: THREE.Vector3[] = [];
@@ -300,6 +396,17 @@ export class Face {
         this.pupilBase.push(p.position.clone());
       }
     }
+    surface ??= buildSurface();
+    browGeo ??= buildBrow();
+    browMat ??= new THREE.MeshStandardMaterial({ color: INK, roughness: 0.6 });
+    for (let k = 0; k < 2; k++) {
+      const b = new THREE.Mesh(browGeo, browMat);
+      b.name = k ? 'BrowR' : 'BrowL';
+      b.userData.noLod = true;
+      b.matrixAutoUpdate = false;
+      model.add(b);
+      this.brows.push(b);
+    }
     tearGeo ??= new THREE.SphereGeometry(0.022, 10, 8).scale(1, 1.4, 0.7);
     tearMat ??= new THREE.MeshStandardMaterial({ color: '#9fdcff', roughness: 0.05, transparent: true, opacity: 0.85 });
     for (let k = 0; k < 4; k++) {
@@ -309,6 +416,24 @@ export class Face {
       model.add(t);
       this.tears.push(t);
     }
+  }
+
+  /** Each brow on the visor above its eye, turned by the tilt within the surface. */
+  private placeBrows() {
+    const y = THREE.MathUtils.clamp(EYE_Y + EYE_HALF * this.wide + BROW_GAP + this.browLift, BROW_MIN_Y, BROW_MAX_Y);
+    this.brows.forEach((b, i) => {
+      const side = i ? 1 : -1;
+      onSurface(surface!, side * BROW_X, y, _bp, _bn);
+      // Along the surface, level; then raised at the inner end (towards the middle) by the tilt.
+      _bt.set(1, 0, 0).addScaledVector(_bn, -_bn.x).normalize();
+      _bb.crossVectors(_bn, _bt);
+      const a = -side * this.browTilt;
+      _bt.multiplyScalar(Math.cos(a)).addScaledVector(_bb, Math.sin(a));
+      _bb.crossVectors(_bn, _bt);
+      _bm.makeBasis(_bt, _bb, _bn).setPosition(_bp.addScaledVector(_bn, BROW_LIFT));
+      b.matrix.copy(_bm);
+      b.matrixWorldNeedsUpdate = true;
+    });
   }
 
   set(e: Expr) {
@@ -324,6 +449,11 @@ export class Face {
     this.open += (want.open * blink * squeeze - this.open) * k;
     this.pupil += (want.pupil - this.pupil) * k;
     for (const e of this.eyes) e.scale.y = this.open;
+    this.wide += (want.open * squeeze - this.wide) * k;
+    const bw = BROWS[this.expr];
+    this.browLift += (bw.lift - this.browLift) * k;
+    this.browTilt += (bw.tilt - this.browTilt) * k;
+    this.placeBrows();
     this.pupils.forEach((p, i) => {
       p.scale.setScalar(this.pupil);
       const base = this.pupilBase[i]!;

@@ -479,6 +479,7 @@ export class ClientArena {
     if (b.state === 'stun') return ANIM.stun;
     if (b.state === 'dive') return ANIM.dive;
     if (b.state === 'slide') return ANIM.slide;
+    if (b.state === 'climb') return b.climbingOver ? ANIM.climbOver : ANIM.climb;
     if (!b.grounded) return ANIM.air;
     if (this.ownGrab >= 0) return ANIM.grab;
     return this.grabHeld && b.state === 'normal' ? ANIM.reach : ANIM.idle;

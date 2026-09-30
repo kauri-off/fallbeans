@@ -212,8 +212,11 @@ export function rotorDecks(n = 2): Segment {
       const jumpWhen = (bot: BotView) => {
         const p = bot.body.pos;
         const d = Math.hypot(p.x, p.z - c);
-        if (d > r + 1.2 || d < 1.2 || bot.t <= 0) return false;
+        if (d < 1.2 || bot.t <= 0) return false;
         const eta = armContactEta(bot, low(bot.t), sp, arms, 0, c);
+        // Where the bean is when the arm comes round: running in, it is in reach by then.
+        const vin = d > 1e-3 ? -(bot.body.vel.x * p.x + bot.body.vel.z * (p.z - c)) / d : 0;
+        if (d - Math.max(0, vin) * Math.max(0, eta) > r + 1.2) return false;
         return eta > 0.1 && eta < 0.24 && (!high || armContactEta(bot, highAng(bot.t), hsp, 1, 0, c) > 0.8);
       };
       const side = rng() < 0.5 ? -1 : 1;
@@ -755,7 +758,13 @@ export function trampolineGap(): Segment {
     b.box(0, s.y + rise - 2.5, far + 4, 12, 5, 8, PAL.purple);
     const routes: Waypoint[][] = [-2.8, 2.8].map((tx) => [
       { x: tx, z: tz, w: 0 },
-      { x: tx * 0.5, z: far + 2.5, w: 0.3 },
+      {
+        x: tx * 0.5,
+        z: far + 2.5,
+        w: 0.3,
+        // Missed the trampoline (down in the basin, past it): back to the nearest one.
+        detour: (bot) => (bot.body.pos.y < basinY + 1 ? { x: bot.body.pos.x < 0 ? -2.8 : 2.8, z: tz } : null),
+      },
       { x: 0, z: far + 5, w: 1 },
     ]);
     return {

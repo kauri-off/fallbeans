@@ -551,12 +551,12 @@ export function canFade(m: THREE.Material): boolean {
 /** Surface for a material of the asset pack, by material name. */
 export function surfaceForModelMaterial(name: string): SurfaceKind | null {
   switch (name) {
-    // The beans are smooth and solid.
+    // The beans are smooth and solid, shoes included.
     case 'Body':
     case 'Belly':
     case 'Blush':
-      return null;
     case 'Shoe':
+      return null;
     case 'Bumper':
     case 'Glove':
       return 'rubber';

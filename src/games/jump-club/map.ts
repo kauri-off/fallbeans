@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { arenaBrain } from '../../sim/bots';
+import { arenaBrain, BOT_DT } from '../../sim/bots';
 import { PAL } from '../../sim/builder';
-import { defineMap } from '../../sim/map';
+import { type BotInput, type BotView, defineMap } from '../../sim/map';
 import { armContactEta, spinUp } from '../../sim/props';
 import meta from './meta';
 
@@ -38,16 +38,53 @@ export default defineMap(meta, (b) => {
     return new THREE.Vector3(Math.cos(a) * 6, 0.1, Math.sin(a) * 6);
   });
   const brain = arenaBrain({
-    radius: 10,
+    radius: 8,
     safe: (x, z) => Math.hypot(x, z) > 3.5,
     jumpWhen: (bot) => {
       const t = Math.max(0, bot.t);
       if (t <= 0) return false;
       const eta = armContactEta(bot, lowAng(t), lowOmega(t), lowArms);
       const high = armContactEta(bot, highAng(t), highOmega(t), highArms);
+      // How fast the bar really closes in: faster running at it (or near the hub), slower running
+      // away from it. Seen between two looks: a quick one would slip through the reaction window, so
+      // jump now if it will be too late at the next.
+      const m = bot.mem;
+      const seen = m.jcT !== undefined && t - m.jcT < 0.2 && (m.jcEta ?? 0) > eta;
+      const rate = seen ? Math.max(0.2, ((m.jcEta ?? eta) - eta) / (t - (m.jcT ?? t))) : 1;
+      m.jcEta = eta;
+      m.jcT = t;
+      const when = eta / rate;
+      const next = when - BOT_DT;
       // Worse bots react late (and sometimes too late).
-      return eta > 0.1 && eta < 0.15 + (bot.mem.react ?? 0.2) * 0.3 && high > 0.7;
+      const late = 0.15 + (m.react ?? 0.2) * 0.3;
+      return when > 0.1 && (when < late || (next < 0.1 && when < 0.32)) && high > 0.7;
     },
   });
-  return { spawns, killY: -6, faceCenter: true, view: new THREE.Vector3(0, 3, 0), bot: brain };
+  /**
+   * Both bars coming by at about the same time: jumping the low one means meeting the high one in
+   * the air. Run along the circle towards the one that comes first: it comes sooner, the other one
+   * later, and there is time to deal with each (under the high one standing, over the low one).
+   */
+  const dodge = (bot: BotView, out: BotInput) => {
+    const t = Math.max(0, bot.t);
+    const p = bot.body.pos;
+    const r = Math.hypot(p.x, p.z);
+    if (t <= 0 || r < 2 || bot.body.state !== 'normal') return;
+    const eta = armContactEta(bot, lowAng(t), lowOmega(t), lowArms);
+    const high = armContactEta(bot, highAng(t), highOmega(t), highArms);
+    const lowFirst = eta < high;
+    const clash = lowFirst ? high - eta < 0.8 : eta - high < 0.35;
+    // Better players spot it sooner.
+    const sees = 0.3 + (bot.mem.skill ?? 0.7) * 0.9;
+    if (!clash || Math.min(eta, high) > sees || Math.min(eta, high) < 0.08) return;
+    const w = lowFirst ? lowOmega(t) : highOmega(t);
+    const s = -Math.sign(w);
+    out.mx = (s * p.z) / r;
+    out.mz = (-s * p.x) / r;
+  };
+  const bot = (view: BotView, out: BotInput) => {
+    brain(view, out);
+    dodge(view, out);
+  };
+  return { spawns, killY: -6, faceCenter: true, view: new THREE.Vector3(0, 3, 0), bot };
 });

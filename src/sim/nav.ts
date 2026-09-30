@@ -384,6 +384,12 @@ export class NavGrid {
     return id >= 0 && this.pen[id]! < 1;
   }
 
+  /** The ground a body falling at (x, z) from height y lands on: its height and whether it is safe. */
+  floorBelow(x: number, z: number, y: number): { y: number; safe: boolean } | null {
+    const id = this.layerBelow(this.cellOf(x, z), y);
+    return id < 0 ? null : { y: this.ys[id]!, safe: this.pen[id]! < 1 };
+  }
+
   /** The node a body at p stands on (or the nearest one close by). */
   private nodeAt(x: number, y: number, z: number): number {
     const cell = this.cellOf(x, z);

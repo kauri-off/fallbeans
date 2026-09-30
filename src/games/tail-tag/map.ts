@@ -149,7 +149,12 @@ export default defineMap(meta, (b, ctx) => {
       }
       if (mine) {
         // Run away (round the island and the bumpers), staying well inside the arena.
-        if (bot.t > (bot.mem.fleeAt ?? -1) || nd < 3) {
+        // A new way out now and then, or when the chaser is close and the current one leads towards it.
+        const fx = (bot.mem.fx ?? p.x) - p.x;
+        const fz = (bot.mem.fz ?? p.z) - p.z;
+        const towards = fx * (near.pos.x - p.x) + fz * (near.pos.z - p.z) > 0;
+        if (bot.t > (bot.mem.fleeAt ?? -1) || (nd < 3 && towards && bot.t > (bot.mem.fledAt ?? -1) + 0.3)) {
+          bot.mem.fledAt = bot.t;
           let best = -Infinity;
           for (let k = 0; k < 8; k++) {
             const a = bot.rng() * Math.PI * 2;
@@ -181,7 +186,7 @@ export default defineMap(meta, (b, ctx) => {
         if (ahead < 4.5 && ahead > 2.6 && bot.body.grounded && bot.rng() < (0.3 + (bot.mem.aggro ?? 0.3)) * BOT_DT * 2)
           out.dive = true;
       }
-      humanize(bot, out, { rough: false, fun: nd > 6 });
+      humanize(bot, out, { rough: false, fun: nd > 6, avoid: mine });
       unstick(bot, out);
     },
   };

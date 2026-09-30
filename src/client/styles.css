@@ -135,6 +135,7 @@ h3 {
 
 .logo.small {
   font-size: 1.625rem;
+  white-space: nowrap;
 }
 
 .muted {
@@ -162,6 +163,8 @@ h3 {
 
 .stack {
   display: grid;
+  /* Columns may shrink below their content (an input, a row of buttons): the panel decides the width. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.625rem;
 }
 
@@ -289,6 +292,7 @@ h3 {
 .who {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   gap: 0.3125rem;
   font-weight: 600;
   white-space: nowrap;
@@ -396,6 +400,7 @@ h3 {
   margin: 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 
@@ -460,6 +465,7 @@ h3 {
   top: 0.75rem;
   right: 0.75rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.375rem;
   justify-items: end;
   max-width: 46vw;
@@ -468,6 +474,7 @@ h3 {
 .feed > div {
   display: flex;
   align-items: center;
+  max-width: 100%;
   gap: 0.375rem;
   padding: 0.3125rem 0.75rem;
   font-size: 0.8125rem;
@@ -486,6 +493,10 @@ h3 {
 .feed .why {
   color: var(--muted);
   font-size: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* HUD: top centre */
