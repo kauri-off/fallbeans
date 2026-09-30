@@ -969,12 +969,29 @@ h3 {
 }
 
 .players li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, max-content) 1fr;
   gap: 0.5rem;
   align-items: center;
   background: rgba(255, 255, 255, 0.35);
   border-radius: 0.625rem;
   padding: 0.3125rem 0.625rem;
+}
+
+.players .side {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.players .side.end {
+  justify-content: flex-end;
+}
+
+.players .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .players li.dim {

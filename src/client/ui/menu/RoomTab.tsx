@@ -90,36 +90,40 @@ export function RoomTab({ game }: { game: Game }) {
       <ul class="players">
         {l.players.map((p) => (
           <li key={p.id} class={p.connected ? '' : 'dim'}>
-            <i class="dot" style={{ background: colorBg(p.color) }} />
-            <span class="grow">
+            <span class="side">
+              <i class="dot" style={{ background: colorBg(p.color) }} />
+            </span>
+            <span class="name">
               {p.name}
               {p.id === me && ' (вы)'}
             </span>
-            {p.id === l.host && <span title="Хост">⭐</span>}
-            {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
-            {p.bot ? (
-              // (With "fill with bots" on, a bot taken out would be replaced at once.)
-              isHost &&
-              !l.fill && (
-                <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
-                  ✕
-                </button>
-              )
-            ) : (
-              <>
-                {isHost && p.id !== me && p.connected && (
-                  <button
-                    type="button"
-                    class="btn tiny"
-                    title="Передать роль хоста этому игроку"
-                    onClick={() => send({ t: 'host', id: p.id })}
-                  >
-                    Отдать хоста
+            <span class="side end">
+              {p.id === l.host && <span title="Хост">⭐</span>}
+              {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
+              {p.bot ? (
+                // (With "fill with bots" on, a bot taken out would be replaced at once.)
+                isHost &&
+                !l.fill && (
+                  <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
+                    ✕
                   </button>
-                )}
-                <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
-              </>
-            )}
+                )
+              ) : (
+                <>
+                  {isHost && p.id !== me && p.connected && (
+                    <button
+                      type="button"
+                      class="btn tiny"
+                      title="Передать роль хоста этому игроку"
+                      onClick={() => send({ t: 'host', id: p.id })}
+                    >
+                      Отдать хоста
+                    </button>
+                  )}
+                  <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
+                </>
+              )}
+            </span>
           </li>
         ))}
       </ul>
