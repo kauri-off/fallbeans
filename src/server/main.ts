@@ -1,22 +1,25 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Auth } from './auth';
 import { loadConfig } from './config';
+import { Diagnostics } from './diag';
 import { Gateway } from './gateway';
 import { startHttp } from './http';
 import { createLogger } from './log';
 
 const cfg = loadConfig(process.argv.slice(2));
-const log = createLogger(cfg.dev);
+const diag = new Diagnostics();
+const log = diag.wrap(createLogger(cfg.dev));
+diag.start();
 
-const checkPin = async (pin: string) => {
+const checkPin = (pin: string): Promise<boolean> => {
   if (cfg.pinHash) return Bun.password.verify(pin, cfg.pinHash);
   const a = Buffer.from(pin);
   const b = Buffer.from(cfg.pinPlain ?? '');
-  return a.length === b.length && timingSafeEqual(a, b);
+  return Promise.resolve(a.length === b.length && timingSafeEqual(a, b));
 };
 const auth = new Auth(cfg.secret, checkPin);
-const gateway = new Gateway(auth, log, { minPlayers: cfg.solo ? 1 : 2 });
-const http = startHttp(cfg, auth, gateway, log);
+const gateway = new Gateway(auth, log, { minPlayers: cfg.solo ? 1 : 2, dev: cfg.dev });
+const http = startHttp(cfg, auth, gateway, log, diag);
 
 let wt: { close(): Promise<void> } | null = null;
 if (cfg.wtPort && cfg.certPem && cfg.keyPem) {

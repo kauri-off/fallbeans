@@ -2,11 +2,22 @@ import * as THREE from 'three';
 import { BTN, type InputFrame, type InputPacket, REMOTE_FLAG, type RemoteState, type Snapshot } from '../shared/codec';
 import { ANIM, BOT_EVERY, DT, TICK_MS } from '../shared/consts';
 import { type ArenaKind, canMove, type FallBehaviour, fallBehaviour } from '../shared/game';
+import type { Sections } from '../shared/prof';
 import type { GameEventRecord } from '../shared/protocol';
 import { mulberry32, type Rng } from '../shared/rng';
 import { emptyStats, type RoundStats } from '../shared/rules';
 import { Builder } from '../sim/builder';
-import type { BotInput, BotMem, BotPlan, BotView, Checkpoint, MapCtx, MapModule, MapSpec } from '../sim/map';
+import {
+  type BotInput,
+  type BotMem,
+  type BotPlan,
+  type BotView,
+  type Checkpoint,
+  type MapCtx,
+  type MapModule,
+  type MapSpec,
+  specProblems,
+} from '../sim/map';
 import { NavGrid } from '../sim/nav';
 import { type OtherBody, PlayerBody } from '../sim/physics';
 
@@ -30,6 +41,58 @@ const CREDIT_WINDOW = 3;
 const FORBIDDEN_GRACE = 0.6;
 
 export type PawnStatus = 'play' | 'finished' | 'out';
+
+/**
+ * A round as played (dev rooms record them): enough to simulate it again tick by tick and get the
+ * same result (see scripts/replay.ts). Human input is stored as the frames the simulation actually
+ * used (late presses merged, gaps filled), run-length encoded; bots replay from the seed.
+ */
+export interface Recording {
+  v: 1;
+  game: string;
+  kind: ArenaKind;
+  seed: number;
+  startAt: number;
+  /** `now` the arena was created with. */
+  createdAt: number;
+  participants: number[];
+  /** Pawns in the order they were added: id, bot, spawn index, tick added at. */
+  pawns: [number, boolean, number | null, number][];
+  /** Human frames: [tick, mx, mz, buttons] whenever they change. */
+  frames: Record<string, [number, number, number, number][]>;
+  /** Dev and roster changes applied between ticks: [after tick, op, args]. */
+  ops: [number, string, unknown[]][];
+  endTick: number;
+  /** stateHash() at endTick. */
+  hash: string;
+}
+
+/** One line of a bean's recent history (debug tracer, 10 per second). */
+export interface TraceEntry {
+  t: number;
+  pos: [number, number, number];
+  vel: [number, number, number];
+  state: string;
+  grounded: boolean;
+  /** Input used: move x/z (−127…127) and buttons (1 jump, 2 dive, 4 grab). */
+  input: [number, number, number];
+  grabbing: number | null;
+  hazard: string | null;
+}
+
+/** Something that happened in the arena (debug journal). */
+export interface JournalEntry {
+  t: number;
+  what: string;
+  id?: number;
+  data?: unknown;
+}
+
+/** Trace: one entry every TRACE_EVERY ticks, the last TRACE_LEN entries per bean (30 s). */
+const TRACE_EVERY = 12;
+const TRACE_LEN = 300;
+const JOURNAL_LEN = 300;
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
 interface BotState {
   mem: BotMem;
@@ -70,6 +133,8 @@ export interface Pawn {
   /** Sim time of the last real input with movement or buttons. */
   activeAt: number;
   forbiddenFor: number;
+  /** Dev: holds on as if the grab button were pressed until this sim time. */
+  forceGrabUntil: number;
 }
 
 export interface KoInfo {
@@ -100,6 +165,10 @@ export interface ArenaOptions {
   participants: number[];
   now: number;
   hooks: ArenaHooks;
+  /** CPU profile of the tick (sections: inputs, bots, movers, physics, interact, rules, map, snapshot). */
+  prof?: Sections;
+  /** Record the round for replays (dev rooms). */
+  record?: boolean;
 }
 
 const IDLE: InputFrame = { mx: 0, mz: 0, buttons: 0 };
@@ -128,7 +197,24 @@ export class ServerArena {
   tick: number;
   /** Results are decided: no more finishes/outs are recorded. */
   frozen = false;
+  /** Dev: bot brains run (false: bots stand still). */
+  private bots = true;
+  get botsOn() {
+    return this.bots;
+  }
+  set botsOn(on: boolean) {
+    this.op('bots', [on]);
+    this.bots = on;
+  }
+  /** World.hash(true): clients compare it with their own build of the map. */
+  readonly staticHash: string;
+  /** Dev: the round so far, for replays (null unless recording). */
+  readonly recording: Recording | null;
+  /** Debug: recent history of every bean, and of the arena. */
+  readonly trace = new Map<number, TraceEntry[]>();
+  readonly journal: JournalEntry[] = [];
   private readonly hooks: ArenaHooks;
+  private readonly prof: Sections | null;
   private readonly bodyMap = new Map<number, PlayerBody>();
   private spawnCursor = 0;
   /** Bot navigation grid, built on first use once the round has started (gates are open). */
@@ -143,6 +229,23 @@ export class ServerArena {
     this.endAt = o.startAt + o.module.meta.duration * 1000;
     this.participants = o.participants;
     this.hooks = o.hooks;
+    this.prof = o.prof ?? null;
+    this.recording = o.record
+      ? {
+          v: 1,
+          game: o.module.meta.id,
+          kind: o.kind,
+          seed: o.seed,
+          startAt: o.startAt,
+          createdAt: o.now,
+          participants: [...o.participants],
+          pawns: [],
+          frames: {},
+          ops: [],
+          endTick: 0,
+          hash: '',
+        }
+      : null;
     this.fall = o.kind === 'round' ? fallBehaviour(o.module.meta.genre) : 'spawn';
     this.tick = Math.floor((o.now - o.startAt) / TICK_MS) - 1;
     this.builder = new Builder(o.seed, null);
@@ -167,7 +270,10 @@ export class ServerArena {
       decorate: () => {},
     };
     this.spec = o.module.build(this.builder, ctx);
+    const bad = specProblems(this.spec);
+    if (bad.length) throw new Error(`map ${o.module.meta.id}: ${bad.join(', ')}`);
     this.builder.world.finalize(this.tick * DT);
+    this.staticHash = this.builder.world.hash(true);
   }
 
   get world() {
@@ -180,6 +286,7 @@ export class ServerArena {
 
   addPawn(id: number, bot: boolean, spawnIndex?: number) {
     if (this.pawns.has(id)) return;
+    this.recording?.pawns.push([id, bot, spawnIndex ?? null, this.tick]);
     const spawns = this.spec.spawns;
     const i = spawnIndex ?? this.spawnCursor++;
     const spawn = (spawns[i % spawns.length] ?? new THREE.Vector3()).clone();
@@ -193,7 +300,8 @@ export class ServerArena {
         ? {
             mem: {},
             plan: { path: null, i: 0, tx: 0, tz: 0, at: -1e9 },
-            rng: mulberry32(this.seed ^ (id * 2654435761)),
+            // By slot in the round, not id: the same seed plays out the same whoever joined when.
+            rng: mulberry32(this.seed ^ ((this.participants.indexOf(id) + 1 || id) * 2654435761)),
             input: { mx: 0, mz: 0, jump: false, dive: false, grab: false, emote: 0 },
           }
         : null,
@@ -218,12 +326,14 @@ export class ServerArena {
       lastHit: null,
       activeAt: Math.max(0, this.time),
       forbiddenFor: 0,
+      forceGrabUntil: -1e9,
     };
     this.pawns.set(id, pawn);
     this.bodyMap.set(id, body);
   }
 
   removePawn(id: number) {
+    this.op('remove', [id]);
     this.pawns.delete(id);
     this.bodyMap.delete(id);
   }
@@ -272,11 +382,14 @@ export class ServerArena {
     return bad === 0;
   }
 
-  /** Runs every tick due by `nowMs`; returns the number of ticks stepped. */
-  advance(nowMs: number): number {
+  /**
+   * Runs every tick due by `nowMs`; returns the number of ticks stepped. After a stall only the last
+   * MAX_CATCHUP ticks are simulated, unless `all` (dev time warps).
+   */
+  advance(nowMs: number, all = false): number {
     const target = Math.floor((nowMs - this.startAt) / TICK_MS);
     let steps = 0;
-    if (target - this.tick > MAX_CATCHUP) {
+    if (!all && target - this.tick > MAX_CATCHUP) {
       this.hooks.warn('arena fell behind', { behind: target - this.tick });
       this.tick = target - MAX_CATCHUP;
     }
@@ -324,7 +437,8 @@ export class ServerArena {
     out.dive = false;
     out.grab = false;
     out.emote = 0;
-    if (!brain) return;
+    if (!brain || !this.botsOn) return;
+    this.prof?.start('bots');
     if (!this.nav && (this.time >= 0 || this.kind !== 'round')) {
       try {
         this.nav = NavGrid.build(this.world, this.spec.forbidden);
@@ -341,9 +455,12 @@ export class ServerArena {
       this.hooks.warn('bot brain failed', { game: this.module.meta.id, err: String(e) });
     }
     if (out.emote) this.hooks.onEmote?.(p.id, out.emote);
+    this.prof?.start('inputs');
   }
 
   private step(k: number) {
+    const prof = this.prof;
+    prof?.start('inputs');
     this.tick = k;
     const t = k * DT;
     const active: Pawn[] = [];
@@ -357,6 +474,7 @@ export class ServerArena {
       // Before the start (and on the podium) inputs are read and acknowledged, but nobody moves.
       const frame = moving ? got.frame : IDLE;
       frames.set(p, frame);
+      if (this.recording && !p.bot) this.recordFrame(p.id, k, frame);
       p.last = got.frame;
       if (real) p.ack = k;
       if (this.kind === 'round' && t >= 0) {
@@ -366,12 +484,14 @@ export class ServerArena {
       // Drop inputs that are now in the past (arrived too late).
       if (p.inputs.size > 0) for (const key of p.inputs.keys()) if (key <= k) p.inputs.delete(key);
     }
+    prof?.start('movers');
     for (const p of active) {
       p.body.clearEvents();
       p.body.beforeWorldUpdate();
     }
     this.world.setTime(t);
     for (const p of active) p.body.afterWorldUpdate();
+    prof?.start('physics');
 
     const others: OtherBody[] = active.map((p) => ({
       id: p.id,
@@ -392,20 +512,107 @@ export class ServerArena {
       const hz = p.body.hazard;
       if (hz) p.lastHit = { by: p.lastHit && t - p.lastHit.t < CREDIT_WINDOW ? p.lastHit.by : null, cause: hz, t };
     }
+    prof?.start('interact');
     for (const p of active) this.interact(p, frames.get(p)!, active, t, frames);
+    prof?.start('rules');
     for (const p of active) this.rules(p, t);
+    if (k % TRACE_EVERY === 0) for (const p of active) this.record(p, t, frames.get(p)!);
+    prof?.start('map');
     try {
       this.spec.tick?.(t);
     } catch (e) {
       this.hooks.warn('game tick failed', { game: this.module.meta.id, err: String(e) });
     }
+    prof?.start('snapshot');
     this.hooks.onSnapshot(k);
+    prof?.stop();
+    prof?.frame();
+  }
+
+  private recordFrame(id: number, k: number, f: InputFrame) {
+    const list = (this.recording!.frames[id] ??= []);
+    const last = list.at(-1);
+    if (!last || last[1] !== f.mx || last[2] !== f.mz || last[3] !== f.buttons) list.push([k, f.mx, f.mz, f.buttons]);
+  }
+
+  /** Records something that changes the simulation from outside, before the next tick. */
+  private op(name: string, args: unknown[]) {
+    this.recording?.ops.push([this.tick, name, args]);
+  }
+
+  /** The recording so far, closed at the current tick. */
+  takeRecording(): Recording | null {
+    const r = this.recording;
+    if (!r) return null;
+    return { ...r, endTick: this.tick, hash: this.stateHash() };
+  }
+
+  /** Hash of every bean's state (replays and determinism checks compare it). */
+  stateHash(): string {
+    let h = 2166136261;
+    const mix = (v: number) => {
+      const x = Math.round(v * 1e5);
+      h = Math.imul(h ^ (x & 0xffff), 16777619);
+      h = Math.imul(h ^ (x >>> 16), 16777619);
+    };
+    for (const [id, p] of [...this.pawns].sort((a, b) => a[0] - b[0])) {
+      mix(id);
+      const b = p.body;
+      for (const v of [b.pos.x, b.pos.y, b.pos.z, b.vel.x, b.vel.y, b.vel.z, b.yaw, b.tilt]) mix(v);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  /** Replays: the frame a human pawn uses at tick k (see scripts/replay.ts). */
+  forceInput(id: number, k: number, f: InputFrame) {
+    this.pawns.get(id)?.inputs.set(k, f);
+  }
+
+  /** Replays: applies a recorded operation. */
+  applyOp(name: string, args: unknown[]) {
+    type V3 = [number, number, number];
+    const id = args[0] as number;
+    if (name === 'remove') this.removePawn(id);
+    else if (name === 'late') {
+      const at = args[2] as V3 | null;
+      this.addLatePawn(id, args[1] as boolean, at ? new THREE.Vector3(...at) : undefined);
+    } else if (name === 'teleport') this.devTeleport(id, new THREE.Vector3(...(args[1] as V3)), args[2] as number | undefined);
+    else if (name === 'knock') this.devKnock(id, args[1] as V3);
+    else if (name === 'kill') this.devKill(id);
+    else if (name === 'grab') this.devGrab(id, args[1] as number, args[2] as number);
+    else if (name === 'bots') this.botsOn = args[0] as boolean;
+  }
+
+  /** Adds a line to the debug journal. */
+  note(what: string, id?: number, data?: unknown) {
+    this.journal.push({ t: r3(this.time), what, ...(id !== undefined ? { id } : {}), ...(data !== undefined ? { data } : {}) });
+    if (this.journal.length > JOURNAL_LEN) this.journal.shift();
+  }
+
+  private record(p: Pawn, t: number, f: InputFrame) {
+    let list = this.trace.get(p.id);
+    if (!list) {
+      list = [];
+      this.trace.set(p.id, list);
+    }
+    const b = p.body;
+    list.push({
+      t: r3(t),
+      pos: [r3(b.pos.x), r3(b.pos.y), r3(b.pos.z)],
+      vel: [r3(b.vel.x), r3(b.vel.y), r3(b.vel.z)],
+      state: b.state,
+      grounded: b.grounded,
+      input: [f.mx, f.mz, f.buttons],
+      grabbing: p.grabbing,
+      hazard: b.hazard,
+    });
+    if (list.length > TRACE_LEN) list.shift();
   }
 
   /** Grabbing holds on (pulling the other bean along) until released, broken free or timed out; dives knock over. */
   private interact(p: Pawn, f: InputFrame, active: Pawn[], t: number, frames: Map<Pawn, InputFrame>) {
     const b = p.body;
-    const wants = (f.buttons & BTN.grab) !== 0 && b.state === 'normal';
+    const wants = ((f.buttons & BTN.grab) !== 0 || t < p.forceGrabUntil) && b.state === 'normal';
     if (p.grabbing !== null) {
       const o = this.pawns.get(p.grabbing);
       const dist = o ? Math.hypot(o.body.pos.x - b.pos.x, o.body.pos.z - b.pos.z) : 99;
@@ -431,6 +638,7 @@ export class ServerArena {
         target = o;
       }
       if (target) {
+        this.note('grab', p.id, { target: target.id });
         p.grabbing = target.id;
         p.holdSince = t;
         target.struggle = 0;
@@ -515,6 +723,7 @@ export class ServerArena {
       if (!this.frozen) {
         p.status = 'finished';
         p.stats.finishAt = t;
+        this.note('finish', p.id);
         this.finished.push(p.id);
         this.bodyMap.delete(p.id);
         this.hooks.onFinish(p.id, t);
@@ -547,12 +756,14 @@ export class ServerArena {
       if (this.frozen) return;
       p.status = 'out';
       p.stats.outAt = Math.max(0, t);
+      this.note('out', p.id, { by, cause, pos: [r3(pos.x), r3(pos.y), r3(pos.z)] });
       this.out.push(p.id);
       this.bodyMap.delete(p.id);
       this.hooks.onKo({ id: p.id, out: true, by, cause, shortcut: false });
       return;
     }
     if (counts && !shortcut) p.stats.falls++;
+    this.note(shortcut ? 'shortcut' : 'fall', p.id, { by, cause, pos: [r3(pos.x), r3(pos.y), r3(pos.z)] });
     if (counts || this.kind === 'lobby') this.hooks.onKo({ id: p.id, out: false, by, cause, shortcut });
     const to = this.fall === 'checkpoint' && p.checkpoint ? p.checkpoint.p : p.spawn;
     const jitter = ((p.id * 7919) % 100) / 100 - 0.5;
@@ -584,6 +795,79 @@ export class ServerArena {
       });
     }
     return { arena: this.id, tick: this.tick, own, bodies };
+  }
+
+  // ------------------------------------------------------------------ dev tools (server --dev only)
+
+  /** Adds a pawn to a running arena (a bot joining mid-round), at `at` or the next spawn. */
+  addLatePawn(id: number, bot: boolean, at?: THREE.Vector3) {
+    if (this.pawns.has(id)) return;
+    this.op('late', [id, bot, at ? [at.x, at.y, at.z] : null]);
+    const rec = this.recording;
+    // The op re-adds it on replay: keep it out of the list of pawns added at the start.
+    const n = rec?.pawns.length ?? 0;
+    if (!this.participants.includes(id)) this.participants.push(id);
+    this.addPawn(id, bot);
+    if (rec && rec.pawns.length > n) rec.pawns.pop();
+    if (at) this.place(id, at);
+  }
+
+  private place(id: number, pos: THREE.Vector3, yaw?: number): boolean {
+    const p = this.pawns.get(id);
+    if (p?.status !== 'play') return false;
+    p.body.reset(pos, yaw ?? p.body.yaw);
+    p.teleported = true;
+    p.forbiddenFor = 0;
+    return true;
+  }
+
+  devTeleport(id: number, pos: THREE.Vector3, yaw?: number): boolean {
+    this.op('teleport', [id, [pos.x, pos.y, pos.z], yaw]);
+    return this.place(id, pos, yaw);
+  }
+
+  /** Where `goto` sends a bean: its spawn, a checkpoint, or 3 m before the finish line. */
+  devPlace(id: number, to: 'spawn' | 'finish' | number): THREE.Vector3 | null {
+    const p = this.pawns.get(id);
+    if (!p) return null;
+    if (to === 'spawn') return p.spawn.clone();
+    if (to === 'finish') {
+      const f = this.spec.finish;
+      return f ? new THREE.Vector3(0, f.y + 1.5, f.z - 3) : null;
+    }
+    const cp = this.spec.checkpoints?.[to];
+    return cp ? cp.p.clone().setY(cp.p.y + 0.5) : null;
+  }
+
+  devKnock(id: number, v: readonly [number, number, number]): boolean {
+    this.op('knock', [id, v]);
+    const p = this.pawns.get(id);
+    if (p?.status !== 'play') return false;
+    p.body.knock(v[0], v[2], v[1], 1);
+    p.lastHit = { by: null, cause: 'dev', t: this.time };
+    return true;
+  }
+
+  /** Drops a bean below the kill height: it falls by the map's rules on the next tick. */
+  devKill(id: number): boolean {
+    this.op('kill', [id]);
+    const p = this.pawns.get(id);
+    if (p?.status !== 'play') return false;
+    p.body.pos.y = this.spec.killY - 1;
+    return true;
+  }
+
+  devGrab(actor: number, target: number, seconds: number): string | null {
+    this.op('grab', [actor, target, seconds]);
+    const a = this.pawns.get(actor);
+    const o = this.pawns.get(target);
+    if (!a || !o || a === o || a.status !== 'play' || o.status !== 'play') return 'no such beans in play';
+    const t = this.time;
+    a.forceGrabUntil = t + seconds;
+    a.grabbing = o.id;
+    a.holdSince = t;
+    o.struggle = 0;
+    return null;
   }
 
   /** Called after snapshots were sent: one-shot flags are cleared. */

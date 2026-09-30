@@ -50,7 +50,7 @@ export const hud = signal<Hud>({
 
 /** The Esc menu (lobby, game settings, options) is open; the mouse is free. */
 export const menuOpen = signal(true);
-export const menuTab = signal<'game' | 'settings'>('game');
+export const menuTab = signal<'game' | 'settings' | 'dev'>('game');
 /** In play but the mouse is free (focus lost, lock refused): the field asks for a click. */
 export const needClick = signal(false);
 
@@ -75,3 +75,12 @@ export function pushFeed(e: Omit<FeedEntry, 'id'>) {
   }, 6000);
 }
 export const note = (text: string) => pushFeed({ victim: -1, by: null, cause: '', out: false, shortcut: false, text });
+
+/** The server accepts dev commands (started with --dev): the menu shows the Dev tab. */
+export const devMode = signal(false);
+/** F3: performance and network overlay. */
+export const debugOverlay = signal(false);
+/** Screenshots (?shot or the probe): no interface over the scene. */
+export const uiHidden = signal(new URLSearchParams(location.search).has('shot'));
+/** Screenshots: a still picture — fixed sky and effects clock, no motes, beans do not blink or fidget. */
+export const shotMode = signal(new URLSearchParams(location.search).has('shot'));

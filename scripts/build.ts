@@ -24,8 +24,10 @@ run([process.execPath, 'x', 'vite', 'build']);
 
 console.log('[build] server');
 const out = await Bun.build({
-  entrypoints: ['src/server/main.ts'],
+  // The audit worker is started by the debug API (src/server/debugApi.ts) as ./worker.js.
+  entrypoints: ['src/server/main.ts', 'src/audit/worker.ts'],
   outdir: join(dist, 'server'),
+  naming: '[name].[ext]',
   target: 'bun',
   minify: false,
   sourcemap: 'linked',

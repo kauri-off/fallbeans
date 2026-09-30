@@ -7,6 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GpuTimer } from '../debug/gpuTimer';
 import { setMaxAnisotropy } from './materials';
 
 export type Quality = 'medium' | 'high' | 'ultra';
@@ -157,8 +158,12 @@ export class Renderer {
   private preset: Preset = PRESETS.high;
   quality: Quality = 'high';
   private readonly time = { value: 0 };
-  private readonly sky = skyDome(this.time);
-  private readonly motes = motes(this.time);
+  readonly sky = skyDome(this.time);
+  readonly motes = motes(this.time);
+  /** GPU timing (debug): off, the whole frame, or each pass (scene, shadows, AO, bloom…). */
+  private gpu: GpuTimer | null = null;
+  private gpuMode: 'off' | 'frame' | 'passes' = 'off';
+  private readonly wrapped = new WeakSet<object>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -167,6 +172,8 @@ export class Renderer {
     this.renderer.toneMappingExposure = 0.95;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Totals per frame over all composer passes (reset in render()).
+    this.renderer.info.autoReset = false;
     setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -200,10 +207,16 @@ export class Renderer {
     this.resize();
   }
 
+  /** Debug (profiler experiments): render resolution scale and MSAA override (null: the preset's). */
+  debugScale = 1;
+  /** Profiling: renders per frame (GPU times are then divided by it). */
+  debugRepeat = 1;
+  debugMsaa: number | null = null;
+
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    const pr = Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio);
+    const pr = Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio) * this.debugScale;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     (this.motes.material as THREE.ShaderMaterial).uniforms.px!.value = pr * (h / 900);
@@ -215,20 +228,21 @@ export class Renderer {
   private buildComposer(w: number, h: number, pr: number) {
     this.composer?.dispose();
     const p = this.preset;
-    const target = new THREE.WebGLRenderTarget(w * pr, h * pr, { type: THREE.HalfFloatType, samples: p.msaa });
+    const target = new THREE.WebGLRenderTarget(w * pr, h * pr, { type: THREE.HalfFloatType, samples: this.debugMsaa ?? p.msaa });
     const c = new EffectComposer(this.renderer, target);
     c.setPixelRatio(pr);
     c.setSize(w, h);
-    c.addPass(new RenderPass(this.scene, this.camera));
+    const named = <T extends object>(p: T, name: string) => Object.assign(p, { fbName: name });
+    c.addPass(named(new RenderPass(this.scene, this.camera), 'scene'));
     if (p.ao) {
       const ao = new GTAOPass(this.scene, this.camera, w, h);
       ao.blendIntensity = 0.55;
-      c.addPass(ao);
+      c.addPass(named(ao, 'gtao'));
     }
-    if (p.bloom) c.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97));
-    c.addPass(new OutputPass());
-    c.addPass(new ShaderPass(GradeShader));
-    if (p.smaa) c.addPass(new SMAAPass());
+    if (p.bloom) c.addPass(named(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97), 'bloom'));
+    c.addPass(named(new OutputPass(), 'output'));
+    c.addPass(named(new ShaderPass(GradeShader), 'grade'));
+    if (p.smaa) c.addPass(named(new SMAAPass(), 'smaa'));
     this.composer = c;
   }
 
@@ -249,11 +263,86 @@ export class Renderer {
   }
 
   render() {
-    if (this.composer) this.composer.render();
-    else this.renderer.render(this.scene, this.camera);
+    this.renderer.info.reset();
+    const gpu = this.gpuMode === 'off' ? null : this.gpu;
+    if (gpu && this.gpuMode === 'passes') this.wrapPasses();
+    if (gpu && this.gpuMode === 'frame') gpu.begin('frame');
+    // Profiling: the same frame several times back to back keeps the GPU busy, so timer queries
+    // measure work rather than the gaps while it waits for the CPU (see GpuTimer).
+    for (let i = 0; i < this.debugRepeat; i++) {
+      if (i) this.renderer.info.reset();
+      if (this.composer) this.composer.render();
+      else this.renderer.render(this.scene, this.camera);
+    }
+    gpu?.endFrame();
   }
 
+  /** GPU time of recent frames (ms), while measuring. */
+  get gpuMs(): readonly number[] {
+    return this.gpu?.frameMs ?? [];
+  }
+
+  /**
+   * Starts measuring GPU time ('frame': per frame; 'passes': per render pass, with the shadow maps
+   * separately), or stops ('off'). Returns false when the browser has no GPU timer queries.
+   */
+  measureGpu(mode: 'off' | 'frame' | 'passes' | boolean): boolean {
+    const m = mode === true ? 'frame' : mode === false ? 'off' : mode;
+    this.gpu ??= new GpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
+    if (!this.gpu.supported) return false;
+    if (m !== this.gpuMode) this.gpu.reset();
+    this.gpuMode = m;
+    return m !== 'off';
+  }
+
+  /** Per-label GPU averages since measuring started (see GpuTimer.report). */
+  gpuReport() {
+    return this.gpu?.report() ?? null;
+  }
+
+  resetGpu() {
+    this.gpu?.reset();
+  }
+
+  /** Composer passes (and the shadow map render inside the scene pass) time themselves on the GPU. */
+  private wrapPasses() {
+    const shadow = this.renderer.shadowMap as unknown as { render: (...a: unknown[]) => void };
+    if (!this.wrapped.has(shadow)) {
+      this.wrapped.add(shadow);
+      const orig = shadow.render.bind(shadow);
+      shadow.render = (...a: unknown[]) => {
+        const g = this.gpuMode === 'passes' ? this.gpu : null;
+        g?.begin('shadows');
+        orig(...a);
+        g?.end();
+      };
+    }
+    for (const p of this.composer?.passes ?? []) {
+      if (this.wrapped.has(p)) continue;
+      this.wrapped.add(p);
+      const label = (p as { fbName?: string }).fbName ?? 'pass';
+      const orig = p.render.bind(p);
+      p.render = (...a: Parameters<typeof p.render>) => {
+        const g = this.gpuMode === 'passes' ? this.gpu : null;
+        g?.begin(label);
+        orig(...a);
+        g?.end();
+      };
+    }
+  }
+
+  /** Composer passes by name (profiler experiments switch them off). */
+  get passes(): { name: string; pass: { enabled: boolean } }[] {
+    return (this.composer?.passes ?? []).map((p) => ({ name: (p as { fbName?: string }).fbName ?? 'pass', pass: p }));
+  }
+
+  /** Draw calls, triangles… of the last frame, summed over all passes. */
   get info() {
     return this.renderer.info.render;
+  }
+
+  /** GPU resources held (geometries, textures, shader programs). */
+  get memory() {
+    return { ...this.renderer.info.memory, programs: this.renderer.info.programs?.length ?? 0 };
   }
 }

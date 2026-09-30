@@ -87,7 +87,7 @@ export default defineMap(meta, (b) => {
   b.box(0, -1, cz, 9, 2, cl, PAL.white, { material: conv, conveyor: new THREE.Vector3(0, 0, -3.5) });
   for (const sx of [-1, 1]) b.box(sx * 4.9, 0.6, cz, 0.8, 1.2, cl, PAL.yellow);
   for (const p of PUNCH) {
-    const m = b.box(0, 0.9, p.z, 3.4, 1.8, 1.2, PAL.orange, { dynamic: true, hit: 0.9, tag: 'pusher' });
+    const m = b.box(0, 0.9, p.z, 3.4, 1.8, 1.2, PAL.orange, { dynamic: true, hit: 0.9, tag: 'pusher', sinks: true });
     b.move((t) => {
       m.obj.position.x = punchX(p, t);
     });

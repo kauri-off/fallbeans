@@ -2,10 +2,13 @@ import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Auth } from '../src/server/auth';
 import { Gateway } from '../src/server/gateway';
+import { replay } from '../src/server/replay';
 import { type Conn, Room } from '../src/server/room';
 import { BTN, decodeSnapshot, encodeInput, type Snapshot } from '../src/shared/codec';
 import { PROTOCOL_VERSION, TICK_MS } from '../src/shared/consts';
 import type { ServerMsg, ServerMsgOf } from '../src/shared/protocol';
+import { mulberry32 } from '../src/shared/rng';
+import { checkServerMsg } from '../src/shared/serverSchema';
 
 let now = 0;
 const clock = () => now;
@@ -19,6 +22,9 @@ class Client implements Conn {
   id = -1;
   constructor(readonly room: Room) {}
   send(m: ServerMsg) {
+    // Everything the server sends must match the protocol schema.
+    const bad = checkServerMsg(JSON.parse(JSON.stringify(m)));
+    if (bad) throw new Error(`invalid server message ${bad}`);
     this.msgs.push(structuredClone(m));
   }
   datagram(d: Uint8Array) {
@@ -287,5 +293,52 @@ describe('gateway', () => {
 describe('timing', () => {
   it('uses a 120 Hz tick', () => {
     expect(TICK_MS).toBeCloseTo(8.333, 2);
+  });
+});
+
+describe('dev tools', () => {
+  it('ignores dev commands unless the server runs with --dev', () => {
+    const a = new Client(room).hello('A');
+    a.ctl({ t: 'dev', q: 1, cmd: { c: 'skipIntro' } });
+    expect(a.last('devAck')).toMatchObject({ q: 1, ok: false });
+  });
+
+  it('replays a recorded round to exactly the same state', () => {
+    const dev = new Room({ minPlayers: 1, seed: 3, introMs: 1000, clock, autoTick: false, dev: true });
+    const a = new Client(dev).hello('A');
+    const b = new Client(dev).hello('B');
+    const cmd = (c: Client, x: Parameters<Room['devCommand']>[1]) => c.ctl({ t: 'dev', cmd: x });
+    cmd(a, { c: 'start', games: ['hammer-swing'], bots: 2 });
+    cmd(a, { c: 'skipIntro' });
+    const rng = mulberry32(5);
+    for (let i = 0; i < 160; i++) {
+      for (const c of [a, b]) {
+        const ar = dev.arena;
+        // Some packets arrive late or not at all, like on a real connection.
+        if (rng() < 0.15) continue;
+        const first = ar.tick + 1 - (rng() < 0.2 ? 4 : 0);
+        const frames = Array.from({ length: 8 }, () => ({
+          mx: Math.round(rng() * 254 - 127),
+          mz: 100,
+          buttons: rng() < 0.05 ? BTN.jump : rng() < 0.03 ? BTN.dive : rng() < 0.1 ? BTN.grab : 0,
+        }));
+        dev.datagram(c.id, c, encodeInput({ arena: ar.id, firstTick: first, frames }));
+      }
+      if (i === 40) cmd(a, { c: 'goto', to: 1 });
+      if (i === 60) cmd(a, { c: 'knock', id: b.id, v: [2, 5, -3] });
+      if (i === 80) cmd(b, { c: 'bot', near: true });
+      if (i === 100) cmd(a, { c: 'grab', target: b.id, s: 1 });
+      if (i === 120) cmd(b, { c: 'bots', on: false });
+      advance(dev, 50);
+    }
+    cmd(a, { c: 'lobby' });
+    const rec = dev.debugReplay(0)!;
+    expect(rec.game).toBe('hammer-swing');
+    expect(rec.ops.map((o) => o[1])).toEqual(expect.arrayContaining(['teleport', 'knock', 'late', 'grab', 'bots']));
+    const r = replay(JSON.parse(JSON.stringify(rec)));
+    expect(r.ticks).toBeGreaterThan(900);
+    expect(r.hash).toBe(rec.hash);
+    r.arena.dispose();
+    dev.dispose();
   });
 });

@@ -82,6 +82,10 @@ if [ -n "${PIN_HASH_B64:-}" ]; then
   setvar FB_SECRET "$(openssl rand -hex 32)"
 fi
 grep -q '^FB_SECRET=' $ENV_FILE || setvar FB_SECRET "$(openssl rand -hex 32)"
+if [ -n "${DEBUG_KEY:-}" ]; then
+  say "Ключ страницы отладки обновлён"
+  setvar FB_DEBUG_KEY "$DEBUG_KEY"
+fi
 grep -q '^FB_PIN_HASH_B64=' $ENV_FILE || fail "PIN не задан: bun run deploy -- --pin <цифры>"
 
 # ------------------------------------------------------------------ firewall

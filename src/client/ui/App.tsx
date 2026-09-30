@@ -1,11 +1,24 @@
+import { useEffect } from 'preact/hooks';
 import type { Game } from '../game/game';
-import { arenaInfo, conn, loadProgress, menuOpen } from '../state';
+import { arenaInfo, conn, debugOverlay, loadProgress, menuOpen, uiHidden } from '../state';
+import { DebugOverlay } from './DebugOverlay';
 import { Hud } from './Hud';
 import { Menu } from './Menu';
 import { Tags } from './Tags';
 
 export function App({ game }: { game: Game }) {
   const c = conn.value;
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.code !== 'F3') return;
+      e.preventDefault();
+      debugOverlay.value = !debugOverlay.value;
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  const overlay = debugOverlay.value && game && <DebugOverlay game={game} />;
+  if (uiHidden.value) return overlay || null;
   if (c.status === 'loading')
     return (
       <div class="screen">
@@ -39,6 +52,7 @@ export function App({ game }: { game: Game }) {
       {info && <Tags game={game} />}
       {info && <Hud />}
       {info && menuOpen.value && <Menu game={game} />}
+      {overlay}
     </>
   );
 }

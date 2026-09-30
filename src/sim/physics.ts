@@ -38,6 +38,8 @@ export interface ColliderOpts {
   onGround?: ((col: Collider, body: PlayerBody) => void) | null;
   /** Left out of bot navigation (the bots' own logic deals with it, e.g. doors that may break). */
   navSkip?: boolean;
+  /** Meant to slide into other geometry (retracting walls, sinking gates): the clipping audit skips it. */
+  sinks?: boolean;
 }
 
 export interface Contact {
@@ -63,6 +65,7 @@ export class Collider {
   onTouch: ColliderOpts['onTouch'];
   onGround: ColliderOpts['onGround'];
   readonly navSkip: boolean;
+  readonly sinks: boolean;
   readonly cur = new THREE.Matrix4();
   readonly prev = new THREE.Matrix4();
   readonly inv = new THREE.Matrix4();
@@ -85,6 +88,7 @@ export class Collider {
     this.onTouch = opts.onTouch ?? null;
     this.onGround = opts.onGround ?? null;
     this.navSkip = !!opts.navSkip;
+    this.sinks = !!opts.sinks;
     this.radius =
       shape.type === 'box'
         ? Math.hypot(shape.hx, shape.hy, shape.hz)

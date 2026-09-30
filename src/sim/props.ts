@@ -90,6 +90,17 @@ export function sweepEta(bot: BotView, angle: number, omega: number, arms: numbe
 }
 
 /** Seconds until a rotor arm (half thickness `half`) first touches the bot; negative while touching. */
+/**
+ * A rotor angle that starts at `start`, eases up to `w` rad/s over about `ease` seconds after the start
+ * (nobody is hit before they can react) and keeps speeding up by `acc`. `omega` is its angular speed.
+ */
+export function spinUp(start: number, w: number, acc: number, ease = 1.5) {
+  return {
+    angle: (t: number) => (t <= 0 ? start : start + (w * t * t) / (t + ease) + acc * t * t),
+    omega: (t: number) => (t <= 0 ? 0.2 : Math.max(0.2, (w * t * (t + 2 * ease)) / (t + ease) ** 2 + 2 * acc * t)),
+  };
+}
+
 export function armContactEta(bot: BotView, angle: number, omega: number, arms: number, cx = 0, cz = 0, half = 0.36): number {
   const r = Math.max(0.5, Math.hypot(bot.body.pos.x - cx, bot.body.pos.z - cz));
   const margin = (half + 0.55) / r / Math.abs(omega);

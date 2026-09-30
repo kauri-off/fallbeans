@@ -290,14 +290,14 @@ export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: numb
     if (wp.wait && bot.mem.go !== i) {
       const ready = wp.wait(bot);
       const reckless = !ready && bot.rng() < (1 - skill) * 0.12 * BOT_DT;
-      if (ready || reckless) {
-        // Reaction time: seeing the gap is not the same as going.
-        bot.mem.readyAt ??= bot.t + (reckless ? 0 : (bot.mem.react ?? 0.15) * 0.5);
-        if (bot.t >= (bot.mem.readyAt ?? 0)) {
-          bot.mem.go = i;
-          bot.mem.readyAt = undefined;
-        }
-      } else bot.mem.readyAt = undefined;
+      // Reaction time: seeing the gap is not the same as going. Once decided, the bot goes after its
+      // reaction time even if the gap has closed by then (as people do); waiting for a gap that stays
+      // open longer than the reaction time left slow bots stuck forever at fast hammers.
+      if (ready || reckless) bot.mem.readyAt ??= bot.t + (reckless ? 0 : (bot.mem.react ?? 0.15) * 0.5);
+      if (bot.mem.readyAt !== undefined && bot.t >= bot.mem.readyAt) {
+        bot.mem.go = i;
+        bot.mem.readyAt = undefined;
+      }
     }
     if (wp.wait && bot.mem.go !== i) {
       // Hold at the previous waypoint (keeps a corridor position exact).

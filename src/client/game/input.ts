@@ -6,6 +6,18 @@ export interface Sample {
   jump: boolean;
   dive: boolean;
   grab: boolean;
+  /** Scripted input may give a world-space direction instead (x, z), bypassing the camera. */
+  world?: [number, number];
+}
+
+/** Input played by the debug probe or tests instead of the devices, until `until` (performance.now()). */
+export interface ScriptedInput {
+  moveX: number;
+  moveY: number;
+  world?: [number, number];
+  /** Held buttons: a jump or dive fires once per press (see Input.press). */
+  grab: boolean;
+  until: number;
 }
 
 const KEYS = {
@@ -37,6 +49,16 @@ export class Input {
   /** Spectating: switch to the previous (−1) or next (+1) player. */
   onCycle: ((dir: number) => void) | null = null;
   spectating = false;
+  /** Debug/tests: replaces keyboard, mouse and gamepad while active (works with the menu open). */
+  script: ScriptedInput | null = null;
+  private scriptJump = false;
+  private scriptDive = false;
+
+  /** Debug/tests: one jump or dive on the next sampled tick. */
+  press(button: 'jump' | 'dive') {
+    if (button === 'jump') this.scriptJump = true;
+    else this.scriptDive = true;
+  }
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => this.key(e, true));
@@ -124,6 +146,23 @@ export class Input {
 
   /** Reads movement and consumes jump/dive presses. Call once per simulation tick. */
   sample(dt: number): Sample {
+    const sc = this.script && performance.now() < this.script.until ? this.script : null;
+    if (this.script && !sc) this.script = null;
+    if (sc || this.scriptJump || this.scriptDive) {
+      const s: Sample = {
+        moveX: sc?.moveX ?? 0,
+        moveY: sc?.moveY ?? 0,
+        jump: this.scriptJump,
+        dive: this.scriptDive,
+        grab: sc?.grab ?? false,
+        ...(sc?.world ? { world: sc.world } : {}),
+      };
+      this.scriptJump = false;
+      this.scriptDive = false;
+      this.jumpEdge = false;
+      this.diveEdge = false;
+      return s;
+    }
     let mx = (this.has(KEYS.right) ? 1 : 0) - (this.has(KEYS.left) ? 1 : 0);
     let my = (this.has(KEYS.up) ? 1 : 0) - (this.has(KEYS.down) ? 1 : 0);
     let grab = this.mouseGrab || this.has(KEYS.grab);

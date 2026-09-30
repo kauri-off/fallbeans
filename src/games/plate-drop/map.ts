@@ -4,7 +4,7 @@ import { arenaBrain } from '../../sim/bots';
 import { PAL, type Palette } from '../../sim/builder';
 import { defineMap } from '../../sim/map';
 import type { Collider } from '../../sim/physics';
-import { armContactEta } from '../../sim/props';
+import { armContactEta, spinUp } from '../../sim/props';
 import meta from './meta';
 
 const PLATE = 3.6;
@@ -20,7 +20,9 @@ interface Plate {
   col: Collider;
 }
 
-export const lowAngle = (t: number) => (t <= 0 ? 0 : 0.9 * t + 0.004 * t * t);
+/** Starts 10° past a spawn and eases in (see jump-club). */
+const LOW = spinUp(-0.22, 0.9, 0.004);
+export const lowAngle = LOW.angle;
 const highAngle = (t: number) => (t <= 60 ? 0 : -(0.6 * (t - 60) + 0.003 * (t - 60) ** 2));
 
 export default defineMap(meta, (b) => {
@@ -90,7 +92,7 @@ export default defineMap(meta, (b) => {
     jumpWhen: (bot) => {
       const t = Math.max(0, bot.t);
       if (t <= 0) return false;
-      const eta = armContactEta(bot, lowAngle(t), 0.9 + 0.008 * t, 2);
+      const eta = armContactEta(bot, lowAngle(t), LOW.omega(t), 2);
       const high = t > 60 ? armContactEta(bot, highAngle(t), -(0.6 + 0.006 * (t - 60)), 1) : 9;
       return eta > 0.1 && eta < 0.15 + (bot.mem.react ?? 0.2) * 0.3 && high > 0.7;
     },

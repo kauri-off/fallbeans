@@ -2,12 +2,15 @@ import { effect } from '@preact/signals';
 import * as THREE from 'three';
 import { decodeSnapshot } from '../../shared/codec';
 import { DT, INTRO_MS } from '../../shared/consts';
-import type { LobbyPlayer, ServerMsg } from '../../shared/protocol';
+import { Sections } from '../../shared/prof';
+import type { DevCmd, LobbyPlayer, ServerMsg } from '../../shared/protocol';
+import { report } from '../debug/capture';
 import { Connection } from '../net/connection';
 import { session, settings, updateSettings } from '../settings';
 import {
   arenaInfo,
   conn,
+  devMode,
   feed,
   gameEnd,
   type Hud,
@@ -21,6 +24,7 @@ import {
   practiceGame,
   pushFeed,
   results,
+  shotMode,
 } from '../state';
 import { fmtSec, ordinal } from '../ui/labels';
 import { ClientArena } from './arena';
@@ -67,6 +71,18 @@ export class Game {
   private readonly look = new THREE.Vector3();
   /** Arena whose scripted shot is running (the first frame of a shot cuts instead of easing). */
   private cineArena = -1;
+  /** Debug: a fixed camera (eye, look) instead of the follow/intro camera. */
+  cameraOverride: { eye: THREE.Vector3; look: THREE.Vector3 } | null = null;
+  /** Debug: called after every frame with its real duration and the CPU time spent in it (ms). */
+  onFrame: ((frameMs: number, cpuMs: number) => void) | null = null;
+  /** Lower the quality by itself on slow frames (off while the profiler runs). */
+  autoQuality = true;
+  /** Debug: sees every control message from the server. */
+  onServerMessage: ((m: ServerMsg) => void) | null = null;
+  /** CPU time of the frame by section (predict, events, animate, beans, camera, hud, render). */
+  readonly prof = new Sections(2000);
+  private devSeq = 1;
+  private readonly devWait = new Map<number, (r: { ok: boolean; msg: string }) => void>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas);
@@ -96,6 +112,7 @@ export class Game {
       setVolume(s.volume);
     });
     window.addEventListener('resize', () => this.renderer.resize());
+    canvas.addEventListener('webglcontextlost', () => report('webgl', 'WebGL context lost'));
     // Any click on the field captures the mouse again (after Alt+Tab, a refused lock, closing the menu…).
     canvas.addEventListener('click', () => {
       if (!this.input.locked) this.resume();
@@ -167,12 +184,36 @@ export class Game {
   start() {
     this.started = true;
     this.renderer.setQuality(settings.value.quality);
-    this.net.start();
+    // (Connection.start handles its own failures: it retries.)
+    void this.net.start();
     const loop = () => {
       this.frame();
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  /** Runs a dev command on the server (only a server started with --dev accepts them). */
+  dev(cmd: DevCmd): Promise<{ ok: boolean; msg: string }> {
+    const q = this.devSeq++;
+    return new Promise((resolve) => {
+      this.devWait.set(q, resolve);
+      this.net.send({ t: 'dev', q, cmd });
+      setTimeout(() => {
+        if (this.devWait.delete(q)) resolve({ ok: false, msg: 'no answer from the server' });
+      }, 10_000);
+    });
+  }
+
+  /** Internals for the debug probe (read-only use). */
+  inspect() {
+    return {
+      beans: this.beans,
+      players: this.players,
+      spectate: this.spectate,
+      fps: this.fps,
+      frameMs: this.frameMs,
+    };
   }
 
   nameOf(id: number) {
@@ -182,9 +223,11 @@ export class Game {
   // ------------------------------------------------------------------ messages
 
   private onMessage(m: ServerMsg) {
+    this.onServerMessage?.(m);
     switch (m.t) {
       case 'welcome':
         myId.value = m.id;
+        devMode.value = m.dev;
         if (!m.practice) session.set('fb_token', m.token);
         return;
       case 'lobby': {
@@ -243,6 +286,16 @@ export class Game {
         results.value = m;
         sfx('results');
         return;
+      case 'clock':
+        this.net.clock.setRate(m.rate, m.s);
+        return;
+      case 'devAck': {
+        const wait = m.q !== null ? this.devWait.get(m.q) : undefined;
+        if (m.q !== null) this.devWait.delete(m.q);
+        if (wait) wait({ ok: m.ok, msg: m.msg });
+        note(`🛠 ${m.ok ? '' : '✖ '}${m.msg}`);
+        return;
+      }
       case 'gameEnd':
         gameEnd.value = m;
         results.value = null;
@@ -338,8 +391,11 @@ export class Game {
     // Real frame time (not capped): on a slow machine the fallback must kick in after seconds, not minutes.
     this.measure(now, Math.min(1, raw));
     const arena = this.arena;
-    this.renderer.tick(now / 1000);
+    const prof = this.prof;
+    this.renderer.tick(shotMode.value ? 0 : now / 1000);
+    this.renderer.motes.visible = !shotMode.value;
     if (arena) {
+      prof.start('predict');
       this.input.enabled = !menuOpen.value;
       this.input.spectating = !arena.body && arena.kind === 'round';
       this.rig.look(this.input.lookX, this.input.lookY);
@@ -347,14 +403,21 @@ export class Game {
       this.input.lookY = 0;
       arena.predict(() => {
         const s = this.input.sample(DT);
-        const [mx, mz] = this.rig.toWorld(s.moveX, s.moveY);
+        const [mx, mz] = s.world ?? this.rig.toWorld(s.moveX, s.moveY);
         return { mx, mz, jump: s.jump, dive: s.dive, grab: s.grab };
       });
+      prof.start('events');
       this.playEvents(arena);
-      const t = arena.renderTick() * DT;
+      // (Screenshots: server time, which does not depend on the connection like the prediction lead.)
+      const t = (shotMode.value ? arena.tickAt(this.net.clock.serverNow()) : arena.renderTick()) * DT;
+      prof.start('animate');
       arena.animate(t, dt);
+      prof.start('beans');
       const focus = this.updateBeans(arena, dt, t);
-      if (!this.cinematic(arena, t, dt)) this.rig.update(focus, dt, arena.builder.world);
+      prof.start('camera');
+      const cam = this.cameraOverride;
+      if (cam) this.rig.cinematic(cam.eye, cam.look, dt, true);
+      else if (!this.cinematic(arena, t, dt)) this.rig.update(focus, dt, arena.builder.world);
       if (arena.teleported) {
         // Respawned (or first placed by the server): look the way the bean faces.
         if (arena.body) this.rig.face(arena.body.yaw);
@@ -362,13 +425,18 @@ export class Game {
         arena.teleported = false;
       }
       this.renderer.focus(focus);
+      prof.start('hud');
       this.countdown(arena, t);
       if (now - this.hudAt > 100) {
         this.hudAt = now;
         this.updateHud(arena, t);
       }
     }
+    prof.start('render');
     this.renderer.render();
+    prof.stop();
+    prof.frame();
+    this.onFrame?.(raw * 1000, performance.now() - now);
   }
 
   /** Scripted camera: fly over the course during the intro, orbit the podium. Returns false when not active. */
@@ -422,7 +490,7 @@ export class Game {
     }
     // Automatic fallback when the machine cannot keep up (never upwards: that is the player's call).
     this.frameMs += (dt * 1000 - this.frameMs) * 0.05;
-    if (document.visibilityState === 'visible' && this.frameMs > 24) this.slowFor += dt;
+    if (this.autoQuality && document.visibilityState === 'visible' && this.frameMs > 24) this.slowFor += dt;
     else this.slowFor = 0;
     if (this.slowFor > 6) {
       this.slowFor = 0;

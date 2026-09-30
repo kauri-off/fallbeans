@@ -5,12 +5,17 @@ dist/
 
 # Local dev: self-signed certs, Claude Code session files
 .dev/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/launch.json
 
 # Tests
 test-results/
+.reports/
+.bench/
 playwright-report/
 blob-report/
+.playwright-mcp/
 coverage/
 
 # Secrets and logs

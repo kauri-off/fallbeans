@@ -16,7 +16,21 @@ export default defineConfig({
     ...(channel ? { channel } : {}),
     launchOptions: { args: ['--ignore-gpu-blocklist'] },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], ...(channel ? { channel } : {}) } }],
+  projects: [
+    { name: 'e2e', testIgnore: /visual.spec/, use: { ...devices['Desktop Chrome'], ...(channel ? { channel } : {}) } },
+    // Screenshots per map (bun run visual); baselines are this machine's, see e2e/visual.spec.ts.
+    {
+      name: 'visual',
+      testMatch: /visual.spec/,
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(channel ? { channel } : {}),
+        viewport: { width: 960, height: 540 },
+        deviceScaleFactor: 1,
+      },
+    },
+  ],
+  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.015 } },
   webServer: {
     // Built client served by the game server itself (no nginx), dev PIN 5050, WebTransport on udp/4434.
     command: `bun src/server/main.ts --dev --static dist/client --host 127.0.0.1 --port ${PORT} --wt-port 4434 --solo`,

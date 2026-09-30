@@ -993,3 +993,64 @@ h3 {
 #ui label {
   pointer-events: auto;
 }
+
+/* ------------------------------------------------------------------ debug (F3 overlay, Dev tab) */
+
+.debug-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 0.5rem;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: min(46rem, calc(100vw - 1rem));
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.5rem;
+  background: rgba(20, 12, 40, 0.78);
+  color: #e9e4ff;
+  font:
+    11px / 1.35 ui-monospace,
+    "Cascadia Mono",
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.debug-overlay b {
+  display: inline-block;
+  width: 3.4rem;
+  color: #ffd23f;
+  font-weight: 600;
+}
+.debug-build {
+  color: #9f93c9;
+  margin-bottom: 0.15rem;
+}
+.dev select.input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.input.narrow {
+  width: 4rem;
+}
+.prof-table {
+  width: 100%;
+  border-collapse: collapse;
+  font:
+    12px / 1.35 ui-monospace,
+    "Cascadia Mono",
+    Consolas,
+    monospace;
+}
+.prof-table th {
+  text-align: left;
+  padding-top: 0.4rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.prof-table td:not(:first-child) {
+  text-align: right;
+}
+.prof-table tr.dim td {
+  opacity: 0.45;
+}

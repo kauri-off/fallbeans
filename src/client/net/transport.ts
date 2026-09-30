@@ -54,7 +54,7 @@ async function connectWebTransport(info: NonNullable<SessionInfo['wt']>, ev: Tra
     () => finish('closed'),
     () => finish('error'),
   );
-  (async () => {
+  void (async () => {
     const reader = stream.readable.getReader();
     const frames = new FrameReader(1 << 20);
     try {
@@ -66,7 +66,7 @@ async function connectWebTransport(info: NonNullable<SessionInfo['wt']>, ev: Tra
     } catch {}
     finish('stream');
   })();
-  (async () => {
+  void (async () => {
     const reader = wt.datagrams.readable.getReader();
     try {
       for (;;) {

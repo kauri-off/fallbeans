@@ -3,17 +3,25 @@ import type { ClientMsg, ServerMsg } from '../../shared/protocol';
 import { conn } from '../state';
 import { connect, fetchSession, type Transport } from './transport';
 
-/** Server clock estimate: the offset from the lowest-latency ping of the last few. */
+/**
+ * Server clock estimate: the offset from the lowest-latency ping of the last few. Game time on the
+ * server normally runs at the real rate; dev commands may slow, pause or warp it (see `setRate`).
+ */
 export class Clock {
   offset = 0;
   rtt = 80;
+  /** Game time speed (dev: slow motion, 0 = paused). */
+  rate = 1;
+  /** Real time at which the current rate started, and the offset then. */
+  private rateAt = 0;
   private samples: { rtt: number; offset: number }[] = [];
   private synced = false;
 
   sample(clientSent: number, serverTime: number) {
     const now = performance.now();
     const rtt = Math.max(0, now - clientSent);
-    const offset = serverTime + rtt / 2 - now;
+    // Offset as it would be at rateAt: serverNow() = now + offset + (now - rateAt) · (rate − 1).
+    const offset = serverTime + (rtt / 2) * this.rate - now - (now - this.rateAt) * (this.rate - 1);
     this.samples.push({ rtt, offset });
     if (this.samples.length > 12) this.samples.shift();
     const best = this.samples.reduce((a, s) => (s.rtt < a.rtt ? s : a));
@@ -24,8 +32,19 @@ export class Clock {
     } else this.offset += (best.offset - this.offset) * 0.15;
   }
 
+  /** The server changed the speed of game time or jumped it (`serverTime` = its clock when it did). */
+  setRate(rate: number, serverTime: number) {
+    const now = performance.now();
+    this.rate = rate;
+    this.rateAt = now;
+    this.offset = serverTime + (this.rtt / 2) * rate - now;
+    // Older samples were taken at another rate or before a jump.
+    this.samples = [];
+  }
+
   serverNow() {
-    return performance.now() + this.offset;
+    const now = performance.now();
+    return now + this.offset + (now - this.rateAt) * (this.rate - 1);
   }
 }
 

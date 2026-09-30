@@ -3,6 +3,8 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 export const COOKIE = 'fb_auth';
 const COOKIE_TTL_S = 365 * 24 * 3600;
 const TICKET_TTL_MS = 120_000;
+export const DEBUG_COOKIE = 'fb_debug';
+const DEBUG_TTL_S = 7 * 24 * 3600;
 
 /**
  * PIN access. A correct PIN earns a signed cookie (one year, this browser); the page trades the
@@ -65,6 +67,21 @@ export class Auth {
     return this.verify(`${parts[0]}.${parts[1]}`, parts[2]!);
   }
 
+  /** Debug page access (production): a week, on top of the PIN cookie. */
+  issueDebugCookie(): string {
+    const payload = `d1.${Math.floor(this.wallClock() / 1000)}`;
+    return `${payload}.${this.sign(payload)}`;
+  }
+
+  validDebugCookie(value: string | undefined): boolean {
+    if (!value) return false;
+    const parts = value.split('.');
+    if (parts.length !== 3 || parts[0] !== 'd1') return false;
+    const age = this.wallClock() / 1000 - Number(parts[1]);
+    if (!Number.isFinite(age) || age < -60 || age > DEBUG_TTL_S) return false;
+    return this.verify(`${parts[0]}.${parts[1]}`, parts[2]!);
+  }
+
   issueTicket(): string {
     const payload = `t1.${this.wallClock()}.${randomBytes(9).toString('base64url')}`;
     return `${payload}.${this.sign(payload)}`;
@@ -92,6 +109,17 @@ export function readCookie(header: string | null, name: string): string | undefi
 
 export function cookieHeader(value: string, secure: boolean, maxAge = COOKIE_TTL_S): string {
   return `${COOKIE}=${value}; Path=/fallbeans; Max-Age=${maxAge}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+}
+
+export function debugCookieHeader(value: string, secure: boolean): string {
+  return `${DEBUG_COOKIE}=${value}; Path=/fallbeans; Max-Age=${DEBUG_TTL_S}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+}
+
+/** Constant-time comparison of a debug key with the configured one. */
+export function sameKey(given: string, want: string): boolean {
+  const a = createHmac('sha256', 'fb-debug').update(given).digest();
+  const b = createHmac('sha256', 'fb-debug').update(want).digest();
+  return timingSafeEqual(a, b);
 }
 
 /** PIN hash for FB_PIN_HASH_B64 (argon2id). */

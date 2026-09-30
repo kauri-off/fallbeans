@@ -1,4 +1,4 @@
-import type { GameMeta } from '../shared/game';
+import { type GameMeta, GameMetaSchema } from '../shared/game';
 import type { MapModule } from '../sim/map';
 import ballHill from './ball-hill/map';
 import crownPeak from './crown-peak/map';
@@ -38,6 +38,11 @@ export const PODIUM: MapModule = podium;
 
 const byId = new Map(MAPS.map((m) => [m.meta.id, m]));
 if (byId.size !== MAPS.length) throw new Error('duplicate game id');
+for (const m of MAPS) {
+  const r = GameMetaSchema.safeParse(m.meta);
+  if (!r.success)
+    throw new Error(`game ${m.meta.id}: ${r.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+}
 
 export function getGame(id: string): GameMeta | undefined {
   return byId.get(id)?.meta;

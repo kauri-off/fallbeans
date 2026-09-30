@@ -85,7 +85,8 @@ export default defineMap(meta, (b) => {
   b.pad(3, P2.y, 89.2, 1.3, 19);
   b.box(0, 13, 99, 14, 2, 10, PAL.pink, { freq: 0.3 });
   b.hub(0, 14, 99, 0.9);
-  b.rotor(0, 14.6, 99, 6.5, 2, (t) => t * 1.4, 0.8);
+  // 5.8 m: the arms clear the first sliding step (z 105).
+  b.rotor(0, 14.6, 99, 5.8, 2, (t) => t * 1.4, 0.8);
 
   // 4. Sliding steps.
   [0, 1, 2].forEach((k) => {
@@ -193,7 +194,8 @@ export default defineMap(meta, (b) => {
       { z: -100, p: new THREE.Vector3(0, 0.1, 10) },
       { z: P1.z0 + 1, p: new THREE.Vector3(0, P1.y + 0.1, P1.z0 + 4) },
       { z: P2.z0 + 1, p: new THREE.Vector3(0, P2.y + 0.1, P2.z0 + 4) },
-      { z: 95, p: new THREE.Vector3(-5, 14.1, 95.5) },
+      // Falling off the rotor deck or above: back before the pads (the deck is all within the rotor's reach).
+      { z: 95, p: new THREE.Vector3(0, P2.y + 0.1, 86) },
     ],
     // On the hammer frames, or the ramp's rail.
     forbidden: (p) => (p.z > P1.z1 && p.z < P2.z0 && p.y > P1.y + 3) || (p.z > 15 && p.z < P1.z0 && p.x < -8.4),

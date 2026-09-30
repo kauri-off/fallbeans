@@ -2,6 +2,8 @@
  * Deploys Fall Beans to https://киберщит-социум.рф/fallbeans/:  bun run deploy -- [options]
  *
  *   --pin <digits>    set (or change) the PIN; changing it signs everyone out. Needed on the first deploy.
+ *   --debug-key <key> turn on the read-only debug page (/fallbeans/debug/) with this key (16–64 of
+ *                     A–Z a–z 0–9 _ -); then open /fallbeans/api/debug/login?key=<key> once per browser
  *   --pack-only       build the bundle (.build/fallbeans-update.tar.gz) without uploading
  *   --skip-checks     skip typecheck, lint and tests
  *   --yes             do not ask for confirmation
@@ -40,6 +42,8 @@ const host = option('--host') ?? process.env.DEPLOY_HOST ?? 'deploy@168.113.157.
 const key = (option('--key') ?? process.env.DEPLOY_KEY ?? '~/.ssh/cybershield_deploy').replace(/^~(?=$|[\\/])/, os.homedir());
 const pin = option('--pin');
 if (pin !== undefined && !/^\d{4,12}$/.test(pin)) fail('PIN must be 4–12 digits');
+const debugKey = option('--debug-key');
+if (debugKey !== undefined && !/^[\w-]{16,64}$/.test(debugKey)) fail('debug key: 16–64 characters of A–Z a–z 0–9 _ -');
 
 const bun = process.execPath;
 if (!flag('--skip-checks')) {
@@ -82,7 +86,8 @@ if (!flag('--yes')) {
 const ssh = ['-i', key, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
 const dir = `fallbeans-update-${Date.now()}`;
 run(['scp', ...ssh, archive, `${host}:${dir}.tar.gz`]);
-const env = pin ? `PIN_HASH_B64=${Buffer.from(await hashPin(pin)).toString('base64')} ` : '';
+const env =
+  (pin ? `PIN_HASH_B64=${Buffer.from(await hashPin(pin)).toString('base64')} ` : '') + (debugKey ? `DEBUG_KEY=${debugKey} ` : '');
 run([
   'ssh',
   ...ssh,

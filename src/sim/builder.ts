@@ -254,7 +254,9 @@ export class Builder {
 
   hammer(x: number, y: number, z: number, speed: number, phase: number, amp = 1.05, withFrame = true) {
     if (withFrame) {
-      for (const sx of [-4.4, 4.4]) this.box(x + sx, y - 3.6, z, 0.8, 8.4, 0.8, PAL.purple);
+      // Legs in front of and behind the swing plane: the head (1.9 m deep) passes between them.
+      for (const sx of [-4.4, 4.4]) for (const sz of [-1.5, 1.5]) this.box(x + sx, y - 3.6, z + sz, 0.8, 8.4, 0.8, PAL.purple);
+      for (const sx of [-4.4, 4.4]) this.box(x + sx, y + 0.8, z, 0.8, 0.8, 3.8, PAL.purple);
       this.box(x, y + 0.8, z, 9.6, 0.8, 1.2, PAL.purple);
     }
     const h = this.model('hammer');

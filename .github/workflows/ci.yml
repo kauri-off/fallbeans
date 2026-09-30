@@ -16,3 +16,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run build
+      - run: bun run assets
+      # Full audits (multi-seed bot balance): errors fail the build, warnings are reported.
+      - run: bun run audit

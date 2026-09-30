@@ -6,6 +6,8 @@ import { BASE_PATH, PROTOCOL_VERSION } from '../shared/consts';
 import type { ServerMsg } from '../shared/protocol';
 import { type Auth, COOKIE, cookieHeader, readCookie } from './auth';
 import type { Config } from './config';
+import { handleDebug, handleReport } from './debugApi';
+import type { Diagnostics } from './diag';
 import type { ConnSession, Gateway } from './gateway';
 import type { Conn, Logger } from './room';
 
@@ -39,7 +41,7 @@ export function devCertHash(certPem: string): string {
   return createHash('sha256').update(Buffer.from(b64, 'base64')).digest('base64');
 }
 
-export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger): Server<WsData> {
+export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger, diag: Diagnostics): Server<WsData> {
   const secure = cfg.trustProxy;
   const staticRoot = cfg.staticDir ? normalize(join(process.cwd(), cfg.staticDir)) : null;
   const certHashes = cfg.dev && cfg.certPem ? [devCertHash(cfg.certPem)] : [];
@@ -102,6 +104,13 @@ export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger
           phase: m.phase,
           practice: gateway.practice.size,
         });
+      }
+      if (path.startsWith(`${BASE_PATH}api/report`) || path.startsWith(`${BASE_PATH}api/debug/`)) {
+        const ctx = { cfg, auth, gateway, diag, log, authed, sameOrigin, clientIp: clientIp(req, srv) };
+        if (path === `${BASE_PATH}api/report`)
+          return req.method === 'POST' ? handleReport(req, ctx) : new Response('method not allowed', { status: 405 });
+        const r = await handleDebug(path, req, ctx);
+        if (r) return r;
       }
       if (path === `${BASE_PATH}api/check`) return new Response(null, { status: authed(req) ? 204 : 401 });
       if (path === `${BASE_PATH}api/auth` && req.method === 'POST') {

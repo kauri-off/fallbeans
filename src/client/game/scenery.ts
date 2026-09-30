@@ -106,6 +106,7 @@ function clouds(b: Builder, boxes: readonly Box[], req: Builder['scenery'][numbe
     inst.frustumCulled = false;
     inst.castShadow = false;
     inst.receiveShadow = false;
+    inst.userData.cat = 'clouds';
     b.group.add(inst);
     b.view!.own({ dispose: () => inst.dispose() });
     return { inst, local };
@@ -148,6 +149,7 @@ function birds(b: Builder, all: Box, rnd: () => number) {
   const mk = (g: THREE.BufferGeometry) => {
     const inst = new THREE.InstancedMesh(g, mat, n);
     inst.frustumCulled = false;
+    inst.userData.cat = 'birds';
     b.group.add(inst);
     b.view!.own({ dispose: () => inst.dispose() });
     return inst;
@@ -247,6 +249,7 @@ function balloons(b: Builder, boxes: readonly Box[], all: Box, rnd: () => number
       g.add(r);
     }
     g.position.copy(pos);
+    g.userData.cat = 'balloons';
     b.group.add(g);
     const home = pos.clone();
     const ph = rnd() * 50;

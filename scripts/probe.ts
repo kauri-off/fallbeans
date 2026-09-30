@@ -1,0 +1,75 @@
+/**
+ * Drives the game in a headless browser and runs code against the debug probe (window.__fallbeans).
+ *   bun run probe [--url http://localhost:5173/fallbeans/] [--headed] [--practice map] [--shot out.png]
+ *                 [--wait round] [--timeout 60] "<async JS; `p` is the probe>" …
+ *
+ * Each snippet runs in the page in turn and its result is printed as JSON, e.g.
+ *   bun run probe "await p.dev({c:'start', games:['door-dash'], bots:3})" "await p.dev({c:'skipIntro'})" "p.snapshot()"
+ * Logs in with the dev PIN; page errors and console errors are printed as they happen. Needs a
+ * running server (bun run dev) or --url of one. Browser: installed Edge on Windows (PW_CHANNEL to change).
+ */
+import { chromium } from '@playwright/test';
+
+const args = process.argv.slice(2);
+const opt = (n: string) => {
+  const i = args.indexOf(n);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const valued = new Set(['--url', '--practice', '--shot', '--wait', '--timeout']);
+const snippets = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1] ?? ''));
+const base = (opt('--url') ?? 'http://localhost:5173/fallbeans/').replace(/\/?$/, '/');
+const timeout = Number(opt('--timeout') ?? 60) * 1000;
+const channel = process.env.PW_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
+
+const browser = await chromium.launch({
+  headless: !args.includes('--headed'),
+  ...(channel ? { channel } : {}),
+  args: [
+    '--ignore-gpu-blocklist',
+    '--enable-gpu',
+    '--use-angle=d3d11',
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+  ],
+});
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));
+page.on('console', (m) => {
+  // D3D shader compiler notes (X4122) are noise.
+  if ((m.type() === 'error' || m.type() === 'warning') && !m.text().includes('X4122'))
+    console.error(`[console.${m.type()}] ${m.text()}`);
+});
+try {
+  await page.goto(`${base}pin/index.html`);
+  const status = await page.evaluate(
+    async (u) => (await fetch(`${u}api/auth`, { method: 'POST', body: JSON.stringify({ pin: '5050' }) })).status,
+    base,
+  );
+  if (status !== 200) throw new Error(`login failed (${status})`);
+  const practice = opt('--practice');
+  await page.goto(`${base}${practice ? `?practice=${practice}` : ''}`);
+  await page.waitForFunction(() => window.__fallbeans?.time().kind, null, { timeout: 30_000 });
+  const wait = opt('--wait');
+  if (wait) await page.waitForFunction((k) => window.__fallbeans?.time().kind === k, wait, { timeout: 30_000 });
+  for (const code of snippets) {
+    // Statements separated by ';': the value of the last one is the result.
+    const cut = code.trimEnd().replace(/;$/, '').lastIndexOf(';');
+    const body =
+      cut < 0 ? `return (${code});` : `${code.slice(0, cut + 1)} return (${code.slice(cut + 1).replace(/;\s*$/, '')});`;
+    const result = await Promise.race([
+      page.evaluate(`(async () => { const p = window.__fallbeans; ${body} })()`),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out after ${timeout / 1000} s: ${code}`)), timeout)),
+    ]);
+    console.log(JSON.stringify(result, null, 1));
+  }
+  const shot = opt('--shot');
+  if (shot) {
+    await page.screenshot({ path: shot });
+    console.error(`[probe] screenshot: ${shot}`);
+  }
+} catch (e) {
+  console.error(`[probe] ${e instanceof Error ? e.message : String(e)}`);
+  process.exitCode = 1;
+} finally {
+  await browser.close();
+}

@@ -65,12 +65,12 @@ async function handle(s: ServerSession, gateway: Gateway, log: Logger) {
     },
   };
   const session = gateway.open(conn);
-  s.closed.then(() => {
+  void s.closed.then(() => {
     closed = true;
     session.close();
   });
 
-  (async () => {
+  void (async () => {
     try {
       for await (const d of s.incomingDatagrams()) session.datagram(d);
     } catch {}

@@ -1,8 +1,13 @@
+// Imported for its side effect too: capture.ts starts catching errors as soon as it loads.
+
 import { render } from 'preact';
+import { report, setReportContext } from './debug/capture';
 import './styles.css';
+import { createProbe } from './debug/probe';
 import { loadModels } from './game/assets';
 import { Game } from './game/game';
-import { conn, loadProgress, menuOpen } from './state';
+import { settings } from './settings';
+import { arenaInfo, conn, loadProgress, lobby, myId } from './state';
 import { App } from './ui/App';
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -13,27 +18,25 @@ async function boot() {
   try {
     game = new Game(canvas);
   } catch (e) {
+    report('boot', `WebGL 2 unavailable: ${String(e)}`);
     conn.value = { ...conn.value, status: 'rejected', message: `Не удалось запустить WebGL 2: ${String(e)}` };
     render(<App game={null as unknown as Game} />, ui);
     return;
   }
+  setReportContext(() => ({
+    me: myId.value,
+    phase: lobby.value?.phase,
+    arena: arenaInfo.value?.game,
+    kind: arenaInfo.value?.kind,
+    status: conn.value.status,
+    transport: game.net.kind,
+    rtt: game.net.clock.rtt,
+    quality: settings.value.quality,
+    size: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
+  }));
   render(<App game={game} />, ui);
-  // Read-only probe for end-to-end tests and debugging.
-  (window as unknown as { __fallbeans: unknown }).__fallbeans = {
-    state: () => ({
-      id: game.arena?.body?.actor ?? null,
-      pos: game.arena?.body?.pos.toArray() ?? null,
-      arena: game.arena?.info.game ?? null,
-      kind: game.arena?.kind ?? null,
-      transport: game.net.kind,
-      corrections: game.arena?.corrections ?? 0,
-      lead: Math.round(game.arena?.inputLead ?? 0),
-      rtt: Math.round(game.net.clock.rtt),
-      drawCalls: game.renderer.info.calls,
-      input: game.input.enabled,
-      menu: menuOpen.value,
-    }),
-  };
+  // Debug probe (window.__fallbeans) for tests, automation and the console.
+  window.__fallbeans = createProbe(game);
   await loadModels((done, total) => {
     loadProgress.value = done / total;
   });
@@ -43,5 +46,6 @@ async function boot() {
 
 boot().catch((e) => {
   console.error(e);
+  report('boot', String(e), e instanceof Error ? e.stack : undefined);
   conn.value = { ...conn.value, status: 'rejected', message: String(e) };
 });

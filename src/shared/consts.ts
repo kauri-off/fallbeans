@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const BASE_PATH = '/fallbeans/';
 
 export const MAX_PLAYERS = 8;

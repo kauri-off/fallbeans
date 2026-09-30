@@ -15,6 +15,7 @@ import type { ArenaInfo } from '../../shared/protocol';
 import { Builder } from '../../sim/builder';
 import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
 import { type OtherBody, PlayerBody } from '../../sim/physics';
+import { report } from '../debug/capture';
 import { applySurfaces } from './materials';
 import { placeScenery } from './scenery';
 import { ClientView, timeUniform } from './view';
@@ -79,6 +80,8 @@ export class ClientArena {
   events = { jumped: false, bounced: false, hit: false, knocked: false, landed: 0, dived: false, bumped: 0 };
   teleported = false;
   corrections = 0;
+  /** Snapshots received for this arena. */
+  snapshots = 0;
   /** Id of the bean the local player holds (from the server), or −1. */
   ownGrab = -1;
 
@@ -111,6 +114,10 @@ export class ClientArena {
     const now = host.serverNow();
     this.predTick = Math.floor(this.tickAt(now)) - 1;
     this.builder.world.finalize(this.predTick * DT);
+    // Server and client build the map separately: they must agree on the solid geometry.
+    const hash = this.builder.world.hash(true);
+    if (info.hash && hash !== info.hash)
+      report('desync', `map ${info.game} (seed ${info.seed}) built differently: ${hash} vs server ${info.hash}`);
     placeScenery(this.builder);
     applySurfaces(this.builder.group);
     scene.add(this.builder.group);
@@ -255,6 +262,7 @@ export class ClientArena {
 
   onSnapshot(s: Snapshot) {
     if (s.arena !== this.info.id) return;
+    this.snapshots++;
     const arrival = performance.now();
     if (this.lastArrival) {
       const expected = SNAPSHOT_EVERY * TICK_MS;
@@ -287,8 +295,12 @@ export class ClientArena {
     // Jitter from a stalled main thread (snapshots handled in bursts) is not network jitter: capped.
     const ceiling = rttHalf + 250;
     const floor = Math.min(ceiling, rttHalf + 16 + Math.min(this.jitter, 40) * 1.5);
-    if (ack < tick) this.lead = Math.min(ceiling, this.lead + 10);
-    else this.lead = Math.max(floor, this.lead - 0.25);
+    // Only while prediction runs ahead: in a hidden tab (no frames) snapshots keep coming, and the
+    // lead would climb to the ceiling and take half a minute to come back down.
+    if (this.predTick > tick) {
+      if (ack < tick) this.lead = Math.min(ceiling, this.lead + 10);
+      else this.lead = Math.max(floor, this.lead - 0.25);
+    }
     const world = this.builder.world;
     if (tick >= this.predTick) {
       b.fromFull(st, world);
@@ -409,6 +421,28 @@ export class ClientArena {
     if (b.state === 'slide') return ANIM.slide;
     if (!b.grounded) return ANIM.air;
     return this.ownGrab >= 0 ? ANIM.grab : ANIM.idle;
+  }
+
+  /** Prediction and interpolation numbers for the debug probe and overlay. */
+  netStats() {
+    const now = this.host.serverNow();
+    const last = this.frames.at(-1);
+    return {
+      serverTick: Math.floor(this.tickAt(now)),
+      predTick: this.predTick,
+      leadMs: this.lead,
+      leadTicks: this.lead / TICK_MS,
+      jitterMs: this.jitter,
+      interpDelayMs: this.interpDelayTicks() * TICK_MS,
+      snapshotTick: last?.tick ?? -1,
+      /** How old the newest snapshot is, in ms of server time. */
+      snapshotAgeMs: last ? now - (this.info.startAt + last.tick * TICK_MS) : -1,
+      snapshots: this.snapshots,
+      buffered: this.frames.length,
+      history: this.history.size,
+      corrections: this.corrections,
+      offset: this.offset.length(),
+    };
   }
 
   takeEvents() {

@@ -6,7 +6,8 @@ import { type Playlist, ROUND_COUNTS } from '../../shared/protocol';
 import type { Game } from '../game/game';
 import type { Quality } from '../game/renderer';
 import { settings, updateSettings } from '../settings';
-import { arenaInfo, lobby, menuTab, myId, practiceGame } from '../state';
+import { arenaInfo, devMode, lobby, menuTab, myId, practiceGame } from '../state';
+import { DevTab } from './DevTab';
 import { plural } from './labels';
 
 const MODES: { id: Playlist['mode']; label: string }[] = [
@@ -37,9 +38,16 @@ export function Menu({ game }: { game: Game }) {
             <button type="button" class={`tab${tab === 'settings' ? ' on' : ''}`} onClick={() => (menuTab.value = 'settings')}>
               Настройки
             </button>
+            {devMode.value && (
+              <button type="button" class={`tab${tab === 'dev' ? ' on' : ''}`} onClick={() => (menuTab.value = 'dev')}>
+                Dev
+              </button>
+            )}
           </div>
         </div>
-        <div class="menu-body">{tab === 'game' ? <GameTab game={game} /> : <SettingsTab />}</div>
+        <div class="menu-body">
+          {tab === 'game' ? <GameTab game={game} /> : tab === 'dev' && devMode.value ? <DevTab game={game} /> : <SettingsTab />}
+        </div>
         <button type="button" class="btn primary" onClick={() => game.resume()}>
           Продолжить <span class="muted-inv">· Esc или щелчок по полю</span>
         </button>

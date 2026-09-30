@@ -30,6 +30,58 @@ export const HelloSchema = z.object({
 });
 export type Hello = z.infer<typeof HelloSchema>;
 
+const Vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
+
+/**
+ * Development commands (accepted only by a server started with --dev). `id` defaults to the sender.
+ * See DevCmd handling in server/room.ts, and window.__fallbeans.dev() in the client.
+ */
+export const DevCmdSchema = z.discriminatedUnion('c', [
+  /** Jump to the start of the round (fast-forwards through the intro). */
+  z.object({ c: z.literal('skipIntro') }),
+  /** Simulate this much time right away (ms of game time, every tick is simulated). */
+  z.object({ c: z.literal('warp'), ms: z.number().min(0).max(180_000) }),
+  z.object({ c: z.literal('endRound') }),
+  /** Start a game now: optional list of games, rounds, and exactly how many bots (replacing any). */
+  z.object({
+    c: z.literal('start'),
+    games: z.array(z.string().max(32)).max(12).optional(),
+    rounds: z.number().int().min(1).max(12).optional(),
+    bots: z.number().int().min(0).max(7).optional(),
+  }),
+  z.object({ c: z.literal('lobby') }),
+  /** Speed of game time: 1 normal, 0.25 slow motion, 0 paused. */
+  z.object({ c: z.literal('rate'), k: z.number().min(0).max(8) }),
+  /** While paused: advance this many ticks. */
+  z.object({ c: z.literal('step'), ticks: z.number().int().min(1).max(1200) }),
+  z.object({ c: z.literal('teleport'), id: PlayerId.optional(), p: Vec3, yaw: z.number().finite().optional() }),
+  /** Teleport to the spawn, a checkpoint (index) or just before the finish. */
+  z.object({
+    c: z.literal('goto'),
+    id: PlayerId.optional(),
+    to: z.union([z.literal('spawn'), z.literal('finish'), z.number().int().min(0).max(64)]),
+  }),
+  /** Add bots (in any phase; in a round they join it), optionally right next to the sender. */
+  z.object({ c: z.literal('bot'), n: z.number().int().min(1).max(7).optional(), near: z.boolean().optional() }),
+  /** Freeze (false) or resume (true) bot brains. */
+  z.object({ c: z.literal('bots'), on: z.boolean() }),
+  z.object({ c: z.literal('kill'), id: PlayerId.optional() }),
+  /** Knock a bean over with velocity [vx, vy, vz]. */
+  z.object({ c: z.literal('knock'), id: PlayerId.optional(), v: Vec3 }),
+  /** Make `actor` hold `target` for `s` seconds (as if the grab button were held). */
+  z.object({ c: z.literal('grab'), actor: PlayerId.optional(), target: PlayerId, s: z.number().min(0).max(10).optional() }),
+  /** Seed of the next round's map. */
+  z.object({
+    c: z.literal('seed'),
+    seed: z
+      .number()
+      .int()
+      .min(0)
+      .max(2 ** 31),
+  }),
+]);
+export type DevCmd = z.infer<typeof DevCmdSchema>;
+
 export const ClientMsgSchema = z.discriminatedUnion('t', [
   HelloSchema,
   z.object({ t: z.literal('ping'), c: z.number().finite(), rtt: z.number().min(0).max(60000).optional() }),
@@ -41,6 +93,7 @@ export const ClientMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('addBot') }),
   z.object({ t: z.literal('removeBot'), id: PlayerId }),
   z.object({ t: z.literal('emote'), e: z.number().int().min(1).max(3) }),
+  z.object({ t: z.literal('dev'), q: z.number().int().min(0).optional(), cmd: DevCmdSchema }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsgSchema>;
 
@@ -93,6 +146,8 @@ export interface ArenaInfo {
   out: number[];
   events: GameEventRecord[];
   scores: [number, number][];
+  /** World.hash(true) of the server's build: a client building the map differently reports it. */
+  hash: string;
 }
 
 /** One player's line in the results of a round. */
@@ -135,7 +190,7 @@ export interface Award {
 export type KoCause = string;
 
 export type ServerMsg =
-  | { t: 'welcome'; id: number; token: string; solo: boolean; practice: boolean; resumed: boolean }
+  | { t: 'welcome'; id: number; token: string; solo: boolean; practice: boolean; resumed: boolean; dev: boolean }
   | { t: 'reject'; reason: 'full' | 'version' | 'auth' | 'bad' | 'busy'; msg: string }
   | { t: 'pong'; c: number; s: number }
   | { t: 'lobby'; phase: Phase; host: number | null; min: number; max: number; players: LobbyPlayer[]; playlist: Playlist }
@@ -148,6 +203,10 @@ export type ServerMsg =
   | { t: 'ev'; n: string; d: unknown }
   | { t: 'scores'; s: [number, number][] }
   | { t: 'emote'; id: number; e: number }
-  | { t: 'left'; id: number };
+  | { t: 'left'; id: number }
+  /** Reply to a dev command (`q` echoes the request's). */
+  | { t: 'devAck'; q: number | null; ok: boolean; msg: string }
+  /** The server clock changed speed or jumped (dev): `s` is the server time when it did. */
+  | { t: 'clock'; rate: number; s: number };
 
 export type ServerMsgOf<T extends ServerMsg['t']> = Extract<ServerMsg, { t: T }>;

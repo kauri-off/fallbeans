@@ -47,6 +47,28 @@ export class World implements CollisionWorld {
     this.t = t;
   }
 
+  /**
+   * Fingerprint of the collision geometry (shapes, transforms, flags) at the current time. Server and
+   * clients build maps separately; equal hashes at the same time mean they agree.
+   */
+  hash(staticOnly = false): string {
+    let h = 2166136261;
+    const mix = (v: number) => {
+      h = Math.imul(h ^ (Math.round(v * 1e3) | 0), 16777619);
+    };
+    const list = staticOnly ? this.colliders.filter((c) => c.isStatic) : this.colliders;
+    for (const c of list) {
+      for (const e of c.cur.elements) mix(e);
+      const s = c.shape;
+      if (s.type === 'box') mix(s.hx + s.hy * 3 + s.hz * 7);
+      else if (s.type === 'cyl') mix(s.r + s.hh * 3);
+      else mix(s.r);
+      mix(c.enabled ? 1 : 0);
+      mix(c.hit + c.bounce * 3 + c.pad * 7 + c.slip * 11);
+    }
+    return `${list.length}:${(h >>> 0).toString(16).padStart(8, '0')}`;
+  }
+
   query(x: number, z: number, r: number, out: Collider[]): Collider[] {
     out.length = 0;
     const stamp = ++this.stamp;

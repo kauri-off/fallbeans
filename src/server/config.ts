@@ -19,6 +19,8 @@ export interface Config {
   pinHash: string | null;
   pinPlain: string | null;
   secret: Buffer;
+  /** Production debug page/API key (FB_DEBUG_KEY); without it the debug API is off outside dev. */
+  debugKey: string | null;
 }
 
 type Env = Record<string, string | undefined>;
@@ -73,5 +75,6 @@ export function loadConfig(argv: string[], env: Env = process.env, root = proces
     pinHash,
     pinPlain,
     secret: Buffer.from(secretHex, 'hex'),
+    debugKey: env.FB_DEBUG_KEY && env.FB_DEBUG_KEY.length >= 16 ? env.FB_DEBUG_KEY : null,
   };
 }

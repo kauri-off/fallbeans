@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ANIM } from '../../shared/consts';
+import { shotMode } from '../state';
 import { clone } from './assets';
 import { applySurface } from './materials';
 
@@ -337,7 +338,8 @@ export class Bean {
 
     // Eyes: blink every few seconds; squeezed shut when tumbling, droopy when dazed.
     this.blinkAt -= dt;
-    const blink = this.blinkAt < 0.12 && this.blinkAt > 0 ? 0.12 : 1;
+    // (Screenshots: no blinking, the same picture every time.)
+    const blink = this.blinkAt < 0.12 && this.blinkAt > 0 && !shotMode.value ? 0.12 : 1;
     if (this.blinkAt < 0) this.blinkAt = 2 + Math.random() * 3.5;
     const eye = a === ANIM.tumble ? 0.25 : a === ANIM.stun ? 0.55 : this.pose === 'sad' ? 0.6 : blink;
     for (const e of this.eyes) e.scale.y += (eye - e.scale.y) * Math.min(1, dt * 30);
@@ -533,7 +535,7 @@ export class Bean {
     // Idle: breathing, weight shifting, every now and then a look around or a stretch.
     const idle = 1 - smooth(speed, 0.2, 1.2);
     this.fidgetAt -= dt;
-    if (this.fidgetAt < 0) {
+    if (this.fidgetAt < 0 && !shotMode.value) {
       this.fidget = 1 + Math.floor(Math.random() * 3);
       this.fidgetAt = 5 + Math.random() * 7;
     }

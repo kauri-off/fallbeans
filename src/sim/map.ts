@@ -106,6 +106,19 @@ export interface MapModule {
   build: BuildFn;
 }
 
+/** Problems with a built map that would break a round (the audits check much more, offline). */
+export function specProblems(spec: MapSpec): string[] {
+  const out: string[] = [];
+  const finite = (v: { x: number; y: number; z: number }) => Number.isFinite(v.x + v.y + v.z);
+  if (!spec.spawns.length) out.push('no spawns');
+  if (spec.spawns.some((p) => !finite(p))) out.push('a spawn is not a finite position');
+  if (!Number.isFinite(spec.killY)) out.push('killY is not a number');
+  else if (spec.spawns.some((p) => p.y <= spec.killY)) out.push('a spawn is below killY');
+  if (spec.checkpoints?.some((c) => !finite(c.p) || !Number.isFinite(c.z))) out.push('a checkpoint is not finite');
+  if (spec.finish && !Number.isFinite(spec.finish.z + spec.finish.y)) out.push('the finish is not finite');
+  return out;
+}
+
 export function defineMap(meta: GameMeta, build: BuildFn): MapModule {
   return { meta, build };
 }
