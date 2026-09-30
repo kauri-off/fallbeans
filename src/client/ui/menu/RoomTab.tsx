@@ -34,9 +34,8 @@ export function RoomTab({ game }: { game: Game }) {
     );
   }
 
-  return (
-    <div class="stack">
-      <RoomHead game={game} />
+  const profile = (
+    <div class="group stack">
       <NameForm game={game} />
       {inLobby && (
         <div class="swatches">
@@ -56,67 +55,78 @@ export function RoomTab({ game }: { game: Game }) {
           })}
         </div>
       )}
+    </div>
+  );
 
-      {inLobby ? (
-        <>
-          <h3>
-            Игроки: {l.players.length} из {l.max}
-          </h3>
-          <ul class="players">
-            {l.players.map((p) => (
-              <li key={p.id} class={p.connected ? '' : 'dim'}>
-                <i class="dot" style={{ background: colorBg(p.color) }} />
-                <span class="grow">
-                  {p.name}
-                  {p.id === me && ' (вы)'}
-                </span>
-                {p.id === l.host && <span title="Хост">⭐</span>}
-                {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
-                {p.bot ? (
-                  // (With "fill with bots" on, a bot taken out would be replaced at once.)
-                  isHost &&
-                  !l.fill && (
-                    <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
-                      ✕
+  if (!inLobby)
+    return (
+      <div class="stack">
+        <RoomHead game={game} />
+        {profile}
+        <p>
+          {info?.kind === 'round'
+            ? `Идёт раунд ${info.index} из ${info.total}: «${getGame(info.game)?.title ?? ''}»`
+            : l.phase === 'podium'
+              ? 'Игра окончена — награждение.'
+              : 'Итоги раунда.'}
+        </p>
+        {isHost && (
+          <button type="button" class="btn danger" onClick={() => send({ t: 'abort' })}>
+            Прервать игру
+          </button>
+        )}
+      </div>
+    );
+
+  return (
+    <div class="room-grid">
+      <div class="stack">
+        <h3>
+          Игроки: {l.players.length} из {l.max}
+        </h3>
+        <ul class="players">
+          {l.players.map((p) => (
+            <li key={p.id} class={p.connected ? '' : 'dim'}>
+              <i class="dot" style={{ background: colorBg(p.color) }} />
+              <span class="grow">
+                {p.name}
+                {p.id === me && ' (вы)'}
+              </span>
+              {p.id === l.host && <span title="Хост">⭐</span>}
+              {p.crowns > 0 && <span title="Победы">👑{p.crowns}</span>}
+              {p.bot ? (
+                // (With "fill with bots" on, a bot taken out would be replaced at once.)
+                isHost &&
+                !l.fill && (
+                  <button type="button" class="btn tiny" title="Убрать бота" onClick={() => send({ t: 'removeBot', id: p.id })}>
+                    ✕
+                  </button>
+                )
+              ) : (
+                <>
+                  {isHost && p.id !== me && p.connected && (
+                    <button
+                      type="button"
+                      class="btn tiny"
+                      title="Передать роль хоста этому игроку"
+                      onClick={() => send({ t: 'host', id: p.id })}
+                    >
+                      Отдать хоста
                     </button>
-                  )
-                ) : (
-                  <>
-                    {isHost && p.id !== me && p.connected && (
-                      <button
-                        type="button"
-                        class="btn tiny"
-                        title="Передать роль хоста этому игроку"
-                        onClick={() => send({ t: 'host', id: p.id })}
-                      >
-                        Отдать хоста
-                      </button>
-                    )}
-                    <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-          {isHost ? <HostSetup game={game} /> : <p class="muted">Игру запускает хост ⭐</p>}
-          <PracticeList />
-        </>
-      ) : (
-        <div class="stack">
-          <p>
-            {info?.kind === 'round'
-              ? `Идёт раунд ${info.index} из ${info.total}: «${getGame(info.game)?.title ?? ''}»`
-              : l.phase === 'podium'
-                ? 'Игра окончена — награждение.'
-                : 'Итоги раунда.'}
-          </p>
-          {isHost && (
-            <button type="button" class="btn danger" onClick={() => send({ t: 'abort' })}>
-              Прервать игру
-            </button>
-          )}
-        </div>
-      )}
+                  )}
+                  <span class="ping">{p.connected ? `${p.ping} мс` : 'нет связи'}</span>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div class="stack">
+        <RoomHead game={game} />
+        {profile}
+        {isHost ? <HostSetup game={game} /> : <p class="muted">Игру запускает хост ⭐</p>}
+        <PracticeList />
+      </div>
     </div>
   );
 }
