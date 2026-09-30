@@ -314,7 +314,7 @@ export function createProfiler(game: Game) {
     if (!gpuOk) warnings.push('no GPU timer queries: savings come from frame time, which vsync caps');
     if (gpu !== null && gpu < frameMs * 0.15)
       warnings.push(
-        `the GPU is busy only ${Math.round((gpu / frameMs) * 100)}% of the frame: at this load clock scaling hides most savings (try Ultra, a bigger window, or a weaker GPU)`,
+        `the GPU is busy only ${Math.round((gpu / frameMs) * 100)}% of the frame: at this load clock scaling hides most savings (try a bigger window or a weaker GPU)`,
       );
     return {
       gpuTimer: gpuOk,

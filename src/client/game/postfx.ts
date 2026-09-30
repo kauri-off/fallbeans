@@ -114,6 +114,8 @@ export class TemporalPass extends Pass {
           vec3 fromYCoCg(vec3 c){ return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
           void main(){
             vec3 c = texture2D(tDiffuse, vUv).rgb;
+            // A NaN would spread through the history for good.
+            if (any(isnan(c))) c = vec3(0.0);
             if (uValid < 0.5) { gl_FragColor = vec4(c, 1.0); return; }
             vec3 cy = toYCoCg(c);
             vec3 mn = cy, mx = cy, m1 = cy, m2 = cy * cy;
@@ -134,7 +136,9 @@ export class TemporalPass extends Pass {
             vec4 p = uPrevViewProj * w;
             vec2 puv = p.xy / p.w * 0.5 + 0.5;
             if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) { gl_FragColor = vec4(c, 1.0); return; }
-            vec3 h = toYCoCg(texture2D(tHistory, puv).rgb);
+            vec3 hs = texture2D(tHistory, puv).rgb;
+            if (any(isnan(hs))) hs = c;
+            vec3 h = toYCoCg(hs);
             h = clamp(h, mn, mx);
             // Fast motion: trust the current frame more.
             float motion = length((puv - vUv) / uTexel);

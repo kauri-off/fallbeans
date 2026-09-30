@@ -5,7 +5,6 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import type { ResolvedLook } from '../../sim/looks';
 import { GpuTimer } from '../debug/gpuTimer';
 import { lod } from './lod';
@@ -14,7 +13,7 @@ import { ScenePass, TemporalPass } from './postfx';
 import { ShadowBake } from './shadowBake';
 import type { Statics } from './statics';
 
-export type Quality = 'medium' | 'high' | 'ultra';
+export type Quality = 'medium' | 'high';
 
 interface Preset {
   pixelRatio: number;
@@ -25,17 +24,15 @@ interface Preset {
    * + 2x temporal supersampling (jittered frames blended with the reprojected previous one).
    */
   msaa: number;
-  /** A barely-there glow on bright highlights. */
-  bloom: boolean;
+  /** Ambient occlusion from the scene pass's depth, at half resolution. */
   ao: boolean;
   /** LOD distances multiplier (further detail on better presets). */
   lodBias: number;
 }
 
 const PRESETS: Record<Quality, Preset> = {
-  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 2, bloom: false, ao: false, lodBias: 0.75 },
-  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 2, bloom: false, ao: false, lodBias: 1 },
-  ultra: { pixelRatio: 2, shadowMap: 4096, shadowRange: 40, msaa: 2, bloom: true, ao: true, lodBias: 1.4 },
+  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 2, ao: false, lodBias: 0.75 },
+  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 2, ao: true, lodBias: 1 },
 };
 
 /** Post effects that can be switched on and off (settings, profiler, benchmarks). */
@@ -58,7 +55,8 @@ const GradeShader = {
       c.rgb = (c.rgb - 0.5) * 1.03 + 0.5;
       vec2 d = vUv - 0.5;
       c.rgb *= 1.0 - uVignette * smoothstep(0.35, 0.85, length(d * vec2(1.0, 0.8)) * 1.25);
-      gl_FragColor = c;
+      // Contrast and saturation push near-black channels below 0: SMAA's pow() turns those into NaN.
+      gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), c.a);
     }`,
 };
 
@@ -181,8 +179,8 @@ function motes(time: { value: number }): THREE.Points {
 
 /**
  * WebGL2 renderer: soft shadows following the camera, image-based lighting, neutral tone
- * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, and (ultra) GTAO
- * with a barely-there bloom.
+ * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, and (high)
+ * half-resolution GTAO.
  */
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -199,7 +197,7 @@ export class Renderer {
   private readonly time = { value: 0 };
   readonly sky = skyDome(this.time);
   readonly motes = motes(this.time);
-  /** GPU timing (debug): off, the whole frame, or each pass (scene, shadows, AO, bloom…). */
+  /** GPU timing (debug): off, the whole frame, or each pass (scene, shadows, AO…). */
   private gpu: GpuTimer | null = null;
   private gpuMode: 'off' | 'frame' | 'passes' = 'off';
   private readonly wrapped = new WeakSet<object>();
@@ -235,6 +233,34 @@ export class Renderer {
     this.sun.shadow.blurSamples = 12;
     this.scene.add(this.sun, this.sun.target);
     this.bake = new ShadowBake(this.renderer, SUN_OFFSET, this.scene);
+    this.splitShadows();
+  }
+
+  /**
+   * The sun's shadow map starts from the bake and draws only moving things; other lights (lamps)
+   * have no bake, so theirs are drawn in a second pass with the static casters in.
+   */
+  private splitShadows() {
+    type Render = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => void;
+    const sm = this.renderer.shadowMap as unknown as { render: Render };
+    const orig = sm.render.bind(sm);
+    sm.render = (lights, scene, camera) => {
+      const statics = this.statics;
+      if (!statics || lights.every((l) => l === this.sun)) {
+        orig(lights, scene, camera);
+        return;
+      }
+      if (lights.includes(this.sun)) orig([this.sun], scene, camera);
+      statics.castLive(true);
+      this.bake.active = false;
+      orig(
+        lights.filter((l) => l !== this.sun),
+        scene,
+        camera,
+      );
+      this.bake.active = true;
+      statics.castLive(false);
+    };
   }
 
   setQuality(q: Quality) {
@@ -292,11 +318,14 @@ export class Renderer {
     const scene = new ScenePass(this.scene, this.camera, w * pr, h * pr, this.debugMsaa ?? p.msaa);
     c.addPass(named(scene, 'scene'));
     if (p.ao) {
+      // Reuses the scene pass's depth (normals from it): no extra render of the scene. (Passing it to
+      // the constructor breaks: three sets it up before its own normal target exists.)
       const ao = new GTAOPass(this.scene, this.camera, w, h);
+      ao.setGBuffer(scene.depth);
       ao.blendIntensity = 0.55;
       c.addPass(named(ao, 'gtao'));
+      ao.setSize(Math.ceil((w * pr) / 2), Math.ceil((h * pr) / 2));
     }
-    if (p.bloom) c.addPass(named(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97), 'bloom'));
     c.addPass(named(new OutputPass(), 'output'));
     this.grade = named(new ShaderPass(GradeShader), 'grade');
     this.grade.uniforms.uSat!.value = this.saturation;

@@ -402,18 +402,19 @@ export class Builder {
     const legs = 6;
     for (let k = 0; k < legs; k++) {
       const a = (k / legs) * Math.PI * 2;
-      this.cyl(x + Math.cos(a) * (r + 0.1), y - 0.6, z + Math.sin(a) * (r + 0.1), 0.09, 1.2, '#39406b', {
+      this.cyl(x + Math.cos(a) * (r + 0.1), y - 0.65, z + Math.sin(a) * (r + 0.1), 0.09, 1.2, '#39406b', {
         noCollide: true,
         surface: 'metal',
         seg: 10,
       });
     }
-    this.cyl(x, y - 0.12, z, r + 0.3, 0.3, PAL.orange, { surface: 'rubber' });
+    // The rim stands proud of the floor and of anything painted on it (paths, rings up to 0.1 m).
+    this.cyl(x, y - 0.03, z, r + 0.3, 0.3, PAL.orange, { surface: 'rubber' });
     const mat = this.view?.pattern('#2b3a8f', '#3f57c9', 1.4, [1, 0], 0, 'fabric', 'dots');
-    const top = this.cyl(x, y + 0.05, z, r, 0.1, PAL.blue, { pad: power, material: mat, surface: 'fabric' });
+    const top = this.cyl(x, y + 0.14, z, r, 0.1, PAL.blue, { pad: power, material: mat, surface: 'fabric' });
     const base = top.obj.position.y;
     this.anim((t) => {
-      // The mat sags and springs back: never below the rim (top y + 0.03), which would hide it.
+      // The mat sags and springs back: never below the rim (top y + 0.12), which would hide it.
       const k = Math.max(0, Math.sin(t * 6 + x)) ** 4;
       top.obj.position.y = base - k * 0.03;
       top.obj.scale.set(1, 1 - k * 0.25, 1);

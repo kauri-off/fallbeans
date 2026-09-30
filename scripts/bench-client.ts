@@ -1,6 +1,6 @@
 /**
  * Client benchmark: every map at each quality preset in a real browser on this machine's GPU.
- *   bun run bench:client [map…] [--quality medium,high,ultra] [--url http://localhost:5173/fallbeans/]
+ *   bun run bench:client [map…] [--quality medium,high] [--url http://localhost:5173/fallbeans/]
  *                        [--seconds 4] [--headed] [--ablate]
  *
  * Per map and preset: frame time (p50/p95), CPU time per frame and its biggest sections, GPU time
@@ -22,7 +22,7 @@ const opt = (n: string) => {
 const valued = new Set(['--quality', '--url', '--seconds']);
 const maps = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1] ?? ''));
 const ids = maps.length ? maps : GAMES.map((g) => g.id);
-const qualities = (opt('--quality') ?? 'medium,high,ultra').split(',');
+const qualities = (opt('--quality') ?? 'medium,high').split(',');
 const base = (opt('--url') ?? 'http://localhost:5173/fallbeans/').replace(/\/?$/, '/');
 const seconds = Number(opt('--seconds') ?? 4);
 
@@ -63,7 +63,7 @@ for (const map of ids) {
           await p.waitFor(() => p.time().kind === 'round' && p.time().arena === map, 15_000);
           await p.dev({ c: 'skipIntro' });
         }
-        p.quality(q as 'medium' | 'high' | 'ultra');
+        p.quality(q as 'medium' | 'high');
         // The camera follows the bean; bots play around it.
         await p.frames(60);
         const passes = await p.profile.passes(Math.round(seconds * 60));

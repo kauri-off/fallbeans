@@ -43,7 +43,7 @@ import { CameraRig } from './camera';
 import { Input } from './input';
 import { type Quality, Renderer } from './renderer';
 
-const QUALITY_ORDER: Quality[] = ['medium', 'high', 'ultra'];
+const QUALITY_ORDER: Quality[] = ['medium', 'high'];
 /** The intro fly-over ends this long before the start; then the camera sits behind the bean. */
 const INTRO_HANDOVER = 1.4;
 

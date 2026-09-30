@@ -124,7 +124,7 @@ export interface LodStats {
 export class LodSystem {
   private readonly entries = new Map<THREE.Mesh, Entry>();
   private readonly owners = new Map<object, THREE.Mesh[]>();
-  /** Multiplies the thresholds' distances (quality presets: further detail on ultra). */
+  /** Multiplies the thresholds' distances (quality presets: further detail on high). */
   bias = 1;
   /** Debug: every mesh at this level (no fading), or null. */
   force: number | null = null;

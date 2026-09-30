@@ -10,7 +10,6 @@ import { room } from '../state';
 const QUALITIES: { id: Quality; label: string }[] = [
   { id: 'medium', label: 'Среднее' },
   { id: 'high', label: 'Высокое' },
-  { id: 'ultra', label: 'Ультра' },
 ];
 
 /** The player's name: kept in the browser and told to the server (at the room list or in a room). */

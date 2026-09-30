@@ -232,6 +232,11 @@ export class ShadowBake {
     this.tex = null;
   }
 
+  /** Whether the bake is copied into shadow maps being drawn (only the sun's matches it). */
+  set active(on: boolean) {
+    this.quad.castShadow = on;
+  }
+
   clear() {
     this.release();
     this.quad.removeFromParent();

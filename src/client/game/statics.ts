@@ -189,6 +189,18 @@ export class Statics {
     return out;
   }
 
+  /**
+   * Static casters in the live shadow maps or not: the sun's shadow has them baked, other lights
+   * (lamps) draw them live. Batched ones cast through their instanced meshes.
+   */
+  castLive(on: boolean) {
+    for (const t of this.tracked.values()) if (t.cast && !t.batch) t.mesh.castShadow = on;
+    for (const b of this.batches) {
+      const cast = b.members.some((m) => this.tracked.get(m.mesh)?.cast);
+      for (const im of b.meshes) im.castShadow = on && cast;
+    }
+  }
+
   /** Every frame: picks up static things that moved after all, and keeps batches at their levels of detail. */
   update(camera: THREE.PerspectiveCamera) {
     this.frame++;

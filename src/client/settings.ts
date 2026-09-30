@@ -30,7 +30,12 @@ const DEFAULTS: Settings = {
 function load(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+    if (raw) {
+      const s = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+      // Ultra was folded into high.
+      if (!['medium', 'high'].includes(s.quality)) s.quality = 'high';
+      return s;
+    }
   } catch {}
   return { ...DEFAULTS };
 }
