@@ -690,6 +690,9 @@ export class Room {
       progress: (id) => a.pawns.get(id)?.progress ?? Number.NEGATIVE_INFINITY,
       timeUp: this.now() > a.endAt,
       solo: (this.session?.started ?? 1) <= 1,
+      bots: new Set([...this.players.values()].filter((p) => p.bot).map((p) => p.id)),
+      // Places the bots left when a round ends early.
+      rng: this.rng,
     };
   }
 

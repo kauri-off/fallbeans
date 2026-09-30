@@ -1,5 +1,6 @@
 import type { Genre } from './game';
 import type { RoundRow } from './protocol';
+import { type Rng, shuffle } from './rng';
 
 /** Placement points for first place; last place gets 0, the rest are spread evenly between. */
 export const TOP_POINTS = 10;
@@ -49,15 +50,28 @@ export interface RoundView {
   progress: (id: number) => number;
   timeUp: boolean;
   solo: boolean;
+  /** Bots among the participants (a round with only bots left in it ends early). */
+  bots?: ReadonlySet<number>;
+  /** Random numbers in [0, 1) for placing the bots left when the round ends early. */
+  rng?: Rng;
 }
 
 const inRound = (r: RoundView) => r.participants.filter(r.connected);
 const remaining = (r: RoundView) => inRound(r).filter((id) => !r.finished.includes(id) && !r.out.includes(id));
 
+/** Every human in the round has finished or is out, and only bots are still going: nobody is watching them race. */
+export function onlyBotsLeft(r: RoundView): boolean {
+  const bots = r.bots;
+  // (Points games have no finish nor eliminations: they run their time.)
+  if (!bots || r.genre === 'points') return false;
+  const rem = remaining(r);
+  return rem.length > 0 && rem.every((id) => bots.has(id)) && inRound(r).some((id) => !bots.has(id));
+}
+
 export function isRoundOver(r: RoundView): boolean {
   if (r.timeUp) return true;
   const rem = remaining(r).length;
-  if (rem === 0) return true;
+  if (rem === 0 || onlyBotsLeft(r)) return true;
   // Survival: the last bean standing has nothing left to prove.
   return r.genre === 'survival' && !r.solo && rem <= 1;
 }
@@ -65,14 +79,19 @@ export function isRoundOver(r: RoundView): boolean {
 /** Ranked groups, best first; players in one group tie. */
 export function rankGroups(r: RoundView): number[][] {
   const ids = inRound(r);
+  // Ended early with only bots left: they take their places (behind the finishers, ahead of whoever is out) in a
+  // random order, each with the same chance at each place.
+  const early = !r.timeUp && onlyBotsLeft(r);
+  const bots = early ? shuffle(remaining(r), r.rng).map((id) => [id]) : [];
   if (r.genre === 'race') {
     const fin = r.finished.filter((id) => ids.includes(id));
-    const rest = ids.filter((id) => !fin.includes(id));
-    return [...fin.map((id) => [id]), ...groupBy(rest, (id) => Math.round(r.progress(id)))];
+    const rest = ids.filter((id) => !fin.includes(id) && !bots.some(([b]) => b === id));
+    return [...fin.map((id) => [id]), ...bots, ...groupBy(rest, (id) => Math.round(r.progress(id)))];
   }
   if (r.genre === 'survival') {
     const outs = r.out.filter((id) => ids.includes(id));
     const stayed = ids.filter((id) => !outs.includes(id));
+    if (early) return [...bots, ...[...outs].reverse().map((id) => [id])];
     return [...(stayed.length ? [stayed] : []), ...[...outs].reverse().map((id) => [id])];
   }
   return groupBy(ids, (id) => r.scores.get(id) ?? 0);
