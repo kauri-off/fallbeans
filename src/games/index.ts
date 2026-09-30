@@ -1,9 +1,12 @@
 import { type GameMeta, GameMetaSchema } from '../shared/game';
 import type { MapModule } from '../sim/map';
 import ballHill from './ball-hill/map';
+import bouncePark from './bounce-park/map';
+import cliffClimb from './cliff-climb/map';
 import crownPeak from './crown-peak/map';
 import doorDash from './door-dash/map';
 import drumRoll from './drum-roll/map';
+import frostSky from './frost-sky/map';
 import hammerSwing from './hammer-swing/map';
 import hexAGone from './hex-a-gone/map';
 import hiddenBridge from './hidden-bridge/map';
@@ -11,7 +14,9 @@ import jumpClub from './jump-club/map';
 import lobby from './lobby/map';
 import plateDrop from './plate-drop/map';
 import podium from './podium/map';
+import portalPanic from './portal-panic/map';
 import rollOut from './roll-out/map';
+import starFall from './star-fall/map';
 import tailTag from './tail-tag/map';
 import wallRush from './wall-rush/map';
 
@@ -28,6 +33,11 @@ export const MAPS: readonly MapModule[] = [
   hexAGone,
   crownPeak,
   plateDrop,
+  portalPanic,
+  bouncePark,
+  cliffClimb,
+  frostSky,
+  starFall,
 ];
 
 export const GAMES: readonly GameMeta[] = MAPS.map((m) => m.meta);

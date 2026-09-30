@@ -114,6 +114,20 @@ export interface PortalPair {
   from: number;
   /** Both ends are shut until then. */
   closedUntil: number;
+  /** How long (s) the ends stay shut after a traveller came out. */
+  closeFor: number;
+}
+
+export interface PortalOpts {
+  /** Only the first end takes beans in; the second only lets them out. */
+  oneWay?: boolean;
+  /** Beans come out with at least this speed (m/s; default 6), thrown up at `lift` m/s when given. */
+  speed?: number;
+  lift?: number;
+  /** How long (s) the ends stay shut after a trip (default PORTAL_CLOSED). */
+  closed?: number;
+  /** Open only while this says so (a pure function of sim time): shut in between. */
+  open?: (t: number) => boolean;
 }
 
 export interface PrimOpts extends ColliderOpts {
@@ -136,6 +150,32 @@ export interface Prim {
   obj: THREE.Object3D;
   mesh: THREE.Mesh | null;
   col: Collider;
+}
+
+/** Rings flowing out, for the discs of one-way exits (client only: needs a canvas). */
+function ringsTexture(color: string): THREE.Texture {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, '#1a0f3d');
+  grad.addColorStop(0.6, color);
+  grad.addColorStop(1, '#ffffff');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.6)';
+  g.lineWidth = 7;
+  for (const r of [0.14, 0.28, 0.42]) {
+    g.beginPath();
+    g.arc(size / 2, size / 2, r * size, 0, Math.PI * 2);
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 /** A spiral for portal discs (client only: needs a canvas). */
@@ -381,15 +421,106 @@ export class Builder {
     return h;
   }
 
-  pad(x: number, y: number, z: number, r = 1.4, power = 17) {
+  /** A launch pad: throws beans up (power, m/s), and along `launch` (horizontal m/s) when given. */
+  pad(x: number, y: number, z: number, r = 1.4, power = 17, launch?: { x: number; z: number }) {
     // The rim stands a little proud of the floor: flush faces would flicker (z-fighting).
     this.cyl(x, y - 0.26, z, r + 0.2, 0.6, '#5a3fb8', { surface: 'rubber' });
-    const top = this.cyl(x, y + 0.07, z, r, 0.2, PAL.teal, { pad: power, freq: 1.2, surface: 'rubber' });
+    const top = this.cyl(x, y + 0.07, z, r, 0.2, launch ? PAL.orange : PAL.teal, {
+      pad: power,
+      freq: 1.2,
+      surface: 'rubber',
+      launch: launch ? new THREE.Vector3(launch.x, 0, launch.z) : null,
+    });
     const base = top.obj.position.y;
     this.anim((t) => {
       top.obj.position.y = base + Math.max(0, Math.sin(t * 8)) * 0.04;
     });
+    const v = this.view;
+    if (v && launch) {
+      // Chevrons on the pad: which way it throws.
+      const chevron = new THREE.Shape();
+      chevron.moveTo(0, 0.35);
+      chevron.lineTo(0.55, -0.2);
+      chevron.lineTo(0.3, -0.2);
+      chevron.lineTo(0, 0.1);
+      chevron.lineTo(-0.3, -0.2);
+      chevron.lineTo(-0.55, -0.2);
+      chevron.closePath();
+      const geo = v.own(new THREE.ShapeGeometry(chevron));
+      const mat = v.own(new THREE.MeshBasicMaterial({ color: '#fff6d0', toneMapped: false }));
+      const holder = this.anchor(x, y + 0.18, z);
+      holder.rotation.y = Math.atan2(launch.x, launch.z);
+      for (const dz of [-0.35 * r, 0.1 * r]) {
+        const m = new THREE.Mesh(geo, mat);
+        m.rotation.x = -Math.PI / 2;
+        m.position.z = dz;
+        m.scale.setScalar(r * 0.7);
+        holder.add(m);
+      }
+      holder.userData.dynamic = true;
+      this.anim(() => {
+        holder.position.y = top.obj.position.y + 0.11;
+      });
+    }
     return top;
+  }
+
+  /**
+   * A bouncy mushroom standing at (x, y, z): its cap (2.1 × scale m wide, 1.9 × scale m up) throws
+   * beans up at `power` m/s; the stem is solid.
+   */
+  mushroom(x: number, y: number, z: number, scale = 1.5, power = 17, tint?: string) {
+    const m = this.model('mushroom');
+    m.position.set(x, y, z);
+    m.scale.setScalar(scale);
+    m.rotation.y = (x * 1.7 + z * 0.9) % 6.283;
+    this.collider(this.anchor(x, y + 0.6 * scale, z), { type: 'cyl', r: 0.42 * scale, hh: 0.6 * scale }, { isStatic: true });
+    const cap = this.collider(
+      this.anchor(x, y + 1.66 * scale, z),
+      { type: 'cyl', r: 0.98 * scale, hh: 0.26 * scale },
+      { isStatic: true, pad: power },
+    );
+    const v = this.view;
+    if (v) {
+      const capMesh = m.getObjectByName('MushCap');
+      if (tint && capMesh instanceof THREE.Mesh)
+        capMesh.material = v.plain(tint, { aoMap: (capMesh.material as THREE.MeshStandardMaterial).aoMap }, 'glossy');
+      // The cap squashes a little now and then, like jelly.
+      m.userData.dynamic = true;
+      const ph = (x * 3.1 + z * 1.3) % 6.283;
+      this.anim((t) => {
+        const k = Math.max(0, Math.sin(t * 5 + ph)) ** 6;
+        m.scale.set(scale * (1 + k * 0.05), scale * (1 - k * 0.06), scale * (1 + k * 0.05));
+      });
+    }
+    return cap;
+  }
+
+  /**
+   * A ladder up a wall: its foot at (x, y0, z) on the wall's face, up to y1 (the top of what it leans
+   * on), the rungs facing `yaw` (away from the wall). Walk into it to climb; jump to leap off.
+   */
+  ladder(x: number, y0: number, z: number, y1: number, yaw = 0, color = '#ffb347') {
+    const h = y1 - y0;
+    const holder = this.anchor(x, y0, z);
+    holder.rotation.y = yaw;
+    this.collider(
+      this.anchor(0, h / 2, 0.45, holder),
+      { type: 'box', hx: 0.55, hy: h / 2, hz: 0.3 },
+      { isStatic: true, ladder: true, navSkip: true },
+    );
+    if (!this.view) return;
+    for (const sx of [-0.45, 0.45])
+      this.box(sx, (h + 0.7) / 2, 0.14, 0.11, h + 0.7, 0.11, color, { parent: holder, noCollide: true, surface: 'wood' });
+    const rungs = Math.max(2, Math.round(h / 0.38));
+    for (let k = 1; k < rungs; k++)
+      this.cyl(0, (k / rungs) * h, 0.14, 0.045, 0.9, color, {
+        parent: holder,
+        noCollide: true,
+        surface: 'wood',
+        rot: [0, 0, Math.PI / 2],
+        seg: 8,
+      });
   }
 
   /** A spot where a bonus may lie (on the ground at y). */
@@ -426,50 +557,55 @@ export class Builder {
    * Two linked portals (rings standing up, facing yaw): running into either takes PORTAL_T, out of
    * sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip
    * closes both ends (sashes shut, solid) until a second after the traveller is out; the end they
-   * went in at flashes as it swallows them, the other as it lets them out.
+   * went in at flashes as it swallows them, the other as it lets them out. One-way: only `a` takes
+   * beans in, `b` (rings flowing out, an arrow on the ground) only lets them out.
    */
   portal(
     a: { x: number; y: number; z: number; yaw: number },
     b: { x: number; y: number; z: number; yaw: number },
     color = '#a66bff',
+    o: PortalOpts = {},
   ) {
     const k = this.portalPairs.length;
-    const pair: PortalPair = { at: -1e9, from: 0, closedUntil: -1e9 };
+    const pair: PortalPair = { at: -1e9, from: 0, closedUntil: -1e9, closeFor: o.closed ?? PORTAL_CLOSED };
     this.portalPairs.push(pair);
     // (Not in the tick it closed: prediction may replay that tick, and must go through again.)
-    const closed = (t: number) => t > pair.at && t < pair.closedUntil;
+    const closed = (t: number) => (t > pair.at && t < pair.closedUntil) || (!!o.open && !o.open(t));
     const ends = [a, b];
     ends.forEach((e, i) => {
       const other = ends[1 - i]!;
+      const exitOnly = !!o.oneWay && i === 1;
       const to = new THREE.Vector3(other.x + Math.sin(other.yaw) * 1.9, other.y + 0.05, other.z + Math.cos(other.yaw) * 1.9);
       const ring = this.anchor(e.x, e.y, e.z);
       ring.rotation.y = e.yaw;
-      this.collider(
-        this.anchor(0, 1.35, 0, ring),
-        { type: 'box', hx: 1.05, hy: 1.25, hz: 0.3 },
-        {
-          isStatic: true,
-          trigger: true,
-          navSkip: true,
-          onTouch: (_c, _n, body) => {
-            const t = this.world.t;
-            if (body.inPortal || closed(t)) return;
-            this.portalUsed(k, i, t);
-            body.enterPortal(to, other.yaw);
-            this.onPortal?.(k, i, t);
+      if (!exitOnly) {
+        this.collider(
+          this.anchor(0, 1.35, 0, ring),
+          { type: 'box', hx: 1.05, hy: 1.25, hz: 0.3 },
+          {
+            isStatic: true,
+            trigger: true,
+            navSkip: true,
+            onTouch: (_c, _n, body) => {
+              const t = this.world.t;
+              if (body.inPortal || closed(t)) return;
+              this.portalUsed(k, i, t);
+              body.enterPortal(to, other.yaw, o.speed, o.lift);
+              this.onPortal?.(k, i, t);
+            },
           },
-        },
-      );
-      // Shut: the sashes are a wall.
-      const sash = this.collider(
-        this.anchor(0, 1.35, 0, ring),
-        { type: 'box', hx: 1.25, hy: 1.3, hz: 0.12 },
-        { isStatic: true, navSkip: true },
-      );
-      sash.enabled = false;
-      this.move((t) => {
-        sash.enabled = closed(t);
-      });
+        );
+        // Shut: the sashes are a wall.
+        const sash = this.collider(
+          this.anchor(0, 1.35, 0, ring),
+          { type: 'box', hx: 1.25, hy: 1.3, hz: 0.12 },
+          { isStatic: true, navSkip: true },
+        );
+        sash.enabled = false;
+        this.move((t) => {
+          sash.enabled = closed(t);
+        });
+      }
       const v = this.view;
       if (!v) return;
       const frame = new THREE.Mesh(
@@ -481,7 +617,7 @@ export class Builder {
       ring.add(frame);
       const discMat = v.own(
         new THREE.MeshBasicMaterial({
-          map: v.own(swirlTexture(color)),
+          map: v.own(exitOnly ? ringsTexture(color) : swirlTexture(color)),
           transparent: true,
           opacity: 0.85,
           side: THREE.DoubleSide,
@@ -496,6 +632,25 @@ export class Builder {
         this.box(e.x + Math.cos(e.yaw) * sx * 1.35, e.y + 0.15, e.z - Math.sin(e.yaw) * sx * 1.35, 0.5, 0.3, 0.5, color, {
           noCollide: true,
         });
+      if (exitOnly) {
+        // An arrow on the ground: the way out (nobody goes in here).
+        const arrow = new THREE.Shape();
+        arrow.moveTo(0, 0.75);
+        arrow.lineTo(0.6, 0);
+        arrow.lineTo(0.22, 0);
+        arrow.lineTo(0.22, -0.6);
+        arrow.lineTo(-0.22, -0.6);
+        arrow.lineTo(-0.22, 0);
+        arrow.lineTo(-0.6, 0);
+        arrow.closePath();
+        const mark = new THREE.Mesh(
+          v.own(new THREE.ShapeGeometry(arrow)),
+          v.own(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false })),
+        );
+        mark.rotation.x = -Math.PI / 2;
+        mark.position.set(0, 0.06, 1.3);
+        ring.add(mark);
+      }
       // Two half-disc sashes hinged at the rim, sliding shut towards the middle.
       const sashMat = v.plain(color, { roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide }, 'metal');
       const sashes = [-1, 1].map((side) => {
@@ -541,7 +696,8 @@ export class Builder {
       ring.add(wave);
       this.anim((t) => {
         disc.rotation.z = t * (i ? -2.2 : 2.2);
-        const shut = t < pair.at || t >= pair.closedUntil ? 0 : Math.min(1, (t - pair.at) / 0.15, (pair.closedUntil - t) / 0.2);
+        const used = t < pair.at || t >= pair.closedUntil ? 0 : Math.min(1, (t - pair.at) / 0.15, (pair.closedUntil - t) / 0.2);
+        const shut = exitOnly ? 0 : o.open && !o.open(t) ? 1 : used;
         for (const m of sashes) {
           m.visible = shut > 0.001;
           m.scale.x = Math.max(0.001, shut);
@@ -564,6 +720,7 @@ export class Builder {
         disc.scale.setScalar((1 + Math.sin(t * 4 + i) * 0.03) * (1 - shut * 0.6));
       });
     });
+    return pair;
   }
 
   /** A trip through portal pair `pair`, in at end `from` at time t: both ends shut till it is over. */
@@ -572,7 +729,7 @@ export class Builder {
     if (!p || t < p.at) return;
     p.at = t;
     p.from = from;
-    p.closedUntil = t + PORTAL_T + PORTAL_CLOSED;
+    p.closedUntil = t + PORTAL_T + p.closeFor;
   }
 
   finish(x: number, y: number, z: number) {

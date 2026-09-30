@@ -626,6 +626,23 @@ export class Bean {
       }
       return T;
     }
+    if (a === ANIM.ladder) {
+      // Hand over hand up the rungs (the rhythm follows the climb), feet stepping after them.
+      this.phase += (Math.abs(vy) * dt * Math.PI) / 0.76;
+      const s = Math.sin(this.phase);
+      T.k = 220;
+      T.c = 18;
+      T.armLx = -2.6 + s * 0.45;
+      T.armRx = -2.6 - s * 0.45;
+      T.armLz = 0.25;
+      T.armRz = 0.25;
+      T.legLx = -0.55 - Math.max(0, -s) * 0.6;
+      T.legRx = -0.55 - Math.max(0, s) * 0.6;
+      T.legLz = 0.12;
+      T.legRz = 0.12;
+      T.lean = 0.08;
+      return T;
+    }
     if (a === ANIM.stun) {
       // Dazed: the body circles, arms dangle loosely.
       T.k = 70;

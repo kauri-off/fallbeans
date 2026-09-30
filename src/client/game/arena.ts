@@ -19,7 +19,7 @@ import type { ArenaInfo } from '../../shared/protocol';
 import { BONUS_EVENT, type Bonus, Bonuses } from '../../sim/bonus';
 import { Builder } from '../../sim/builder';
 import { lookFor } from '../../sim/looks';
-import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
+import type { BeanDeco, MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
 import { type OtherBody, PlayerBody } from '../../sim/physics';
 import { report } from '../debug/capture';
 import { lod } from './lod';
@@ -55,7 +55,7 @@ export interface RemotePose {
 export interface ArenaHost {
   myId: number;
   sfx(s: MapSfx): void;
-  decorate(id: number, deco: { tail?: boolean }): void;
+  decorate(id: number, deco: BeanDeco): void;
   send(data: Uint8Array<ArrayBuffer>): void;
   /** Server clock (ms). */
   serverNow(): number;
@@ -548,6 +548,7 @@ export class ClientArena {
     if (b.state === 'slide') return ANIM.slide;
     if (b.state === 'climb') return b.climbingOver ? ANIM.climbOver : ANIM.climb;
     if (b.state === 'portal') return ANIM.portal;
+    if (b.state === 'ladder') return ANIM.ladder;
     if (!b.grounded) return ANIM.air;
     if (this.ownGrab >= 0) return ANIM.grab;
     return this.grabHeld && b.state === 'normal' ? ANIM.reach : ANIM.idle;

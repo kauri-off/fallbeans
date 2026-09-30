@@ -7,13 +7,20 @@ import type { NavGrid, NavPoint } from './nav';
 import type { BodyInput, PlayerBody } from './physics';
 
 /** Sounds a map may ask the client to play. */
-export type MapSfx = 'break' | 'warn' | 'steal' | 'boing' | 'count';
+export type MapSfx = 'break' | 'warn' | 'steal' | 'boing' | 'count' | 'pickup';
 
 /**
  * What map code can do besides building. On the server, `emit` records an authoritative event,
  * applies it locally (spec.onEvent) and broadcasts it; on clients it does nothing, and the events
  * arrive from the server instead.
  */
+/** Decorations a map puts on beans (client). */
+export interface BeanDeco {
+  tail?: boolean;
+  /** Shown by the name tag ('' for none). */
+  badge?: string;
+}
+
 export interface MapCtx {
   readonly server: boolean;
   readonly seed: number;
@@ -29,8 +36,8 @@ export interface MapCtx {
   sfx(s: MapSfx): void;
   /** Client: id of the local player (-1 on the server). */
   me(): number;
-  /** Client: set the bean decoration of a player (tail etc.). */
-  decorate(id: number, deco: { tail?: boolean }): void;
+  /** Client: set the bean decoration of a player (a tail, a badge by the name tag, e.g. "⭐ 5"). */
+  decorate(id: number, deco: BeanDeco): void;
 }
 
 export interface Checkpoint {
