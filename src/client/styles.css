@@ -282,6 +282,7 @@ h3 {
   display: inline-block;
   width: 0.6875rem;
   height: 0.6875rem;
+  margin-left: 0.125rem;
   border-radius: 50%;
   flex: none;
   box-shadow:
@@ -810,7 +811,8 @@ h3 {
 
 .menu-body {
   overflow-y: auto;
-  padding-right: 2px;
+  margin-inline: -0.25rem;
+  padding-inline: 0.25rem calc(0.25rem + 2px);
 }
 
 .tabs {
