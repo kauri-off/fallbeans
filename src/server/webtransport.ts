@@ -91,7 +91,9 @@ async function handle(s: ServerSession, gateway: Gateway, log: Logger) {
       for (const f of frames.push(value)) session.control(dec.decode(f));
     }
   } catch (e) {
-    if (!closed) log.warn('webtransport stream error', { ip: s.peer.ip, err: String(e) });
+    // A tab closed or a network drop ends the session this way: a normal disconnect, not an error.
+    const err = String(e);
+    if (!closed && !err.includes('E_SESSION_CLOSED')) log.warn('webtransport stream error', { ip: s.peer.ip, err });
   } finally {
     conn.close();
   }

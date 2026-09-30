@@ -1,8 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
+import { channel, gpuArgs } from './scripts/browser';
 
 const PORT = 7790;
-// Windows: drive the installed Edge; elsewhere (CI) Playwright's Chromium.
-const channel = process.env.PW_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
 
 export default defineConfig({
   testDir: 'e2e',
@@ -14,7 +13,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     viewport: { width: 1280, height: 720 },
     ...(channel ? { channel } : {}),
-    launchOptions: { args: ['--ignore-gpu-blocklist'] },
+    launchOptions: { args: gpuArgs },
   },
   projects: [
     { name: 'e2e', testIgnore: /visual.spec/, use: { ...devices['Desktop Chrome'], ...(channel ? { channel } : {}) } },

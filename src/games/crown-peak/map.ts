@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { routesBrain, type Waypoint } from '../../sim/bots';
 import { PAL } from '../../sim/builder';
 import { type BotView, defineMap } from '../../sim/map';
-import { armContactEta, rollingBalls, sweepEta, yOnRamp } from '../../sim/props';
+import { armContactEta, glovePuncher, rollingBalls, sweepEta, yOnRamp } from '../../sim/props';
 import meta from './meta';
 
 const SUMMIT_Y = 18;
@@ -38,9 +38,17 @@ type Hammer = (typeof BEAMS)[number]['hammers'][number];
 const BLOCKS = [22, 30, 38];
 
 const slideX = (k: number, t: number) => Math.sin(t * (0.8 + k * 0.25) + k * 2) * 1.6;
-const crownAng = (t: number) => (t <= 0 ? 0 : t * 0.9);
+const CROWN_W = 1.1;
+const crownAng = (t: number) => (t <= 0 ? 0 : t * CROWN_W);
+/** Gloves across the second plateau, before the pads. */
+const GLOVES = [
+  { z: 84.3, side: -1, w: 1.2, ph: 0 },
+  { z: 87.2, side: 1, w: 1.35, ph: 2.4 },
+] as const;
+const GLOVE_REACH = 8.5;
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'chevron';
   const spawns = b.startArea(0);
   b.box(0, -1, 11, 18, 2, 8, PAL.purple);
 
@@ -80,6 +88,20 @@ export default defineMap(meta, (b) => {
   }
   b.box(0, P2.y - 1, (P2.z0 + P2.z1) / 2, 14, 2, P2.z1 - P2.z0, PAL.purple);
 
+  // Gloves punching across the plateau (from posts beside it).
+  const gloveXs = GLOVES.map((g) =>
+    glovePuncher(b, {
+      x: g.side * 9,
+      y: P2.y + 0.95,
+      z: g.z,
+      side: g.side,
+      w: g.w,
+      ph: g.ph,
+      reach: GLOVE_REACH,
+      scale: 1.3,
+      postTo: P2.y - 6,
+    }),
+  );
   // 3. Launch pads up to the rotor deck.
   b.pad(-3, P2.y, 89.2, 1.3, 19);
   b.pad(3, P2.y, 89.2, 1.3, 19);
@@ -173,12 +195,17 @@ export default defineMap(meta, (b) => {
       w: 0.2,
       jumpWhen: (bot) => {
         if (bot.body.pos.z < 115) return edgeJump(115)(bot);
-        const eta = armContactEta(bot, crownAng(bot.t), 0.9, 2, 0, HUB_Z);
+        const eta = armContactEta(bot, crownAng(bot.t), CROWN_W, 2, 0, HUB_Z);
         return eta > 0.1 && eta < 0.24;
       },
     },
   ];
-  const pads = (x: number): Waypoint[] => [{ x, z: 89.2, w: 0 }];
+  // Across the glove lanes only when both are pulled back for a while.
+  const clear = (bot: BotView) =>
+    [0, 0.25, 0.5, 0.75, 1].every((dt) =>
+      gloveXs.every((gx, i) => Math.abs(gx(bot.t + dt)) > 9 - GLOVE_REACH * 0.3 || !GLOVES[i]),
+    );
+  const pads = (x: number): Waypoint[] => [{ x, z: 89.2, w: 0, wait: clear }];
   const routes = [
     { x: -6, points: [{ x: -3, z: 12, w: 1 }, ...ramp(-3), ...beam(-3, BEAMS[0].hammers), ...pads(-3), ...top] },
     { x: -2, points: [{ x: -3, z: 12, w: 1 }, ...ramp(3), ...beam(3, BEAMS[1].hammers), ...pads(3), ...top] },

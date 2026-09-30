@@ -15,6 +15,7 @@ export const LOBBY_META = defineGame({
 });
 
 export default defineMap(LOBBY_META, (b) => {
+  b.style.pattern = 'dots';
   b.cyl(0, -1, 0, 15, 2, PAL.blue, { freq: 0.3 });
   b.cyl(0, 0.05, 0, 4, 0.2, PAL.yellow, { noCollide: true });
   b.hub(0, 0, 0, 1);

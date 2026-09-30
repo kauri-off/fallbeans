@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { ModelName, Palette, PrimKind, SurfaceKind, View } from '../../sim/builder';
+import type { ModelName, Palette, PatternKind, PrimKind, SurfaceKind, View } from '../../sim/builder';
 import { clone } from './assets';
+import { LOD_LEVELS, setLevels } from './lod';
 import { applySurface } from './materials';
 
 export { timeUniform } from './materials';
@@ -12,21 +13,47 @@ const matCache = new Map<string, THREE.Material>();
 const LIFTS = 6;
 const LIFT = 0.0025;
 
+/** Segment counts per LOD level (M0…M3). */
+const SPHERE_SEG = [
+  [32, 20],
+  [20, 12],
+  [12, 8],
+  [8, 6],
+] as const;
+const CYL_SEG = [48, 24, 14, 8] as const;
+const BOX_SEG = [2, 1, 1, 0] as const;
+
+function build(kind: PrimKind, dims: readonly number[], level: number): THREE.BufferGeometry {
+  if (kind === 'box') {
+    const [sx = 1, sy = 1, sz = 1] = dims;
+    const seg = BOX_SEG[level]!;
+    const r = Math.min(0.25, sx / 4, sy / 4, sz / 4);
+    // M2 keeps the rounding with the fewest segments but a smaller radius (fewer, flatter bevels); M3 is a plain box.
+    return seg ? new RoundedBoxGeometry(sx, sy, sz, seg, level >= 2 ? r * 0.6 : r) : new THREE.BoxGeometry(sx, sy, sz);
+  }
+  if (kind === 'cyl') {
+    const [r = 1, h = 1, seg = 48] = dims;
+    return new THREE.CylinderGeometry(r, r, h, Math.min(seg, Math.max(Math.min(seg, 8), CYL_SEG[level]!)));
+  }
+  const [r = 1] = dims;
+  const [w, hs] = SPHERE_SEG[level]!;
+  return new THREE.SphereGeometry(r, w, hs);
+}
+
 function geometry(kind: PrimKind, dims: readonly number[], lift: number): THREE.BufferGeometry {
   const key = `${kind}|${dims.map((d) => d.toFixed(3)).join('|')}|${lift}`;
   let g = geoCache.get(key);
   if (!g) {
-    if (kind === 'box') {
-      const [sx = 1, sy = 1, sz = 1] = dims;
-      g = new RoundedBoxGeometry(sx, sy, sz, 2, Math.min(0.25, sx / 4, sy / 4, sz / 4));
-    } else if (kind === 'cyl') {
-      const [r = 1, h = 1, seg = 48] = dims;
-      g = new THREE.CylinderGeometry(r, r, h, seg);
-    } else {
-      const [r = 1] = dims;
-      g = new THREE.SphereGeometry(r, 32, 20);
-    }
-    if (lift) g.translate(0, lift * LIFT, 0);
+    const lv = Array.from({ length: LOD_LEVELS }, (_, l) => {
+      const x = build(kind, dims, l);
+      if (lift) x.translate(0, lift * LIFT, 0);
+      x.computeBoundingSphere();
+      return x;
+    });
+    g = lv[0]!;
+    // Low cylinders (hex tiles…) are the same at every level.
+    const same = kind === 'cyl' && (dims[2] ?? 48) <= 8;
+    setLevels(g, same ? [g, g, g, g] : lv);
     geoCache.set(key, g);
   }
   return g;
@@ -39,12 +66,13 @@ export function patternMaterial(
   dir: [number, number] = [1, 1],
   speed = 0,
   surface: SurfaceKind = 'plastic',
+  kind: PatternKind = 'stripes',
 ): THREE.Material {
-  const key = ['pat', c1, c2, freq, dir, speed, surface].join('|');
+  const key = ['pat', c1, c2, freq, dir, speed, surface, kind].join('|');
   let m = matCache.get(key);
   if (!m) {
     m = applySurface(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0 }), surface, {
-      pattern: { c1, c2, freq, dir, speed },
+      pattern: { c1, c2, freq, dir, speed, kind },
     });
     matCache.set(key, m);
   }
@@ -109,14 +137,22 @@ export class ClientView implements View {
     return m;
   }
 
-  material(pal: Palette | string, freq?: number, surface?: SurfaceKind): THREE.Material {
+  material(pal: Palette | string, freq?: number, surface?: SurfaceKind, kind?: PatternKind): THREE.Material {
     return typeof pal === 'string'
       ? plainMaterial(pal, {}, surface)
-      : patternMaterial(pal[0], pal[1], freq, undefined, 0, surface);
+      : patternMaterial(pal[0], pal[1], freq, undefined, 0, surface, kind);
   }
 
-  pattern(c1: string, c2: string, freq?: number, dir?: [number, number], speed?: number, surface?: SurfaceKind): THREE.Material {
-    return patternMaterial(c1, c2, freq, dir, speed, surface);
+  pattern(
+    c1: string,
+    c2: string,
+    freq?: number,
+    dir?: [number, number],
+    speed?: number,
+    surface?: SurfaceKind,
+    kind?: PatternKind,
+  ): THREE.Material {
+    return patternMaterial(c1, c2, freq, dir, speed, surface, kind);
   }
 
   plain(color: string, opts?: THREE.MeshStandardMaterialParameters, surface?: SurfaceKind): THREE.Material {

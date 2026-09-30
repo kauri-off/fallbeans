@@ -12,7 +12,7 @@ const RINGS = 8;
 const THICK = 0.5;
 const FLOORS = [0, -10, -20];
 const FLOOR_COLORS = ['#ff8cc8', '#7ccfff', '#ffd84a'];
-const FALL_DELAY = 0.5;
+const FALL_DELAY = 0.42;
 const SQ3 = Math.sqrt(3);
 
 interface Tile {

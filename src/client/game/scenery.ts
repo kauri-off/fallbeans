@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { Builder } from '../../sim/builder';
 import type { Collider } from '../../sim/physics';
-import { meshParts } from './assets';
+import { clone, meshParts } from './assets';
+import { atLevel } from './lod';
 import { applySurface } from './materials';
 import { patternMaterial, plainMaterial } from './view';
 
@@ -72,6 +73,50 @@ export function placeScenery(b: Builder) {
   for (const req of b.scenery) clouds(b, boxes, req, rnd);
   birds(b, all, rnd);
   balloons(b, boxes, all, rnd);
+  islands(b, boxes, all, rnd);
+}
+
+/** Floating islands below and around the course, with trees, pines and mushrooms on top. */
+function islands(b: Builder, boxes: readonly Box[], all: Box, rnd: () => number) {
+  const cx = (all.min.x + all.max.x) / 2;
+  const cz = (all.min.z + all.max.z) / 2;
+  const reach = Math.hypot(all.max.x - all.min.x, all.max.z - all.min.z) / 2;
+  const count = 7;
+  const flora = ['tree', 'pine', 'mushroom', 'tree', 'pine'] as const;
+  for (let k = 0; k < count; k++) {
+    let pos: THREE.Vector3 | null = null;
+    const scale = 0.8 + rnd() * 0.9;
+    for (let tries = 0; tries < 24 && !pos; tries++) {
+      const a = (k / count) * Math.PI * 2 + rnd() * 0.8;
+      const d = reach * 0.6 + 18 + rnd() * 40;
+      const c = new THREE.Vector3(cx + Math.cos(a) * d, all.min.y - 10 - rnd() * 22, cz + Math.sin(a) * d);
+      if (!blocked(boxes, c, 4.5 * scale + 2, 7 * scale, 8)) pos = c;
+    }
+    if (!pos) continue;
+    const g = clone('island');
+    g.scale.setScalar(scale);
+    g.rotation.y = rnd() * 6.3;
+    const n = 1 + Math.floor(rnd() * 3);
+    for (let i = 0; i < n; i++) {
+      const f = clone(flora[Math.floor(rnd() * flora.length)]!);
+      const a = rnd() * 6.3;
+      const r = i === 0 && n === 1 ? 0 : 1 + rnd() * 1.6;
+      f.position.set(Math.cos(a) * r, 0.45, Math.sin(a) * r);
+      f.rotation.y = rnd() * 6.3;
+      f.scale.setScalar(0.55 + rnd() * 0.35);
+      g.add(f);
+    }
+    g.position.copy(pos);
+    g.userData.cat = 'islands';
+    b.group.add(g);
+    const home = pos.clone();
+    const ph = rnd() * 50;
+    const yaw = g.rotation.y;
+    b.anim((t) => {
+      g.position.y = home.y + Math.sin(t * 0.25 + ph) * 0.7;
+      g.rotation.y = yaw + Math.sin(t * 0.05 + ph) * 0.15;
+    });
+  }
 }
 
 interface Cloud {
@@ -102,7 +147,7 @@ function clouds(b: Builder, boxes: readonly Box[], req: Builder['scenery'][numbe
   }
   if (!list.length) return;
   const parts = meshParts('cloud').map(({ mesh, local }) => {
-    const inst = new THREE.InstancedMesh(mesh.geometry, mesh.material, list.length);
+    const inst = new THREE.InstancedMesh(atLevel(mesh.geometry, 1), mesh.material, list.length);
     inst.frustumCulled = false;
     inst.castShadow = false;
     inst.receiveShadow = false;

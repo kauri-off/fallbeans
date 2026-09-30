@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Game } from '../game/game';
+import { lod } from '../game/lod';
 
 /**
  * What costs the most performance, on this machine and this map:
@@ -217,6 +218,16 @@ export function createProfiler(game: Game) {
       revert: () => {
         rd.debugMsaa = null;
         rd.resize();
+      },
+    });
+    list.push({
+      name: 'lod',
+      what: 'levels of detail (everything at full detail)',
+      apply: () => {
+        lod.enabled = false;
+      },
+      revert: () => {
+        lod.enabled = true;
       },
     });
     list.push({

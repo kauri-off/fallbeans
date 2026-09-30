@@ -29,10 +29,12 @@ interface Tile {
   x: number;
   z: number;
   obj: THREE.Object3D;
+  mat: THREE.MeshStandardMaterial | undefined;
   col: Collider;
 }
 
 export default defineMap(meta, (b, ctx) => {
+  b.style.pattern = 'dots';
   b.box(0, -3, -14, 20, 2, 4, PAL.purple);
   const tiles: Tile[] = [];
   const half = (GRID - 1) / 2;
@@ -40,18 +42,16 @@ export default defineMap(meta, (b, ctx) => {
     for (let k = 0; k < GRID; k++) {
       const x = (i - half) * STEP;
       const z = (k - half) * STEP;
-      const p = b.box(x, -0.5, z, TILE, 1, TILE, '#ffffff', {
-        dynamic: true,
-        material: b.view?.own(new THREE.MeshStandardMaterial()),
-      });
-      tiles.push({ x, z, obj: p.obj, col: p.col });
+      const mat = b.view?.own(new THREE.MeshStandardMaterial());
+      const p = b.box(x, -0.5, z, TILE, 1, TILE, '#ffffff', { dynamic: true, material: mat });
+      tiles.push({ x, z, obj: p.obj, mat, col: p.col });
     }
 
   // The whole schedule follows from the seed: server and clients agree without events.
   const rounds: Round[] = [];
   let start = 2;
   for (let r = 0; start < meta.duration; r++) {
-    const look = Math.max(2.5, 6 - r * 0.5);
+    const look = Math.max(2, 5.5 - r * 0.6);
     const kinds = Math.min(FRUITS.length, 3 + r);
     const target = Math.floor(b.rng() * kinds);
     const fruit = shuffle(
@@ -109,8 +109,8 @@ export default defineMap(meta, (b, ctx) => {
       if (key === lastKey) return;
       lastKey = key;
       tiles.forEach((tile, i) => {
-        if (!(tile.obj instanceof THREE.Mesh)) return;
-        const mat = tile.obj.material as THREE.MeshStandardMaterial;
+        const mat = tile.mat;
+        if (!mat) return;
         const f = round?.fruit[i];
         mat.map = phase === 'look' && f !== undefined ? tex[f]! : blank;
         mat.needsUpdate = true;

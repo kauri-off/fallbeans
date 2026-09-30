@@ -10,6 +10,7 @@ const CY = -R;
 const STEP = (2 * Math.PI) / N;
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'stripes';
   const rings = [
     { z: -9, dir: 1, pal: PAL.pink },
     { z: 0, dir: -1, pal: PAL.blue },
@@ -17,7 +18,8 @@ export default defineMap(meta, (b) => {
   ].map((r) => {
     const group = b.anchor(0, CY, r.z);
     const missing = new Set<number>();
-    while (missing.size < 4) {
+    // The outer drums lose one slat more than the middle one.
+    while (missing.size < (r.z === 0 ? 4 : 5)) {
       const k = Math.floor(b.rng() * N);
       if (k > 2 && k < N - 2) missing.add(k);
     }

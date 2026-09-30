@@ -5,7 +5,7 @@ import { BOT_DT, humanize, initBot, navTo, pathBrain, steer, unstick, type Waypo
 import { PAL } from '../../sim/builder';
 import { type BotBrain, type BotInput, type BotView, defineMap } from '../../sim/map';
 import type { Collider } from '../../sim/physics';
-import { armContactEta } from '../../sim/props';
+import { armContactEta, glovePuncher } from '../../sim/props';
 import meta from './meta';
 
 const DoorEvent = z.object({ i: z.number().int().min(0).max(63) });
@@ -23,12 +23,13 @@ export default defineMap(meta, (b, ctx) => {
     col: Collider;
   }
   const doors: Door[] = [];
-  const ROWS = [14, 24, 34] as const;
+  const ROWS = [14, 24, 34, 42] as const;
   const doorX = (i: number) => -6.8 + i * 3.4;
   for (const [z, nBreak] of [
-    [14, 3],
+    [14, 2],
     [24, 2],
     [34, 2],
+    [42, 2],
   ] as const) {
     const idx = shuffle([0, 1, 2, 3, 4], b.rng).slice(0, nBreak);
     for (let i = 0; i < 5; i++) {
@@ -76,9 +77,9 @@ export default defineMap(meta, (b, ctx) => {
 
   b.box(0, -1, 46.5, 3.6, 2, 5, PAL.yellow);
   const plats = [
-    [54, 2, 1.5, 0],
-    [70, 3, -1.7, 0],
-    [86, 2, 1.9, 1],
+    [54, 3, 1.5, 0],
+    [70, 3, -1.8, 0],
+    [86, 2, 2.0, 1],
   ] as const;
   const highAngle = (t: number) => -t * 1.1 + 1.5;
   plats.forEach(([z, n, sp, high], i) => {
@@ -92,11 +93,11 @@ export default defineMap(meta, (b, ctx) => {
 
   b.box(0, -1, 97, 10, 2, 6, PAL.purple);
   const movers = [
-    [104, 0.9, 0],
-    [110.5, 1.1, 2],
+    [104, 1.0, 0],
+    [110.5, 1.25, 2],
     [117, 0, 0],
-    [123.5, 1.3, 4],
-    [130, 1.0, 1],
+    [123.5, 1.45, 4],
+    [130, 1.15, 1],
   ] as const;
   const moverX = (sp: number, ph: number) => (t: number) => (sp === 0 ? 0 : Math.sin(t * sp + ph) * 4);
   movers.forEach(([z, sp, ph], i) => {
@@ -104,7 +105,7 @@ export default defineMap(meta, (b, ctx) => {
     const fx = moverX(sp, ph);
     if (sp === 0)
       b.move((t) => {
-        m.obj.rotation.y = t * 0.9;
+        m.obj.rotation.y = t * 1.15;
       });
     else
       b.move((t) => {
@@ -125,6 +126,12 @@ export default defineMap(meta, (b, ctx) => {
     [-4, 161],
   ] as const)
     b.bumper(x, ((z - 144) / 20) * 4 - 0.1, z, 0.9, 11);
+  // Gloves punching out of the ramp's rails: a knock back down the slope.
+  for (const [z, side, w, ph] of [
+    [150.5, -1, 1.2, 0],
+    [155.5, 1, 1.05, 2.2],
+  ] as const)
+    glovePuncher(b, { x: side * 7.6, y: ((z - 144) / 20) * 4 + 0.95, z, side, w, ph, reach: 5.2, scale: 1.2, postTo: -2 });
   b.box(0, 3, 172, 18, 2, 16, PAL.yellow);
   b.finish(0, 4, 170);
   b.clouds(0, 90, 70, 40);

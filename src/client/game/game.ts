@@ -104,7 +104,10 @@ export class Game {
 
     effect(() => {
       const s = settings.value;
-      if (this.renderer.quality !== s.quality || !this.started) this.renderer.setQuality(s.quality);
+      if (this.renderer.quality !== s.quality || !this.started) {
+        this.renderer.fx.godrays = s.godrays;
+        this.renderer.setQuality(s.quality);
+      } else this.renderer.setEffects({ godrays: s.godrays });
       this.renderer.camera.fov = s.fov;
       this.renderer.camera.updateProjectionMatrix();
       this.input.sensitivity = s.sensitivity;
@@ -341,6 +344,7 @@ export class Game {
     this.rig.face(arena.spec.finish ? 0 : yaw);
     this.rig.update(pos, 1, null);
     this.rig.snap();
+    this.renderer.cut();
     if (info.kind !== 'lobby') {
       results.value = null;
       menuOpen.value = false;
@@ -422,6 +426,7 @@ export class Game {
         // Respawned (or first placed by the server): look the way the bean faces.
         if (arena.body) this.rig.face(arena.body.yaw);
         this.rig.snap();
+        this.renderer.cut();
         arena.teleported = false;
       }
       this.renderer.focus(focus);
@@ -478,6 +483,7 @@ export class Game {
   private cut(arena: ClientArena) {
     if (this.cineArena === arena.info.id) return false;
     this.cineArena = arena.info.id;
+    this.renderer.cut();
     return true;
   }
 
@@ -592,6 +598,7 @@ export class Game {
       if (this.spectate !== this.lastSpectate) {
         this.lastSpectate = this.spectate;
         this.rig.snap();
+        this.renderer.cut();
       }
       focus = this.beans.get(this.spectate)?.root.position ?? arena.spec.view ?? new THREE.Vector3();
     }

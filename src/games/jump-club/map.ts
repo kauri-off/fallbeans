@@ -6,11 +6,12 @@ import { armContactEta, spinUp } from '../../sim/props';
 import meta from './meta';
 
 /** The low bar starts 10° past a spawn pair and eases in: the first bean it reaches has over a second. */
-const LOW = spinUp(-0.26, 1.15, 0.009);
+const LOW = spinUp(-0.26, 1.15, 0.011);
 export const lowAng = LOW.angle;
-const highAng = (t: number) => Math.PI / 2 - (t <= 0 ? 0 : 0.7 * t + 0.006 * t * t);
+const highAng = (t: number) => Math.PI / 2 - (t <= 0 ? 0 : 0.7 * t + 0.008 * t * t);
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'checker';
   b.cyl(0, -1, 0, 13, 2, PAL.blue, { freq: 0.35 });
   b.cyl(0, 0.03, 0, 13.05, 0.1, PAL.yellow, { noCollide: true });
   b.cyl(0, 0.06, 0, 11.5, 0.1, PAL.blue, { noCollide: true, freq: 0.35 });
@@ -29,7 +30,7 @@ export default defineMap(meta, (b) => {
       const t = Math.max(0, bot.t);
       if (t <= 0) return false;
       const eta = armContactEta(bot, lowAng(t), LOW.omega(t), 2);
-      const high = armContactEta(bot, highAng(t), -(0.7 + 0.012 * t), 2);
+      const high = armContactEta(bot, highAng(t), -(0.7 + 0.016 * t), 2);
       // Worse bots react late (and sometimes too late).
       return eta > 0.1 && eta < 0.15 + (bot.mem.react ?? 0.2) * 0.3 && high > 0.7;
     },

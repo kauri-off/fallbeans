@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SurfaceKind } from '../../sim/builder';
+import type { PatternKind, SurfaceKind } from '../../sim/builder';
 
 /**
  * Surface detail for every material: a procedural, tileable texture per surface kind holding a
@@ -255,6 +255,82 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
       return { h: 0.5 + (fbm(u, v, 6, 3, 23) - 0.5) * 0.4 - speck * 0.15, r: 0.35 + fbm(u, v, 12, 2, 24) * 0.4 + speck * 0.25 };
     },
   },
+  // Foliage: overlapping rounded leaf clumps.
+  leaf: {
+    scale: 1.3,
+    normal: 0.7,
+    roughVar: 0.3,
+    cavity: 0.2,
+    roughness: 0.62,
+    build: (u, v) => {
+      const [f1, f2] = cells(u, v, 12, 31);
+      const clump = 1 - smooth(f1, 0.1, 0.55);
+      const vein = smooth(f2 - f1, 0, 0.06);
+      return { h: clump * 0.8 * vein + fbm(u, v, 32, 2, 32) * 0.2, r: 0.4 + fbm(u, v, 16, 2, 33) * 0.6 };
+    },
+  },
+  // Lawn: fine vertical-ish blades and soft clumps.
+  grass: {
+    scale: 1.6,
+    normal: 0.55,
+    roughVar: 0.25,
+    cavity: 0.16,
+    roughness: 0.85,
+    build: (u, v) => {
+      const blades = vnoise(u, v * 0.25, 160, 34) * 0.7 + vnoise(u, v, 64, 35) * 0.3;
+      return { h: blades * 0.75 + fbm(u, v, 6, 3, 36) * 0.25, r: 0.6 + blades * 0.4 };
+    },
+  },
+  // Rock: chunky facets with cracks between them.
+  rock: {
+    scale: 0.45,
+    normal: 0.9,
+    roughVar: 0.2,
+    cavity: 0.22,
+    roughness: 0.9,
+    build: (u, v) => {
+      const [f1, f2] = cells(u, v, 7, 37);
+      const crack = smooth(f2 - f1, 0, 0.08);
+      return { h: (0.35 + f1 * 0.4) * crack + fbm(u, v, 16, 3, 38) * 0.25, r: 0.7 + fbm(u, v, 8, 2, 39) * 0.3 };
+    },
+  },
+  // Flags and banners: a fine plain weave.
+  cloth: {
+    scale: 3,
+    normal: 0.3,
+    roughVar: 0.15,
+    cavity: 0.08,
+    roughness: 0.8,
+    build: (u, v) => {
+      const n = 64;
+      const w = Math.abs(Math.sin(Math.PI * u * n)) * 0.5 + Math.abs(Math.sin(Math.PI * v * n)) * 0.5;
+      return { h: w * 0.85 + fbm(u, v, 32, 2, 40) * 0.15, r: 0.6 + fbm(u, v, 16, 2, 41) * 0.4 };
+    },
+  },
+  // Glass panes: smooth, with faint smudges and a few scratches.
+  glass: {
+    scale: 0.5,
+    normal: 0.06,
+    roughVar: 1,
+    cavity: 0,
+    roughness: 0.06,
+    build: (u, v) => {
+      const sc = scratches(u, v, 12, 42);
+      return { h: 0.5 - (1 - sc) * 0.2, r: smooth(fbm(u, v, 4, 4, 43), 0.45, 0.8) * 0.8 + (1 - sc) * 0.6 };
+    },
+  },
+  // Carpet runners: dense fuzz.
+  carpet: {
+    scale: 2.4,
+    normal: 0.45,
+    roughVar: 0.2,
+    cavity: 0.14,
+    roughness: 0.95,
+    build: (u, v) => {
+      const fuzz = fbm(u, v, 96, 2, 44);
+      return { h: fuzz * 0.8 + fbm(u, v, 8, 2, 45) * 0.2, r: 0.7 + fuzz * 0.3 };
+    },
+  },
 };
 
 const textures = new Map<SurfaceKind, THREE.DataTexture>();
@@ -313,13 +389,35 @@ export interface Pattern {
   freq: number;
   dir: [number, number];
   speed: number;
+  kind?: PatternKind;
 }
 
+const PATTERN_IDS: Record<PatternKind, number> = { stripes: 0, checker: 1, dots: 2, chevron: 3, waves: 4 };
+
 interface Patched {
-  surface: SurfaceKind;
+  surface: SurfaceKind | null;
   pattern: Pattern | null;
   strength: number;
 }
+
+/**
+ * LOD cross-fade (see lod.ts): a per-draw value, 0 = drawn whole; f > 0 = fading out (dithered away
+ * where the noise is below f); f < 0 = fading in (drawn where the noise is below −f). The noise
+ * shifts every frame, so the temporal anti-aliasing turns the dither into a smooth blend.
+ */
+export const NO_FADE = { value: 0 };
+export const lodFrame = { value: 0 };
+
+const FRAG_FADE_COMMON = `
+uniform float uLodFade;
+uniform float uLodFrame;`;
+
+const FRAG_FADE = `#include <clipping_planes_fragment>
+if (uLodFade != 0.0) {
+  vec2 fc = gl_FragCoord.xy + vec2(5.588238, 3.1178) * uLodFrame;
+  float dn = fract(52.9829189 * fract(dot(fc, vec2(0.06711056, 0.00583715))));
+  if (uLodFade > 0.0 ? dn < uLodFade : dn >= -uLodFade) discard;
+}`;
 
 const VERT_COMMON = `#include <common>
 varying vec3 vDetailPos;
@@ -366,10 +464,28 @@ float dHeight = dTx.b * dW.x + dTy.b * dW.y + dTz.b * dW.z;
 float dRough = dTx.a * dW.x + dTy.a * dW.y + dTz.a * dW.z;
 #ifdef DETAIL_PATTERN
 {
-  float sx = dot(vDetailPos.xz, uDir) * uF + uTime * uSpeed;
-  float fw = min(0.5, fwidth(sx));
-  float tri = abs(fract(sx) - 0.5);
-  float stp = smoothstep(0.25 - fw, 0.25 + fw, tri);
+  vec2 q = vec2(dot(vDetailPos.xz, uDir), dot(vDetailPos.xz, vec2(-uDir.y, uDir.x))) * uF;
+  q.x += uTime * uSpeed;
+  float stp;
+  #if PATTERN_KIND == 1
+    vec2 fw2 = min(vec2(0.5), fwidth(q));
+    vec2 sq = smoothstep(0.25 - fw2, 0.25 + fw2, abs(fract(q * 0.5) - 0.5));
+    stp = sq.x + sq.y - 2.0 * sq.x * sq.y;
+  #elif PATTERN_KIND == 2
+    vec2 cell = fract(q) - 0.5;
+    float r = length(cell);
+    float fwr = min(0.5, fwidth(r));
+    stp = smoothstep(0.26 - fwr, 0.26 + fwr, r);
+  #else
+    float sx = q.x;
+    #if PATTERN_KIND == 3
+      sx += abs(fract(q.y * 0.5) - 0.5) * 1.2;
+    #elif PATTERN_KIND == 4
+      sx += sin(q.y * 1.5) * 0.3;
+    #endif
+    float fw = min(0.5, fwidth(sx));
+    stp = smoothstep(0.25 - fw, 0.25 + fw, abs(fract(sx) - 0.5));
+  #endif
   diffuseColor.rgb *= mix(uC1, uC2, stp);
 }
 #endif
@@ -387,31 +503,24 @@ const FRAG_NORMAL = `#include <normal_fragment_maps>
   normal = normalize(normal + dObj.x * vDetailAx + dObj.y * vDetailAy + dObj.z * vDetailAz);
 }`;
 
-/**
- * Gives a standard material its surface: detail maps, base roughness/metalness for the kind and
- * (optionally) animated stripes. Idempotent; returns the material.
- */
-export function applySurface<T extends THREE.Material>(
-  mat: T,
-  surface: SurfaceKind,
-  opts: { pattern?: Pattern | null; strength?: number; keepRoughness?: boolean } = {},
-): T {
-  if (!(mat instanceof THREE.MeshStandardMaterial)) return mat;
-  if ((mat.userData.detail as Patched | undefined)?.surface) return mat;
-  const def = SURFACES[surface];
-  if (!opts.keepRoughness && def.roughness !== undefined) mat.roughness = def.roughness;
-  if (def.metalness !== undefined) mat.metalness = def.metalness;
-  const patched: Patched = { surface, pattern: opts.pattern ?? null, strength: opts.strength ?? 1 };
-  mat.userData.detail = patched;
-  const tex = detailTexture(surface);
+/** Installs the shader patch on a material, with its own LOD fade uniform (shared NO_FADE for the originals). */
+function install(mat: THREE.MeshStandardMaterial, patched: Patched, fade: { value: number }) {
+  const def = patched.surface ? SURFACES[patched.surface] : null;
+  const tex = patched.surface ? detailTexture(patched.surface) : null;
   const p = patched.pattern;
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uLodFade = fade;
+    sh.uniforms.uLodFrame = lodFrame;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>${FRAG_FADE_COMMON}`)
+      .replace('#include <clipping_planes_fragment>', FRAG_FADE);
+    if (!def || !tex) return;
     sh.uniforms.uDetail = { value: tex };
     sh.uniforms.uDetailP = {
       value: new THREE.Vector4(def.scale, def.normal * patched.strength, def.roughVar, def.cavity * patched.strength),
     };
     if (p) {
-      sh.defines = { ...sh.defines, DETAIL_PATTERN: '' };
+      sh.defines = { ...sh.defines, DETAIL_PATTERN: '', PATTERN_KIND: PATTERN_IDS[p.kind ?? 'stripes'] };
       sh.uniforms.uC1 = { value: new THREE.Color(p.c1) };
       sh.uniforms.uC2 = { value: new THREE.Color(p.c2) };
       sh.uniforms.uF = { value: p.freq };
@@ -426,20 +535,59 @@ export function applySurface<T extends THREE.Material>(
       .replace('#include <roughnessmap_fragment>', FRAG_ROUGH)
       .replace('#include <normal_fragment_maps>', FRAG_NORMAL);
   };
-  mat.customProgramCacheKey = () => `detail|${p ? 'pat' : ''}`;
+  const key = `fb|${patched.surface ?? ''}|${p ? `pat${PATTERN_IDS[p.kind ?? 'stripes']}` : ''}`;
+  mat.customProgramCacheKey = () => key;
   mat.needsUpdate = true;
+}
+
+/**
+ * Gives a standard material its surface: detail maps, base roughness/metalness for the kind and
+ * (optionally) animated stripes; `null` keeps it smooth. Every patched material can LOD cross-fade.
+ * Idempotent; returns the material.
+ */
+export function applySurface<T extends THREE.Material>(
+  mat: T,
+  surface: SurfaceKind | null,
+  opts: { pattern?: Pattern | null; strength?: number; keepRoughness?: boolean } = {},
+): T {
+  if (!(mat instanceof THREE.MeshStandardMaterial)) return mat;
+  if (mat.userData.detail) return mat;
+  const def = surface ? SURFACES[surface] : null;
+  if (def && !opts.keepRoughness && def.roughness !== undefined) mat.roughness = def.roughness;
+  if (def?.metalness !== undefined) mat.metalness = def.metalness;
+  const patched: Patched = { surface, pattern: opts.pattern ?? null, strength: opts.strength ?? 1 };
+  mat.userData.detail = patched;
+  install(mat, patched, NO_FADE);
   return mat;
 }
 
+/** A copy of a patched material with its own fade value (the same shader program). */
+export function fadeMaterial(base: THREE.Material, fade: { value: number }): THREE.Material {
+  const m = base.clone();
+  const patched = base.userData.detail as Patched | undefined;
+  if (patched && m instanceof THREE.MeshStandardMaterial) install(m, patched, fade);
+  m.userData.fadeOf = base;
+  m.userData.srcVersion = base.version;
+  return m;
+}
+
+/** Whether a material can cross-fade between LOD levels. */
+export function canFade(m: THREE.Material): boolean {
+  return m instanceof THREE.MeshStandardMaterial && !!m.userData.detail && !m.transparent;
+}
+
 /** Surface for a material of the asset pack, by material name. */
-export function surfaceForModelMaterial(name: string): SurfaceKind {
+export function surfaceForModelMaterial(name: string): SurfaceKind | null {
   switch (name) {
+    // The beans are smooth and solid.
     case 'Body':
     case 'Belly':
     case 'Blush':
-      return 'fabric';
+    case 'Mouth':
+      return null;
     case 'Shoe':
     case 'Bumper':
+    case 'Glove':
       return 'rubber';
     case 'Metal':
       return 'metal';
@@ -450,14 +598,25 @@ export function surfaceForModelMaterial(name: string): SurfaceKind {
     case 'Sclera':
     case 'Glint':
     case 'Visor':
+    case 'Star':
       return 'glossy';
     case 'Cloud':
       return 'cloud';
     case 'Door':
+    case 'Trunk':
       return 'wood';
     case 'Top':
     case 'Side':
       return 'tile';
+    case 'Leaves':
+    case 'Pine':
+      return 'leaf';
+    case 'Grass':
+      return 'grass';
+    case 'Rock':
+      return 'rock';
+    case 'Flag':
+      return 'cloth';
     default:
       return 'plastic';
   }

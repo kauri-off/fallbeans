@@ -16,6 +16,7 @@ import { Builder } from '../../sim/builder';
 import type { MapCtx, MapModule, MapSfx, MapSpec } from '../../sim/map';
 import { type OtherBody, PlayerBody } from '../../sim/physics';
 import { report } from '../debug/capture';
+import { lod } from './lod';
 import { applySurfaces } from './materials';
 import { placeScenery } from './scenery';
 import { ClientView, timeUniform } from './view';
@@ -121,6 +122,7 @@ export class ClientArena {
     placeScenery(this.builder);
     applySurfaces(this.builder.group);
     scene.add(this.builder.group);
+    lod.register(this.builder.group);
     for (const [name, data] of info.events) this.spec.onEvent?.(name, data);
     this.lead = host.rtt() / 2 + 30;
   }
@@ -452,6 +454,7 @@ export class ClientArena {
   }
 
   dispose() {
+    lod.drop(this.builder.group);
     this.builder.dispose();
   }
 }

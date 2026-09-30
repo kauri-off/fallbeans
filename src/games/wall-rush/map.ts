@@ -20,6 +20,7 @@ interface Wall {
 }
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'waves';
   b.box(0, -1, 0, 20, 2, 16, PAL.blue, { freq: 0.3 });
   b.box(0, 0.02, -7.6, 20, 0.05, 0.6, PAL.red, { noCollide: true });
   b.box(0, 0.02, 7.6, 20, 0.05, 0.6, PAL.red, { noCollide: true });
@@ -29,13 +30,13 @@ export default defineMap(meta, (b) => {
   let at = 0.5;
   for (let k = 0; k < 40 && at < meta.duration; k++) {
     const segs: Seg[] = Array.from({ length: SEGS }, () => 'solid');
-    const passCount = k < 3 ? 2 : k < 10 && b.rng() < 0.3 ? 2 : 1;
+    const passCount = k < 3 ? 2 : k < 8 && b.rng() < 0.25 ? 2 : 1;
     for (let n = 0; n < passCount; n++) {
       const kinds: Seg[] = k < 2 ? ['gap'] : ['gap', 'low', 'high', 'low'];
       segs[Math.floor(b.rng() * SEGS)] = kinds[Math.floor(b.rng() * kinds.length)]!;
     }
     if (!segs.some((s) => s !== 'solid')) segs[0] = 'gap';
-    const speed = 3.6 + Math.min(5, k * 0.28);
+    const speed = 3.8 + Math.min(5.6, k * 0.33);
     const group = b.anchor(0, 0, START_Z);
     group.visible = false;
     const pal = [PAL.orange, PAL.purple, PAL.green, PAL.pink][k % 4]!;
@@ -47,7 +48,7 @@ export default defineMap(meta, (b) => {
       return [b.box(x, 3, 0, SEG_W, 2, 1, pal, { parent: group, dynamic: true }).col];
     });
     walls.push({ at, speed, segs, group, cols });
-    at += Math.max(1.9, 4.6 - k * 0.17);
+    at += Math.max(1.7, 4.4 - k * 0.19);
   }
   const wallZ = (w: Wall, t: number) => START_Z + (t - w.at) * w.speed;
   b.move((t) => {

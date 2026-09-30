@@ -32,6 +32,8 @@ const BUDGET: Record<string, { tris: number; kb: number; mats: number }> = {
 const NEEDS: Record<string, { nodes?: string[]; materials?: string[] }> = {
   bean: { nodes: ['ArmL', 'ArmR', 'LegL', 'LegR', 'EyeL', 'EyeR'], materials: ['Body', 'Belly', 'Glint'] },
   cloud: { materials: ['Cloud'] },
+  fan: { nodes: ['FanBlades'] },
+  flag: { nodes: ['Pennant'], materials: ['Flag'] },
 };
 
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);

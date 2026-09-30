@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { GAMES } from '../src/games';
+import { channel, gpuArgs } from './browser';
 
 const args = process.argv.slice(2);
 const opt = (n: string) => {
@@ -23,12 +24,11 @@ const ids = maps.length ? maps : GAMES.map((g) => g.id);
 const qualities = (opt('--quality') ?? 'medium,high,ultra').split(',');
 const base = (opt('--url') ?? 'http://localhost:5173/fallbeans/').replace(/\/?$/, '/');
 const seconds = Number(opt('--seconds') ?? 4);
-const channel = process.env.PW_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
 
 const browser = await chromium.launch({
   headless: !args.includes('--headed'),
   ...(channel ? { channel } : {}),
-  args: ['--ignore-gpu-blocklist', '--enable-gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
+  args: gpuArgs,
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));
@@ -100,9 +100,8 @@ for (const map of ids) {
 await browser.close();
 
 mkdirSync('.bench', { recursive: true });
-const gpuName = rows.length ? '' : '';
 writeFileSync('.bench/client-latest.json', JSON.stringify({ at: new Date().toISOString(), rows }, null, 1));
-console.log(`${gpuName}map            quality  frame p50/p95  cpu ms  gpu ms  calls  ktris  heap  top cpu · top gpu`);
+console.log(`map            quality  frame p50/p95  cpu ms  gpu ms  calls  ktris  heap  top cpu · top gpu`);
 for (const r of rows)
   console.log(
     `${r.map.padEnd(15)} ${r.quality.padEnd(7)} ${`${r.frameP50}/${r.frameP95}`.padStart(13)} ${String(r.cpu).padStart(7)} ${String(r.gpu ?? '—').padStart(7)} ${String(r.calls).padStart(6)} ${String(Math.round(r.triangles / 1000)).padStart(6)} ${String(r.heapMB ?? '—').padStart(5)}  ${r.cpuTop} · ${r.gpuTop}`,

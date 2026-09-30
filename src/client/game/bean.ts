@@ -2,22 +2,24 @@ import * as THREE from 'three';
 import { ANIM } from '../../shared/consts';
 import { shotMode } from '../state';
 import { clone } from './assets';
+import { lod } from './lod';
 import { applySurface } from './materials';
 
 const bodyMats = new Map<string, THREE.MeshStandardMaterial>();
+/** Smooth, solid suit colour: soft plastic with a faint clearcoat, no surface texture. */
 function bodyMaterial(color: string) {
   let m = bodyMats.get(color);
   if (!m) {
     m = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(color),
-      roughness: 0.62,
-      clearcoat: 0.25,
-      clearcoatRoughness: 0.45,
-      sheen: 0.6,
-      sheenRoughness: 0.55,
+      roughness: 0.5,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.35,
+      sheen: 0.35,
+      sheenRoughness: 0.6,
       sheenColor: new THREE.Color('#ffffff'),
     });
-    applySurface(m, 'fabric', { keepRoughness: true });
+    applySurface(m, null);
     bodyMats.set(color, m);
   }
   return m;
@@ -28,8 +30,10 @@ const bellyMats = new Map<string, THREE.MeshStandardMaterial>();
 function bellyMaterial(color: string) {
   let m = bellyMats.get(color);
   if (!m) {
-    m = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.62), roughness: 0.7 });
-    applySurface(m, 'fabric', { keepRoughness: true, strength: 0.7 });
+    m = applySurface(
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.62), roughness: 0.55 }),
+      null,
+    );
     bellyMats.set(color, m);
   }
   return m;
@@ -39,8 +43,8 @@ let tailProto: THREE.Object3D | null = null;
 function makeTail(): THREE.Object3D {
   if (!tailProto) {
     const g = new THREE.Group();
-    const mat = applySurface(new THREE.MeshStandardMaterial({ color: '#ff9f1c', roughness: 0.85 }), 'fabric');
-    const tip = applySurface(new THREE.MeshStandardMaterial({ color: '#fff4d6', roughness: 0.95 }), 'fabric');
+    const mat = applySurface(new THREE.MeshStandardMaterial({ color: '#ff9f1c', roughness: 0.7 }), null);
+    const tip = applySurface(new THREE.MeshStandardMaterial({ color: '#fff4d6', roughness: 0.8 }), null);
     const segs = 5;
     let parent: THREE.Object3D = g;
     for (let i = 0; i < segs; i++) {
@@ -124,6 +128,7 @@ const clamp = THREE.MathUtils.clamp;
 
 /** Height of the tip-over pivot (the lower collision sphere). */
 const PIVOT_Y = 0.5;
+const CROWN_SCALE = 0.62;
 /** Ground covered by one full run cycle (two steps), m. */
 const STRIDE = 1.45;
 
@@ -193,6 +198,7 @@ export class Bean {
     }
     this.setColor(color);
     this.name = name;
+    lod.register(this.model, this);
   }
 
   setColor(color: string) {
@@ -200,7 +206,7 @@ export class Bean {
     const m = bodyMaterial(color);
     const belly = bellyMaterial(color);
     this.model.traverse((o) => {
-      if (!(o instanceof THREE.Mesh)) return;
+      if (!(o instanceof THREE.Mesh) || o.userData.lodGhost) return;
       const name = (o.material as THREE.Material).name;
       if (name === 'Body') o.userData.part = 'body';
       if (name === 'Belly') o.userData.part = 'belly';
@@ -213,11 +219,14 @@ export class Bean {
   setCrown(on: boolean) {
     if (on && !this.crown) {
       this.crown = clone('crown');
-      this.crown.scale.setScalar(0.62);
-      this.crown.position.set(0, 1.62, -0.02);
-      this.crown.rotation.x = -0.12;
+      // The band (radius 0.5 in the model) rests on the head where it is 0.31 m from the axis (y ≈ 1.49).
+      this.crown.scale.setScalar(CROWN_SCALE);
+      this.crown.position.set(0, 1.465, -0.01);
+      this.crown.rotation.x = -0.06;
       this.model.add(this.crown);
+      lod.register(this.crown, this.crown);
     } else if (!on && this.crown) {
+      lod.drop(this.crown);
       this.model.remove(this.crown);
       this.crown = null;
     }
@@ -244,6 +253,8 @@ export class Bean {
   }
 
   dispose() {
+    if (this.crown) lod.drop(this.crown);
+    lod.drop(this);
     this.root.removeFromParent();
   }
 

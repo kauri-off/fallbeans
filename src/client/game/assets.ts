@@ -3,6 +3,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MODEL_NAMES, type ModelName } from '../../sim/builder';
 import { report } from '../debug/capture';
+import { simplifierReady, simplifyLevels } from './lod';
 import { applySurface, surfaceForModelMaterial } from './materials';
 
 const models = new Map<ModelName, THREE.Object3D>();
@@ -15,6 +16,7 @@ export async function loadModels(onProgress?: (done: number, total: number) => v
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
   let done = 0;
+  const simplifier = simplifierReady.catch((e: unknown) => report('asset', `mesh simplifier unavailable: ${String(e)}`));
   await Promise.all(
     MODEL_NAMES.map(async (n) => {
       const url = `${import.meta.env.BASE_URL}models/${n}.glb`;
@@ -23,12 +25,15 @@ export async function loadModels(onProgress?: (done: number, total: number) => v
         report('asset', `model ${n} failed to load: ${String(e)}`);
         throw e;
       });
-      loadTimes.set(n, Math.round(performance.now() - t0));
+      await simplifier;
       gltf.scene.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           o.castShadow = n !== 'cloud';
           o.receiveShadow = n !== 'cloud';
           sharedGeometries.add(o.geometry);
+          o.geometry.computeBoundingSphere();
+          // Levels of detail M1…M3 (the clouds are instanced and use one level for all).
+          for (const l of simplifyLevels(o.geometry)) sharedGeometries.add(l);
           const mats = Array.isArray(o.material) ? o.material : [o.material];
           for (const m of mats) {
             m.side = THREE.FrontSide;
@@ -43,6 +48,7 @@ export async function loadModels(onProgress?: (done: number, total: number) => v
           }
         }
       });
+      loadTimes.set(n, Math.round(performance.now() - t0));
       models.set(n, gltf.scene);
       onProgress?.(++done, MODEL_NAMES.length);
     }),

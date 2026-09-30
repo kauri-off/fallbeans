@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { routesBrain, type Waypoint } from '../../sim/bots';
 import { PAL } from '../../sim/builder';
 import { type BotView, defineMap } from '../../sim/map';
+import { armContactEta } from '../../sim/props';
 import meta from './meta';
 
 /**
@@ -13,11 +14,13 @@ import meta from './meta';
 const FORK_Z0 = 15;
 const FORK_Z1 = 45;
 const HAMMERS = [
-  { z: 20, w: 1.9, ph: 0 },
-  { z: 27, w: 2.2, ph: 1.7 },
-  { z: 34, w: 1.7, ph: 3.2 },
-  { z: 41, w: 2.4, ph: 0.9 },
+  { z: 20, w: 2.0, ph: 0 },
+  { z: 27, w: 2.35, ph: 1.7 },
+  { z: 34, w: 1.85, ph: 3.2 },
+  { z: 41, w: 2.5, ph: 0.9 },
 ] as const;
+/** Hammer swing amplitude (rad). */
+const AMP = 1.12;
 const BRIDGE_X = -5;
 /** Zig-zag walls on the right path: [z, wall from x, to x]. */
 const ZIG = [
@@ -27,8 +30,10 @@ const ZIG = [
   { z: 39.5, x0: 4.5, x1: 7.5 },
 ] as const;
 const PUSHERS = [
-  { z: 23.2, w: 1.6, ph: 0 },
-  { z: 36.2, w: 1.9, ph: 2 },
+  { z: 23.2, w: 1.7, ph: 0 },
+  { z: 29.7, w: 1.5, ph: 1 },
+  { z: 36.2, w: 2.0, ph: 2 },
+  { z: 42.7, w: 1.8, ph: 3.1 },
 ] as const;
 const pusherX = (p: (typeof PUSHERS)[number], t: number) => 5 + Math.sin(t * p.w + p.ph) * 1.6;
 
@@ -40,23 +45,29 @@ const SEESAWS = [
 
 const CONV_Z0 = 91;
 const CONV_Z1 = 123;
+const CONV_SPEED = 4.2;
 const PUNCH = [
-  { z: 99, side: -1, w: 1.3, ph: 0 },
-  { z: 107, side: 1, w: 1.5, ph: 1.5 },
-  { z: 115, side: -1, w: 1.7, ph: 3 },
+  { z: 99, side: -1, w: 1.5, ph: 0 },
+  { z: 107, side: 1, w: 1.7, ph: 1.5 },
+  { z: 115, side: -1, w: 1.9, ph: 3 },
 ] as const;
+/** D: a spinner deck between the belt and the finish. */
+const DECK_Z = 134;
+const deckAng = (t: number) => (t <= 0 ? 0 : t * 1.3);
+const FINISH_Z = 149;
 /** Punching wall: pulled back into the rail, then out across half the belt. */
 const punchX = (p: (typeof PUNCH)[number], t: number) => p.side * (5.6 - 3.2 * Math.max(0, Math.sin(t * p.w + p.ph)));
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'chevron';
   const spawns = b.startArea(0);
   b.box(0, -1, 11, 18, 2, 8, PAL.purple);
 
   // --- A: the fork
   const len = FORK_Z1 - FORK_Z0;
   b.box(BRIDGE_X, -1, (FORK_Z0 + FORK_Z1) / 2, 3.2, 2, len, PAL.blue);
-  for (const h of HAMMERS) b.hammer(BRIDGE_X, 7.4, h.z, h.w, h.ph);
-  const headX = (h: (typeof HAMMERS)[number], t: number) => BRIDGE_X + 6 * Math.sin(Math.sin(t * h.w + h.ph) * 1.05);
+  for (const h of HAMMERS) b.hammer(BRIDGE_X, 7.4, h.z, h.w, h.ph, AMP);
+  const headX = (h: (typeof HAMMERS)[number], t: number) => BRIDGE_X + 6 * Math.sin(Math.sin(t * h.w + h.ph) * AMP);
 
   b.box(5, -1, (FORK_Z0 + FORK_Z1) / 2, 5, 2, len, PAL.green);
   for (const sx of [2.1, 7.9]) b.box(sx, 1.2, (FORK_Z0 + FORK_Z1) / 2, 0.8, 2.4, len, PAL.pink);
@@ -74,17 +85,17 @@ export default defineMap(meta, (b) => {
   SEESAWS.forEach((s, i) => {
     const pl = b.box(s.x, -0.5, s.z, 7.5, 1, 7.5, i % 2 ? PAL.pink : PAL.teal, { dynamic: true });
     b.move((t) => {
-      pl.obj.rotation.z = Math.sin(t * 1.1 + i * 2) * 0.3;
-      pl.obj.rotation.x = Math.sin(t * 0.7 + i) * 0.1;
+      pl.obj.rotation.z = Math.sin(t * 1.25 + i * 2) * 0.36;
+      pl.obj.rotation.x = Math.sin(t * 0.8 + i) * 0.12;
     });
   });
   b.box(0, -1, 88, 12, 2, 6, PAL.purple);
 
   // --- C: conveyor with punching walls and bumpers
-  const conv = b.view?.pattern('#8a8f9e', '#c7ccd8', 0.9, [0, 1], 3.5 * 0.9, 'rubber');
+  const conv = b.view?.pattern('#8a8f9e', '#c7ccd8', 0.9, [0, 1], CONV_SPEED * 0.9, 'rubber');
   const cl = CONV_Z1 - CONV_Z0;
   const cz = (CONV_Z0 + CONV_Z1) / 2;
-  b.box(0, -1, cz, 9, 2, cl, PAL.white, { material: conv, conveyor: new THREE.Vector3(0, 0, -3.5) });
+  b.box(0, -1, cz, 9, 2, cl, PAL.white, { material: conv, conveyor: new THREE.Vector3(0, 0, -CONV_SPEED) });
   for (const sx of [-1, 1]) b.box(sx * 4.9, 0.6, cz, 0.8, 1.2, cl, PAL.yellow);
   for (const p of PUNCH) {
     const m = b.box(0, 0.9, p.z, 3.4, 1.8, 1.2, PAL.orange, { dynamic: true, hit: 0.9, tag: 'pusher', sinks: true });
@@ -100,8 +111,14 @@ export default defineMap(meta, (b) => {
   ] as const)
     b.bumper(x, 0, z, 0.75, 10);
 
-  b.box(0, -1, 131, 18, 2, 16, PAL.yellow);
-  b.finish(0, 0, 130);
+  // --- D: a spinner deck, then the finish.
+  b.box(0, -1, 125, 12, 2, 4, PAL.purple);
+  b.cyl(0, -1, DECK_Z, 6.2, 2, PAL.teal, { freq: 0.35 });
+  b.hub(0, 0, DECK_Z, 0.9);
+  b.rotor(0, 0.6, DECK_Z, 5.8, 3, deckAng, 0.75);
+  b.box(0, -1, 142, 5, 2, 3, PAL.purple);
+  b.box(0, -1, 151, 18, 2, 16, PAL.yellow);
+  b.finish(0, 0, FINISH_Z);
   b.clouds(0, 70, 60, 36);
 
   // --- bots
@@ -150,7 +167,22 @@ export default defineMap(meta, (b) => {
       wait: (bot: BotView) => Math.abs(punchX(p, bot.t + 0.4)) > 3.4 || p.side * lane < 0,
     });
   }
-  rest.push({ x: 0, z: 126, w: 2 }, { x: 0, z: 134, w: 3 });
+  // The deck: hop the arms as they come.
+  const deckJump = (bot: BotView) => {
+    const p = bot.body.pos;
+    const r = Math.hypot(p.x, p.z - DECK_Z);
+    if (r > 7 || r < 1.3 || bot.t <= 0) return false;
+    const eta = armContactEta(bot, deckAng(bot.t), 1.3, 3, 0, DECK_Z);
+    return eta > 0.08 && eta < 0.22;
+  };
+  rest.push(
+    { x: 0, z: 125, w: 1 },
+    { x: 2.6, z: DECK_Z - 3, w: 0.3, jumpWhen: deckJump },
+    { x: 2.6, z: DECK_Z + 3, w: 0.3, jumpWhen: deckJump },
+    { x: 0, z: 142, w: 0.3, jumpWhen: deckJump },
+    { x: 0, z: 147, w: 2 },
+    { x: 0, z: 154, w: 3 },
+  );
   const brain = routesBrain([
     { x: -3, points: [...start, ...bridge, ...rest] },
     { x: 3, points: [...start, ...zig, ...rest] },
@@ -159,11 +191,12 @@ export default defineMap(meta, (b) => {
   return {
     spawns,
     killY: -14,
-    finish: { z: 130, y: -1 },
+    finish: { z: FINISH_Z, y: -1 },
     checkpoints: [
       { z: -100, p: new THREE.Vector3(0, 0.1, 10) },
       { z: 46, p: new THREE.Vector3(0, 0.1, 49) },
       { z: 86, p: new THREE.Vector3(0, 0.1, 88) },
+      { z: 123.5, p: new THREE.Vector3(0, 0.1, 124.8) },
     ],
     forbidden: (p) =>
       // On top of the zig-zag walls or the hammer frames.

@@ -27,7 +27,9 @@ bun run assets         # validate models (gltf-validator, budgets, names the cod
   The in-app browser pane pauses animation frames while hidden or unfocused; prefer `probe` for anything that needs frames.
 - Probe (`src/client/debug/probe.ts`): `state/snapshot/time/body/beans/colliders/world/net/render/memory/hud/logs/errors/msgs`,
   `input.hold({x,z}|{f,r}, ms)/press('jump')/walkTo(x,z)`, `camera.set(eye, look)/free()`, `shot(true)`, `dev(cmd)`,
-  `frames(n)`, `waitFor(fn)`, `profile.run()/passes()/ablate()/scene()`, `sections()`, `gpu('passes')`.
+  `frames(n)`, `waitFor(fn)`, `profile.run()/passes()/ablate()/scene()`, `sections()`, `gpu('passes')`,
+  `fx({godrays, smaa, temporal})` (post effects on/off), `lod({enabled, force, bias})`, `decorate({crown, tail})`.
+  Snippets can save screenshots mid-run: `await shot('/tmp/a.png')`. Probe/bench pick the GPU backend per OS (scripts/browser.ts).
 - Dev commands (`DevCmdSchema` in `src/shared/protocol.ts`, only with `--dev`): skipIntro, warp, endRound, start {games, bots, rounds},
   lobby, rate {k} (0 pauses), step, teleport, goto {spawn|finish|checkpoint i}, bot {near}, bots {on}, kill, knock, grab, seed.
 - Server state without a browser: `curl "http://127.0.0.1:7777/fallbeans/api/debug/state?format=text"` — also `health`,
@@ -40,4 +42,6 @@ bun run assets         # validate models (gltf-validator, budgets, names the cod
 `src/shared` protocol, codec, rules, prof · `src/sim` physics, world, builder, bots, nav · `src/games/*` maps (`meta.ts`, `map.ts`) ·
 `src/server` room (game flow, dev commands), arena (simulation, recording), debugApi, diag · `src/client` game, net, ui, `debug/`
 (capture, probe, profiler, gpuTimer, debug page) · `src/audit` audits (maps.ts, systems.ts, run.ts) · `scripts/` CLI tools ·
-`blender/` source models + `export.py` (`bun run assets --export [--dry-run]`).
+`blender/` source models + `export.py` (`bun run assets --export [--dry-run]`; new models: add an `A_<name>` collection and the
+name to `MODEL_NAMES`). Client rendering: `src/client/game/renderer.ts` (presets, passes), `postfx.ts` (scene/MSAA, god rays,
+temporal AA), `lod.ts` (M0–M3 + dithered cross-fade), `materials.ts` (surfaces, patterns, fade chunk).

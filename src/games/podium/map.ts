@@ -84,6 +84,13 @@ export default defineMap(PODIUM_META, (b) => {
       conf.instanceMatrix.needsUpdate = true;
     });
   }
+  // Stage dressing behind the podiums: fans, flags and stars.
+  for (const sx of [-1, 1]) {
+    b.prop('fan', sx * 11.5, 0, -5.5, { yaw: -sx * 0.5, scale: 1.3 });
+    b.prop('flag', sx * 13.5, 0, -1, { tint: sx < 0 ? '#ff5fa2' : '#3fa9ff', yaw: sx < 0 ? Math.PI : 0 });
+    b.prop('star', sx * 4.5, 7.2, -2, { scale: 1.2 });
+  }
+  b.prop('star', 0, 8.4, -2.5, { scale: 1.8 });
   b.clouds(0, 0, 45);
   return { spawns, killY: -15, view: new THREE.Vector3(0, 2.4, 0) };
 });

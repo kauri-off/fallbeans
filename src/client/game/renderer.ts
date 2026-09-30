@@ -3,12 +3,13 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { GpuTimer } from '../debug/gpuTimer';
+import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
+import { GodRaysPass, ScenePass, TemporalPass } from './postfx';
 
 export type Quality = 'medium' | 'high' | 'ultra';
 
@@ -16,19 +17,30 @@ interface Preset {
   pixelRatio: number;
   shadowMap: number;
   shadowRange: number;
+  /**
+   * Anti-aliasing is SMAA 4x on every preset: SMAA 1x (edges) + 2x MSAA (spatial multisampling)
+   * + 2x temporal supersampling (jittered frames blended with the reprojected previous one).
+   */
   msaa: number;
-  /** Post-process edge smoothing (for presets without MSAA, or on top of it). */
-  smaa: boolean;
   /** A barely-there glow on bright highlights. */
   bloom: boolean;
   ao: boolean;
+  /** LOD distances multiplier (further detail on better presets). */
+  lodBias: number;
 }
 
 const PRESETS: Record<Quality, Preset> = {
-  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 0, smaa: true, bloom: false, ao: false },
-  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 4, smaa: false, bloom: false, ao: false },
-  ultra: { pixelRatio: 2, shadowMap: 4096, shadowRange: 40, msaa: 4, smaa: true, bloom: true, ao: true },
+  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 2, bloom: false, ao: false, lodBias: 0.75 },
+  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 2, bloom: false, ao: false, lodBias: 1 },
+  ultra: { pixelRatio: 2, shadowMap: 4096, shadowRange: 40, msaa: 2, bloom: true, ao: true, lodBias: 1.4 },
 };
+
+/** Post effects that can be switched on and off (settings, profiler, benchmarks). */
+export interface Effects {
+  godrays: boolean;
+  smaa: boolean;
+  temporal: boolean;
+}
 
 /** Final grade in display space: a touch of saturation and contrast, and a soft vignette. */
 const GradeShader = {
@@ -145,9 +157,9 @@ function motes(time: { value: number }): THREE.Points {
 }
 
 /**
- * WebGL2 renderer with the high-quality preset (RTX 3060 class): MSAA through the composer,
- * soft shadows following the camera, image-based lighting, neutral tone mapping, a light grade, SMAA
- * and (ultra) GTAO with a barely-there bloom.
+ * WebGL2 renderer: soft shadows following the camera, image-based lighting, sun shafts, neutral tone
+ * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, and (ultra) GTAO
+ * with a barely-there bloom.
  */
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -164,6 +176,9 @@ export class Renderer {
   private gpu: GpuTimer | null = null;
   private gpuMode: 'off' | 'frame' | 'passes' = 'off';
   private readonly wrapped = new WeakSet<object>();
+  private temporal: TemporalPass | null = null;
+  /** Switchable effects (see Effects); the composer is rebuilt when they change. */
+  readonly fx: Effects = { godrays: true, smaa: true, temporal: true };
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -195,6 +210,7 @@ export class Renderer {
     this.quality = q;
     this.preset = PRESETS[q];
     const p = this.preset;
+    lod.bias = p.lodBias;
     this.sun.shadow.mapSize.set(p.shadowMap, p.shadowMap);
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
@@ -225,25 +241,43 @@ export class Renderer {
     this.buildComposer(w, h, pr);
   }
 
+  /** Switches effects on or off (rebuilds the post-processing chain). */
+  setEffects(patch: Partial<Effects>) {
+    const before = JSON.stringify(this.fx);
+    Object.assign(this.fx, patch);
+    if (JSON.stringify(this.fx) !== before) this.resize();
+  }
+
   private buildComposer(w: number, h: number, pr: number) {
     this.composer?.dispose();
     const p = this.preset;
-    const target = new THREE.WebGLRenderTarget(w * pr, h * pr, { type: THREE.HalfFloatType, samples: this.debugMsaa ?? p.msaa });
+    const fx = this.fx;
+    // Everything after the scene pass is single-sampled; the scene pass resolves its own MSAA target.
+    const target = new THREE.WebGLRenderTarget(w * pr, h * pr, { type: THREE.HalfFloatType });
     const c = new EffectComposer(this.renderer, target);
     c.setPixelRatio(pr);
     c.setSize(w, h);
     const named = <T extends object>(p: T, name: string) => Object.assign(p, { fbName: name });
-    c.addPass(named(new RenderPass(this.scene, this.camera), 'scene'));
+    const scene = new ScenePass(this.scene, this.camera, w * pr, h * pr, this.debugMsaa ?? p.msaa);
+    c.addPass(named(scene, 'scene'));
     if (p.ao) {
       const ao = new GTAOPass(this.scene, this.camera, w, h);
       ao.blendIntensity = 0.55;
       c.addPass(named(ao, 'gtao'));
     }
+    if (fx.godrays) c.addPass(named(new GodRaysPass(this.camera, this.sun, () => scene.depth, w * pr, h * pr), 'godrays'));
     if (p.bloom) c.addPass(named(new UnrealBloomPass(new THREE.Vector2(w, h), 0.06, 0.3, 0.97), 'bloom'));
     c.addPass(named(new OutputPass(), 'output'));
     c.addPass(named(new ShaderPass(GradeShader), 'grade'));
-    if (p.smaa) c.addPass(named(new SMAAPass(), 'smaa'));
+    if (fx.smaa) c.addPass(named(new SMAAPass(), 'smaa'));
+    this.temporal = fx.temporal ? named(new TemporalPass(this.camera, () => scene.depth, w * pr, h * pr), 'temporal') : null;
+    if (this.temporal) c.addPass(this.temporal);
     this.composer = c;
+  }
+
+  /** A camera cut: the previous frame is not reused by the temporal anti-aliasing. */
+  cut() {
+    this.temporal?.reset();
   }
 
   /** Keeps the shadow frustum centred on the action, snapped to texels to avoid shimmering. */
@@ -269,10 +303,15 @@ export class Renderer {
     if (gpu && this.gpuMode === 'frame') gpu.begin('frame');
     // Profiling: the same frame several times back to back keeps the GPU busy, so timer queries
     // measure work rather than the gaps while it waits for the CPU (see GpuTimer).
+    this.camera.updateMatrixWorld();
+    lod.update(this.camera);
     for (let i = 0; i < this.debugRepeat; i++) {
       if (i) this.renderer.info.reset();
+      const taa = this.temporal?.enabled ? this.temporal : null;
+      taa?.jitter();
       if (this.composer) this.composer.render();
       else this.renderer.render(this.scene, this.camera);
+      taa?.unjitter();
     }
     gpu?.endFrame();
   }

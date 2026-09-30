@@ -17,9 +17,20 @@ test.describe.configure({ mode: 'serial' });
 
 /** One login for all tests (the PIN endpoint allows 5 attempts a minute). */
 let cookies: Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>> = [];
+/**
+ * One player for all tests: each test is a new browser context, and without the resume token every
+ * test would join as a new player while the last ones wait out their reconnect grace, filling the
+ * room after 8 maps.
+ */
+let token: string | null = null;
+
+test.afterEach(async ({ page }) => {
+  token = (await page.evaluate(() => sessionStorage.getItem('fb_token')).catch(() => null)) ?? token;
+});
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('fb_settings', JSON.stringify({ quality: 'high', name: 'Шот' })));
+  if (token) await page.addInitScript((t) => sessionStorage.setItem('fb_token', t), token);
   if (cookies.length) await page.context().addCookies(cookies);
   else {
     await page.goto('/fallbeans/pin/index.html');

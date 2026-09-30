@@ -3,7 +3,27 @@ import { mulberry32, type Rng } from '../shared/rng';
 import { Collider, type ColliderOpts, type Shape } from './physics';
 import { type Mover, World } from './world';
 
-export const MODEL_NAMES = ['bean', 'crown', 'hub', 'arm', 'hammer', 'hex', 'door', 'finish', 'bumper', 'cloud'] as const;
+export const MODEL_NAMES = [
+  'bean',
+  'crown',
+  'hub',
+  'arm',
+  'hammer',
+  'hex',
+  'door',
+  'finish',
+  'bumper',
+  'cloud',
+  'tree',
+  'pine',
+  'flag',
+  'cone',
+  'star',
+  'island',
+  'mushroom',
+  'glove',
+  'fan',
+] as const;
 export type ModelName = (typeof MODEL_NAMES)[number];
 
 export type Palette = readonly [string, string];
@@ -34,7 +54,16 @@ export type SurfaceKind =
   | 'gold'
   | 'wood'
   | 'glossy'
-  | 'tile';
+  | 'tile'
+  | 'leaf'
+  | 'grass'
+  | 'rock'
+  | 'cloth'
+  | 'glass'
+  | 'carpet';
+
+/** Two-colour pattern of palette materials (client). */
+export type PatternKind = 'stripes' | 'checker' | 'dots' | 'chevron' | 'waves';
 
 /** Client-only decoration placed after the build, clear of everything solid. */
 export interface SceneryRequest {
@@ -54,8 +83,16 @@ export interface View {
   prim(kind: PrimKind, dims: readonly number[], material: THREE.Material): THREE.Mesh;
   /** Many copies of one primitive in one draw call (per-instance matrix and colour). */
   instanced(kind: PrimKind, dims: readonly number[], material: THREE.Material, count: number): THREE.InstancedMesh;
-  material(pal: Palette | string, freq?: number, surface?: SurfaceKind): THREE.Material;
-  pattern(c1: string, c2: string, freq?: number, dir?: [number, number], speed?: number, surface?: SurfaceKind): THREE.Material;
+  material(pal: Palette | string, freq?: number, surface?: SurfaceKind, pattern?: PatternKind): THREE.Material;
+  pattern(
+    c1: string,
+    c2: string,
+    freq?: number,
+    dir?: [number, number],
+    speed?: number,
+    surface?: SurfaceKind,
+    kind?: PatternKind,
+  ): THREE.Material;
   plain(color: string, opts?: THREE.MeshStandardMaterialParameters, surface?: SurfaceKind): THREE.Material;
   model(name: ModelName): THREE.Object3D;
   emojiTexture(emoji: string, bg: string): THREE.Texture;
@@ -78,6 +115,8 @@ export interface PrimOpts extends ColliderOpts {
   seg?: number;
   /** Surface finish (default: padded for big floors, rubber for balls, plastic otherwise). */
   surface?: SurfaceKind;
+  /** Pattern of a two-colour palette (default: the map's style). */
+  pattern?: PatternKind;
 }
 
 export interface Prim {
@@ -92,6 +131,8 @@ export class Builder {
   readonly anims: Anim[] = [];
   readonly scenery: SceneryRequest[] = [];
   readonly rng: Rng;
+  /** Look of the map (client only): the pattern its palette materials use by default. */
+  readonly style: { pattern: PatternKind } = { pattern: 'stripes' };
 
   constructor(
     readonly seed: number,
@@ -134,7 +175,7 @@ export class Builder {
     const [a = 1, b = 1, c = 1] = dims;
     const big = kind === 'box' ? a * c >= 30 && Math.min(a, c) >= 3 && b <= 3 : kind === 'cyl' ? a >= 4 && b <= 3 : false;
     const surface = opts.surface ?? (kind === 'sphere' ? 'rubber' : big ? 'padded' : 'plastic');
-    return v.prim(kind, dims, opts.material ?? v.material(pal, opts.freq ?? freq, surface));
+    return v.prim(kind, dims, opts.material ?? v.material(pal, opts.freq ?? freq, surface, opts.pattern ?? this.style.pattern));
   }
 
   box(
@@ -284,6 +325,45 @@ export class Builder {
     f.position.set(x, y, z);
     for (const sx of [-8.5, 8.5])
       this.collider(this.anchor(x + sx, y + 3, z), { type: 'cyl', r: 0.6, hh: 3 }, { isStatic: true });
+    // Stars twirling over the arch; flags just past the line (finished beans have left the course).
+    for (const sx of [-5, 0, 5]) this.prop('star', x + sx, y + 8.2 + (sx ? 0 : 0.6), z, { scale: sx ? 1.1 : 1.5 });
+    for (const sx of [-7, 7])
+      this.prop('flag', x + sx, y, z + 3, { tint: sx < 0 ? '#ffd23f' : '#4fdc6a', yaw: sx < 0 ? Math.PI : 0 });
+  }
+
+  /**
+   * A decorative model (client only, no collision): trees, flags (their pennant sways, `tint` colours
+   * it), cones, stars (spin and bob), fans (blades turn), mushrooms, islands.
+   */
+  prop(name: ModelName, x: number, y: number, z: number, o: { yaw?: number; scale?: number; tint?: string } = {}) {
+    const v = this.view;
+    if (!v) return null;
+    const m = this.model(name);
+    m.position.set(x, y, z);
+    m.rotation.y = o.yaw ?? 0;
+    m.scale.setScalar(o.scale ?? 1);
+    m.userData.cat = 'decor';
+    const ph = (x * 12.9898 + z * 78.233) % 6.283;
+    if (name === 'flag') {
+      const cloth = m.getObjectByName('Pennant');
+      if (cloth instanceof THREE.Mesh && o.tint) cloth.material = v.plain(o.tint, {}, 'cloth');
+      if (cloth)
+        this.anim((t) => {
+          cloth.rotation.y = Math.sin(t * 2.2 + ph) * 0.22 + Math.sin(t * 5.1 + ph * 2) * 0.05;
+        });
+    } else if (name === 'fan') {
+      const blades = m.getObjectByName('FanBlades');
+      if (blades)
+        this.anim((t) => {
+          blades.rotation.z = t * 6 + ph;
+        });
+    } else if (name === 'star') {
+      this.anim((t) => {
+        m.rotation.y = (o.yaw ?? 0) + t * 1.4 + ph;
+        m.position.y = y + Math.sin(t * 1.8 + ph) * 0.2;
+      });
+    }
+    return m;
   }
 
   /** Decorative clouds around the course (client only; placed clear of the course after the build). */
@@ -299,6 +379,10 @@ export class Builder {
     this.box(0, 0.6, z0 - 7.4, 19.6, 1.2, 0.8, PAL.pink);
     const gateMat = this.view?.own(new THREE.MeshStandardMaterial({ color: '#ff5fa2', transparent: true, opacity: 0.35 }));
     const gate = this.box(0, 1.8, z0 + 7.1, 18, 3.6, 0.4, PAL.pink, { material: gateMat, castShadow: false });
+    // Flags and cones by the gate (on the rails: nothing to trip over, out of the camera's way).
+    this.prop('flag', -9.4, 1.2, z0 + 6.4, { tint: '#ff5fa2', yaw: Math.PI });
+    this.prop('flag', 9.4, 1.2, z0 + 6.4, { tint: '#3fa9ff' });
+    for (const sx of [-1, 1]) this.prop('cone', sx * 9.4, 1.2, z0 + 4.2, { scale: 0.9 });
     this.move((t) => {
       gate.col.enabled = t < 0;
       gate.obj.visible = t < 0;

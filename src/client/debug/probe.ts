@@ -3,7 +3,8 @@ import { DT, PROTOCOL_VERSION, TICK_MS } from '../../shared/consts';
 import type { DevCmd, ServerMsg } from '../../shared/protocol';
 import { type Collider, R, SPHERES } from '../../sim/physics';
 import type { Game } from '../game/game';
-import type { Quality } from '../game/renderer';
+import { lod } from '../game/lod';
+import type { Effects, Quality } from '../game/renderer';
 import { settings, updateSettings } from '../settings';
 import {
   arenaInfo,
@@ -388,6 +389,14 @@ export function createProbe(game: Game) {
       },
       get: () => ({ pos: vec(game.renderer.camera.position), fov: game.renderer.camera.fov }),
     },
+    /** Puts a crown or a tail on a bean (default: the local one) until the next lobby update. */
+    decorate(d: { crown?: boolean; tail?: boolean }, id = myId.value) {
+      const b = game.inspect().beans.get(id);
+      if (!b) return false;
+      if (d.crown !== undefined) b.setCrown(d.crown);
+      if (d.tail !== undefined) b.setTail(d.tail);
+      return true;
+    },
     ui: (hidden: boolean) => {
       uiHidden.value = hidden;
     },
@@ -400,6 +409,19 @@ export function createProbe(game: Game) {
       debugOverlay.value = on;
     },
     quality: (q: Quality) => updateSettings({ quality: q }),
+    /** Post effects on/off (god rays, SMAA, temporal AA) for benchmarks; returns the current set. */
+    fx: (patch: Partial<Effects> = {}) => {
+      if (patch.godrays !== undefined) updateSettings({ godrays: patch.godrays });
+      game.renderer.setEffects(patch);
+      return { ...game.renderer.fx };
+    },
+    /** Levels of detail: stats, or switch off / force a level (null: automatic). */
+    lod: (o: { enabled?: boolean; force?: number | null; bias?: number } = {}) => {
+      if (o.enabled !== undefined) lod.enabled = o.enabled;
+      if (o.force !== undefined) lod.force = o.force;
+      if (o.bias !== undefined) lod.bias = o.bias;
+      return { enabled: lod.enabled, force: lod.force, bias: lod.bias, ...lod.stats, levels: [...lod.stats.levels] };
+    },
     settings: () => settings.value,
     /** GPU timing: 'frame', 'passes' (per render pass) or 'off'; returns false if unsupported. */
     gpu: (mode: 'off' | 'frame' | 'passes' | boolean = 'frame') => game.renderer.measureGpu(mode),

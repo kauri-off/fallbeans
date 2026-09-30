@@ -109,3 +109,46 @@ export function armContactEta(bot: BotView, angle: number, omega: number, arms: 
   // Just passed: still touching until the arm clears the other side.
   return eta > period - margin ? eta - period - margin : eta - margin;
 }
+
+export interface GloveOpts {
+  x: number;
+  y: number;
+  z: number;
+  /** −1: comes from the left (punches towards +x), 1: from the right. */
+  side: -1 | 1;
+  /** Punch rhythm (rad/s) and phase. */
+  w: number;
+  ph: number;
+  /** How far the punch reaches out of its post (m). */
+  reach: number;
+  scale?: number;
+  /** A post under the glove down to this height (none: hangs from nothing, e.g. out of a wall). */
+  postTo?: number;
+}
+
+/**
+ * A boxing glove on a rod that rests in its post and punches out along x now and then: a quick jab
+ * and a slower pull back. Returns the glove's x offset from the post over time (for bots).
+ */
+export function glovePuncher(b: Builder, o: GloveOpts): (t: number) => number {
+  const s = o.scale ?? 1.3;
+  const out = (t: number) => o.reach * Math.max(0, Math.sin(Math.max(0, t) * o.w + o.ph)) ** 3;
+  if (o.postTo !== undefined) {
+    const h = o.y - o.postTo + 0.6;
+    b.box(o.x + o.side * 1.4 * s, o.postTo + h / 2, o.z, 1.1, h, 1.3, PAL.orange, { noCollide: true });
+  }
+  const glove = b.anchor(o.x, o.y, o.z);
+  b.collider(
+    b.anchor(-o.side * 0.56 * s, 0, 0, glove),
+    { type: 'box', hx: 0.54 * s, hy: 0.48 * s, hz: 0.48 * s },
+    { hit: 1.1, tag: 'glove', sinks: true },
+  );
+  const model = b.model('glove', glove);
+  // The model punches along its +z: turned to punch across.
+  model.rotation.y = -o.side * (Math.PI / 2);
+  model.scale.setScalar(s);
+  b.move((t) => {
+    glove.position.x = o.x - o.side * out(t);
+  });
+  return (t) => o.x - o.side * out(t);
+}

@@ -23,9 +23,11 @@ interface Plate {
 /** Starts 10° past a spawn and eases in (see jump-club). */
 const LOW = spinUp(-0.22, 0.9, 0.004);
 export const lowAngle = LOW.angle;
-const highAngle = (t: number) => (t <= 60 ? 0 : -(0.6 * (t - 60) + 0.003 * (t - 60) ** 2));
+const HIGH_AT = 45;
+const highAngle = (t: number) => (t <= HIGH_AT ? 0 : -(0.6 * (t - HIGH_AT) + 0.003 * (t - HIGH_AT) ** 2));
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'checker';
   const plates: Plate[] = [];
   const pals: Palette[] = [PAL.purple, PAL.blue, PAL.pink, PAL.teal];
   const half = (N - 1) / 2;
@@ -93,7 +95,7 @@ export default defineMap(meta, (b) => {
       const t = Math.max(0, bot.t);
       if (t <= 0) return false;
       const eta = armContactEta(bot, lowAngle(t), LOW.omega(t), 2);
-      const high = t > 60 ? armContactEta(bot, highAngle(t), -(0.6 + 0.006 * (t - 60)), 1) : 9;
+      const high = t > HIGH_AT ? armContactEta(bot, highAngle(t), -(0.6 + 0.006 * (t - HIGH_AT)), 1) : 9;
       return eta > 0.1 && eta < 0.15 + (bot.mem.react ?? 0.2) * 0.3 && high > 0.7;
     },
   });

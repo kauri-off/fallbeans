@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { pathBrain, type Waypoint } from '../../sim/bots';
 import { PAL } from '../../sim/builder';
 import { type BotView, defineMap } from '../../sim/map';
-import { rollingBalls, yOnRamp } from '../../sim/props';
+import { glovePuncher, rollingBalls, yOnRamp } from '../../sim/props';
 import meta from './meta';
 
 /**
@@ -35,13 +35,15 @@ const CARPET_W = 3.2;
 
 /** Gates: a wall across the ramp with one gap that slides from side to side. */
 const GATES = [
-  { z: 72, w: 0.75, ph: 0, gap: 3.8 },
-  { z: 82, w: 0.95, ph: 2, gap: 3.6 },
-  { z: 92, w: 1.1, ph: 4.1, gap: 3.4 },
+  { z: 70, w: 0.8, ph: 0, gap: 3.6 },
+  { z: 78, w: 1.0, ph: 2, gap: 3.4 },
+  { z: 86, w: 1.15, ph: 4.1, gap: 3.2 },
+  { z: 94, w: 1.3, ph: 1.2, gap: 3.1 },
 ] as const;
 const gateX = (g: (typeof GATES)[number], t: number) => Math.sin(t * g.w + g.ph) * (B_W / 2 - g.gap / 2 - 0.4);
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'waves';
   const spawns = b.startArea(0);
   b.box(0, -1, 11, 18, 2, 8, PAL.purple);
 
@@ -65,6 +67,7 @@ export default defineMap(meta, (b) => {
     b.box(cx, yA(cz) + 0.1 / cosA, cz, CARPET_W, 0.2, len, i % 2 ? PAL.green : PAL.yellow, {
       rot: [-angA, yaw, 0],
       freq: 0.8,
+      surface: 'carpet',
     });
   }
   const balls = rollingBalls(b, {
@@ -74,8 +77,8 @@ export default defineMap(meta, (b) => {
     zBottom: A0.z + 1,
     yBottom: A0.y,
     radius: 1.1,
-    speed: (t) => 8 + t * 0.03,
-    period: 5.5,
+    speed: (t) => 9 + t * 0.03,
+    period: 4.4,
     perLane: 1,
   });
 
@@ -98,10 +101,17 @@ export default defineMap(meta, (b) => {
       gate.position.x = gateX(g, t);
     });
   });
+  // Gloves out of the side walls between the gates.
+  for (const [z, side, w, ph] of [
+    [75, -1, 1.1, 0.5],
+    [91, 1, 1.25, 2.5],
+  ] as const)
+    glovePuncher(b, { x: side * 9.2, y: yB(z) + 0.95, z, side, w, ph, reach: 7.8, scale: 1.2, postTo: yB(z) - 3 });
   for (const [x, z] of [
-    [-4, 77],
-    [4, 87],
-    [0, 97],
+    [-4, 73.5],
+    [4, 82],
+    [-3, 90],
+    [2, 98.5],
   ] as const)
     b.bumper(x, yB(z) - 0.1, z, 0.8, 10);
 

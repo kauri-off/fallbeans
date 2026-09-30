@@ -8,6 +8,8 @@ export interface Settings {
   fov: number;
   volume: number;
   quality: Quality;
+  /** Sun shafts (a post effect; off saves GPU time). */
+  godrays: boolean;
   showFps: boolean;
 }
 
@@ -19,6 +21,7 @@ const DEFAULTS: Settings = {
   fov: 70,
   volume: 0.8,
   quality: 'high',
+  godrays: true,
   showFps: false,
 };
 

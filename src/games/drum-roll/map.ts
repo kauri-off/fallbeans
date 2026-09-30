@@ -37,26 +37,34 @@ const A_END = { z: STAIR.at(-1)!.z + STAIR_R + 0.05, y: STAIR.at(-1)!.top - 0.45
 // B: the spinner deck.
 const DECK_Z = 52;
 const DECK_Y = A_END.y;
-const lowAng = (t: number) => (t <= 0 ? 0 : t * 1.25);
-const highAng = (t: number) => (t <= 0 ? Math.PI / 2 : Math.PI / 2 - t * 0.8);
+const LOW_W = 1.45;
+const HIGH_W = 0.95;
+const lowAng = (t: number) => (t <= 0 ? 0 : t * LOW_W);
+const highAng = (t: number) => (t <= 0 ? Math.PI / 2 : Math.PI / 2 - t * HIGH_W);
 
 // C: logs rolling sideways.
 const LOGS = [
-  { z: 72, x: 0, spin: 0.9 },
-  { z: 82.4, x: 0, spin: -1.05 },
-  { z: 92.8, x: 0, spin: 1.2 },
+  { z: 72, x: 0, spin: 0.95 },
+  { z: 82.4, x: 0, spin: -1.1 },
+  { z: 92.8, x: 0, spin: 1.25 },
+  { z: 108.6, x: 0, spin: -1.35 },
+  { z: 119, x: 0, spin: 1.5 },
 ] as const;
+/** A rest platform between the third and fourth log. */
+const REST = { z0: 97.7, z1: 103.7 };
+const FINISH_Z = 130;
 const LOG_R = 1.8;
 const LOG_LEN = 9;
 
 export default defineMap(meta, (b) => {
+  b.style.pattern = 'dots';
   const spawns = b.startArea(0);
   // Reaches right up to the first drum (no gap to fall into).
   b.box(0, -1, 11.3, 16, 2, 8.6, PAL.purple);
 
   const pals = [PAL.orange, PAL.teal, PAL.pink, PAL.green];
   STAIR.forEach((s, i) => {
-    drum(b, s.x, s.top, s.z, STAIR_R, STAIR_LEN, -1.25 - i * 0.08, pals[i % 4]!);
+    drum(b, s.x, s.top, s.z, STAIR_R, STAIR_LEN, -1.35 - i * 0.1, pals[i % 4]!);
   });
   b.box(0, A_END.y - 1, A_END.z + 3, 23, 2, 6, PAL.purple);
 
@@ -78,8 +86,9 @@ export default defineMap(meta, (b) => {
   LOGS.forEach((l, i) => {
     drum(b, l.x, DECK_Y, l.z, LOG_R, LOG_LEN, l.spin, pals[(i + 2) % 4]!, true);
   });
-  b.box(0, DECK_Y - 1, 106.8, 18, 2, 18, PAL.yellow);
-  b.finish(0, DECK_Y, 106);
+  b.box(0, DECK_Y - 1, (REST.z0 + REST.z1) / 2, 10, 2, REST.z1 - REST.z0, PAL.purple);
+  b.box(0, DECK_Y - 1, 133.5, 18, 2, 18, PAL.yellow);
+  b.finish(0, DECK_Y, FINISH_Z);
   b.clouds(0, 60, 60, 36);
 
   // --- bots
@@ -105,8 +114,8 @@ export default defineMap(meta, (b) => {
     const p = bot.body.pos;
     const r = Math.hypot(p.x, p.z - DECK_Z);
     if (r > 8 || r < 1.3 || bot.t <= 0) return false;
-    const eta = armContactEta(bot, lowAng(bot.t), 1.25, 2, 0, DECK_Z);
-    const high = armContactEta(bot, highAng(bot.t), -0.8, 1, 0, DECK_Z);
+    const eta = armContactEta(bot, lowAng(bot.t), LOW_W, 2, 0, DECK_Z);
+    const high = armContactEta(bot, highAng(bot.t), -HIGH_W, 1, 0, DECK_Z);
     return eta > 0.1 && eta < 0.24 && high > 0.8;
   };
   path.push(
@@ -118,23 +127,27 @@ export default defineMap(meta, (b) => {
   for (const l of LOGS) {
     const start = l.z - LOG_LEN / 2;
     const e = edge;
-    path.push({ x: l.x, z: start + 1.2, w: 0.1, jumpWhen: (bot) => bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2 });
+    if (start > REST.z1)
+      path.push({ x: 0, z: REST.z0 + 2, w: 1, jumpWhen: (bot) => bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2 });
+    const from = start > REST.z1 ? REST.z1 : e;
+    path.push({ x: l.x, z: start + 1.2, w: 0.1, jumpWhen: (bot) => bot.body.pos.z > from - 1.5 && bot.body.pos.z < from + 0.2 });
     path.push({ x: l.x, z: l.z + LOG_LEN / 2 - 2.2, w: 0 });
     edge = l.z + LOG_LEN / 2;
   }
-  path.push({ x: 0, z: 100, w: 1, jumpWhen: (bot) => bot.body.pos.z > edge - 1.5 && bot.body.pos.z < edge + 0.2 });
-  path.push({ x: 0, z: 110, w: 3 });
+  path.push({ x: 0, z: FINISH_Z - 6, w: 1, jumpWhen: (bot) => bot.body.pos.z > edge - 1.5 && bot.body.pos.z < edge + 0.2 });
+  path.push({ x: 0, z: FINISH_Z + 4, w: 3 });
 
   return {
     spawns,
     killY: -12,
-    finish: { z: 106, y: DECK_Y - 1 },
+    finish: { z: FINISH_Z, y: DECK_Y - 1 },
     // On the drum frames or the walkway rails? There are none: only the course counts.
     forbidden: (p) => p.y > DECK_Y + 6.5,
     checkpoints: [
       { z: -100, p: new THREE.Vector3(0, 0.1, 10) },
       { z: A_END.z + 0.5, p: new THREE.Vector3(0, A_END.y + 0.1, A_END.z + 2.5) },
       { z: 61, p: new THREE.Vector3(0, DECK_Y + 0.1, 63) },
+      { z: REST.z0 + 0.5, p: new THREE.Vector3(0, DECK_Y + 0.1, REST.z0 + 3) },
     ],
     bot: pathBrain(path),
   };

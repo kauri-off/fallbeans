@@ -12,6 +12,7 @@ const IMMUNE = 1.5;
 const ARENA_R = 15;
 
 export default defineMap(meta, (b, ctx) => {
+  b.style.pattern = 'dots';
   b.cyl(0, -1, 0, ARENA_R, 2, PAL.teal, { freq: 0.3 });
   b.cyl(0, 0.03, 0, ARENA_R + 0.05, 0.1, PAL.yellow, { noCollide: true });
   // A raised island with ramps, and a few bumpers to dodge around
@@ -27,8 +28,13 @@ export default defineMap(meta, (b, ctx) => {
     // From the island's top edge (1.5 m) down to the floor 4 m further out.
     b.box(0, 0.47, 0, 4, 0.6, 4.5, PAL.pink, { parent: ramp, rot: [Math.atan2(1.5, 4), 0, 0] });
   }
-  // Between the spawn points (which sit at 22.5° + k·45°), never on top of one.
-  for (const a of [0, 0.5, 1, 1.5]) b.bumper(Math.cos(a * Math.PI) * 10, 0, Math.sin(a * Math.PI) * 10, 1, 12);
+  // Between the spawn points (which sit at 22.5° + k·45°), never on top of one; two small sweepers
+  // turning at the far sides (their arms stop short of the spawns).
+  for (const a of [0.5, 1.5]) b.bumper(Math.cos(a * Math.PI) * 10, 0, Math.sin(a * Math.PI) * 10, 1, 12);
+  for (const sx of [-1, 1]) {
+    b.hub(sx * 11.6, 0, 0, 0.6);
+    b.rotor(sx * 11.6, 0.6, 0, 2.9, 2, (t) => (t <= 0 ? sx * 0.8 : sx * (0.8 + t * 1.1)), 0.7);
+  }
   b.clouds(0, 0, 40);
 
   // Initial tails follow from the seed and the participant order, identical everywhere.
