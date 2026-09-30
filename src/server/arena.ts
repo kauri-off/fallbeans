@@ -945,7 +945,7 @@ export function animFor(b: PlayerBody, grabbing: boolean, reaching = false): num
   if (b.state === 'stun') return ANIM.stun;
   if (b.state === 'dive') return ANIM.dive;
   if (b.state === 'slide') return ANIM.slide;
-  if (b.state === 'climb') return ANIM.climb;
+  if (b.state === 'climb') return b.climbingOver ? ANIM.climbOver : ANIM.climb;
   if (!b.grounded) return ANIM.air;
   if (grabbing) return ANIM.grab;
   if (reaching) return ANIM.reach;

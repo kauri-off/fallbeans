@@ -545,6 +545,11 @@ export class PlayerBody {
     return this.size > 1 ? GIANT_MASS : 1;
   }
 
+  /** Climbing and already up at the edge (going over it), past hanging on and pulling up. */
+  get climbingOver() {
+    return this.state === 'climb' && this.stateT <= CLIMB_T - CLIMB_HANG && this.pos.y >= this.climbTo.y - 1e-4;
+  }
+
   /** Gives a bonus from sim time t. */
   givePower(kind: number, t: number) {
     this.power = kind;
@@ -613,7 +618,8 @@ export class PlayerBody {
   /** Before moving the world: remember where we stand on the ground collider. */
   beforeWorldUpdate() {
     this.hasGroundLocal = false;
-    if (this.grounded && this.groundCol?.enabled) {
+    // A sweeping arm is no ride: it moves on under whoever lands on top, and they drop off behind it.
+    if (this.grounded && this.groundCol?.enabled && !this.groundCol.sweep) {
       this.groundLocal.copy(this.pos).applyMatrix4(this.groundCol.inv);
       this.hasGroundLocal = true;
       this.carryCol = this.groundCol;
@@ -833,14 +839,16 @@ export class PlayerBody {
             hitDone.add(col);
             col.surfaceVelocity(hitInfo.local, dt, _sv);
             const sp = Math.hypot(_sv.x, _sv.z);
-            if (this.state === 'tumble') {
+            // Running into the back of an arm that is moving away: just a wall (it fells only what it catches).
+            const behind = _sv.x * n.x + _sv.z * n.z < -0.3 * sp;
+            if (!behind && this.state === 'tumble') {
               // Already down: scooped up and over the arm (not dragged along with it, not passed through).
               if (g && this.vel.y < SCOOP_V * 0.6) {
                 this.vel.y = SCOOP_V;
                 this.hitSomething = true;
               }
               this.stateT = Math.max(this.stateT, 0.6);
-            } else if (sp > 1) {
+            } else if (!behind && sp > 1) {
               // A sweeping arm fells whoever it catches, shoved along its swing.
               // (hit sets how hard: 0.6 is a full shove)
               const k = Math.min(1, 11 / sp) * 1.5 * col.hit;

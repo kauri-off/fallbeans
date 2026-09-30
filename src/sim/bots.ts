@@ -186,28 +186,66 @@ function clearTo(nav: NonNullable<BotView['nav']>, from: THREE.Vector3, x: numbe
   return true;
 }
 
-/** Stuck against something while trying to move: hop, then side-step. */
+/**
+ * Stuck against something while trying to move: hop, then side-step. Stuck means no real progress
+ * (0.6 m) from where the bot last got somewhere: velocity lies (a bean pushed back by another keeps
+ * it high), and the hop itself must not count as progress, or the side-step never comes.
+ */
 export function unstick(bot: BotView, out: BotInput) {
+  const m = bot.mem;
+  const b = bot.body;
+  const p = b.pos;
   const moving = Math.hypot(out.mx, out.mz) > 0.3;
-  // Real displacement, not velocity: being pushed back by another bean keeps velocity high.
-  const p = bot.body.pos;
-  const sp = bot.mem.lx === undefined ? 9 : Math.hypot(p.x - bot.mem.lx, p.z - (bot.mem.lz ?? 0)) / BOT_DT;
-  bot.mem.lx = p.x;
-  bot.mem.lz = p.z;
-  bot.mem.stuck = moving && sp < 1.2 && bot.body.grounded ? (bot.mem.stuck ?? 0) + BOT_DT : 0;
-  if ((bot.mem.stuck ?? 0) > 0.45) {
+  if (!moving || m.ax === undefined || Math.hypot(p.x - m.ax, p.z - (m.az ?? 0)) > 0.6) {
+    m.ax = p.x;
+    m.az = p.z;
+    m.stuck = 0;
+    // (Not before the start: nobody can move yet.)
+  } else if (b.grounded && bot.t > 0) m.stuck = (m.stuck ?? 0) + BOT_DT;
+  const stuck = m.stuck ?? 0;
+  if (stuck > 0.45 && b.grounded) {
     out.jump = true;
     bot.plan.at = -1e9;
-    if ((bot.mem.stuck ?? 0) > 1.4) {
-      // Still stuck (another bean in the way): sidestep for a moment.
-      bot.mem.side = bot.rng() < 0.5 ? -1 : 1;
-      bot.mem.sideUntil = bot.t + 0.6;
-      bot.mem.stuck = 0;
-    }
   }
-  if ((bot.mem.sideUntil ?? -1) > bot.t) {
-    out.mx = bot.mem.side ?? 1;
-    out.mz *= 0.3;
+  if (stuck > 1.4) {
+    // Still stuck: side-step for a moment. Against another bean, both step to their own right of
+    // the line between them (so the two go opposite ways, like people in a corridor); against a
+    // wall, to one side of the heading. Every other try goes the other way, and never off an edge.
+    const [hx, hz] = heading(bot, out);
+    const odd = bot.id % 2 === 1 ? -1 : 1;
+    let sx = hz * odd;
+    let sz = -hx * odd;
+    let near = 1.6;
+    for (const o of bot.others) {
+      const dx = o.pos.x - p.x;
+      const dz = o.pos.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d < near && d > 1e-3 && Math.abs(o.pos.y - p.y) < 1.2) {
+        near = d;
+        sx = dz / d;
+        sz = -dx / d;
+      }
+    }
+    m.tries = (m.tries ?? 0) + 1;
+    const flip = m.tries % 2 === 0 ? -1 : 1;
+    sx *= flip;
+    sz *= flip;
+    if (bot.nav && !bot.nav.safe(p.x + sx * 1.5, p.z + sz * 1.5, p.y)) {
+      sx = -sx;
+      sz = -sz;
+    }
+    m.sdx = sx;
+    m.sdz = sz;
+    m.sideUntil = bot.t + 0.6;
+    m.stuck = 0;
+  }
+  if ((m.sideUntil ?? -1) > bot.t) {
+    const [hx, hz] = heading(bot, out);
+    const x = (m.sdx ?? 1) + hx * 0.25;
+    const z = (m.sdz ?? 0) + hz * 0.25;
+    const l = Math.hypot(x, z);
+    out.mx = x / l;
+    out.mz = z / l;
   }
 }
 
@@ -244,8 +282,30 @@ function landing(bot: BotView, vx: number, vz: number, vy: number) {
     const x = p.x + vx * t;
     const z = p.z + vz * t;
     const f = nav.floorBelow(x, z, py);
-    if (f && y <= f.y) return { x, z, ...f };
+    if (f && y <= f.y) return { x, z, t, ...f };
     py = y;
+  }
+  return null;
+}
+
+/**
+ * Ground the map knows better than the navigation grid (tiles that drop, floors that move): what
+ * level the bean is going for, and whether (x, z) has ground there at time t.
+ */
+export interface LandCheck {
+  y: number;
+  ok: (x: number, z: number, t: number) => boolean;
+}
+
+/** Where a body flying with (vx, vy, vz) gets back down to the level of `land`, or null if it never does. */
+function landingOn(bot: BotView, vx: number, vz: number, vy: number, land: LandCheck) {
+  const p = bot.body.pos;
+  if (p.y < land.y) return null;
+  for (let t = 0.05; t <= 2; t += 0.05) {
+    if (p.y + vy * t - (GRAVITY / 2) * t * t > land.y) continue;
+    const x = p.x + vx * t;
+    const z = p.z + vz * t;
+    return { x, z, y: land.y, safe: land.ok(x, z, bot.t + t), t };
   }
   return null;
 }
@@ -261,22 +321,28 @@ function heading(bot: BotView, out: BotInput): [number, number] {
  * Dives that are worth it: in the air, when the jump falls short and a dive still reaches ground;
  * held by someone, to break free (a dive shakes off any grip) when the way ahead is safe.
  */
-export function smartDive(bot: BotView, out: BotInput) {
+export function smartDive(bot: BotView, out: BotInput, land?: LandCheck) {
   const b = bot.body;
   const nav = bot.nav;
-  if (!nav || b.state !== 'normal' || out.dive) return;
+  if ((!nav && !land) || b.state !== 'normal' || out.dive) return;
   const skill = bot.mem.skill ?? 0.7;
   const [fx, fz] = heading(bot, out);
   if (!b.grounded && b.vel.y < 1.5) {
-    const short = landing(bot, b.vel.x, b.vel.z, b.vel.y);
-    if (short?.safe) return;
+    const fly = (vx: number, vz: number, vy: number) => (land ? landingOn(bot, vx, vz, vy, land) : landing(bot, vx, vz, vy));
+    const short = fly(b.vel.x, b.vel.z, b.vel.y);
+    if (short?.safe || (land && !short)) return;
     const along = Math.max(0, b.vel.x * fx + b.vel.z * fz);
     const sp = Math.max(DIVE_SPEED, Math.min(along, DIVE_SPEED * 1.25));
-    const far = landing(bot, fx * sp, fz * sp, Math.max(b.vel.y, 3));
+    const far = fly(fx * sp, fz * sp, Math.max(b.vel.y, 3));
+    if (!far?.safe) return;
     // Landing on safe ground, with room to slide on it.
-    if (far?.safe && nav.safe(far.x + fx * 1.2, far.z + fz * 1.2, far.y) && bot.rng() < 0.35 + skill * 0.6) out.dive = true;
+    const room = land
+      ? land.ok(far.x + fx * 1.2, far.z + fz * 1.2, bot.t + far.t + 0.1)
+      : !!nav?.safe(far.x + fx * 1.2, far.z + fz * 1.2, far.y);
+    if (room && bot.rng() < 0.35 + skill * 0.6) out.dive = true;
     return;
   }
+  if (!nav) return;
   const held = b.grounded && b.slowUntil > bot.t && b.slowK <= 0.5;
   if (held && bot.rng() < (0.25 + skill * 0.5) * BOT_DT * 6) {
     const y = b.pos.y;
@@ -330,6 +396,8 @@ export interface HumanOpts {
   rough?: boolean;
   /** Step round beans in the way (off when going for one). */
   avoid?: boolean;
+  /** Real ground for rescue dives, where the navigation grid does not know it (see LandCheck). */
+  land?: LandCheck;
 }
 
 /**
@@ -341,7 +409,7 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   const skill = bot.mem.skill ?? 0.7;
   const ph = bot.mem.ph ?? 0;
   const t = bot.t;
-  smartDive(bot, out);
+  smartDive(bot, out, o.land);
   // Wobble: a slow, uneven drift of the aim.
   const amount = o.precise ? 0.03 + (1 - skill) * 0.03 : 0.12 + (1 - skill) * 0.14;
   const a = (Math.sin(t * 0.9 + ph) * 0.6 + Math.sin(t * 2.3 + ph * 1.7) * 0.4) * amount;
@@ -683,8 +751,10 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
     }
     if (opts.floor && Math.hypot(out.mx, out.mz) > 0.1) avoidHoles(bot, out, opts.floor);
     if (opts.social && d < 1.5 && b.grounded && bot.rng() < 0.12 * BOT_DT) out.emote = 1 + Math.floor(bot.rng() * EMOTES);
-    // jumpWhen models reaction time itself (a timing window that depends on bot.mem.react).
-    if (opts.jumpWhen?.(bot) && b.grounded) out.jump = true;
+    // jumpWhen models reaction time itself (a timing window that depends on bot.mem.react). Just
+    // before landing counts too: the jump is kept for a moment and goes off on touchdown.
+    const landing = !b.grounded && b.vel.y < 0 && b.pos.y - gy < 0.35;
+    if (opts.jumpWhen?.(bot) && (b.grounded || landing)) out.jump = true;
     humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt, avoid: !hunt });
     unstick(bot, out);
   };

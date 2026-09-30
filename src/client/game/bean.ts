@@ -575,9 +575,10 @@ export class Bean {
       T.k = 200;
       return T;
     }
-    if (a === ANIM.climb) {
-      // Hanging on and pulling up (rising, or still), then a knee over the edge and a push down.
-      const pulling = vy > 0.4 || speed < 0.4;
+    if (a === ANIM.climb || a === ANIM.climbOver) {
+      // Hanging on and pulling up, then a knee over the edge and a push down. The phase comes from the
+      // physics (guessing it from the motion flickered for others' beans on a poor connection).
+      const pulling = a === ANIM.climb;
       T.k = 200;
       T.c = 16;
       if (pulling) {

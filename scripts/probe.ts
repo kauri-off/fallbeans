@@ -1,7 +1,7 @@
 /**
  * Drives the game in a headless browser and runs code against the debug probe (window.__fallbeans).
  *   bun run probe [--url http://localhost:5173/fallbeans/] [--headed] [--practice map] [--shot out.png]
- *                 [--wait round] [--timeout 60] "<async JS; `p` is the probe>" …
+ *                 [--wait round] [--timeout 60] [--size 1280x720] "<async JS; `p` is the probe>" …
  *
  * Each snippet runs in the page in turn and its result is printed as JSON, e.g.
  *   bun run probe "await p.dev({c:'start', games:['door-dash'], bots:3})" "await p.dev({c:'skipIntro'})" "p.snapshot()"
@@ -17,10 +17,15 @@ const opt = (n: string) => {
   const i = args.indexOf(n);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const valued = new Set(['--url', '--practice', '--shot', '--wait', '--timeout']);
+const valued = new Set(['--url', '--practice', '--shot', '--wait', '--timeout', '--size']);
 const snippets = args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1] ?? ''));
 const base = (opt('--url') ?? 'http://localhost:5173/fallbeans/').replace(/\/?$/, '/');
 const timeout = Number(opt('--timeout') ?? 60) * 1000;
+// Window size (e.g. 1366x768), to check the UI fits.
+const [width = 1280, height = 720] = (opt('--size') ?? '')
+  .split('x')
+  .map(Number)
+  .filter((n) => n > 0);
 
 const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => unknown;
 const parses = (body: string) => {
@@ -50,7 +55,7 @@ const browser = await chromium.launch({
   ...(channel ? { channel } : {}),
   args: gpuArgs,
 });
-const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const page = await browser.newPage({ viewport: { width, height } });
 page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));
 // Snippets can take screenshots along the way: await shot('/tmp/a.png').
 await page.exposeFunction('shot', async (path: string) => {

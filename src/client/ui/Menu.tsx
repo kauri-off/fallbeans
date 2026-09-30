@@ -29,7 +29,7 @@ export function Menu({ game }: { game: Game }) {
   return (
     <div class="menu-wrap">
       <div class="menu glass">
-        <div class="row between">
+        <div class="row between wrap">
           <h1 class="logo small">Fall Beans</h1>
           <div class="tabs">
             <button type="button" class={`tab${tab === 'game' ? ' on' : ''}`} onClick={() => (menuTab.value = 'game')}>

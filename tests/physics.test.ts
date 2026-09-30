@@ -150,6 +150,37 @@ describe('course mechanics', () => {
     expect(maxDrag).toBeLessThan(6);
   });
 
+  it('a sweeping arm is no ride: a bean on top of it drops off behind it', () => {
+    const b = new Builder(1, null);
+    b.box(0, -1, 0, 40, 2, 40);
+    b.rotor(0, 0.6, 0, 8, 1, (t) => t * 1.2);
+    b.world.finalize(0);
+    const body = new PlayerBody(1);
+    // On top of the arm (along +x at t = 0; its top is at 0.96).
+    body.reset(new THREE.Vector3(5, 1, 0));
+    run(body, b.world, 0, 120);
+    // Carried along, it would be 6 m round the circle by now.
+    expect(Math.hypot(body.pos.x - 5, body.pos.z)).toBeLessThan(1.5);
+    expect(body.pos.y).toBeLessThan(0.1);
+  });
+
+  it('running into the back of an arm that is moving away does not knock the bean over', () => {
+    const b = new Builder(1, null);
+    b.box(0, -1, 0, 40, 2, 40);
+    b.rotor(0, 0.6, 0, 8, 1, (t) => t * 0.5);
+    b.world.finalize(0);
+    const body = new PlayerBody(1);
+    // Behind the arm (it turns towards −z), running after it.
+    body.reset(new THREE.Vector3(3, 0.02, 1.5));
+    let knocked = false;
+    for (let i = 1; i <= 96; i++) {
+      run(body, b.world, (i - 1) / 120, 1, { ...idle, mz: -1 });
+      if (body.knocked) knocked = true;
+    }
+    expect(knocked).toBe(false);
+    expect(body.state).toBe('normal');
+  });
+
   it('a dive lays the body along its flight, and into a wall it stays out of it', () => {
     const b = new Builder(1, null);
     b.box(0, -1, 0, 20, 2, 40);
@@ -179,7 +210,7 @@ describe('course mechanics', () => {
     return b;
   };
   /** Runs at the block and jumps a little before it. */
-  const jumpAt = (body: PlayerBody, world: Builder['world'], hold = { ...idle, mz: 1 }) => {
+  const jumpAt = (body: PlayerBody, world: Builder['world'], hold = { ...idle, mz: 1 }, phases: boolean[] = []) => {
     body.reset(new THREE.Vector3(0, 0.02, 0));
     let t = 0;
     const step = (n: number, input: typeof idle) => {
@@ -191,8 +222,10 @@ describe('course mechanics', () => {
     let climbed = false;
     for (let i = 0; i < 360; i++) {
       step(1, hold);
-      if (body.state === 'climb') climbed = true;
-      else if (climbed) break;
+      if (body.state === 'climb') {
+        climbed = true;
+        phases.push(body.climbingOver);
+      } else if (climbed) break;
     }
     // Settle where it got to.
     step(30, idle);
@@ -202,8 +235,13 @@ describe('course mechanics', () => {
   it('catches a ledge out of reach of a jump and climbs onto it', () => {
     const b = ledgeCourse(2.6);
     const body = new PlayerBody(1);
-    const climbed = jumpAt(body, b.world);
+    const phases: boolean[] = [];
+    const climbed = jumpAt(body, b.world, undefined, phases);
     expect(climbed).toBe(true);
+    // Pulling up, then over the edge: one change of phase (what others see as the pose).
+    expect(phases[0]).toBe(false);
+    expect(phases.at(-1)).toBe(true);
+    expect(phases.filter((p, i) => i > 0 && p !== phases[i - 1]).length).toBe(1);
     expect(body.state).toBe('normal');
     expect(body.pos.y).toBeCloseTo(2.6, 1);
     expect(body.pos.z).toBeGreaterThan(4.3);
