@@ -109,6 +109,16 @@ function Feed() {
   );
 }
 
+/** Seconds until the next scene, shown as "label N с" (nothing when no timer runs). */
+function Next({ label, s, line }: { label: string; s: number; line?: boolean }) {
+  if (s < 0) return null;
+  return (
+    <span class={`next ${line ? 'line' : 'end'}`}>
+      {label} {Math.ceil(s)} с
+    </span>
+  );
+}
+
 /** Before the start: a compact line at the top (the camera flies over the course meanwhile). */
 function Intro() {
   const info = arenaInfo.value!;
@@ -126,6 +136,7 @@ function Intro() {
               Раунд {info.index} из {info.total}
             </span>
           )}
+          <Next label="Старт через" s={-h.t} />
         </div>
         <h2>{g.title}</h2>
         <p>
@@ -146,12 +157,14 @@ function Results() {
   const r = results.value!;
   const ps = playersById();
   const g = getGame(r.game);
+  const next = r.practice ? 'Заново через' : r.index < r.total ? 'Следующий раунд через' : 'Итоги игры через';
   return (
     <div class="sheet glass">
       <div class="sheet-head">
         <b>{g?.title ?? r.game}</b>
         <span class="muted">{r.practice ? 'тренировка' : `итоги раунда ${r.index} из ${r.total}`}</span>
       </div>
+      <Next label={next} s={hud.value.nextIn} line />
       <table>
         <tbody>
           {r.rows.map((e) => (
@@ -211,6 +224,7 @@ function Summary() {
           ))}
         </div>
       )}
+      <Next label="Возврат в лобби через" s={hud.value.nextIn} line />
     </div>
   );
 }

@@ -800,9 +800,11 @@ export class Game {
     try {
       mapText = info.kind === 'round' && t >= 0 ? (arena.spec.hud?.() ?? null) : null;
     } catch {}
+    const next = lobby.value?.next ?? null;
     hud.value = {
       t,
       timeLeft: Math.max(0, (info.endAt - this.net.clock.serverNow()) / 1000),
+      nextIn: next === null ? -1 : Math.max(0, (next - this.net.clock.serverNow()) / 1000),
       status,
       place: fin.indexOf(me) + 1,
       spectating:

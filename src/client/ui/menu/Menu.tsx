@@ -8,7 +8,12 @@ import { RoomTab } from './RoomTab';
 export function Menu({ game }: { game: Game }) {
   const tab = menuTab.value;
   return (
-    <div class="menu-wrap">
+    <div
+      class="menu-wrap"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) game.resume();
+      }}
+    >
       <div class="menu glass">
         <div class="row between wrap">
           <h1 class="logo small">Fall Beans</h1>
@@ -30,7 +35,7 @@ export function Menu({ game }: { game: Game }) {
           {tab === 'game' ? <RoomTab game={game} /> : tab === 'dev' && devMode.value ? <DevTab game={game} /> : <SettingsTab />}
         </div>
         <button type="button" class="btn primary" onClick={() => game.resume()}>
-          Продолжить <span class="muted-inv">· Esc или щелчок по полю</span>
+          Продолжить <span class="muted-inv">· Esc или щелчок вне меню</span>
         </button>
       </div>
     </div>

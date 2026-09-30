@@ -275,6 +275,8 @@ export type ServerMsg =
       fill: boolean;
       /** PIN of a private room: only the host is told. */
       pin: string | null;
+      /** Server clock (ms) when the next scene starts on its own (results → round, podium → lobby). */
+      next: number | null;
     }
   | ({ t: 'arena' } & ArenaInfo)
   | { t: 'roundEnd'; game: string; index: number; total: number; rows: RoundRow[]; practice: boolean }

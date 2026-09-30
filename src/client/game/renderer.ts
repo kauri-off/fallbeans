@@ -318,6 +318,7 @@ export class Renderer {
     SKY_CLOUD.set(look.sky.cloud);
     SUN_COLOR.set(look.sun.color);
     sky.stars!.value = look.sky.stars;
+    document.documentElement.classList.toggle('night', look.sky.stars > 0);
     const az = THREE.MathUtils.degToRad(look.sun.azimuth);
     const el = THREE.MathUtils.degToRad(look.sun.elevation);
     SUN_OFFSET.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)).multiplyScalar(SUN_DISTANCE);

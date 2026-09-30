@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { CHAT_MAX } from '../../../shared/consts';
 import type { Game } from '../../game/game';
-import { chatFresh, chatLog, chatOpen, menuOpen } from '../../state';
+import { chatFresh, chatLog, chatOpen } from '../../state';
 import { colorInk } from '../labels';
 
 /**
@@ -26,7 +26,7 @@ export function Chat({ game }: { game: Game }) {
     chatOpen.value = false;
   };
   return (
-    <div class={`chat${open ? ' open' : chatFresh.value ? ' fresh' : ''}${menuOpen.value ? ' aside' : ''}`}>
+    <div class={`chat${open ? ' open' : chatFresh.value ? ' fresh' : ''}`}>
       <div class="chat-log" ref={log}>
         {(open ? lines : lines.slice(-6)).map((l) => (
           <div key={l.n} class={l.mine ? 'me' : ''}>
