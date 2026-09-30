@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import type { World } from '../../sim/world';
 import { levels, lod } from './lod';
 
 /**
@@ -69,8 +68,6 @@ export class Statics {
   private frame = 0;
   /** Bumped whenever the set of static shadow casters changes (the bake is redone). */
   version = 0;
-  /** Where live shadows can fall (the course and around it): what the bake covers. */
-  readonly region = new THREE.Box3();
 
   constructor(private readonly root: THREE.Object3D) {
     this.batchRoot.name = 'static batches';
@@ -82,7 +79,7 @@ export class Statics {
    * `restore()` puts it back), batches the identical ones, and takes all of them out of the live
    * shadow map. Call before registering the map's meshes for LOD.
    */
-  prepare(world: World, pose: (t: number) => void, restore: () => void) {
+  prepare(pose: (t: number) => void, restore: () => void) {
     const root = this.root;
     const candidates: THREE.Mesh[] = [];
     root.updateMatrixWorld(true);
@@ -136,15 +133,6 @@ export class Statics {
     const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
     for (const list of groups.values()) if (list.length >= 2) this.batches.push(this.batch(list, inv));
     if (this.batches.length) root.add(this.batchRoot);
-
-    // Live shadows follow the action on the course: the bake covers the colliders and a margin.
-    this.region.makeEmpty();
-    for (const c of world.colliders) {
-      _s.set(c.center, c.radius);
-      this.region.union(_s.getBoundingBox(new THREE.Box3()));
-    }
-    if (this.region.isEmpty()) this.region.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(40, 10, 40));
-    this.region.expandByVector(new THREE.Vector3(45, 12, 45));
     this.version++;
   }
 

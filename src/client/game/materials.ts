@@ -22,6 +22,8 @@ interface SurfaceDef {
   cavity: number;
   roughness?: number;
   metalness?: number;
+  /** Whitening where the roughness mask is high (frost on ice): the pattern shows in any light. */
+  frost?: number;
   build: (u: number, v: number) => { h: number; r: number };
 }
 
@@ -163,10 +165,12 @@ const SURFACES: Record<SurfaceKind, SurfaceDef> = {
   // Ice: gentle undulations, hairline cracks and frosty patches.
   ice: {
     scale: 0.3,
-    normal: 0.5,
-    roughVar: 0.9,
-    cavity: 0.05,
-    roughness: 0.1,
+    normal: 0.7,
+    roughVar: 0.8,
+    cavity: 0.14,
+    // Glossy but not a mirror: at 0.1 the sun's highlight and the sky washed the pattern out.
+    roughness: 0.35,
+    frost: 0.35,
     build: (u, v) => {
       const [f1, f2] = cells(u, v, 6, 12);
       const crack = smooth(f2 - f1, 0, 0.05);
@@ -471,7 +475,10 @@ float dRough = dTx.a * dW.x + dTy.a * dW.y + dTz.a * dW.z;
   diffuseColor.rgb *= mix(uC1, uC2, stp);
 }
 #endif
-diffuseColor.rgb *= mix(1.0 - uDetailP.w, 1.0, smoothstep(0.1, 0.7, dHeight));`;
+diffuseColor.rgb *= mix(1.0 - uDetailP.w, 1.0, smoothstep(0.1, 0.7, dHeight));
+#ifdef DETAIL_FROST
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), smoothstep(0.35, 1.0, dRough) * DETAIL_FROST);
+#endif`;
 
 const FRAG_ROUGH = `#include <roughnessmap_fragment>
 roughnessFactor = clamp(roughnessFactor * mix(1.0 - uDetailP.z, 1.0 + uDetailP.z, dRough), 0.04, 1.0);`;
@@ -501,6 +508,7 @@ function install(mat: THREE.MeshStandardMaterial, patched: Patched, fade: { valu
     sh.uniforms.uDetailP = {
       value: new THREE.Vector4(def.scale, def.normal * patched.strength, def.roughVar, def.cavity * patched.strength),
     };
+    if (def.frost) sh.defines = { ...sh.defines, DETAIL_FROST: def.frost.toFixed(3) };
     if (p) {
       sh.defines = { ...sh.defines, DETAIL_PATTERN: '', PATTERN_KIND: PATTERN_IDS[p.kind ?? 'stripes'] };
       sh.uniforms.uC1 = { value: new THREE.Color(p.c1) };

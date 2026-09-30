@@ -198,6 +198,35 @@ export class LodSystem {
     return lvl;
   }
 
+  private readonly shadowSaved: [THREE.Mesh, THREE.BufferGeometry, boolean][] = [];
+
+  /**
+   * Shadow maps draw every mesh at full detail (between beginShadows and endShadows): a shadow must
+   * not change shape, or pop, as the camera's distance changes the level it is drawn at.
+   */
+  beginShadows() {
+    const saved = this.shadowSaved;
+    for (const e of this.entries.values()) {
+      if (!e.cast) continue;
+      const m = e.mesh;
+      saved.push([m, m.geometry, m.castShadow]);
+      m.geometry = e.levels[0]!;
+      m.castShadow = true;
+      if (e.ghost?.castShadow) {
+        saved.push([e.ghost, e.ghost.geometry, true]);
+        e.ghost.castShadow = false;
+      }
+    }
+  }
+
+  endShadows() {
+    for (const [m, g, cast] of this.shadowSaved) {
+      m.geometry = g;
+      m.castShadow = cast;
+    }
+    this.shadowSaved.length = 0;
+  }
+
   /** Whether a mesh casts a (live) shadow; kept through level changes. */
   setCast(mesh: THREE.Mesh, cast: boolean) {
     const e = this.entries.get(mesh);

@@ -190,7 +190,7 @@ export default defineMap(LOBBY_META, (b, ctx) => {
     });
   }
   // The way down: an icy slide from the top to the east.
-  const ice = b.view?.plain('#d6f2ff', { roughness: 0.08, metalness: 0.05 }, 'ice');
+  const ice = b.view?.plain('#d6f2ff', {}, 'ice');
   slide(b, TOWER.x + TOWER.half, TOWER.top, TOWER.x + 11.5, 0, TOWER.z, 3.2, ice);
   solid(b, 'flag', TOWER.x + 12.5, 0, TOWER.z - 2.2, { tint: '#39e0d0', yaw: Math.PI / 2 });
   solid(b, 'flag', TOWER.x + 12.5, 0, TOWER.z + 2.2, { tint: '#39e0d0', yaw: Math.PI / 2 });

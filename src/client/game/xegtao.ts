@@ -7,9 +7,9 @@ import type { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
  *   1. prefilter: the scene's depth → linear view depth, and a hierarchy of 5 levels filtered the
  *      XeGTAO way (far samples read coarse levels: far fewer cache misses for wide radii);
  *   2. main pass: horizon search in a few screen-space slices (normals rebuilt in place from depth),
- *      spatio-temporal noise (Hilbert curve + R2 sequence, a new pattern every frame with the
- *      temporal anti-aliasing), and edges packed next to the result for the denoiser;
- *   3. edge-aware 3×3 denoise (twice: our temporal pass keeps little history).
+ *      noise from a Hilbert curve + R2 sequence (fixed: see PostPipeline.renderAo), and edges
+ *      packed next to the result for the denoiser;
+ *   3. edge-aware 3×3 denoise, three passes (the noise is not averaged over frames).
  * The composite pass then upsamples it depth-aware (see postfx.ts) and applies it.
  */
 
@@ -20,8 +20,8 @@ export interface AoQuality {
 }
 
 export const AO_QUALITY = {
-  medium: { slices: 2, steps: 2, denoise: 2 },
-  high: { slices: 3, steps: 3, denoise: 2 },
+  medium: { slices: 2, steps: 2, denoise: 3 },
+  high: { slices: 3, steps: 3, denoise: 3 },
 } satisfies Record<string, AoQuality>;
 
 /** Depth hierarchy levels (XE_GTAO_DEPTH_MIP_LEVELS). */

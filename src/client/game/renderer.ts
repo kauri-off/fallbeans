@@ -6,7 +6,8 @@ import { FSR_SCALE, type Upscale } from './fsr';
 import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
 import { PostPipeline } from './postfx';
-import { ShadowBake } from './shadowBake';
+import { ShadowBake, sunBasis } from './shadowBake';
+import { installShadowFilter } from './shadowFilter';
 import type { Statics } from './statics';
 import { AO_QUALITY, type AoQuality } from './xegtao';
 
@@ -236,6 +237,7 @@ export class Renderer {
   private readonly ambient: Ambient;
 
   constructor(readonly canvas: HTMLCanvasElement) {
+    installShadowFilter();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
@@ -264,7 +266,10 @@ export class Renderer {
     this.depthOnly();
   }
 
-  /** The shadow map is depth only: colour writes stay off while it renders. */
+  /**
+   * The shadow map is depth only: colour writes stay off while it renders. Casters are drawn at full
+   * detail (see LodSystem.beginShadows).
+   */
   private depthOnly() {
     type Render = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => void;
     const sm = this.renderer.shadowMap as unknown as { render: Render };
@@ -274,9 +279,11 @@ export class Renderer {
       this.sun.shadow.map ??= shadowTarget(this.sun);
       color.setMask(false);
       color.setLocked(true);
+      lod.beginShadows();
       try {
         orig(lights, scene, camera);
       } finally {
+        lod.endShadows();
         color.setLocked(false);
         color.setMask(true);
       }
@@ -392,13 +399,30 @@ export class Renderer {
     this.post.reset();
   }
 
-  /** Keeps the shadow frustum centred on the action, snapped to texels to avoid shimmering. */
+  /** Centre of the live shadow map in the sun's light space (on its texel grid; see focus). */
+  private lightX = 0;
+  private lightY = 0;
+  private readonly lx = new THREE.Vector3();
+  private readonly ly = new THREE.Vector3();
+  private readonly lz = new THREE.Vector3();
+
+  /**
+   * Keeps the shadow frustum centred on the action, snapped to whole texels in the sun's own light
+   * space: the map's texel grid then stays put in the world as the focus moves, and shadow edges do
+   * not crawl. (Snapping world x and z instead moved the grid by fractions of a texel, the sun
+   * being at an angle.) The static bake shares the same grid.
+   */
   focus(p: THREE.Vector3) {
     const texel = (this.preset.shadowRange * 2) / this.preset.shadowMap;
-    const x = Math.round(p.x / texel) * texel;
-    const z = Math.round(p.z / texel) * texel;
-    this.sun.target.position.set(x, p.y, z);
-    this.sun.position.set(x + SUN_OFFSET.x, p.y + SUN_OFFSET.y, z + SUN_OFFSET.z);
+    const { lx, ly, lz } = this;
+    sunBasis(SUN_OFFSET, lx, ly, lz);
+    const px = p.dot(lx);
+    const py = p.dot(ly);
+    this.lightX = Math.round(px / texel) * texel;
+    this.lightY = Math.round(py / texel) * texel;
+    const t = this.sun.target.position.copy(p);
+    t.addScaledVector(lx, this.lightX - px).addScaledVector(ly, this.lightY - py);
+    this.sun.position.copy(t).add(SUN_OFFSET);
     this.sky.position.copy(this.camera.position);
     (this.motes.material as THREE.ShaderMaterial).uniforms.center!.value.copy(this.camera.position);
   }
@@ -442,7 +466,14 @@ export class Renderer {
     this.statics?.update(this.camera);
     lod.update(this.camera);
     // Static shadows at the live shadow map's texel size (the bake is redone when that or the statics change).
-    if (this.fx.shadows) this.bake.update(this.statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
+    if (this.fx.shadows)
+      this.bake.update(
+        this.statics,
+        (this.preset.shadowRange * 2) / this.preset.shadowMap,
+        this.lightX,
+        this.lightY,
+        this.preset.shadowRange,
+      );
     for (let i = 0; i < this.debugRepeat; i++) {
       if (i) this.renderer.info.reset();
       this.post.jitter();

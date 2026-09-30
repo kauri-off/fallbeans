@@ -46,6 +46,19 @@ describe('collider grid', () => {
     expect(body.pos.y).toBeLessThan(-1);
   });
 
+  it('does not pass through a thin wall at any speed (collision substeps)', () => {
+    const b = new Builder(1, null);
+    b.box(3, 0, 0, 0.1, 10, 10);
+    b.world.finalize(0);
+    const body = new PlayerBody(1);
+    // 1.25 m a tick, from where whole ticks would land at x = 2.40 and 3.65: either side of the wall.
+    body.reset(new THREE.Vector3(-0.05, 1, 0));
+    body.vel.set(150, 0, 0);
+    const idle = { mx: 0, mz: 0, jump: false, dive: false };
+    for (let i = 0; i < 12; i++) body.step(1 / 120, idle, b.world, i / 120);
+    expect(body.pos.x).toBeLessThan(3);
+  });
+
   it('round-trips the full body state', () => {
     const b = new Builder(1, null);
     b.box(0, -1, 0, 10, 2, 10);

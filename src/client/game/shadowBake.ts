@@ -3,25 +3,20 @@ import { levels } from './lod';
 import { BAKE_LAYER, type Statics } from './statics';
 
 /**
- * Baked shadows of the static parts of a map. Their depth, as the sun sees it, is rendered once for
- * the whole course into a texture (redone only when something static starts moving). Every frame
- * the shadow map that follows the camera then starts from a copy of it (one full-screen pass) and
+ * Baked shadows of the static parts of a map. Their depth, as the sun sees it, is rendered into a
+ * window around the live shadow map, on exactly its texel grid (same size and alignment), and redone
+ * only when the live map nears the window's edge or something static starts moving. Every frame the
+ * live shadow map starts from a copy of it (one full-screen pass, texel for texel: no resampling) and
  * only the moving things (beans, movers) are drawn into it, instead of the whole course.
+ *
+ * (A single bake of the whole course was coarser than the live map on long courses — 8 to 13 cm a
+ * texel against 3.3 — and its texels showed as steps along every static shadow.)
  */
 
-/** Largest bake (texels): 32 MB. Longer courses get a coarser bake (still softened by the shadow filter). */
-const MAX_TEXELS = 8 * 1024 * 1024;
-/** Bakes at most this often (hex tiles dropping one after another). */
+/** Extra room around the live shadow map (m): the window is redone after moving this far. */
+const MARGIN = 16;
+/** Bakes for changed statics at most this often (hex tiles dropping one after another). */
 const MIN_INTERVAL_MS = 300;
-
-/** Depth (0…1) in 24 bits of an RGBA8 texel. */
-const BAKE_VERT = 'void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
-const BAKE_FRAG = /* glsl */ `
-void main() {
-  vec3 e = fract(gl_FragCoord.z * vec3(1.0, 255.0, 65025.0));
-  e -= e.yzz * vec3(1.0 / 255.0, 1.0 / 255.0, 0.0);
-  gl_FragColor = vec4(e, 1.0);
-}`;
 
 const COPY_VERT = /* glsl */ `
 varying vec2 vNdc;
@@ -32,7 +27,8 @@ void main() {
 
 /**
  * For each texel of the live shadow map: the static occluder on its ray (from the bake), as a depth
- * of the live shadow camera. Both are orthographic along the sun, so the mapping is exact.
+ * of the live shadow camera. Both are orthographic along the sun on the same texel grid, so every
+ * live texel reads exactly one bake texel.
  */
 const COPY_FRAG = /* glsl */ `
 uniform sampler2D uBake;
@@ -46,24 +42,35 @@ void main() {
   vec4 b = uBakeViewProj * vec4(w.xyz / w.w, 1.0);
   vec2 uv = b.xy * 0.5 + 0.5;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
-  float d = dot(texture2D(uBake, uv).rgb, vec3(1.0, 1.0 / 255.0, 1.0 / 65025.0));
-  if (d > 0.9999) discard;
+  float d = texture2D(uBake, uv).r;
+  if (d > 0.99999) discard;
   vec4 o = uBakeToWorld * vec4(b.xy, d * 2.0 - 1.0, 1.0);
   vec4 r = uRtViewProj * vec4(o.xyz / o.w, 1.0);
   gl_FragDepth = clamp(r.z / r.w * 0.5 + 0.5, 0.0, 1.0);
   gl_FragColor = vec4(1.0);
 }`;
 
+/** The sun's light space: x and y across its rays (as a shadow camera looking along them sees it), z towards it. */
+export function sunBasis(sunDir: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3, z: THREE.Vector3) {
+  z.copy(sunDir).normalize();
+  // As Matrix4.lookAt builds it for a camera with up = +y.
+  x.set(0, 1, 0).cross(z).normalize();
+  y.crossVectors(z, x);
+}
+
 export class ShadowBake {
-  private tex: THREE.Texture | null = null;
   private target: THREE.WebGLRenderTarget | null = null;
   private readonly cam = new THREE.OrthographicCamera();
-  private readonly depth = new THREE.ShaderMaterial({ vertexShader: BAKE_VERT, fragmentShader: BAKE_FRAG, side: THREE.BackSide });
+  private readonly depth = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.BackSide });
   private readonly copy: THREE.ShaderMaterial;
   /** Draws the bake into the live shadow map (and nothing into the picture). */
   private readonly quad: THREE.Mesh;
-  private baked: { statics: Statics; version: number; texel: number } | null = null;
+  /** What the current bake is of: statics, their version, texel size, window centre (light space). */
+  private baked: { statics: Statics; version: number; texel: number; cx: number; cy: number; half: number } | null = null;
   private at = -Infinity;
+  private readonly bx = new THREE.Vector3();
+  private readonly by = new THREE.Vector3();
+  private readonly bz = new THREE.Vector3();
   /** Size of the last bake, for the debug overlay. */
   size = { w: 0, h: 0, ms: 0, casters: 0 };
 
@@ -107,97 +114,96 @@ export class ShadowBake {
   }
 
   /**
-   * Bakes when the statics changed (or the texel size of the live shadow map did); `texel` is the
-   * live shadow map's texel size (m), which the bake matches where it can.
+   * Keeps the bake ready for the live shadow map: `texel` its texel size (m), (`lx`, `ly`) its centre
+   * in the sun's light space (on the texel grid: see Renderer.focus), `range` its half width (m).
    */
-  update(statics: Statics | null, texel: number) {
+  update(statics: Statics | null, texel: number, lx: number, ly: number, range: number) {
     if (!statics) {
       this.clear();
       return;
     }
     const b = this.baked;
-    const fresh = b && b.statics === statics && b.version === statics.version && b.texel === texel;
-    if (fresh) return;
-    // Changes after the first bake wait a little (several at once make one bake).
+    const same = !!b && b.statics === statics && b.texel === texel;
+    const inside = !!b && Math.abs(lx - b.cx) <= b.half - range && Math.abs(ly - b.cy) <= b.half - range;
+    const changed = !same || b?.version !== statics.version;
+    if (!changed && inside) return;
+    // Statics that changed after the first bake wait a little (several at once make one bake);
+    // the window following the player never waits.
     const now = performance.now();
-    if (b && b.statics === statics && now - this.at < MIN_INTERVAL_MS) return;
+    if (same && inside && now - this.at < MIN_INTERVAL_MS) return;
     this.at = now;
-    this.bake(statics, texel);
-    this.baked = { statics, version: statics.version, texel };
+    this.bake(statics, texel, lx, ly, range);
   }
 
-  private bake(statics: Statics, texel: number) {
+  private bake(statics: Statics, texel: number, cx: number, cy: number, range: number) {
     const t0 = performance.now();
     const r = this.renderer;
     const casters = statics.casters();
-    const cam = this.cam;
-    // Looking down the sun's rays at the course.
-    const dir = this.sunDir.clone().normalize();
-    const center = statics.region.getCenter(new THREE.Vector3());
-    cam.position.copy(center).addScaledVector(dir, 500);
-    cam.up.set(0, 1, 0);
-    cam.lookAt(center);
-    cam.updateMatrixWorld();
-    const view = cam.matrixWorldInverse;
-    // Width and height from the course (where shadows are seen), depth from everything that casts.
-    const xy = new THREE.Box3();
-    const z = new THREE.Box3();
-    const corner = new THREE.Vector3();
-    const reg = statics.region;
-    for (let i = 0; i < 8; i++) {
-      corner.set(i & 1 ? reg.max.x : reg.min.x, i & 2 ? reg.max.y : reg.min.y, i & 4 ? reg.max.z : reg.min.z).applyMatrix4(view);
-      xy.expandByPoint(corner);
-      z.expandByPoint(corner);
-    }
+    const { bx, by, bz } = this;
+    sunBasis(this.sunDir, bx, by, bz);
+    // An even number of texels across: the window's edges fall on the live map's texel grid.
+    const maxTex = Math.min(r.capabilities.maxTextureSize, 8192);
+    const size = Math.min(maxTex, 2 * Math.ceil((range + MARGIN) / texel)) & ~1;
+    const half = (size * texel) / 2;
+    // Depth: everything that casts, in front of the camera.
+    let zMin = Number.POSITIVE_INFINITY;
+    let zMax = Number.NEGATIVE_INFINITY;
     const box = new THREE.Box3();
+    const p = new THREE.Vector3();
     for (const m of casters) {
       const g = m.geometry;
       if (!g.boundingBox) g.computeBoundingBox();
-      box.copy(g.boundingBox!).applyMatrix4(m.matrixWorld).applyMatrix4(view);
-      z.union(box);
+      box.copy(g.boundingBox!).applyMatrix4(m.matrixWorld);
+      for (let i = 0; i < 8; i++) {
+        const d = p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).dot(bz);
+        zMin = Math.min(zMin, d);
+        zMax = Math.max(zMax, d);
+      }
     }
-    const maxTex = Math.min(r.capabilities.maxTextureSize, 16384);
-    const sx = xy.max.x - xy.min.x;
-    const sy = xy.max.y - xy.min.y;
-    const tx = Math.max(texel, Math.sqrt((sx * sy) / MAX_TEXELS), sx / maxTex, sy / maxTex);
-    const w = Math.max(1, Math.ceil(sx / tx));
-    const h = Math.max(1, Math.ceil(sy / tx));
-    cam.left = xy.min.x;
-    cam.right = xy.min.x + w * tx;
-    cam.bottom = xy.min.y;
-    cam.top = xy.min.y + h * tx;
-    cam.near = -z.max.z - 1;
-    cam.far = -z.min.z + 1;
+    if (!Number.isFinite(zMin)) zMin = zMax = 0;
+    const cam = this.cam;
+    cam.position
+      .copy(bx)
+      .multiplyScalar(cx)
+      .addScaledVector(by, cy)
+      .addScaledVector(bz, zMax + 10);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(p.copy(cam.position).sub(bz));
+    cam.updateMatrixWorld();
+    cam.left = -half;
+    cam.right = half;
+    cam.bottom = -half;
+    cam.top = half;
+    cam.near = 1;
+    cam.far = zMax - zMin + 20;
     cam.updateProjectionMatrix();
     cam.layers.set(BAKE_LAYER);
 
-    const target = new THREE.WebGLRenderTarget(w, h, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      generateMipmaps: false,
-      depthBuffer: true,
-    });
+    if (!this.target || this.target.width !== size) {
+      this.target?.dispose();
+      this.target?.depthTexture?.dispose();
+      // Depth only (a minimal colour attachment, never written): 16 bits, as precise as the live map.
+      this.target = new THREE.WebGLRenderTarget(size, size, {
+        format: THREE.RedFormat,
+        minFilter: THREE.NearestFilter,
+        magFilter: THREE.NearestFilter,
+        generateMipmaps: false,
+      });
+      this.target.depthTexture = new THREE.DepthTexture(size, size, THREE.UnsignedShortType);
+    }
     // Full detail for the bake, whatever level of detail they are drawn at now.
     const geo = casters.map((m) => m.geometry);
     for (const m of casters) {
       m.layers.enable(BAKE_LAYER);
       m.geometry = levels(m.geometry)?.[0] ?? m.geometry;
     }
-    const prev = {
-      target: r.getRenderTarget(),
-      clear: r.getClearColor(new THREE.Color()),
-      alpha: r.getClearAlpha(),
-      override: this.scene.overrideMaterial,
-      shadows: r.shadowMap.autoUpdate,
-    };
+    const prev = { target: r.getRenderTarget(), override: this.scene.overrideMaterial, shadows: r.shadowMap.autoUpdate };
     r.shadowMap.autoUpdate = false;
     this.scene.overrideMaterial = this.depth;
-    r.setRenderTarget(target);
-    r.setClearColor(0xffffff, 1);
-    r.clear();
+    r.setRenderTarget(this.target);
+    r.clear(false, true, false);
     r.render(this.scene, cam);
     r.setRenderTarget(prev.target);
-    r.setClearColor(prev.clear, prev.alpha);
     this.scene.overrideMaterial = prev.override;
     r.shadowMap.autoUpdate = prev.shadows;
     casters.forEach((m, i) => {
@@ -205,35 +211,19 @@ export class ShadowBake {
       m.geometry = geo[i]!;
     });
 
-    // Keep only the colour (the packed depth): a plain texture instead of the whole render target.
-    this.release();
-    let tex: THREE.Texture = target.texture;
-    try {
-      const copy = new THREE.FramebufferTexture(w, h);
-      r.copyTextureToTexture(target.texture, copy);
-      target.dispose();
-      tex = copy;
-    } catch {
-      this.target = target;
-    }
-    this.tex = tex;
     const u = this.copy.uniforms;
-    u.uBake!.value = tex;
+    u.uBake!.value = this.target.depthTexture;
     u.uBakeViewProj!.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     u.uBakeToWorld!.value.copy(u.uBakeViewProj!.value).invert();
     if (!this.quad.parent) this.scene.add(this.quad);
-    this.size = { w, h, ms: Math.round((performance.now() - t0) * 10) / 10, casters: casters.length };
-  }
-
-  private release() {
-    if (this.target) this.target.dispose();
-    else this.tex?.dispose();
-    this.target = null;
-    this.tex = null;
+    this.baked = { statics, version: statics.version, texel, cx, cy, half };
+    this.size = { w: size, h: size, ms: Math.round((performance.now() - t0) * 10) / 10, casters: casters.length };
   }
 
   clear() {
-    this.release();
+    this.target?.dispose();
+    this.target?.depthTexture?.dispose();
+    this.target = null;
     this.quad.removeFromParent();
     this.baked = null;
   }

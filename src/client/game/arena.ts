@@ -163,7 +163,6 @@ export class ClientArena {
     const world = this.builder.world;
     const t0 = this.predTick * DT;
     this.statics.prepare(
-      world,
       (t) => {
         for (const m of world.movers) m(t);
         for (const a of this.builder.anims) a(t, 0);
