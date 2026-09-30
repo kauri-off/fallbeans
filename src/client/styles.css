@@ -869,6 +869,34 @@ h3 {
   animation: drop 0.25s ease-out;
 }
 
+/* The other layout: a column beside the player panel, over the game left in full view (clicks on it pass through). */
+.menu-wrap.side {
+  inset: 0.75rem auto 0.75rem calc(var(--panel-w) + 2 * var(--gap));
+  display: flex;
+  align-items: flex-start;
+  padding: 0;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  pointer-events: none;
+  animation: none;
+}
+
+.menu-wrap.side .menu {
+  --glass: inherit;
+  --glass-strong: inherit;
+  --glass-low: inherit;
+  width: min(28rem, calc(100vw - var(--panel-w) - 4 * var(--gap)));
+  height: auto;
+  max-height: 100%;
+  padding: 0.875rem 1rem;
+}
+
+/* (Sized by its content, up to the window: then it scrolls.) */
+.menu-wrap.side .menu-body {
+  flex: 0 1 auto;
+}
+
 .menu-body {
   flex: 1;
   min-height: 0;
@@ -1051,6 +1079,15 @@ h3 {
   .menu {
     height: 100%;
   }
+  .menu-wrap.side {
+    left: var(--gap);
+    right: var(--gap);
+    padding: 0;
+  }
+  .menu-wrap.side .menu {
+    width: 100%;
+    height: auto;
+  }
   .room-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1183,6 +1220,11 @@ h3 {
 .chat.open {
   opacity: 0.95;
   transition-duration: 0.1s;
+}
+
+/* (Beside the open side menu there is only the panel's column.) */
+.chat.aside {
+  width: var(--panel-w);
 }
 
 .chat-log {

@@ -111,6 +111,26 @@ export function SettingsTab() {
         <input type="checkbox" checked={s.showFps} onChange={(e) => updateSettings({ showFps: e.currentTarget.checked })} />
         Показывать частоту кадров
       </label>
+      <div class="field">
+        <span>Меню (Esc):</span>
+        <div class="row">
+          {(
+            [
+              ['side', 'Сбоку, игра видна'],
+              ['center', 'По центру, в две колонки'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              type="button"
+              key={id}
+              class={`btn chip${s.menuLayout === id ? ' on' : ''}`}
+              onClick={() => updateSettings({ menuLayout: id })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
