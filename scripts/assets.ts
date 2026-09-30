@@ -3,8 +3,9 @@
  *   bun run assets                 validate + budgets + what the game needs from each model
  *   bun run assets --export [--dry-run]  re-export from blender/fallguys_assets.blend (headless Blender),
  *                                  optimise, check, and replace public/models if everything passes
- *   bun run assets --optimize      optimise the current files in place (lossless: dedup, prune,
- *                                  weld, vertex-cache order; names and hierarchy are kept)
+ *   bun run assets --optimize      optimise the current files in place (dedup, prune, weld, unused
+ *                                  UVs dropped, normals to 12 bits, vertex-cache order, meshopt
+ *                                  compression; names, hierarchy and positions are kept exactly)
  *
  * Checks: the Khronos glTF validator (errors fail), triangle / size / material budgets per model,
  * every model the code loads exists (MODEL_NAMES), and the node and material names the code looks
@@ -13,10 +14,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Document, NodeIO } from '@gltf-transform/core';
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { dedup, prune, reorder, weld } from '@gltf-transform/functions';
+import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
+import { dedup, prune, quantize, reorder, weld } from '@gltf-transform/functions';
 import validator from 'gltf-validator';
-import { MeshoptEncoder } from 'meshoptimizer';
+import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 import { MODEL_NAMES } from '../src/sim/builder';
 
 const args = process.argv.slice(2);
@@ -36,7 +37,10 @@ const NEEDS: Record<string, { nodes?: string[]; materials?: string[] }> = {
   flag: { nodes: ['Pennant'], materials: ['Flag'] },
 };
 
-const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
+await Promise.all([MeshoptDecoder.ready, MeshoptEncoder.ready]);
+const io = new NodeIO()
+  .registerExtensions(ALL_EXTENSIONS)
+  .registerDependencies({ 'meshopt.decoder': MeshoptDecoder, 'meshopt.encoder': MeshoptEncoder });
 
 interface ModelReport {
   name: string;
@@ -102,15 +106,42 @@ async function check(dir: string): Promise<ModelReport[]> {
   return out;
 }
 
-/** Lossless clean-up: shared data merged, unused data dropped, vertices welded and ordered for the GPU cache. */
+/**
+ * The game shades models with object-space triplanar detail (materials.ts) and no textures, so
+ * texture coordinates are dead weight: dropped.
+ */
+function dropUVs(doc: Document) {
+  for (const mesh of doc.getRoot().listMeshes())
+    for (const prim of mesh.listPrimitives())
+      for (const sem of prim.listSemantics()) if (sem.startsWith('TEXCOORD_')) prim.setAttribute(sem, null);
+}
+
+/**
+ * Repacks every model: shared data merged, unused data dropped, vertices welded and ordered for the
+ * GPU's vertex cache, normals stored in 16-bit integers (12 bits: invisible), and the buffers
+ * compressed with EXT_meshopt_compression (decoded by the loader). Positions stay 32-bit floats and
+ * no node transform changes (quantised positions would move scale into nodes the game animates).
+ */
 async function optimize(dir: string) {
-  await MeshoptEncoder.ready;
   for (const name of MODEL_NAMES) {
     const file = join(dir, `${name}.glb`);
     if (!existsSync(file)) continue;
     const before = statSync(file).size;
     const doc = await io.read(file);
-    await doc.transform(dedup(), prune({ keepLeaves: true, keepAttributes: true }), weld(), reorder({ encoder: MeshoptEncoder }));
+    dropUVs(doc);
+    await doc.transform(
+      dedup(),
+      prune({ keepLeaves: true, keepAttributes: true }),
+      weld(),
+      quantize({ pattern: /^NORMAL$/, quantizeNormal: 12, cleanup: false }),
+      reorder({ encoder: MeshoptEncoder }),
+    );
+    // Integer normals need KHR_mesh_quantization (quantize() only declares it for positions).
+    doc.createExtension(KHRMeshQuantization).setRequired(true);
+    doc
+      .createExtension(EXTMeshoptCompression)
+      .setRequired(true)
+      .setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
     await io.write(file, doc);
     const after = statSync(file).size;
     console.log(`  optimised ${name}: ${Math.round(before / 1024)} → ${Math.round(after / 1024)} KB`);

@@ -5,7 +5,7 @@ import { lod } from '../game/lod';
 /**
  * What costs the most performance, on this machine and this map:
  *   scene()  — what is drawn, by category (map, beans, clouds, sky…): draw calls, shadow draws, triangles;
- *   passes() — GPU time per render pass (scene, shadow maps, GTAO, bloom, SMAA…) and CPU time per frame section;
+ *   passes() — GPU time per render pass (scene, shadow maps, GTAO, SMAA, TAA, FSR…) and CPU time per frame section;
  *   ablate() — switches each feature off in turn and measures what that saves (GPU and CPU);
  *   run()    — all of it, plus the GPU and long main-thread tasks.
  * GPU times need EXT_disjoint_timer_query_webgl2 (desktop Chromium has it); without it the frame
@@ -196,7 +196,7 @@ export function createProfiler(game: Game) {
       },
     });
     for (const { name, pass } of rd.passes) {
-      if (name === 'scene' || name === 'output') continue;
+      if (name === 'scene' || name === 'composite') continue;
       list.push({
         name,
         what: `post pass "${name}"`,
@@ -366,6 +366,8 @@ export function createProfiler(game: Game) {
     return {
       device: gpuInfo(),
       quality: rd.quality,
+      upscale: rd.upscale,
+      effects: { ...rd.fx },
       size: [rd.canvas.width, rd.canvas.height],
       map: game.arena?.info.game ?? null,
       scene: scene(),

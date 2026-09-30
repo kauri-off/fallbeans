@@ -119,6 +119,8 @@ export class Game {
 
     effect(() => {
       const s = settings.value;
+      this.renderer.setEffects(s.gfx);
+      this.renderer.setUpscale(s.upscale);
       if (this.renderer.quality !== s.quality || !this.started) this.renderer.setQuality(s.quality);
       this.renderer.camera.fov = s.fov;
       this.renderer.camera.updateProjectionMatrix();

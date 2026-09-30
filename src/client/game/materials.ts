@@ -428,10 +428,20 @@ uniform vec3 uC1; uniform vec3 uC2; uniform float uF; uniform vec2 uDir; uniform
 const FRAG_COLOR = `#include <color_fragment>
 vec3 dW = pow(abs(normalize(vDetailNrm)), vec3(4.0));
 dW /= dW.x + dW.y + dW.z;
+// Projections that barely show are not sampled (most surfaces face mostly one axis): weights below
+// 2 % fade to 0 and the rest are renormalised, which keeps the blend continuous.
+dW = max(dW - 0.02, 0.0);
+dW /= dW.x + dW.y + dW.z;
 vec3 dP = vDetailPos * uDetailP.x;
-vec4 dTx = texture2D(uDetail, dP.zy);
-vec4 dTy = texture2D(uDetail, dP.xz);
-vec4 dTz = texture2D(uDetail, dP.xy);
+// Explicit gradients: sampling inside the branches below stays filtered (mipmaps, anisotropy).
+vec3 dPdx = dFdx(dP);
+vec3 dPdy = dFdy(dP);
+vec4 dTx = vec4(0.5);
+vec4 dTy = vec4(0.5);
+vec4 dTz = vec4(0.5);
+if (dW.x > 0.0) dTx = textureGrad(uDetail, dP.zy, dPdx.zy, dPdy.zy);
+if (dW.y > 0.0) dTy = textureGrad(uDetail, dP.xz, dPdx.xz, dPdy.xz);
+if (dW.z > 0.0) dTz = textureGrad(uDetail, dP.xy, dPdx.xy, dPdy.xy);
 float dHeight = dTx.b * dW.x + dTy.b * dW.y + dTz.b * dW.z;
 float dRough = dTx.a * dW.x + dTy.a * dW.y + dTz.a * dW.z;
 #ifdef DETAIL_PATTERN

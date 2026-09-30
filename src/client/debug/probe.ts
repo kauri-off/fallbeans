@@ -5,7 +5,7 @@ import { type Collider, R, SPHERES } from '../../sim/physics';
 import type { Expr } from '../game/face';
 import type { Game } from '../game/game';
 import { lod } from '../game/lod';
-import type { Effects, Quality } from '../game/renderer';
+import type { Effects, Quality, Upscale } from '../game/renderer';
 import { settings, updateSettings } from '../settings';
 import {
   arenaInfo,
@@ -215,6 +215,7 @@ export function createProbe(game: Game) {
     const size = rd.renderer.getSize(new THREE.Vector2());
     return {
       quality: rd.quality,
+      upscale: rd.upscale,
       size: [size.x, size.y],
       pixelRatio: rd.renderer.getPixelRatio(),
       calls: i.calls,
@@ -457,11 +458,13 @@ export function createProbe(game: Game) {
       debugOverlay.value = on;
     },
     quality: (q: Quality) => updateSettings({ quality: q }),
-    /** Post effects on/off (SMAA, temporal AA) for benchmarks; returns the current set. */
+    /** Graphics features on/off (shadows, ao, grade, msaa, smaa, temporal, motes) for benchmarks; returns the current set. */
     fx: (patch: Partial<Effects> = {}) => {
-      game.renderer.setEffects(patch);
+      updateSettings({ gfx: { ...settings.value.gfx, ...patch } });
       return { ...game.renderer.fx };
     },
+    /** FSR 1 upscaling mode ('off', 'ultra', 'quality', 'balanced', 'performance'). */
+    upscale: (u: Upscale) => updateSettings({ upscale: u }),
     /** Levels of detail: stats, or switch off / force a level (null: automatic). */
     lod: (o: { enabled?: boolean; force?: number | null; bias?: number } = {}) => {
       if (o.enabled !== undefined) lod.enabled = o.enabled;

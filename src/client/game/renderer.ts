@@ -1,17 +1,14 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import type { ResolvedLook } from '../../sim/looks';
 import { GpuTimer } from '../debug/gpuTimer';
+import { FSR_SCALE, type Upscale } from './fsr';
 import { lod } from './lod';
 import { setMaxAnisotropy } from './materials';
-import { ScenePass, TemporalPass } from './postfx';
+import { PostPipeline } from './postfx';
 import { ShadowBake } from './shadowBake';
 import type { Statics } from './statics';
+import { AO_QUALITY, type AoQuality } from './xegtao';
 
 export type Quality = 'medium' | 'high';
 
@@ -19,46 +16,56 @@ interface Preset {
   pixelRatio: number;
   shadowMap: number;
   shadowRange: number;
+  /** Largest shadow map of other lights (lamps): they are drawn live every frame, statics included. */
+  localShadowMap: number;
   /**
    * Anti-aliasing is SMAA 4x on every preset: SMAA 1x (edges) + 2x MSAA (spatial multisampling)
    * + 2x temporal supersampling (jittered frames blended with the reprojected previous one).
    */
   msaa: number;
-  /** Ambient occlusion from the scene pass's depth, at half resolution. */
-  ao: boolean;
+  /** Ambient occlusion (XeGTAO at half resolution), or none. */
+  ao: AoQuality | null;
   /** LOD distances multiplier (further detail on better presets). */
   lodBias: number;
 }
 
 const PRESETS: Record<Quality, Preset> = {
-  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, msaa: 2, ao: false, lodBias: 0.75 },
-  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, msaa: 2, ao: true, lodBias: 1 },
+  medium: { pixelRatio: 1, shadowMap: 1024, shadowRange: 28, localShadowMap: 512, msaa: 2, ao: null, lodBias: 0.75 },
+  high: { pixelRatio: 1.5, shadowMap: 2048, shadowRange: 34, localShadowMap: 1024, msaa: 2, ao: AO_QUALITY.high, lodBias: 1 },
 };
 
-/** Post effects that can be switched on and off (settings, profiler, benchmarks). */
+/**
+ * Graphics features that can be switched off one by one (settings, profiler, benchmarks): each
+ * only ever removes work from the preset (the ambient occlusion stays off on medium).
+ */
 export interface Effects {
+  /** Shadows of every light (the shadow maps are not drawn at all). */
+  shadows: boolean;
+  /** Ambient occlusion. */
+  ao: boolean;
+  /** Colour grade: saturation, contrast, vignette. */
+  grade: boolean;
+  /** Multisampling of the scene (the spatial part of the anti-aliasing). */
+  msaa: boolean;
+  /** SMAA edge anti-aliasing. */
   smaa: boolean;
+  /** Temporal anti-aliasing (also smooths the LOD cross-fades and the AO noise). */
   temporal: boolean;
+  /** Specks drifting in the air. */
+  motes: boolean;
 }
 
-/** Final grade in display space: a touch of saturation and contrast, and a soft vignette. */
-const GradeShader = {
-  uniforms: { tDiffuse: { value: null }, uVignette: { value: 0.22 }, uSat: { value: 1.06 } },
-  vertexShader:
-    'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float uVignette; uniform float uSat; varying vec2 vUv;
-    void main() {
-      vec4 c = texture2D(tDiffuse, vUv);
-      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-      c.rgb = mix(vec3(l), c.rgb, uSat);
-      c.rgb = (c.rgb - 0.5) * 1.03 + 0.5;
-      vec2 d = vUv - 0.5;
-      c.rgb *= 1.0 - uVignette * smoothstep(0.35, 0.85, length(d * vec2(1.0, 0.8)) * 1.25);
-      // Contrast and saturation push near-black channels below 0: SMAA's pow() turns those into NaN.
-      gl_FragColor = vec4(clamp(c.rgb, 0.0, 1.0), c.a);
-    }`,
+export const DEFAULT_EFFECTS: Effects = {
+  shadows: true,
+  ao: true,
+  grade: true,
+  msaa: true,
+  smaa: true,
+  temporal: true,
+  motes: true,
 };
+
+export type { Upscale };
 
 const SKY_TOP = new THREE.Color('#6fb8ff');
 const SKY_HORIZON = new THREE.Color('#ffd9f2');
@@ -178,9 +185,32 @@ function motes(time: { value: number }): THREE.Points {
 }
 
 /**
+ * The shadow map of a directional or spot light: 16-bit depth (plenty for these ranges, half the
+ * bandwidth of the default) and a minimal colour attachment (never written: see splitShadows).
+ */
+function shadowTarget(light: THREE.Light & { shadow: THREE.LightShadow }): THREE.WebGLRenderTarget {
+  const { x, y } = light.shadow.mapSize;
+  const rt = new THREE.WebGLRenderTarget(x, y, {
+    format: THREE.RedFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    generateMipmaps: false,
+  });
+  rt.texture.name = `${light.name}.shadowMapColor`;
+  const d = new THREE.DepthTexture(x, y, THREE.UnsignedShortType);
+  d.name = `${light.name}.shadowMap`;
+  d.format = THREE.DepthFormat;
+  d.compareFunction = THREE.LessEqualCompare;
+  d.minFilter = THREE.LinearFilter;
+  d.magFilter = THREE.LinearFilter;
+  rt.depthTexture = d;
+  return rt;
+}
+
+/**
  * WebGL2 renderer: soft shadows following the camera, image-based lighting, neutral tone
- * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, and (high)
- * half-resolution GTAO.
+ * mapping, a light grade, SMAA 4x anti-aliasing, levels of detail with cross-fades, (high)
+ * half-resolution XeGTAO and FSR 1 upscaling (see postfx.ts).
  */
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
@@ -188,10 +218,6 @@ export class Renderer {
   readonly camera = new THREE.PerspectiveCamera(70, 1, 0.25, 1100);
   readonly sun = new THREE.DirectionalLight('#fff1dc', 2.2);
   readonly hemi = new THREE.HemisphereLight('#cfe8ff', '#b99be0', 0.9);
-  /** Saturation of the final grade (the look sets it). */
-  private saturation = 1.06;
-  private grade: ShaderPass | null = null;
-  private composer: EffectComposer | null = null;
   private preset: Preset = PRESETS.high;
   quality: Quality = 'high';
   private readonly time = { value: 0 };
@@ -201,11 +227,12 @@ export class Renderer {
   private gpu: GpuTimer | null = null;
   private gpuMode: 'off' | 'frame' | 'passes' = 'off';
   private readonly wrapped = new WeakSet<object>();
-  private temporal: TemporalPass | null = null;
-  /** Switchable effects (see Effects); the composer is rebuilt when they change. */
-  readonly fx: Effects = { smaa: true, temporal: true };
-  /** Static meshes of the current map (their shadows are baked once, not drawn every frame). */
-  statics: Statics | null = null;
+  private readonly post: PostPipeline;
+  /** Switchable features (see Effects). */
+  readonly fx: Effects = { ...DEFAULT_EFFECTS };
+  /** FSR mode: the scene renders below the display resolution and is upscaled. */
+  upscale: Upscale = 'off';
+  private _statics: Statics | null = null;
   readonly bake: ShadowBake;
 
   constructor(readonly canvas: HTMLCanvasElement) {
@@ -213,9 +240,12 @@ export class Renderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
     this.renderer.toneMappingExposure = 0.95;
+    // Every pass clears what it needs itself (no clear before each full-screen pass).
+    this.renderer.autoClear = false;
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    // Totals per frame over all composer passes (reset in render()).
+    // Totals per frame over all passes (reset in render()).
     this.renderer.info.autoReset = false;
     setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
 
@@ -226,34 +256,59 @@ export class Renderer {
     this.scene.fog = new THREE.Fog(SKY_HORIZON.clone().lerp(SKY_TOP, 0.25), 120, 520);
     this.scene.add(this.sky, this.motes);
     this.scene.add(this.hemi);
+    this.sun.name = 'sun';
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0003;
     this.sun.shadow.normalBias = 0.035;
     this.sun.shadow.radius = 4;
-    this.sun.shadow.blurSamples = 12;
     this.scene.add(this.sun, this.sun.target);
     this.bake = new ShadowBake(this.renderer, SUN_OFFSET, this.scene);
+    this.post = new PostPipeline(this.renderer, this.scene, this.camera);
     this.splitShadows();
+  }
+
+  /** Static meshes of the current map (their shadows are baked once, not drawn every frame). */
+  get statics(): Statics | null {
+    return this._statics;
+  }
+
+  set statics(s: Statics | null) {
+    this._statics = s;
+    // A new map may bring lights of its own.
+    if (!this.fx.shadows) this.applyShadows();
   }
 
   /**
    * The sun's shadow map starts from the bake and draws only moving things; other lights (lamps)
-   * have no bake, so theirs are drawn in a second pass with the static casters in.
+   * have no bake, so theirs are drawn in a second pass with the static casters in. Shadow maps are
+   * depth only: colour writes stay off while they render.
    */
   private splitShadows() {
     type Render = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => void;
     const sm = this.renderer.shadowMap as unknown as { render: Render };
     const orig = sm.render.bind(sm);
-    sm.render = (lights, scene, camera) => {
-      const statics = this.statics;
-      if (!statics || lights.every((l) => l === this.sun)) {
+    const color = this.renderer.state.buffers.color;
+    const draw = (lights: THREE.Light[], scene: THREE.Object3D, camera: THREE.Camera) => {
+      for (const l of lights) this.prepareShadow(l);
+      color.setMask(false);
+      color.setLocked(true);
+      try {
         orig(lights, scene, camera);
+      } finally {
+        color.setLocked(false);
+        color.setMask(true);
+      }
+    };
+    sm.render = (lights, scene, camera) => {
+      const statics = this._statics;
+      if (!statics || lights.every((l) => l === this.sun)) {
+        draw(lights, scene, camera);
         return;
       }
-      if (lights.includes(this.sun)) orig([this.sun], scene, camera);
+      if (lights.includes(this.sun)) draw([this.sun], scene, camera);
       statics.castLive(true);
       this.bake.active = false;
-      orig(
+      draw(
         lights.filter((l) => l !== this.sun),
         scene,
         camera,
@@ -263,12 +318,27 @@ export class Renderer {
     };
   }
 
+  /** Our own shadow map for directional and spot lights, and the preset's size limit for lamps. */
+  private prepareShadow(l: THREE.Light) {
+    const light = l as THREE.Light & { shadow?: THREE.LightShadow; isPointLight?: boolean };
+    const shadow = light.shadow;
+    if (!shadow || light.isPointLight) return;
+    if (light !== this.sun) {
+      const want = (light.userData.fbShadowSize as number | undefined) ?? shadow.mapSize.x;
+      light.userData.fbShadowSize = want;
+      const size = Math.min(want, this.preset.localShadowMap);
+      if (shadow.mapSize.x !== size) shadow.mapSize.set(size, size);
+    }
+    shadow.map ??= shadowTarget(light as THREE.Light & { shadow: THREE.LightShadow });
+  }
+
   setQuality(q: Quality) {
     this.quality = q;
     this.preset = PRESETS[q];
     const p = this.preset;
     lod.bias = p.lodBias;
     this.sun.shadow.mapSize.set(p.shadowMap, p.shadowMap);
+    this.sun.shadow.map?.depthTexture?.dispose();
     this.sun.shadow.map?.dispose();
     this.sun.shadow.map = null;
     const cam = this.sun.shadow.camera;
@@ -292,48 +362,55 @@ export class Renderer {
     const pr = Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio) * this.debugScale;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
-    (this.motes.material as THREE.ShaderMaterial).uniforms.px!.value = pr * (h / 900);
+    const scale = FSR_SCALE[this.upscale];
+    (this.motes.material as THREE.ShaderMaterial).uniforms.px!.value = pr * scale * (h / 900);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
-    this.buildComposer(w, h, pr);
-  }
-
-  /** Switches effects on or off (rebuilds the post-processing chain). */
-  setEffects(patch: Partial<Effects>) {
-    const before = JSON.stringify(this.fx);
-    Object.assign(this.fx, patch);
-    if (JSON.stringify(this.fx) !== before) this.resize();
-  }
-
-  private buildComposer(w: number, h: number, pr: number) {
-    this.composer?.dispose();
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const p = this.preset;
     const fx = this.fx;
-    // Everything after the scene pass is single-sampled; the scene pass resolves its own MSAA target.
-    const target = new THREE.WebGLRenderTarget(w * pr, h * pr, { type: THREE.HalfFloatType });
-    const c = new EffectComposer(this.renderer, target);
-    c.setPixelRatio(pr);
-    c.setSize(w, h);
-    const named = <T extends object>(p: T, name: string) => Object.assign(p, { fbName: name });
-    const scene = new ScenePass(this.scene, this.camera, w * pr, h * pr, this.debugMsaa ?? p.msaa);
-    c.addPass(named(scene, 'scene'));
-    if (p.ao) {
-      // Reuses the scene pass's depth (normals from it): no extra render of the scene. (Passing it to
-      // the constructor breaks: three sets it up before its own normal target exists.)
-      const ao = new GTAOPass(this.scene, this.camera, w, h);
-      ao.setGBuffer(scene.depth);
-      ao.blendIntensity = 0.55;
-      c.addPass(named(ao, 'gtao'));
-      ao.setSize(Math.ceil((w * pr) / 2), Math.ceil((h * pr) / 2));
-    }
-    c.addPass(named(new OutputPass(), 'output'));
-    this.grade = named(new ShaderPass(GradeShader), 'grade');
-    this.grade.uniforms.uSat!.value = this.saturation;
-    c.addPass(this.grade);
-    if (fx.smaa) c.addPass(named(new SMAAPass(), 'smaa'));
-    this.temporal = fx.temporal ? named(new TemporalPass(this.camera, () => scene.depth, w * pr, h * pr), 'temporal') : null;
-    if (this.temporal) c.addPass(this.temporal);
-    this.composer = c;
+    this.post.configure({
+      width: size.x,
+      height: size.y,
+      scale,
+      msaa: this.debugMsaa ?? (fx.msaa ? p.msaa : 0),
+      ao: fx.ao ? p.ao : null,
+      grade: fx.grade,
+      smaa: fx.smaa,
+      temporal: fx.temporal,
+    });
+  }
+
+  /** Switches features on or off. */
+  setEffects(patch: Partial<Effects>) {
+    const before = { ...this.fx };
+    Object.assign(this.fx, patch);
+    this.motes.visible = this.fx.motes;
+    if (before.shadows !== this.fx.shadows) this.applyShadows();
+    if (JSON.stringify(this.fx) !== JSON.stringify(before)) this.resize();
+  }
+
+  /** FSR mode (render scale). */
+  setUpscale(u: Upscale) {
+    if (u === this.upscale) return;
+    this.upscale = u;
+    this.resize();
+    this.cut();
+  }
+
+  /**
+   * Shadows on or off for every light in the scene (a light keeps whether it casts in its user
+   * data). Lights that stop casting change the shader programs, so nothing samples a stale map.
+   */
+  private applyShadows() {
+    const on = this.fx.shadows;
+    this.renderer.shadowMap.enabled = on;
+    this.scene.traverse((o) => {
+      if (!(o instanceof THREE.Light) || !(o as { shadow?: unknown }).shadow) return;
+      if (o.userData.fbCast === undefined) o.userData.fbCast = o.castShadow;
+      o.castShadow = on && (o.userData.fbCast as boolean);
+      if (on) delete o.userData.fbCast;
+    });
   }
 
   /**
@@ -363,8 +440,7 @@ export class Renderer {
     fog.far = look.fog.far;
     this.renderer.toneMappingExposure = look.exposure;
     this.scene.environmentIntensity = look.env;
-    this.saturation = look.saturation;
-    if (this.grade) this.grade.uniforms.uSat!.value = look.saturation;
+    this.post.setGrade(look.saturation);
     const motes = (this.motes.material as THREE.ShaderMaterial).uniforms;
     (motes.tint!.value as THREE.Color).set(look.motes.color);
     motes.rise!.value = look.motes.rise;
@@ -372,7 +448,7 @@ export class Renderer {
 
   /** A camera cut: the previous frame is not reused by the temporal anti-aliasing. */
   cut() {
-    this.temporal?.reset();
+    this.post.reset();
   }
 
   /** Keeps the shadow frustum centred on the action, snapped to texels to avoid shimmering. */
@@ -399,17 +475,15 @@ export class Renderer {
     // Profiling: the same frame several times back to back keeps the GPU busy, so timer queries
     // measure work rather than the gaps while it waits for the CPU (see GpuTimer).
     this.camera.updateMatrixWorld();
-    this.statics?.update(this.camera);
+    this._statics?.update(this.camera);
     lod.update(this.camera);
     // Static shadows at the live shadow map's texel size (the bake is redone when that or the statics change).
-    this.bake.update(this.statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
+    if (this.fx.shadows) this.bake.update(this._statics, (this.preset.shadowRange * 2) / this.preset.shadowMap);
     for (let i = 0; i < this.debugRepeat; i++) {
       if (i) this.renderer.info.reset();
-      const taa = this.temporal?.enabled ? this.temporal : null;
-      taa?.jitter();
-      if (this.composer) this.composer.render();
-      else this.renderer.render(this.scene, this.camera);
-      taa?.unjitter();
+      this.post.jitter();
+      this.post.render();
+      this.post.unjitter();
     }
     gpu?.endFrame();
   }
@@ -441,7 +515,7 @@ export class Renderer {
     this.gpu?.reset();
   }
 
-  /** Composer passes (and the shadow map render inside the scene pass) time themselves on the GPU. */
+  /** Post stages (and the shadow map render inside the scene stage) time themselves on the GPU. */
   private wrapPasses() {
     const shadow = this.renderer.shadowMap as unknown as { render: (...a: unknown[]) => void };
     if (!this.wrapped.has(shadow)) {
@@ -454,23 +528,22 @@ export class Renderer {
         g?.end();
       };
     }
-    for (const p of this.composer?.passes ?? []) {
-      if (this.wrapped.has(p)) continue;
-      this.wrapped.add(p);
-      const label = (p as { fbName?: string }).fbName ?? 'pass';
-      const orig = p.render.bind(p);
-      p.render = (...a: Parameters<typeof p.render>) => {
+    for (const st of this.post.stages) {
+      if (this.wrapped.has(st)) continue;
+      this.wrapped.add(st);
+      const orig = st.render;
+      st.render = () => {
         const g = this.gpuMode === 'passes' ? this.gpu : null;
-        g?.begin(label);
-        orig(...a);
+        g?.begin(st.name);
+        orig();
         g?.end();
       };
     }
   }
 
-  /** Composer passes by name (profiler experiments switch them off). */
+  /** Post stages by name (profiler experiments switch them off). */
   get passes(): { name: string; pass: { enabled: boolean } }[] {
-    return (this.composer?.passes ?? []).map((p) => ({ name: (p as { fbName?: string }).fbName ?? 'pass', pass: p }));
+    return this.post.stages.map((st) => ({ name: st.name, pass: st }));
   }
 
   /** Draw calls, triangles… of the last frame, summed over all passes. */

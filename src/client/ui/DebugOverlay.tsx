@@ -26,7 +26,7 @@ export function DebugOverlay({ game }: { game: Game }) {
       'draw',
       `${r.calls} calls  ${Math.round(r.triangles / 1000)}k tris  ${r.programs} programs  ${r.geometries} geo  ${r.textures} tex`,
     ],
-    ['view', `${r.size[0]}×${r.size[1]} @${r.pixelRatio}  ${r.quality}  ${r.sceneObjects} objects`],
+    ['view', `${r.size[0]}×${r.size[1]} @${r.pixelRatio}  ${r.quality} fsr:${r.upscale}  ${r.sceneObjects} objects`],
     [
       'net',
       `${n.transport ?? '—'}  rtt ${n.rtt}  lead ${a?.leadMs ?? '—'}  jitter ${a?.jitterMs ?? '—'}  snap age ${a?.snapshotAgeMs ?? '—'} ms`,

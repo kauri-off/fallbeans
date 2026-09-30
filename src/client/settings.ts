@@ -1,5 +1,5 @@
 import { effect, signal } from '@preact/signals';
-import type { Quality } from './game/renderer';
+import { DEFAULT_EFFECTS, type Effects, type Quality, type Upscale } from './game/renderer';
 
 /** Esc menu layout: a column beside the player panel (the game stays in view), or a wide panel in the middle. */
 export type MenuLayout = 'side' | 'center';
@@ -12,6 +12,10 @@ export interface Settings {
   fov: number;
   volume: number;
   quality: Quality;
+  /** FSR 1 upscaling: the scene renders below the display resolution. */
+  upscale: Upscale;
+  /** Graphics features switched on or off one by one (performance testing). */
+  gfx: Effects;
   showFps: boolean;
 }
 
@@ -24,8 +28,12 @@ const DEFAULTS: Settings = {
   fov: 70,
   volume: 0.8,
   quality: 'high',
+  upscale: 'ultra',
+  gfx: { ...DEFAULT_EFFECTS },
   showFps: false,
 };
+
+const UPSCALES: Upscale[] = ['off', 'ultra', 'quality', 'balanced', 'performance'];
 
 function load(): Settings {
   try {
@@ -34,6 +42,8 @@ function load(): Settings {
       const s = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
       // Ultra was folded into high.
       if (!['medium', 'high'].includes(s.quality)) s.quality = 'high';
+      if (!UPSCALES.includes(s.upscale)) s.upscale = DEFAULTS.upscale;
+      s.gfx = { ...DEFAULT_EFFECTS, ...s.gfx };
       return s;
     }
   } catch {}

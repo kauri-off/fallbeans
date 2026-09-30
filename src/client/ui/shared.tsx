@@ -3,13 +3,32 @@ import { GAMES } from '../../games';
 import { BASE_PATH, NAME_MAX } from '../../shared/consts';
 import { GENRE_LABEL } from '../../shared/game';
 import type { Game } from '../game/game';
-import type { Quality } from '../game/renderer';
+import type { Effects, Quality, Upscale } from '../game/renderer';
 import { settings, updateSettings } from '../settings';
 import { room } from '../state';
 
 const QUALITIES: { id: Quality; label: string }[] = [
   { id: 'medium', label: 'Среднее' },
   { id: 'high', label: 'Высокое' },
+];
+
+const UPSCALES: { id: Upscale; label: string; title: string }[] = [
+  { id: 'off', label: 'Выкл', title: 'Полное разрешение' },
+  { id: 'ultra', label: 'Ультра', title: 'Рендер в 77% разрешения' },
+  { id: 'quality', label: 'Качество', title: 'Рендер в 67% разрешения' },
+  { id: 'balanced', label: 'Баланс', title: 'Рендер в 59% разрешения' },
+  { id: 'performance', label: 'Скорость', title: 'Рендер в 50% разрешения' },
+];
+
+/** Graphics features that can be switched off one by one (to see what each costs). */
+const FEATURES: { id: keyof Effects; label: string }[] = [
+  { id: 'shadows', label: 'Тени' },
+  { id: 'ao', label: 'Фоновое затенение (AO, только «Высокое»)' },
+  { id: 'grade', label: 'Цветокоррекция и виньетка' },
+  { id: 'msaa', label: 'Сглаживание MSAA' },
+  { id: 'smaa', label: 'Сглаживание SMAA' },
+  { id: 'temporal', label: 'Временное сглаживание (TAA)' },
+  { id: 'motes', label: 'Частицы в воздухе' },
 ];
 
 /** The player's name: kept in the browser and told to the server (at the room list or in a room). */
@@ -106,6 +125,37 @@ export function SettingsTab() {
           ))}
         </div>
       </div>
+      <div class="field">
+        <span>Масштабирование AMD FSR:</span>
+        <div class="row wrap">
+          {UPSCALES.map((u) => (
+            <button
+              type="button"
+              key={u.id}
+              title={u.title}
+              class={`btn chip${s.upscale === u.id ? ' on' : ''}`}
+              onClick={() => updateSettings({ upscale: u.id })}
+            >
+              {u.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <details class="practice">
+        <summary>Графические эффекты (для проверки производительности)</summary>
+        <div class="stack">
+          {FEATURES.map((f) => (
+            <label key={f.id} class="row">
+              <input
+                type="checkbox"
+                checked={s.gfx[f.id]}
+                onChange={(e) => updateSettings({ gfx: { ...s.gfx, [f.id]: e.currentTarget.checked } })}
+              />
+              {f.label}
+            </label>
+          ))}
+        </div>
+      </details>
       <label class="row">
         <input type="checkbox" checked={s.showFps} onChange={(e) => updateSettings({ showFps: e.currentTarget.checked })} />
         Показывать частоту кадров
