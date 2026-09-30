@@ -154,7 +154,7 @@ function clouds(b: Builder, boxes: readonly Box[], req: Builder['scenery'][numbe
   if (!list.length) return;
   const parts = meshParts('cloud').map(({ mesh, local }) => {
     const mat = Array.isArray(mesh.material) ? mesh.material : cloudTint(b, b.look, mesh.material);
-    const inst = new THREE.InstancedMesh(atLevel(mesh.geometry, 1), mat, list.length);
+    const inst = new THREE.InstancedMesh(atLevel(mesh.geometry, 2), mat, list.length);
     inst.frustumCulled = false;
     inst.castShadow = false;
     inst.receiveShadow = false;

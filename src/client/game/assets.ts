@@ -32,7 +32,7 @@ export async function loadModels(onProgress?: (done: number, total: number) => v
           o.receiveShadow = n !== 'cloud';
           sharedGeometries.add(o.geometry);
           o.geometry.computeBoundingSphere();
-          // Levels of detail M1…M3 (the clouds are instanced and use one level for all).
+          // Levels of detail M1…M6 (the clouds are instanced and use one level for all).
           for (const l of simplifyLevels(o.geometry)) sharedGeometries.add(l);
           const mats = Array.isArray(o.material) ? o.material : [o.material];
           for (const m of mats) {

@@ -13,27 +13,36 @@ const matCache = new Map<string, THREE.Material>();
 const LIFTS = 6;
 const LIFT = 0.0025;
 
-/** Segment counts per LOD level (M0…M3). */
+/** Segment counts per LOD level (M0…M6). */
 const SPHERE_SEG = [
   [32, 20],
+  [26, 16],
   [20, 12],
+  [16, 10],
   [12, 8],
+  [10, 7],
   [8, 6],
 ] as const;
-const CYL_SEG = [48, 24, 14, 8] as const;
-const BOX_SEG = [2, 1, 1, 0] as const;
+const CYL_SEG = [48, 36, 24, 18, 14, 10, 8] as const;
+const BOX_SEG = [2, 1, 1, 1, 0, 0, 0] as const;
+/** Rounding radius per level: flatter bevels before the plain box. */
+const BOX_ROUND = [1, 1, 0.75, 0.5, 0, 0, 0] as const;
+
+function cylSeg(dims: readonly number[], level: number): number {
+  const seg = dims[2] ?? 48;
+  return Math.min(seg, Math.max(Math.min(seg, 8), CYL_SEG[level]!));
+}
 
 function build(kind: PrimKind, dims: readonly number[], level: number): THREE.BufferGeometry {
   if (kind === 'box') {
     const [sx = 1, sy = 1, sz = 1] = dims;
     const seg = BOX_SEG[level]!;
     const r = Math.min(0.25, sx / 4, sy / 4, sz / 4);
-    // M2 keeps the rounding with the fewest segments but a smaller radius (fewer, flatter bevels); M3 is a plain box.
-    return seg ? new RoundedBoxGeometry(sx, sy, sz, seg, level >= 2 ? r * 0.6 : r) : new THREE.BoxGeometry(sx, sy, sz);
+    return seg ? new RoundedBoxGeometry(sx, sy, sz, seg, r * BOX_ROUND[level]!) : new THREE.BoxGeometry(sx, sy, sz);
   }
   if (kind === 'cyl') {
-    const [r = 1, h = 1, seg = 48] = dims;
-    return new THREE.CylinderGeometry(r, r, h, Math.min(seg, Math.max(Math.min(seg, 8), CYL_SEG[level]!)));
+    const [r = 1, h = 1] = dims;
+    return new THREE.CylinderGeometry(r, r, h, cylSeg(dims, level));
   }
   const [r = 1] = dims;
   const [w, hs] = SPHERE_SEG[level]!;
@@ -44,16 +53,20 @@ function geometry(kind: PrimKind, dims: readonly number[], lift: number): THREE.
   const key = `${kind}|${dims.map((d) => d.toFixed(3)).join('|')}|${lift}`;
   let g = geoCache.get(key);
   if (!g) {
+    const built = new Map<string, THREE.BufferGeometry>();
     const lv = Array.from({ length: LOD_LEVELS }, (_, l) => {
+      // Levels that come out the same share one geometry (no pointless cross-fades).
+      const id = kind === 'box' ? `${BOX_SEG[l]}|${BOX_ROUND[l]}` : kind === 'cyl' ? `${cylSeg(dims, l)}` : `${SPHERE_SEG[l]}`;
+      const known = built.get(id);
+      if (known) return known;
       const x = build(kind, dims, l);
+      built.set(id, x);
       if (lift) x.translate(0, lift * LIFT, 0);
       x.computeBoundingSphere();
       return x;
     });
     g = lv[0]!;
-    // Low cylinders (hex tiles…) are the same at every level.
-    const same = kind === 'cyl' && (dims[2] ?? 48) <= 8;
-    setLevels(g, same ? [g, g, g, g] : lv);
+    setLevels(g, lv);
     geoCache.set(key, g);
   }
   return g;

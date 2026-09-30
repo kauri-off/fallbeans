@@ -3,18 +3,18 @@ import * as THREE from 'three';
 import { canFade, fadeMaterial, lodFrame } from './materials';
 
 /**
- * Client-only levels of detail M0 (full) … M3 (coarsest) for every mesh that has them. The level
+ * Client-only levels of detail M0 (full) … M6 (coarsest) for every mesh that has them. The level
  * follows the projected size on screen; near each switch both levels are drawn with complementary
  * dither masks (see materials.ts), which the temporal anti-aliasing blends into a smooth cross-fade.
  */
 
-export const LOD_LEVELS = 4;
-/** Screen-size thresholds (bounding radius / (distance · tan(fov/2))) where M0→M1, M1→M2, M2→M3. */
-const THRESHOLDS = [0.14, 0.055, 0.022] as const;
-/** Half width of each cross-fade band, as a ratio of the size (log scale). */
-const BAND = 1.18;
-/** Target share of the triangles kept at M1, M2, M3 (model meshes). */
-const KEEP = [1, 0.45, 0.18, 0.06] as const;
+export const LOD_LEVELS = 7;
+/** Screen-size thresholds (bounding radius / (distance · tan(fov/2))) where Mi→Mi+1. */
+const THRESHOLDS = [0.16, 0.095, 0.056, 0.033, 0.02, 0.012] as const;
+/** Half width of each cross-fade band, as a ratio of the size (log scale); bands must not overlap. */
+const BAND = 1.2;
+/** Target share of the triangles kept at M0…M6 (model meshes). */
+const KEEP = [1, 0.62, 0.4, 0.24, 0.13, 0.07, 0.035] as const;
 
 const levelsOf = new WeakMap<THREE.BufferGeometry, THREE.BufferGeometry[]>();
 
@@ -46,7 +46,7 @@ export function simplifyLevels(g: THREE.BufferGeometry): THREE.BufferGeometry[] 
   const idx = g.index;
   const out: THREE.BufferGeometry[] = [g];
   if (!pos || !idx || idx.count < 240 || !MeshoptSimplifier.supported) {
-    setLevels(g, [g, g, g, g]);
+    setLevels(g, Array(LOD_LEVELS).fill(g));
     return levelsOf.get(g)!;
   }
   const n = pos.count;
@@ -73,11 +73,11 @@ export function simplifyLevels(g: THREE.BufferGeometry): THREE.BufferGeometry[] 
       [0.5, 0.5, 0.5],
       null,
       target,
-      0.05 * l,
+      0.035 * l,
       ['Prune'],
     );
-    // Some shapes stop short of the target (seams, small parts): the coarsest level may be sloppy.
-    if (l === LOD_LEVELS - 1 && res.length > target * 1.6)
+    // Some shapes stop short of the target (seams, small parts): the coarsest levels may be sloppy.
+    if (l >= LOD_LEVELS - 2 && res.length > target * 1.6)
       [res] = MeshoptSimplifier.simplifySloppy(prev, positions, 3, null, target, 0.08);
     if (!res.length) res = prev;
     const lg = new THREE.BufferGeometry();
@@ -130,7 +130,7 @@ export class LodSystem {
   force: number | null = null;
   enabled = true;
   private frame = 0;
-  readonly stats: LodStats = { meshes: 0, levels: [0, 0, 0, 0], fading: 0 };
+  readonly stats: LodStats = { meshes: 0, levels: Array(LOD_LEVELS).fill(0), fading: 0 };
 
   /**
    * Every eligible mesh under root, until drop(owner). With `groupRadius` the whole model changes
@@ -250,7 +250,7 @@ export class LodSystem {
           }
         }
       }
-      const fadable = fade > 0.02 && fade < 0.98 && canFade(e.base);
+      const fadable = fade > 0.02 && fade < 0.98 && e.levels[lvl - 1] !== e.levels[lvl] && canFade(e.base);
       st.levels[lvl]!++;
       if (!fadable) {
         const g = e.levels[Math.min(LOD_LEVELS - 1, fade > 0 && fade < 0.5 ? lvl - 1 : lvl)]!;
