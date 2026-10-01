@@ -1,4 +1,5 @@
-//! Project tasks: `cargo xtask <check|golden|assets|dev|stress>`.
+//! Project tasks: `cargo xtask <check|golden|assets|dev|stress|deploy>`.
+mod deploy;
 mod stress;
 
 use std::path::{Path, PathBuf};
@@ -24,7 +25,10 @@ enum Task {
     /// Server plus windowed clients on this machine.
     Dev(DevArgs),
     /// Server plus headless clients under a simulated network; checks prediction, traffic and tick cost.
+    /// `--remote`: against a probe server on the production host, over the real network.
     Stress(stress::StressArgs),
+    /// Builds the server for Linux and installs it on the production host.
+    Deploy(deploy::DeployArgs),
 }
 
 /// What both server and clients take.
@@ -170,6 +174,7 @@ fn main() -> ExitCode {
         }
         Task::Dev(a) => dev(&a),
         Task::Stress(a) => stress::stress(&a),
+        Task::Deploy(a) => deploy::deploy(&a),
     };
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }

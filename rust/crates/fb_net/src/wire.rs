@@ -4,7 +4,7 @@ use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 use fb_sim::math::V3;
-use fb_sim::physics::{Body, BodyState};
+use fb_sim::physics::{Body, BodyState, GIANT_SIZE, power};
 use serde::{Deserialize, Serialize};
 
 use crate::{BodyFull, RemotePose};
@@ -25,8 +25,11 @@ fn state(i: u8) -> BodyState {
     STATES.get(i as usize).copied().unwrap_or_default()
 }
 
-/// The own bean: what prediction resumes from. Position, velocity and yaw are exact (they carry the
-/// motion); timers and angles are f32 like the TS snapshot (sub-microsecond and micro-radian errors).
+/// The own bean: what prediction resumes from. Everything the physics step reads is exact: after a
+/// rollback the client must go on from the server's very state. (Timers in f32, as the TS snapshot sent
+/// them, cross zero a tick earlier or later than on the server: the state changes at another tick and
+/// the next rollback follows a second later.) Only the landing impact, drawn and never read, is f32.
+/// The size is not sent: it follows the bonus (`Body::step` sets it from `power` every tick).
 #[derive(Serialize, Deserialize)]
 pub struct Full {
     actor: i32,
@@ -36,18 +39,17 @@ pub struct Full {
     grounded: bool,
     ground_col: i32,
     state: u8,
-    state_t: f32,
-    coyote: f32,
-    jump_buf: f32,
-    slow_until: f32,
-    slow_k: f32,
+    state_t: f64,
+    coyote: f64,
+    jump_buf: f64,
+    slow_until: f64,
+    slow_k: f64,
     land_impact: f32,
-    tilt: f32,
-    tilt_dir: f32,
+    tilt: f64,
+    tilt_dir: f64,
     power: u8,
-    power_until: f32,
-    size: f32,
-    climb_to: [f32; 3],
+    power_until: f64,
+    climb_to: [f64; 3],
     teleports: u32,
 }
 
@@ -62,18 +64,17 @@ impl From<BodyFull> for Full {
             grounded: b.grounded,
             ground_col: b.ground_col,
             state: b.state as u8,
-            state_t: b.state_t as f32,
-            coyote: b.coyote as f32,
-            jump_buf: b.jump_buf as f32,
-            slow_until: b.slow_until as f32,
-            slow_k: b.slow_k as f32,
+            state_t: b.state_t,
+            coyote: b.coyote,
+            jump_buf: b.jump_buf,
+            slow_until: b.slow_until,
+            slow_k: b.slow_k,
             land_impact: b.land_impact as f32,
-            tilt: b.tilt as f32,
-            tilt_dir: b.tilt_dir as f32,
+            tilt: b.tilt,
+            tilt_dir: b.tilt_dir,
             power: b.power,
-            power_until: b.power_until as f32,
-            size: b.size as f32,
-            climb_to: b.climb_to.as_vec3().to_array(),
+            power_until: b.power_until,
+            climb_to: b.climb_to.to_array(),
             teleports: f.teleports,
         }
     }
@@ -90,18 +91,18 @@ impl From<Full> for BodyFull {
                 grounded: w.grounded,
                 ground_col: w.ground_col,
                 state: state(w.state),
-                state_t: w.state_t.into(),
-                coyote: w.coyote.into(),
-                jump_buf: w.jump_buf.into(),
-                slow_until: w.slow_until.into(),
-                slow_k: w.slow_k.into(),
+                state_t: w.state_t,
+                coyote: w.coyote,
+                jump_buf: w.jump_buf,
+                slow_until: w.slow_until,
+                slow_k: w.slow_k,
                 land_impact: w.land_impact.into(),
-                tilt: w.tilt.into(),
-                tilt_dir: w.tilt_dir.into(),
+                tilt: w.tilt,
+                tilt_dir: w.tilt_dir,
                 power: w.power,
-                power_until: w.power_until.into(),
-                size: w.size.into(),
-                climb_to: Vec3::from_array(w.climb_to).as_dvec3(),
+                power_until: w.power_until,
+                size: if w.power == power::GIANT { GIANT_SIZE } else { 1.0 },
+                climb_to: V3::from_array(w.climb_to),
             },
             teleports: w.teleports,
         }
@@ -171,7 +172,6 @@ impl From<Pose> for RemotePose {
 #[cfg(test)]
 mod tests {
     use bevy_replicon::postcard;
-    use fb_sim::physics::power;
 
     use super::*;
 
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn full_keeps_motion_exact() {
+    fn full_is_exact() {
         let f = moving_body();
         let mut buf = [0u8; 256];
         let bytes = postcard::to_slice(&f, &mut buf).unwrap();
@@ -205,12 +205,13 @@ mod tests {
             (back.body.state, back.body.ground_col, back.teleports),
             (f.body.state, 17, 300)
         );
-        assert!((back.body.state_t - 0.4).abs() < 1e-7 && (back.body.tilt - 1.4).abs() < 1e-6);
-        assert!(
-            !crate::body_differs(&f, &back),
-            "the rounding must stay under the rollback threshold"
-        );
-        assert!(bytes.len() <= 120, "{} bytes", bytes.len());
+        assert_eq!(back.body.size, GIANT_SIZE);
+        let exact = Body {
+            land_impact: back.body.land_impact,
+            ..f.body.clone()
+        };
+        assert_eq!(back.body, exact, "all but the landing impact is exact");
+        assert!(bytes.len() <= 160, "{} bytes", bytes.len());
     }
 
     #[test]

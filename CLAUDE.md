@@ -12,9 +12,9 @@ gives a tab its own).
 - Git: the repo is on GitHub (kauri-off/fallbeans, `master`). Do not commit, push or open PRs unless asked.
 - Line endings are LF (`.gitattributes`). Biome (TS/JSON/CSS) and rustfmt (`.rs`) format on every edit (hook in
   `.claude/settings.json` → `scripts/hooks/format-edited.ts`).
-- Deploy only when asked: `bun run deploy` (see README). Right after the confirmation everybody is sent off ("the game is
-  updating", the flag file `/run/fallbeans-updating`); once the new server is up their pages reload into the new build
-  (`build` in `/api/session`, see `src/server/build.ts`).
+- Deploy only when asked: `cd rust && cargo xtask deploy` (the Rust server; `rust/README.md`, "Деплой"). The TS version is
+  no longer deployed: it was taken off the host on 2026-10-01 (`bun run deploy` and `deploy/` are gone from this branch).
+  There is no "the game is updating" step yet: connected clients just lose the connection.
 - The server simulation must stay deterministic: no `Math.random`/`Date.now` in sim or map logic (use `b.rng`, the seed, sim time). The determinism audit and the replay test catch violations.
 
 ## Verify changes
@@ -64,12 +64,14 @@ shadow map, no cascades, statics baked: `shadowBake.ts`); ambient light is image
 
 ## Rust port (branch `rogue/port-to-rust`, workspace `rust/`)
 
-The game is being ported to a native Rust + Bevy 0.19 + Lightyear 0.30 client and server; the TS version stays in
-production with frozen content until the switch. Read before working on it:
+The game is being ported to a native Rust + Bevy 0.19 + Lightyear 0.30 client and server. The Rust server already runs in
+production (Phase 0, closed 2026-10-01: `jump-club`); the TS version is frozen, off the host, and kept on `master` as the porting source
+(a prototype, not a reference: where it behaves badly, the Rust version does better). Read before working on it:
 
 - `plan.md` (Russian): the spec and the phases; section 12 says where we are and what comes next.
 - `rust/PHASE0.md`: Phase 0 state, measurements, review of every technical decision, open items.
 - `rust/README.md`: layout, commands, code rules, debugging, known issues.
+- `rust/deploy/README.md`: the production host (hardware, what else runs there, ports, ufw, nginx, load measured).
 
 Essentials:
 
@@ -81,12 +83,17 @@ Essentials:
   --jitter 15 --loss 0.05` (server + headless clients, compares predictions with the server tick by tick).
 - Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--lag 75]`, or `fb_client --screenshot f.png
   --exit-after 15` against a running `fb_server`. There is no BRP probe yet (Phase 4); read `stats:`/`metrics:` logs.
+- Over the real network: `cargo xtask stress --remote --clients 8 --secs 100 --transport udp|ws|auto` runs a probe
+  server (this tree's Linux build) on the production host next to the game (UDP 5890, `/fallbeans/ws-probe`) and
+  compares the clients run here with it tick by tick. The production service is not touched.
 - Porting from TS: the source of truth is TS on `master`; port line by line and cover it with a golden trace
   (`scripts/golden.ts` → `rust/core/fb_arena/tests/golden/`, `cargo xtask golden` re-exports with bun).
 - Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
-- Lightyear runs two `Server`s (UDP + WS), so its topology is `Invalid` (lightyear#1693) and topology-gated systems
-  are off; the server reads inputs itself (`room::frame_for`). Inputs go out at 60 Hz, input margin 3 ticks: both
-  chosen by stress measurements.
+- One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`room::frame_for`: late presses
+  happen on the next tick; Lightyear's copy into `ActionState` is off). Inputs go out at 60 Hz with 15 messages of
+  redundancy, input margin 3 ticks: all chosen by stress measurements. The server runs every schedule single-threaded (`SingleThreadedExecutor`; the 1-vCPU host lost 15% of its
+  core to the multi-threaded executor's hand-offs). `rust/vendor/aeronet_websocket` patches the
+  WebSocket server (`TCP_NODELAY`); keep it until aeronet has it, carry it over on aeronet updates.
 - No traffic budget anywhere (decided by the author): traffic is measured and reported only. Target server and
-  minimum client: 2 vCPU / 2 GB RAM. Many players sit behind VPNs that drop UDP/443 (plan.md §5): the game's UDP
+  minimum client: 2 vCPU / 2 GB RAM (the current host has 1 vCPU / 0.9 GB). Many players sit behind VPNs that drop UDP/443 (plan.md §5): the game's UDP
   must stay off port 443 and not look like QUIC; WebSocket on 443 is the fallback.

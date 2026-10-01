@@ -1,3 +1,4 @@
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
 use bevy::prelude::Resource;
@@ -11,6 +12,9 @@ pub struct Opts {
     pub udp_port: u16,
     #[arg(long, default_value_t = WS_PORT)]
     pub ws_port: u16,
+    /// Address the WebSocket listener binds (production: 127.0.0.1, behind nginx's wss on 443).
+    #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
+    pub ws_addr: IpAddr,
     /// Seed of every round (default: a new one per round).
     #[arg(long)]
     pub seed: Option<u32>,

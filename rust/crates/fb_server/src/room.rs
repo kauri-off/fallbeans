@@ -49,6 +49,13 @@ pub struct RoomPlugin;
 impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start_room);
+        // Lightyear's copy of the input buffer into `ActionState` would also drop every tick before
+        // the current one, and with them any input that arrives late: a late press would be lost.
+        // The room reads the buffer itself (`frame_for`); the buffer is a ring of 64 ticks.
+        app.configure_sets(
+            FixedPreUpdate,
+            lightyear::input::server::InputSystems::UpdateActionState.run_if(|| false),
+        );
         app.add_observer(on_pawn_removed);
         app.add_systems(FixedUpdate, tick_room.in_set(RoomTick));
     }
@@ -104,23 +111,75 @@ fn on_pawn_removed(trigger: On<Remove, Pawn>, pawns: Query<&PlayerId>, room: Opt
 }
 
 type Inputs = InputBuffer<ActionState<FbInput>, FbInput>;
+type PawnData = (
+    &'static PlayerId,
+    Option<&'static Inputs>,
+    &'static mut InputState,
+    &'static mut BodyFull,
+    &'static mut RemotePose,
+);
 
-/// The input for `tick` straight from the buffer (see `net::start_servers` for why). TS rules for a tick
-/// without input: keep the stick for a moment, never repeat a jump or dive.
-fn frame_for(tick: Tick, buffer: Option<&Inputs>) -> InputFrame {
-    let Some(b) = buffer else { return InputFrame::IDLE };
-    if let Some(s) = b.get(tick) {
-        return s.0.into();
-    }
-    match b.get_last_with_tick() {
-        Some((last, s)) if last < tick && tick.0 - last.0 <= INPUT_HOLD => {
-            let f: InputFrame = s.0.into();
-            InputFrame {
-                buttons: f.buttons & !(BTN_JUMP | BTN_DIVE),
-                ..f
-            }
+/// Jump and dive: one tick per press (the client sends them so).
+const PRESSES: u8 = BTN_JUMP | BTN_DIVE;
+
+/// What the room keeps of a player's input between ticks.
+#[derive(Component, Debug)]
+pub struct InputState {
+    /// The frame used last tick: carried on while input is missing.
+    last: InputFrame,
+    /// Last tick that had the player's input in time.
+    ack: u32,
+    /// Presses that arrived after their tick: they happen on the next one.
+    late: u8,
+    /// Newest tick looked at for late presses.
+    late_seen: u32,
+    /// Ticks run without the player's input since the last `metrics:` line (after their first input).
+    pub missed: u32,
+}
+
+impl InputState {
+    pub fn new(now: Tick) -> Self {
+        Self {
+            last: InputFrame::IDLE,
+            ack: now.0,
+            late: 0,
+            late_seen: now.0,
+            missed: 0,
         }
-        _ => InputFrame::IDLE,
+    }
+}
+
+/// The input for `tick`, read from the buffer directly (see `RoomPlugin` for why). Without one
+/// in time the pawn keeps its stick (and grab) for INPUT_HOLD ticks, never repeating a jump or dive; a
+/// press that arrives late is not lost but happens now.
+fn frame_for(tick: Tick, buffer: Option<&Inputs>, st: &mut InputState) -> InputFrame {
+    let k = tick.0;
+    if let Some(b) = buffer {
+        let buttons = |j: u32| b.get(Tick(j)).map(|s| InputFrame::from(s.0).buttons);
+        for j in st.ack.max(st.late_seen).max(k.saturating_sub(LATE_TICKS)) + 1..k {
+            let Some(now) = buttons(j) else { continue };
+            // Only a new press: Lightyear fills a gap with the tick before it, a held bit is that copy.
+            st.late |= now & !buttons(j - 1).unwrap_or(0) & PRESSES;
+            st.late_seen = j;
+        }
+    }
+    let input = buffer.and_then(|b| b.get(tick));
+    st.missed += u32::from(input.is_none() && buffer.is_some());
+    let frame = match input {
+        Some(s) => {
+            st.ack = k;
+            s.0.into()
+        }
+        None if k.saturating_sub(st.ack) > INPUT_HOLD => InputFrame::IDLE,
+        None => InputFrame {
+            buttons: st.last.buttons & !PRESSES,
+            ..st.last
+        },
+    };
+    st.last = frame;
+    InputFrame {
+        buttons: frame.buttons | core::mem::take(&mut st.late),
+        ..frame
     }
 }
 
@@ -128,7 +187,7 @@ fn tick_room(
     timeline: Res<LocalTimeline>,
     opts: Res<Opts>,
     mut room: ResMut<Room>,
-    mut pawns: Query<(&PlayerId, Option<&Inputs>, &mut BodyFull, &mut RemotePose), With<Pawn>>,
+    mut pawns: Query<PawnData, With<Pawn>>,
     mut rounds: Query<&mut Round>,
     mut sender: ServerMultiMessageSender,
     servers: Query<&Server>,
@@ -137,10 +196,16 @@ fn tick_room(
     let tick = timeline.tick();
     let room = &mut *room;
     let k = room.round.arena_tick(tick);
+    let mut frames: Vec<(u32, InputFrame)> = pawns
+        .iter_mut()
+        .map(|(id, buffer, mut st, _, _)| (id.0, frame_for(tick, buffer, &mut st).clamped()))
+        .collect();
+    frames.sort_unstable_by_key(|f| f.0);
     if k as f64 * DT > room.arena.map.meta().duration + RESULTS_S {
         let (mut arena, round) = new_round(&opts, tick, room.round.number + 1);
         for p in &room.arena.pawns {
-            arena.add_pawn(p.id);
+            // To the new spawn as a teleport: views snap instead of gliding across the map.
+            arena.add_pawn(p.id).teleports = p.teleports + 1;
         }
         room.arena = arena;
         room.round = round.clone();
@@ -148,13 +213,9 @@ fn tick_room(
         if let Ok(mut r) = rounds.get_mut(room.round_entity) {
             *r = round;
         }
+        publish(room, &mut pawns);
         return;
     }
-    let mut frames: Vec<(u32, InputFrame)> = pawns
-        .iter()
-        .map(|(id, buffer, _, _)| (id.0, frame_for(tick, buffer).clamped()))
-        .collect();
-    frames.sort_unstable_by_key(|f| f.0);
     let events = room.arena.step(k, |id| {
         frames
             .binary_search_by_key(&id, |f| f.0)
@@ -189,7 +250,12 @@ fn tick_room(
         }
         info!("tick {}: player {} took bonus {}", tick.0, b.id, b.i);
     }
-    for (id, _, mut full, mut pose) in &mut pawns {
+    publish(room, &mut pawns);
+}
+
+/// The arena's beans into their replicated components.
+fn publish(room: &Room, pawns: &mut Query<PawnData, With<Pawn>>) {
+    for (id, _, _, mut full, mut pose) in pawns {
         let Some(p) = room.arena.pawn(id.0) else { continue };
         let next = BodyFull {
             body: p.body.clone(),

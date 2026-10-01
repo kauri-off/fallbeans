@@ -42,6 +42,10 @@ pub struct Opts {
     /// reach the server late at 150 ms RTT, 30 ms jitter, 5% loss; 3 (+17 ms) brought that under 0.05%.
     #[arg(long, default_value_t = 3.0)]
     pub input_margin: f32,
+    /// Ticks the clock's lead may be off before Lightyear jumps it (a hard resync, relabelling inputs
+    /// already sent) instead of speeding up or slowing down (Lightyear's default: 10).
+    #[arg(long)]
+    pub sync_max_error: Option<f32>,
     /// Graphics API (default: wgpu's choice, or WGPU_BACKEND).
     #[arg(long, value_enum)]
     pub backend: Option<Backend>,

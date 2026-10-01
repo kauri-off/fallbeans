@@ -20,8 +20,7 @@
     "replay": "bun scripts/replay.ts",
     "assets": "bun scripts/assets.ts",
     "check": "tsc --noEmit && biome check . && vitest run",
-    "new-game": "bun scripts/new-game.ts",
-    "deploy": "bun scripts/deploy.ts"
+    "new-game": "bun scripts/new-game.ts"
   },
   "dependencies": {
     "@preact/signals": "^2.11.2",

@@ -44,3 +44,8 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
+
+# Local fixes to dependencies, each to drop once upstream has it (rust/README.md, "Known issues").
+[patch.crates-io]
+# The WebSocket server leaves Nagle's algorithm on (only the client can turn it off): +15 ms RTT on wss.
+aeronet_websocket = { path = "vendor/aeronet_websocket" }

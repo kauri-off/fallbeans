@@ -1,0 +1,208 @@
+//! `cargo xtask deploy`: builds the server for Linux (a static musl binary: it runs on any glibc), packs it
+//! with `deploy/` and installs it on the host (`deploy/remote-install.sh`: checks, release switch with a
+//! health check, rollback on failure, checks from outside).
+//!
+//! On Windows the build runs in WSL (`--wsl-distro`, default Ubuntu), which needs Rust with the
+//! `x86_64-unknown-linux-musl` target and `build-essential cmake musl-tools`.
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use clap::Args;
+
+use crate::{root, run};
+
+pub const LINUX_TARGET: &str = "x86_64-unknown-linux-musl";
+
+/// The production host, as in the SharedServer repository.
+#[derive(Args, Clone, Debug)]
+pub struct Host {
+    /// SSH target (default DEPLOY_HOST or deploy@168.113.157.12).
+    #[arg(long)]
+    pub host: Option<String>,
+    /// SSH key (default DEPLOY_KEY or ~/.ssh/cybershield_deploy).
+    #[arg(long)]
+    pub key: Option<PathBuf>,
+}
+
+impl Host {
+    pub fn target(&self) -> String {
+        self.host
+            .clone()
+            .or_else(|| std::env::var("DEPLOY_HOST").ok())
+            .unwrap_or_else(|| "deploy@168.113.157.12".into())
+    }
+
+    pub fn key(&self) -> PathBuf {
+        self.key
+            .clone()
+            .or_else(|| std::env::var_os("DEPLOY_KEY").map(PathBuf::from))
+            .unwrap_or_else(|| home().join(".ssh").join("cybershield_deploy"))
+    }
+
+    fn opts(&self) -> Vec<String> {
+        vec![
+            "-i".into(),
+            self.key().to_string_lossy().into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=15".into(),
+        ]
+    }
+
+    pub fn ssh(&self, remote_cmd: &str) -> Command {
+        let mut c = Command::new("ssh");
+        c.args(self.opts()).arg(self.target()).arg(remote_cmd);
+        c
+    }
+
+    /// `scp` from `from` to `to`; a remote side is written `:path` (the host is added).
+    pub fn scp(&self, from: &str, to: &str) -> Command {
+        let side = |s: &str| match s.strip_prefix(':') {
+            Some(p) => format!("{}:{p}", self.target()),
+            None => s.to_string(),
+        };
+        let mut c = Command::new("scp");
+        c.args(self.opts()).arg(side(from)).arg(side(to));
+        c
+    }
+}
+
+fn home() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
+#[derive(Args)]
+pub struct DeployArgs {
+    #[command(flatten)]
+    host: Host,
+    /// Build and pack (target/deploy/fallbeans-update.tar.gz) without uploading.
+    #[arg(long)]
+    pack_only: bool,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+    /// Skip `cargo xtask check`.
+    #[arg(long)]
+    skip_checks: bool,
+    /// WSL distribution the Linux build runs in (Windows only).
+    #[arg(long, default_value = "Ubuntu")]
+    wsl_distro: String,
+}
+
+/// `C:\Users\…` → `/mnt/c/Users/…`.
+fn wsl_path(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    match s.split_once(":/") {
+        Some((drive, rest)) if drive.len() == 1 => format!("/mnt/{}/{rest}", drive.to_ascii_lowercase()),
+        _ => s,
+    }
+}
+
+/// Builds `fb_server` for Linux and copies it to `out`.
+pub fn build_linux_server(distro: &str, out: &Path) -> bool {
+    let copy = format!(
+        "cp \"$CARGO_TARGET_DIR/{LINUX_TARGET}/release/fb_server\" \"{}\"",
+        wsl_path(out)
+    );
+    let build = format!(
+        "cargo build --release -p fb_server --target {LINUX_TARGET} --config profile.release.strip='\"debuginfo\"'"
+    );
+    if cfg!(windows) {
+        // The build directory lives in WSL's own file system (fast); the sources stay where they are.
+        let script = format!(
+            "set -e; . \"$HOME/.cargo/env\"; cd \"{}\"; export CARGO_TARGET_DIR=\"$HOME/fb-target\"; {build}; {copy}",
+            wsl_path(&root())
+        );
+        let mut c = Command::new("wsl");
+        c.args(["-d", distro, "--exec", "bash", "-lc", &script]);
+        // Git Bash would rewrite the /mnt/… paths.
+        c.env("MSYS_NO_PATHCONV", "1");
+        run(&mut c)
+    } else {
+        let script = format!(
+            "set -e; export CARGO_TARGET_DIR=\"{}\"; {build}; {copy}",
+            root().join("target").display()
+        );
+        run(Command::new("bash").args(["-c", &script]).current_dir(root()))
+    }
+}
+
+fn confirm(question: &str) -> bool {
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    let _ = std::io::stdin().read_line(&mut answer);
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+pub fn deploy(a: &DeployArgs) -> bool {
+    if !a.pack_only && !a.host.key().exists() {
+        eprintln!("[deploy] SSH key not found: {}", a.host.key().display());
+        return false;
+    }
+    if !a.pack_only
+        && !a.yes
+        && !confirm(&format!(
+            "[deploy] Update Fall Beans on {} (production)?",
+            a.host.target()
+        ))
+    {
+        eprintln!("[deploy] cancelled");
+        return false;
+    }
+    if !a.skip_checks && !crate::check() {
+        eprintln!("[deploy] checks failed");
+        return false;
+    }
+    let stage = root().join("target").join("deploy");
+    let bundle = stage.join("bundle");
+    let _ = fs::remove_dir_all(&stage);
+    fs::create_dir_all(bundle.join("nginx")).expect("target/deploy");
+    eprintln!("[deploy] Linux build");
+    if !build_linux_server(&a.wsl_distro, &bundle.join("fb_server")) {
+        eprintln!("[deploy] the Linux build failed");
+        return false;
+    }
+    let src = root().join("deploy");
+    for f in [
+        "remote-install.sh",
+        "fallbeans.service",
+        "nginx/fallbeans.conf",
+        "nginx/fallbeans.ws",
+    ] {
+        fs::copy(src.join(f), bundle.join(f)).unwrap_or_else(|e| panic!("deploy/{f}: {e}"));
+    }
+    let version = Command::new("git")
+        .args(["describe", "--always", "--dirty"])
+        .current_dir(root())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    fs::write(bundle.join("VERSION"), format!("{version}\n")).expect("VERSION");
+    // Relative paths: GNU tar would read "C:\…" as a remote host.
+    if !run(Command::new("tar")
+        .args(["-czf", "../fallbeans-update.tar.gz", "."])
+        .current_dir(&bundle))
+    {
+        return false;
+    }
+    let archive = stage.join("fallbeans-update.tar.gz");
+    let kb = fs::metadata(&archive).map_or(0, |m| m.len() / 1024);
+    eprintln!("[deploy] bundle: {} ({kb} KB, {version})", archive.display());
+    if a.pack_only {
+        return true;
+    }
+    let stamp = std::time::SystemTime::UNIX_EPOCH.elapsed().map_or(0, |d| d.as_secs());
+    let dir = format!("fallbeans-update-{stamp}");
+    run(&mut a.host.scp(&archive.to_string_lossy(), &format!(":{dir}.tar.gz")))
+        && run(&mut a.host.ssh(&format!(
+            "mkdir -p ~/{dir} && tar -xzf ~/{dir}.tar.gz -C ~/{dir} && sudo bash ~/{dir}/remote-install.sh; code=$?; rm -rf ~/{dir} ~/{dir}.tar.gz; exit $code"
+        )))
+}

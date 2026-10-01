@@ -1,5 +1,5 @@
-//! Bytes and packets each side puts on the wire (after Lightyear's own framing, before IO), so stress
-//! runs can hold the traffic budget.
+//! Bytes and packets each side puts on the wire (after Lightyear's own framing, before IO): measured and
+//! reported only (there is no traffic budget).
 use bevy::prelude::*;
 use lightyear::prelude::*;
 

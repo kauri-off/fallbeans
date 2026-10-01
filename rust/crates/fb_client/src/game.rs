@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use fb_arena::{Stepper, build_map, tick_bodies};
 use fb_net::*;
 use fb_shared::DT;
@@ -76,8 +77,9 @@ impl Plugin for GamePlugin {
         app.insert_resource(CameraAngles { yaw: 0.0, pitch: 0.38 });
         app.init_resource::<Stats>();
         app.init_resource::<Inbox>();
+        app.init_resource::<Presses>();
         app.add_systems(Startup, open_trace);
-        app.add_systems(PreUpdate, build_round);
+        app.add_systems(PreUpdate, (build_round, latch_presses.after(bevy::input::InputSystems)));
         app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
         app.add_systems(FixedUpdate, predict);
         app.add_systems(Update, (receive_map_events, apply_map_events).chain());
@@ -162,6 +164,39 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> 
     Ok((1.0, turn, buttons))
 }
 
+const JUMP_KEYS: [KeyCode; 1] = [KeyCode::Space];
+const DIVE_KEYS: [KeyCode; 4] = [
+    KeyCode::KeyE,
+    KeyCode::ShiftLeft,
+    KeyCode::ShiftRight,
+    KeyCode::ControlLeft,
+];
+
+/// Jump and dive fire once per press (a held key does not repeat them, nor does the server: see
+/// `room::frame_for`). Presses made between two ticks wait here for the next one.
+#[derive(Resource, Default)]
+struct Presses(u8);
+
+fn latch_presses(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut presses: ResMut<Presses>,
+) {
+    let (Some(keys), Some(mouse)) = (keys, mouse) else {
+        return;
+    };
+    if keys.any_just_pressed(JUMP_KEYS) {
+        presses.0 |= BTN_JUMP;
+    }
+    // The click that captures the mouse is not a dive.
+    let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
+    if keys.any_just_pressed(DIVE_KEYS) || (captured && mouse.just_pressed(MouseButton::Left)) {
+        presses.0 |= BTN_DIVE;
+    }
+}
+
+/// The stick (forward, right) and the held buttons (grab).
 fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> (f64, f64, u8) {
     let held = |k: &[KeyCode]| k.iter().any(|k| keys.pressed(*k));
     let axis = |pos: &[KeyCode], neg: &[KeyCode]| f64::from(i8::from(held(pos)) - i8::from(held(neg)));
@@ -170,29 +205,23 @@ fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> (f
         &[KeyCode::KeyD, KeyCode::ArrowRight],
         &[KeyCode::KeyA, KeyCode::ArrowLeft],
     );
-    let mut buttons = 0;
-    if held(&[KeyCode::Space]) {
-        buttons |= BTN_JUMP;
-    }
-    if held(&[KeyCode::KeyE, KeyCode::ShiftLeft, KeyCode::ControlLeft]) || mouse.pressed(MouseButton::Left) {
-        buttons |= BTN_DIVE;
-    }
-    if held(&[KeyCode::KeyQ]) || mouse.pressed(MouseButton::Right) {
-        buttons |= BTN_GRAB;
-    }
-    (f, r, buttons)
+    let grab = held(&[KeyCode::KeyQ]) || mouse.pressed(MouseButton::Right);
+    (f, r, if grab { BTN_GRAB } else { 0 })
 }
 
 /// The stick relative to the camera, quantized as the server takes it.
 fn write_input(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    mut presses: ResMut<Presses>,
     cam: Res<CameraAngles>,
     opts: Res<Opts>,
     timeline: Res<LocalTimeline>,
     map: Option<Res<Map>>,
     mut q: Query<(&mut ActionState<FbInput>, Option<(&PlayerId, &BodyFull)>), With<InputMarker<FbInput>>>,
 ) {
+    // Taken by the first tick after the press (or dropped while there is no bean to press it).
+    let pressed = core::mem::take(&mut presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };
     let (f, r, buttons) = if opts.autopilot() {
         match autopilot(timeline.tick().0, map.as_deref(), own) {
@@ -203,7 +232,8 @@ fn write_input(
             }
         }
     } else if let (Some(keys), Some(mouse)) = (keys, mouse) {
-        keyboard(&keys, &mouse)
+        let (f, r, held) = keyboard(&keys, &mouse);
+        (f, r, held | pressed)
     } else {
         (0.0, 0.0, 0)
     };

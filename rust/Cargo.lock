@@ -145,8 +145,6 @@ dependencies = [
 [[package]]
 name = "aeronet_websocket"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a928ea484a1fda0e9bf24a84eaef93328b0f1176bee37e99a3cdec78b3c58b3"
 dependencies = [
  "aeronet_io",
  "bevy_app",

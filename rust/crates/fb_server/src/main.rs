@@ -6,6 +6,7 @@ mod room;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, SystemInformationDiagnosticsPlugin};
+use bevy::ecs::schedule::SingleThreadedExecutor;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use clap::Parser;
@@ -40,5 +41,11 @@ fn main() -> AppExit {
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(opts);
     app.add_plugins((net::NetPlugin, room::RoomPlugin, metrics::MetricsPlugin));
+    // Every schedule on the main thread. The multi-threaded executor hands systems to the compute pool and
+    // waits for them each frame: on the 1-vCPU host that cost 15% of the core and 9 000 context switches a
+    // second with nobody playing, for a frame of a few dozen microseconds of work.
+    for (_, schedule) in app.world_mut().resource_mut::<Schedules>().iter_mut() {
+        schedule.set_executor(SingleThreadedExecutor::new());
+    }
     app.run()
 }

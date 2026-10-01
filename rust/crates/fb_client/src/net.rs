@@ -39,10 +39,13 @@ fn setup_input_delay(mut commands: Commands, opts: Res<Opts>) {
     // A second, as the TS client keeps: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
     manager.rollback_policy.max_rollback_ticks = 120;
     commands.insert_resource(manager);
-    let sync = SyncConfig {
+    let mut sync = SyncConfig {
         jitter_margin: opts.input_margin,
         ..default()
     };
+    if let Some(m) = opts.sync_max_error {
+        sync.max_error_margin = m;
+    }
     commands.insert_resource(
         InputTimelineConfig::default()
             .with_sync_config(sync)
@@ -89,26 +92,32 @@ fn spawn_client(commands: &mut Commands, opts: &Opts, id: u64, transport: Transp
         PeerAddr(server_addr),
         netcode,
     ));
-    if transport == Transport::Ws {
+    let target = if transport == Transport::Ws {
         let url = opts
             .ws_url
             .clone()
             .unwrap_or_else(|| format!("ws://{}:{}", opts.server, opts.ws_port));
+        let builder = aeronet_websocket::client::ClientConfig::builder;
         let config = if url.starts_with("wss://") {
-            aeronet_websocket::client::ClientConfig::default()
+            builder().with_native_certs()
         } else {
-            aeronet_websocket::client::ClientConfig::builder().with_no_encryption()
+            builder().with_no_encryption()
         };
+        // Small packets many times a second: Nagle's algorithm (aeronet's default) would hold them
+        // back for an ACK, tens of milliseconds each time.
+        let config = config.disable_nagle();
         e.insert(WebSocketClientIo {
             config,
-            target: WebSocketTarget::Url(url),
+            target: WebSocketTarget::Url(url.clone()),
         });
+        url
     } else {
         e.insert(UdpIo::default());
-    }
+        server_addr.to_string()
+    };
     let entity = e.id();
     commands.trigger(Connect { entity });
-    info!("connecting to {server_addr} over {transport:?} as {id}");
+    info!("connecting to {target} over {transport:?} as {id}");
     entity
 }
 

@@ -30,7 +30,7 @@ impl Round {
 }
 
 /// Full state of the bean, sent to its owner only (it predicts it and rolls back on a mismatch). On the
-/// wire as the TS `FULL_BYTES`: position, velocity and yaw exact, timers and angles in f32.
+/// wire exactly (`wire.rs`), all but the landing impact.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(from = "crate::wire::Full", into = "crate::wire::Full")]
 pub struct BodyFull {
@@ -39,17 +39,32 @@ pub struct BodyFull {
     pub teleports: u32,
 }
 
-/// Rolls back only when the server disagrees beyond float noise.
+/// Rolls back on any difference in what the physics step reads. Server and client run the same code on
+/// the same bits and the state travels exactly, so a difference is never float noise: it is the client
+/// having seen something else (another bean where it was a moment ago, an input that came late). Left
+/// alone below a threshold it grows until it crosses it, a second later, as a bigger correction.
+/// Not compared: the landing impact (drawn only, f32 on the wire) and the size (set from the bonus at
+/// the start of every step).
 pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
     let (x, y) = (&a.body, &b.body);
     a.teleports != b.teleports
-        || x.state != y.state
-        || x.power != y.power
+        || x.actor != y.actor
+        || x.pos != y.pos
+        || x.vel != y.vel
+        || x.yaw != y.yaw
+        || x.grounded != y.grounded
         || x.ground_col != y.ground_col
-        || (x.pos - y.pos).length_squared() > 1e-6
-        || (x.vel - y.vel).length_squared() > 1e-4
-        || (x.state_t - y.state_t).abs() > 1e-4
-        || (x.tilt - y.tilt).abs() > 1e-3
+        || x.state != y.state
+        || x.state_t != y.state_t
+        || x.coyote != y.coyote
+        || x.jump_buf != y.jump_buf
+        || x.slow_until != y.slow_until
+        || x.slow_k != y.slow_k
+        || x.tilt != y.tilt
+        || x.tilt_dir != y.tilt_dir
+        || x.power != y.power
+        || x.power_until != y.power_until
+        || x.climb_to != y.climb_to
 }
 
 /// What everybody else sees of a bean (interpolated). On the wire about 20 bytes (TS:

@@ -32,7 +32,32 @@ pub struct StressArgs {
     max_tick_us: u64,
     #[command(flatten)]
     shared: Shared,
+    /// Against a probe server on the production host (UDP 5890, wss …/fallbeans/ws-probe) instead of a
+    /// local one: the network between here and there is the real one (the VPN matrix, plan.md §5).
+    #[arg(long)]
+    remote: bool,
+    #[command(flatten)]
+    host: crate::deploy::Host,
+    /// The host's address for UDP (default: the SSH target's).
+    #[arg(long)]
+    server: Option<String>,
+    #[arg(long, default_value = "wss://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/ws-probe")]
+    ws_url: String,
+    /// Extra flags for every client, e.g. `--client-arg=--sync-max-error=40`.
+    #[arg(long, allow_hyphen_values = true)]
+    client_arg: Vec<String>,
+    /// WSL distribution the Linux build of `--remote` runs in (Windows only).
+    #[arg(long, default_value = "Ubuntu")]
+    wsl_distro: String,
 }
+
+/// Where the probe server of `--remote` lives on the host (the deploy user's home: no root needed).
+const PROBE_DIR: &str = "fb-probe";
+/// Its ports: UDP open in ufw, WebSocket behind nginx at /fallbeans/ws-probe (`deploy/`).
+const PROBE_UDP: u16 = 5890;
+const PROBE_WS: u16 = 5891;
+/// Matches only the probe (a server started from PROBE_DIR), never the production service.
+const PROBE_MATCH: &str = "pgrep -u \"$(id -u)\" -f '^./fb_server --udp-port 5890'";
 
 pub fn stress(a: &StressArgs) -> bool {
     if !a.shared.build() {
@@ -42,27 +67,62 @@ pub fn stress(a: &StressArgs) -> bool {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("target/stress");
     let log = |name: &str| File::create(dir.join(name)).expect("log file");
-
-    let mut server_cmd = Command::new(a.shared.bin("fb_server"));
-    server_cmd
-        .args(a.shared.server_args())
-        .args([
-            "--intro",
-            "2",
-            "--metrics-every",
-            "5",
-            "--exit-after",
-            &(a.secs + 4).to_string(),
-        ])
-        .arg("--trace")
-        .arg(dir.join("server.trace"))
-        .stdout(log("server.log"))
-        .stderr(log("server.err.log"));
-    let Ok(mut server) = server_cmd.spawn() else {
-        eprintln!("cannot start the server");
-        return false;
+    let server_flags = |trace: &str| {
+        let mut v = a.shared.server_args();
+        let exit = (a.secs + 4).to_string();
+        v.extend(
+            [
+                "--intro",
+                "2",
+                "--metrics-every",
+                "5",
+                "--exit-after",
+                &exit,
+                "--trace",
+                trace,
+            ]
+            .map(String::from),
+        );
+        v
     };
-    std::thread::sleep(Duration::from_millis(800));
+
+    let mut server = None;
+    let mut client_net: Vec<String> = Vec::new();
+    if a.remote {
+        if !start_remote(a, &dir, &server_flags("server.trace")) {
+            return false;
+        }
+        let ip = a.server.clone().unwrap_or_else(|| {
+            let t = a.host.target();
+            t.rsplit('@').next().unwrap_or(&t).to_string()
+        });
+        let (udp, ws) = (PROBE_UDP.to_string(), PROBE_WS.to_string());
+        client_net.extend(
+            [
+                "--server",
+                &ip,
+                "--udp-port",
+                &udp,
+                "--ws-port",
+                &ws,
+                "--ws-url",
+                &a.ws_url,
+            ]
+            .map(String::from),
+        );
+    } else {
+        let mut server_cmd = Command::new(a.shared.bin("fb_server"));
+        server_cmd
+            .args(server_flags(&dir.join("server.trace").to_string_lossy()))
+            .stdout(log("server.log"))
+            .stderr(log("server.err.log"));
+        let Ok(child) = server_cmd.spawn() else {
+            eprintln!("cannot start the server");
+            return false;
+        };
+        server = Some(child);
+        std::thread::sleep(Duration::from_millis(800));
+    }
     let mut clients: Vec<Child> = Vec::new();
     for i in 0..a.clients {
         let mut c = Command::new(a.shared.bin("fb_client"));
@@ -74,7 +134,9 @@ pub fn stress(a: &StressArgs) -> bool {
             &a.transport,
         ])
         .args(["--exit-after", &a.secs.to_string()])
+        .args(&client_net)
         .args(a.shared.net_args())
+        .args(&a.client_arg)
         .arg("--trace")
         .arg(dir.join(format!("client-{i}.trace")))
         .stdout(log(&format!("client-{i}.log")))
@@ -85,20 +147,92 @@ pub fn stress(a: &StressArgs) -> bool {
         }
     }
     eprintln!(
-        "stress: {} clients for {} s over {} at lag {} ms jitter {} ms loss {}; logs in {}",
+        "stress: {} clients for {} s over {} at lag {} ms jitter {} ms loss {}{}; logs in {}",
         a.clients,
         a.secs,
         a.transport,
         a.shared.lag,
         a.shared.jitter,
         a.shared.loss,
+        if a.remote { " against the host" } else { "" },
         dir.display()
     );
     let deadline = Instant::now() + Duration::from_secs(a.secs + 30);
-    for c in clients.iter_mut().chain(std::iter::once(&mut server)) {
+    for c in clients.iter_mut().chain(server.as_mut()) {
         wait_or_kill(c, deadline);
     }
+    if a.remote && !fetch_remote(a, &dir) {
+        return false;
+    }
     report(a, &dir)
+}
+
+/// The first word of `sha256sum`'s output.
+fn first_word(out: std::io::Result<std::process::Output>) -> String {
+    out.ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split(' ')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// The probe server on the host: a fresh Linux build of this tree (local clients and the server must
+/// speak the same protocol), uploaded when it differs from the one there, started in the background.
+fn start_remote(a: &StressArgs, dir: &Path, flags: &[String]) -> bool {
+    let bin = dir.join("fb_server-linux");
+    eprintln!("stress: Linux build of the server for the host");
+    if !crate::deploy::build_linux_server(&a.wsl_distro, &bin) {
+        return false;
+    }
+    let local = first_word(Command::new("sha256sum").arg(&bin).output());
+    let there = first_word(
+        a.host
+            .ssh(&format!(
+                "mkdir -p {PROBE_DIR} && (sha256sum {PROBE_DIR}/fb_server 2>/dev/null || true)"
+            ))
+            .output(),
+    );
+    if local.is_empty() || local != there {
+        eprintln!(
+            "stress: uploading the server ({} MB)",
+            fs::metadata(&bin).map_or(0, |m| m.len() >> 20)
+        );
+        if !crate::run(&mut a.host.scp(&bin.to_string_lossy(), &format!(":{PROBE_DIR}/fb_server"))) {
+            return false;
+        }
+    }
+    let args: Vec<String> = flags.iter().map(|f| format!("'{f}'")).collect();
+    // A probe left over from an interrupted run would hold the ports.
+    let script = format!(
+        "cd {PROBE_DIR} && chmod +x fb_server && ({kill} || true) && rm -f server.trace server.log \
+         && (setsid nohup ./fb_server --udp-port {PROBE_UDP} --ws-addr 127.0.0.1 --ws-port {PROBE_WS} {} \
+         > server.log 2>&1 < /dev/null &) && sleep 1 && {PROBE_MATCH} > /dev/null",
+        args.join(" "),
+        kill = PROBE_MATCH.replacen("pgrep", "pkill", 1),
+    );
+    if !crate::run(&mut a.host.ssh(&script)) {
+        eprintln!("stress: the probe server did not start on the host");
+        let _ = crate::run(&mut a.host.ssh(&format!("tail -20 {PROBE_DIR}/server.log")));
+        return false;
+    }
+    true
+}
+
+/// Waits for the probe server to finish and brings its trace and log here.
+fn fetch_remote(a: &StressArgs, dir: &Path) -> bool {
+    let wait = format!(
+        "for i in $(seq 1 40); do {PROBE_MATCH} > /dev/null || exit 0; sleep 1; done; {}; exit 0",
+        PROBE_MATCH.replacen("pgrep", "pkill", 1)
+    );
+    let to = |f: &str| dir.join(f).to_string_lossy().into_owned();
+    crate::run(&mut a.host.ssh(&wait))
+        && crate::run(&mut a.host.scp(&format!(":{PROBE_DIR}/server.trace"), &to("server.trace")))
+        && crate::run(&mut a.host.scp(&format!(":{PROBE_DIR}/server.log"), &to("server.log")))
 }
 
 fn wait_or_kill(c: &mut Child, deadline: Instant) {
@@ -175,10 +309,17 @@ fn compare(
     }
     let mut d = Divergence::default();
     let mut prev_bad = false;
+    let mut streaming = false;
     for (&tick, &(id, c)) in &first {
         let Some(s) = server.get(&(tick, id)) else { continue };
-        d.ticks += 1;
         let late = c.input != s.input;
+        // Just after joining the server has nothing from the client yet (its pawn is there before the
+        // client knows it is its own): compared from the first input the server got.
+        streaming |= !late;
+        if !streaming {
+            continue;
+        }
+        d.ticks += 1;
         if late {
             d.late += 1;
         }
@@ -261,8 +402,10 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     let mut teleports = BTreeSet::new();
     for (id, rows) in &by_id {
         for w in rows.windows(2) {
-            // Within a few ticks: the tick that starts a new round is not traced.
-            if w[1].0 <= w[0].0 + 3 && dist(&w[0].1.pos, &w[1].1.pos) > 2.0 {
+            // Within a few ticks: the tick that starts a new round is not traced, and its gap is a move
+            // to the new spawn however near (a respawn is a jump of more than 2 m).
+            let gap = w[1].0 > w[0].0 + 1;
+            if w[1].0 <= w[0].0 + 3 && (gap || dist(&w[0].1.pos, &w[1].1.pos) > 2.0) {
                 teleports.insert((*id, w[1].0));
             }
         }
@@ -273,7 +416,9 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
         by_tick.entry(t).or_default().push((id, r.pos));
     }
 
-    println!("client  ticks   late   late%  respawn  late-runs  push  other  other/min  rollbacks  out B/s");
+    println!(
+        "client  ticks   late   late%  respawn  late-runs  push  other  other/min  rollbacks  out B/s  frame-max  shifts"
+    );
     for i in 0..a.clients {
         let rows = parse_trace(&dir.join(format!("client-{i}.trace")), "C");
         let log = read_log(dir, &format!("client-{i}"));
@@ -284,11 +429,29 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
             .find_map(|l| l.split_once(" stats: ").map(|(_, m)| m))
             .unwrap_or("");
         let d = compare(&server, &by_tick, &teleports, &rows);
+        // Stalls of this machine (the longest frame) and clock resyncs, the first (joining) one aside.
+        let stat_lines: Vec<&str> = log
+            .lines()
+            .filter_map(|l| l.split_once(" stats: ").map(|(_, m)| m))
+            .collect();
+        let frame_max = stat_lines
+            .iter()
+            .filter_map(|l| num_after(l, "frame max "))
+            .fold(0.0, f64::max);
+        let shifts: Vec<&str> = stat_lines
+            .iter()
+            .filter_map(|l| {
+                let rest = &l[l.find("shifts [")? + 8..];
+                Some(&rest[..rest.find(']')?])
+            })
+            .filter(|s| !s.is_empty())
+            .skip(1)
+            .collect();
         let minutes = d.ticks as f64 / 120.0 / 60.0;
         let late = d.late as f64 / d.ticks.max(1) as f64;
         let other = d.runs_other as f64 / minutes.max(1e-9);
         println!(
-            "{i:>6} {:>6} {:>6} {:>6.3}% {:>8} {:>10} {:>5} {:>6} {:>10.1} {:>10} {:>8}",
+            "{i:>6} {:>6} {:>6} {:>6.3}% {:>8} {:>10} {:>5} {:>6} {:>10.1} {:>10} {:>8} {:>8.0}ms  {}",
             d.ticks,
             d.late,
             late * 100.0,
@@ -299,6 +462,8 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
             other,
             num_after(stats, "rollbacks ").unwrap_or(f64::NAN),
             num_after(stats, "out ").unwrap_or(f64::NAN),
+            frame_max,
+            shifts.join(" "),
         );
         if !d.first_other.is_empty() {
             println!("        unexplained divergences start at ticks {:?}", d.first_other);
@@ -346,8 +511,15 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     let per_player = worst(&|l| num_before(l, " per player"));
     let cpu = worst(&|l| num_after(l, "cpu "));
     let mem = worst(&|l| num_after(l, "mem "));
+    // The first line also holds the start and the joins (the clients' clocks not synced yet).
+    let settled = metrics.iter().skip(1);
+    let frame_max = settled
+        .clone()
+        .filter_map(|l| num_after(l, "frame max "))
+        .fold(f64::NAN, f64::max);
+    let missed: f64 = settled.filter_map(|l| num_after(l, "input missed ")).sum();
     println!(
-        "        tick p99 {p99:.0} µs, max {max:.0} µs | out {per_player:.0} B/s per player | cpu {cpu:.1}% | mem {mem:.0} MB"
+        "        tick p99 {p99:.0} µs, max {max:.0} µs | frame max {frame_max:.0} ms | input missed {missed:.0} ticks | out {per_player:.0} B/s per player | cpu {cpu:.1}% | mem {mem:.0} MB"
     );
     if metrics.is_empty() {
         failures.push("server: no metric line with every client in".into());

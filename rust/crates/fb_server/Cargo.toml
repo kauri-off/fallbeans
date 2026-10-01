@@ -11,7 +11,7 @@ fb_sim.workspace = true
 fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
-bevy = { workspace = true, features = ["std", "bevy_log", "multi_threaded", "sysinfo_plugin"] }
+bevy = { workspace = true, features = ["std", "bevy_log", "sysinfo_plugin"] }
 clap.workspace = true
 lightyear = { workspace = true, features = ["server", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
 

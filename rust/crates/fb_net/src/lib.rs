@@ -32,8 +32,12 @@ pub const SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// Inputs go out at 60 Hz, as from the TS client (two ticks a message). Lightyear's default, every frame,
 /// cost 56 KB/s up from a client running at 1000 frames and as many acks back from the server.
 pub const INPUT_SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
-/// Each input message repeats the last 8 (133 ms of loss bursts covered).
-pub const INPUT_REDUNDANCY: u16 = 8;
+/// A jump or dive that reaches the server up to this many ticks after its tick still happens, on the next
+/// tick (`fb_server::room::frame_for`); older inputs are of no use to the server.
+pub const LATE_TICKS: u32 = 30;
+/// Each input message repeats the inputs of this many before it (two ticks a message): a loss burst of up
+/// to LATE_TICKS (250 ms, a Wi-Fi hiccup) loses no press. Lightyear's default, 5, covers 83 ms.
+pub const INPUT_REDUNDANCY: u16 = (LATE_TICKS / 2) as u16;
 /// The server's loop rate: twice the tick rate, so ticks run on time without spinning.
 pub const SERVER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / (2 * TICK_RATE as u64));
 
