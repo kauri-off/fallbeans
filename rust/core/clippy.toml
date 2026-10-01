@@ -1,3 +1,4 @@
+# The deterministic core only (clippy reads the nearest clippy.toml above a crate): same bits on every OS.
 disallowed-methods = [
   { path = "f64::sin", reason = "use fb_shared::m (libm: same bits on every OS)" },
   { path = "f64::cos", reason = "use fb_shared::m" },
@@ -12,4 +13,10 @@ disallowed-methods = [
   { path = "f64::sin_cos", reason = "use fb_shared::m" },
   { path = "std::time::Instant::now", reason = "no wall clock in the simulation" },
   { path = "std::time::SystemTime::now", reason = "no wall clock in the simulation" },
+]
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "random iteration order: BTreeMap, IndexMap or Vec" },
+  { path = "std::collections::HashSet", reason = "random iteration order: BTreeSet or Vec" },
+  { path = "std::time::Instant", reason = "no wall clock in the simulation" },
+  { path = "std::time::SystemTime", reason = "no wall clock in the simulation" },
 ]

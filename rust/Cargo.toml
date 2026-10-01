@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+# core/: the deterministic simulation (no Bevy, its own clippy.toml); crates/: networking, server, client.
+members = ["core/*", "crates/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,13 +11,19 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
-fb_shared = { path = "crates/fb_shared" }
-fb_sim = { path = "crates/fb_sim" }
-fb_maps = { path = "crates/fb_maps" }
-fb_arena = { path = "crates/fb_arena" }
+fb_shared = { path = "core/fb_shared" }
+fb_sim = { path = "core/fb_sim" }
+fb_maps = { path = "core/fb_maps" }
+fb_arena = { path = "core/fb_arena" }
 fb_net = { path = "crates/fb_net" }
+# Engine and networking: pinned exactly, they move together (see PHASE0.md, "Versions").
 bevy = { version = "=0.19.1", default-features = false }
+bevy_render = { version = "=0.19.1", default-features = false }
 lightyear = { version = "=0.30.1", default-features = false }
+# What Lightyear 0.30.1 itself builds on; named here for APIs it does not re-export.
+bevy_replicon = { version = "=0.44.2", default-features = false }
+aeronet_websocket = { version = "=0.21.0", default-features = false }
+clap = { version = "4.6", features = ["derive"] }
 glam = { version = "0.32", default-features = false, features = ["std", "serde"] }
 libm = "0.2"
 serde = { version = "1", features = ["derive"] }

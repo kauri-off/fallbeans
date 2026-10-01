@@ -1,7 +1,7 @@
 //! Connecting: UDP first, WebSocket when UDP does not get through within 2 s (or when asked).
 use core::net::{Ipv4Addr, SocketAddr};
-use std::net::ToSocketAddrs;
 use core::time::Duration;
+use std::net::ToSocketAddrs;
 
 use bevy::prelude::*;
 use fb_net::*;
@@ -34,12 +34,20 @@ impl Plugin for NetPlugin {
     }
 }
 
-fn setup_input_delay(mut commands: Commands) {
+fn setup_input_delay(mut commands: Commands, opts: Res<Opts>) {
     let mut manager = PredictionManager::default();
     // A second, as the TS client keeps: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
     manager.rollback_policy.max_rollback_ticks = 120;
     commands.insert_resource(manager);
-    commands.insert_resource(InputTimelineConfig::default().with_input_delay(InputDelayConfig::no_input_delay()));
+    let sync = SyncConfig {
+        jitter_margin: opts.input_margin,
+        ..default()
+    };
+    commands.insert_resource(
+        InputTimelineConfig::default()
+            .with_sync_config(sync)
+            .with_input_delay(InputDelayConfig::no_input_delay()),
+    );
 }
 
 fn resolve(host: &str, port: u16) -> SocketAddr {
@@ -51,7 +59,11 @@ fn resolve(host: &str, port: u16) -> SocketAddr {
 }
 
 fn spawn_client(commands: &mut Commands, opts: &Opts, id: u64, transport: Transport) -> Entity {
-    let port = if transport == Transport::Ws { opts.ws_port } else { opts.udp_port };
+    let port = if transport == Transport::Ws {
+        opts.ws_port
+    } else {
+        opts.udp_port
+    };
     let server_addr = resolve(&opts.server, port);
     let auth = Authentication::Manual {
         server_addr,
@@ -72,13 +84,16 @@ fn spawn_client(commands: &mut Commands, opts: &Opts, id: u64, transport: Transp
         Name::new("client"),
         Client,
         ReplicationReceiver,
-        Link::default().with_conditioner(opts.conditioner.clone().map(RecvLinkConditioner::new)),
+        Link::default().with_conditioner(opts.net.config().map(RecvLinkConditioner::new)),
         LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
         PeerAddr(server_addr),
         netcode,
     ));
     if transport == Transport::Ws {
-        let url = opts.ws_url.clone().unwrap_or_else(|| format!("ws://{}:{}", opts.server, opts.ws_port));
+        let url = opts
+            .ws_url
+            .clone()
+            .unwrap_or_else(|| format!("ws://{}:{}", opts.server, opts.ws_port));
         let config = if url.starts_with("wss://") {
             aeronet_websocket::client::ClientConfig::default()
         } else {
@@ -99,10 +114,17 @@ fn spawn_client(commands: &mut Commands, opts: &Opts, id: u64, transport: Transp
 
 fn connect_first(mut commands: Commands, opts: Res<Opts>, time: Res<Time>) {
     let id = opts.id.unwrap_or_else(|| {
-        let n = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_nanos() as u64;
+        let n = std::time::SystemTime::UNIX_EPOCH
+            .elapsed()
+            .unwrap_or_default()
+            .as_nanos() as u64;
         (n ^ (n >> 31) ^ std::process::id() as u64) & 0x7fff_ffff
     });
-    let transport = if opts.transport == Transport::Ws { Transport::Ws } else { Transport::Udp };
+    let transport = if opts.transport == Transport::Ws {
+        Transport::Ws
+    } else {
+        Transport::Udp
+    };
     let entity = spawn_client(&mut commands, &opts, id, transport);
     commands.insert_resource(Conn {
         id,

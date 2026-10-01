@@ -69,7 +69,9 @@ impl Bonuses {
     }
 
     pub fn available(&self, t: f64) -> impl Iterator<Item = &Bonus> {
-        self.list.iter().filter(move |x| x.taken_by.is_none() && t >= x.appear_at)
+        self.list
+            .iter()
+            .filter(move |x| x.taken_by.is_none() && t >= x.appear_at)
     }
 
     /// Server: bodies (id, body) that touch a bonus take it.

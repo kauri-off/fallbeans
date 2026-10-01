@@ -1,5 +1,5 @@
 /**
- * Golden traces for the Rust port (rust/crates/fb_arena/tests/golden): builds maps with the TS code,
+ * Golden traces for the Rust port (rust/core/fb_arena/tests/golden): builds maps with the TS code,
  * runs a few bodies through a scripted round and records everything the Rust side must reproduce.
  *   bun scripts/golden.ts [map…]   (default: the maps ported so far)
  * The loop is the body part of server/rooms/arena.ts step(): events cleared, world moved, bodies
@@ -14,7 +14,7 @@ import { Builder } from '../src/sim/builder';
 import type { MapCtx, MapModule } from '../src/sim/map';
 import { BODY_STATES, type OtherBody, PlayerBody } from '../src/sim/physics';
 
-const OUT = 'rust/crates/fb_arena/tests/golden';
+const OUT = 'rust/core/fb_arena/tests/golden';
 const SEEDS = [1, 777, 123456789];
 const INTRO_TICKS = 720;
 const PLAY_TICKS = 1800;

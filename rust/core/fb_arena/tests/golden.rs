@@ -4,7 +4,17 @@ use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_sim::collider::Shape;
 use serde_json::Value;
 
-const DIRS: [(i8, i8); 9] = [(127, 0), (90, 90), (0, 127), (-90, 90), (-127, 0), (-90, -90), (0, -127), (90, -90), (0, 0)];
+const DIRS: [(i8, i8); 9] = [
+    (127, 0),
+    (90, 90),
+    (0, 127),
+    (-90, 90),
+    (-127, 0),
+    (-90, -90),
+    (0, -127),
+    (90, -90),
+    (0, 0),
+];
 
 fn script(id: u32, k: i64) -> InputFrame {
     let d = DIRS[((k.div_euclid(90) * 5 + id as i64 * 3).rem_euclid(DIRS.len() as i64)) as usize];
@@ -15,7 +25,11 @@ fn script(id: u32, k: i64) -> InputFrame {
     if k.rem_euclid(250) == id as i64 * 31 && k >= 0 {
         buttons |= BTN_DIVE;
     }
-    InputFrame { mx: d.0, mz: d.1, buttons }
+    InputFrame {
+        mx: d.0,
+        mz: d.1,
+        buttons,
+    }
 }
 
 fn f(v: &Value) -> f64 {
@@ -30,21 +44,35 @@ fn check_map(id: &str) {
         let seed = run["seed"].as_u64().unwrap() as u32;
         let intro = run["intro"].as_i64().unwrap();
         let (mut arena, _) = Arena::new(map, seed, -intro, false);
-        assert_eq!(arena.static_hash, run["staticHash"].as_str().unwrap(), "{id} seed {seed}: static hash");
+        assert_eq!(
+            arena.static_hash,
+            run["staticHash"].as_str().unwrap(),
+            "{id} seed {seed}: static hash"
+        );
 
         let cols = run["colliders"].as_array().unwrap();
-        assert_eq!(cols.len(), arena.world.colliders.len(), "{id} seed {seed}: collider count");
+        assert_eq!(
+            cols.len(),
+            arena.world.colliders.len(),
+            "{id} seed {seed}: collider count"
+        );
         for (i, (c, g)) in arena.world.colliders.iter().zip(cols).enumerate() {
             assert_eq!(c.is_static, g["isStatic"].as_bool().unwrap(), "collider {i} static");
             let s = &g["shape"];
             let ok = match c.shape {
-                Shape::Box { hx, hy, hz } => s["type"] == "box" && hx == f(&s["hx"]) && hy == f(&s["hy"]) && hz == f(&s["hz"]),
+                Shape::Box { hx, hy, hz } => {
+                    s["type"] == "box" && hx == f(&s["hx"]) && hy == f(&s["hy"]) && hz == f(&s["hz"])
+                }
                 Shape::Cyl { r, hh } => s["type"] == "cyl" && r == f(&s["r"]) && hh == f(&s["hh"]),
                 Shape::Sphere { r } => s["type"] == "sphere" && r == f(&s["r"]),
             };
             assert!(ok, "{id} seed {seed}: collider {i} shape {:?} vs {s}", c.shape);
             for (e, ge) in c.cur.0.iter().zip(g["cur"].as_array().unwrap()) {
-                assert!((e - f(ge)).abs() < 1e-9, "{id} seed {seed}: collider {i} matrix {:?}", c.cur.0);
+                assert!(
+                    (e - f(ge)).abs() < 1e-9,
+                    "{id} seed {seed}: collider {i} matrix {:?}",
+                    c.cur.0
+                );
             }
         }
 
@@ -57,7 +85,12 @@ fn check_map(id: &str) {
             assert!((b.pos.x - f(&g["x"])).abs() < 1e-12 && (b.pos.z - f(&g["z"])).abs() < 1e-12);
         }
 
-        let ids: Vec<u32> = run["ids"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let ids: Vec<u32> = run["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as u32)
+            .collect();
         for &pid in &ids {
             arena.add_pawn(pid);
         }
@@ -93,8 +126,18 @@ fn check_map(id: &str) {
                         g[8]
                     );
                 }
-                assert_eq!(b.state as u8 as i64, g[8].as_i64().unwrap(), "{id} seed {seed}: tick {k} body {} state", p.id);
-                assert_eq!(b.ground_col as i64, g[9].as_i64().unwrap(), "{id} seed {seed}: tick {k} body {} ground", p.id);
+                assert_eq!(
+                    b.state as u8 as i64,
+                    g[8].as_i64().unwrap(),
+                    "{id} seed {seed}: tick {k} body {} state",
+                    p.id
+                );
+                assert_eq!(
+                    b.ground_col as i64,
+                    g[9].as_i64().unwrap(),
+                    "{id} seed {seed}: tick {k} body {} ground",
+                    p.id
+                );
             }
             if let Some((_, h)) = hashes.iter().find(|(hk, _)| *hk == k) {
                 assert_eq!(&arena.world.hash(false), h, "{id} seed {seed}: world hash at tick {k}");
@@ -104,7 +147,10 @@ fn check_map(id: &str) {
         assert_eq!(events.len(), want.len(), "{id} seed {seed}: bonus events");
         for ((k, e), w) in events.iter().zip(want) {
             assert_eq!(*k, w["k"].as_i64().unwrap());
-            assert_eq!((e.i as u64, e.id as u64), (w["i"].as_u64().unwrap(), w["id"].as_u64().unwrap()));
+            assert_eq!(
+                (e.i as u64, e.id as u64),
+                (w["i"].as_u64().unwrap(), w["id"].as_u64().unwrap())
+            );
         }
         eprintln!("{id} seed {seed}: {} ticks, worst difference {worst:e}", frames.len());
     }

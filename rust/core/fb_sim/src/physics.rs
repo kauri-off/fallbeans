@@ -157,14 +157,23 @@ fn sphere_at(pos: V3, tilt: f64, tilt_dir: f64, size: f64, i: usize) -> V3 {
         return c;
     }
     let s = m::sin(tilt) * SPINE * size;
-    V3::new(c.x + m::sin(tilt_dir) * s, c.y + m::cos(tilt) * SPINE * size, c.z + m::cos(tilt_dir) * s)
+    V3::new(
+        c.x + m::sin(tilt_dir) * s,
+        c.y + m::cos(tilt) * SPINE * size,
+        c.z + m::cos(tilt_dir) * s,
+    )
 }
 
 /// Moves where a body is drawn out of solid colliders, as its simulation would.
 pub fn push_out(world: &World, mut pos: V3, tilt: f64, tilt_dir: f64, size: f64) -> V3 {
     let r = R * size;
     let mut cols = Vec::new();
-    world.query(pos.x, pos.z, r + 1.2 * size + if tilt > 0.0 { SPINE * size } else { 0.0 }, &mut cols);
+    world.query(
+        pos.x,
+        pos.z,
+        r + 1.2 * size + if tilt > 0.0 { SPINE * size } else { 0.0 },
+        &mut cols,
+    );
     let mut hit = Contact::default();
     for _ in 0..2 {
         let mut any = false;
@@ -397,7 +406,15 @@ impl Body {
         }
     }
 
-    pub fn step(&mut self, ev: &mut StepEvents, dt: f64, input: BodyInput, world: &World, t: f64, others: &mut [OtherBody]) {
+    pub fn step(
+        &mut self,
+        ev: &mut StepEvents,
+        dt: f64,
+        input: BodyInput,
+        world: &World,
+        t: f64,
+        others: &mut [OtherBody],
+    ) {
         if self.state == BodyState::Portal {
             return self.portal_step(ev, dt);
         }
@@ -408,11 +425,20 @@ impl Body {
         self.size = if pw == power::GIANT { GIANT_SIZE } else { 1.0 };
         let size = self.size;
         let r = R * size;
-        let slow = (if t < self.slow_until { self.slow_k } else { 1.0 }) * (if pw == power::SPEED { SPEED_UP } else { 1.0 });
+        let slow =
+            (if t < self.slow_until { self.slow_k } else { 1.0 }) * (if pw == power::SPEED { SPEED_UP } else { 1.0 });
         let g = self.grounded;
-        let slip = if g { self.ground(world).map_or(0.0, |c| c.slip) } else { 0.0 };
+        let slip = if g {
+            self.ground(world).map_or(0.0, |c| c.slip)
+        } else {
+            0.0
+        };
         self.coyote = if g { 0.12 } else { (self.coyote - dt).max(0.0) };
-        self.jump_buf = if input.jump { 0.12 } else { (self.jump_buf - dt).max(0.0) };
+        self.jump_buf = if input.jump {
+            0.12
+        } else {
+            (self.jump_buf - dt).max(0.0)
+        };
         self.state_t -= dt;
         let state_before = self.state;
         let plat_v = if g { self.ground_velocity(world, dt) } else { V3::ZERO };
@@ -508,7 +534,11 @@ impl Body {
                     let sp = (DIVE_SPEED * slow).max(along.min(DIVE_SPEED * 1.25));
                     self.vel.x = fx * sp + if g { plat_v.x } else { 0.0 };
                     self.vel.z = fz * sp + if g { plat_v.z } else { 0.0 };
-                    self.vel.y = if g { 6.0 + plat_v.y.max(0.0) } else { self.vel.y.max(3.0) };
+                    self.vel.y = if g {
+                        6.0 + plat_v.y.max(0.0)
+                    } else {
+                        self.vel.y.max(3.0)
+                    };
                     self.grounded = false;
                 }
             }
@@ -523,7 +553,11 @@ impl Body {
             self.tilt += (want - self.tilt) * (12.0 * dt).min(1.0);
             self.tilt_dir = self.yaw;
         } else if !self.down() {
-            self.tilt = if self.tilt > 0.02 { self.tilt * m::exp(-12.0 * dt) } else { 0.0 };
+            self.tilt = if self.tilt > 0.02 {
+                self.tilt * m::exp(-12.0 * dt)
+            } else {
+                0.0
+            };
         }
 
         let climbing = self.state == BodyState::Climb;
@@ -598,10 +632,15 @@ impl Body {
                             }
                             ev.hit_something = true;
                         } else if vn < 0.0 {
-                            let e = if self.state == BodyState::Tumble && vn < -3.0 { TUMBLE_E } else { 0.0 };
+                            let e = if self.state == BodyState::Tumble && vn < -3.0 {
+                                TUMBLE_E
+                            } else {
+                                0.0
+                            };
                             self.vel = add_scaled(self.vel, n, -vn * (1.0 + e));
                         }
-                        let fresh = self.state != BodyState::Tumble && !(self.state == BodyState::Stun && self.state_t > 0.2);
+                        let fresh =
+                            self.state != BodyState::Tumble && !(self.state == BodyState::Stun && self.state_t > 0.2);
                         if col.sweep && n.y < 0.55 && !hit_done.contains(&ci) {
                             hit_done.push(ci);
                             let sv = col.surface_velocity(hit.local, dt);
@@ -671,8 +710,7 @@ impl Body {
                 }
             }
         }
-        if g
-            && !self.grounded
+        if g && !self.grounded
             && !ev.jumped
             && self.state != BodyState::Dive
             && self.vel.y < 1.0
@@ -690,7 +728,7 @@ impl Body {
             && !self.grounded
             && self.vel.y < 4.0
             && len_sq(wall_n) > 0.0
-            && self.into_wall(input, wall_n) > 0.5
+            && self.push_into_wall(input, wall_n) > 0.5
             && let Some(n) = self.grab_ledge(world, wall_n)
         {
             ground_n = n;
@@ -729,8 +767,16 @@ impl Body {
                     self.vel.y = 0.0;
                     self.grounded = true;
                 } else {
-                    let nx = if d > 1e-4 { dx / d } else { m::sin(self.actor as f64 * 2.4) };
-                    let nz = if d > 1e-4 { dz / d } else { m::cos(self.actor as f64 * 2.4) };
+                    let nx = if d > 1e-4 {
+                        dx / d
+                    } else {
+                        m::sin(self.actor as f64 * 2.4)
+                    };
+                    let nz = if d > 1e-4 {
+                        dz / d
+                    } else {
+                        m::cos(self.actor as f64 * 2.4)
+                    };
                     let o_mass = if os > 1.0 { GIANT_MASS } else { 1.0 };
                     let share = o_mass / (my_mass + o_mass);
                     let push = (gap - d) * share;
@@ -807,7 +853,7 @@ impl Body {
         }
     }
 
-    fn into_wall(&self, input: BodyInput, n: V3) -> f64 {
+    fn push_into_wall(&self, input: BodyInput, n: V3) -> f64 {
         let l = m::hypot(input.mx, input.mz);
         let h = m::hypot(n.x, n.z);
         if l < 0.3 || h < 1e-3 {
@@ -856,8 +902,8 @@ impl Body {
         let mut cols = Vec::new();
         let mut hit = Contact::default();
         world.query(x, z, R * k + 0.2, &mut cols);
-        for si in 0..2 {
-            let c = V3::new(x, y + SPHERES[si] * k, z);
+        for s in SPHERES {
+            let c = V3::new(x, y + s * k, z);
             for &ci in &cols {
                 let col = world.col(ci);
                 if !col.enabled || col.trigger {
@@ -968,7 +1014,9 @@ impl Body {
     fn grab_ladder(&mut self, col: &Collider, input: BodyInput) {
         let dir = col.cur.transform_dir(V3::new(0.0, 0.0, 1.0));
         let h = m::hypot(dir.x, dir.z);
-        let crate::collider::Shape::Box { hy, .. } = col.shape else { return };
+        let crate::collider::Shape::Box { hy, .. } = col.shape else {
+            return;
+        };
         if h < 1e-3 {
             return;
         }
@@ -1021,7 +1069,11 @@ impl Body {
             self.pos.z += (dz / d) * pull;
         }
         let up = input.mx * fx + input.mz * fz;
-        let climb = if up.abs() > 0.3 { up * LADDER_SPEED * self.size } else { 0.0 };
+        let climb = if up.abs() > 0.3 {
+            up * LADDER_SPEED * self.size
+        } else {
+            0.0
+        };
         self.pos.y = (self.pos.y + climb * dt).min(to.y - 0.85);
         if climb > 0.0 && self.pos.y >= to.y - 0.85 - 1e-6 {
             let ox = to.x + fx * 1.05;

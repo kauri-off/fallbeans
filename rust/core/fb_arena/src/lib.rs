@@ -14,8 +14,8 @@ pub struct Pawn {
     pub body: Body,
     pub ev: StepEvents,
     pub spawn: V3,
-    /// Respawned this tick: clients snap instead of smoothing.
-    pub teleported: bool,
+    /// Respawns so far: views snap instead of smoothing when it changes.
+    pub teleports: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +47,12 @@ pub struct Stepper<'a> {
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
 pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody]) {
+    // Where a body stands on a moving platform is read in the world of the previous tick. The server's
+    // world is always there; a client replaying a rollback finds it at its latest prediction instead.
+    // (Compared with a tolerance: k·DT − DT and (k − 1)·DT may differ in the last bit.)
+    if (world.t - (t - DT)).abs() > 1e-9 {
+        world.goto(t - DT);
+    }
     let mut carries = Vec::with_capacity(bodies.len());
     for s in bodies.iter_mut() {
         *s.ev = StepEvents::default();
@@ -126,7 +132,11 @@ impl Arena {
     }
 
     fn face_yaw(&self, p: V3) -> f64 {
-        if self.spec.face_center { m::atan2(-p.x, -p.z) } else { 0.0 }
+        if self.spec.face_center {
+            m::atan2(-p.x, -p.z)
+        } else {
+            0.0
+        }
     }
 
     pub fn add_pawn(&mut self, id: u32) -> &mut Pawn {
@@ -143,7 +153,7 @@ impl Arena {
                 body,
                 ev: StepEvents::default(),
                 spawn,
-                teleported: true,
+                teleports: 0,
             },
         );
         &mut self.pawns[at]
@@ -165,14 +175,15 @@ impl Arena {
         let mut steppers: Vec<Stepper> = self
             .pawns
             .iter_mut()
-            .map(|p| {
-                p.teleported = false;
-                Stepper {
-                    id: p.id,
-                    input: if moving { frame(p.id).into() } else { BodyInput::default() },
-                    body: &mut p.body,
-                    ev: &mut p.ev,
-                }
+            .map(|p| Stepper {
+                id: p.id,
+                input: if moving {
+                    frame(p.id).into()
+                } else {
+                    BodyInput::default()
+                },
+                body: &mut p.body,
+                ev: &mut p.ev,
             })
             .collect();
         tick_bodies(&mut self.world, t, &mut steppers, &[]);
@@ -186,9 +197,10 @@ impl Arena {
                 let to = self.pawns[i].spawn;
                 let yaw = self.face_yaw(to);
                 let p = &mut self.pawns[i];
-                let jitter = ((p.id * 7919) % 100) as f64 / 100.0 - 0.5;
+                // In u64, as the f64 product of JS: client ids use all 32 bits.
+                let jitter = ((p.id as u64 * 7919) % 100) as f64 / 100.0 - 0.5;
                 p.body.reset(V3::new(to.x + jitter * 2.0, to.y + 0.5, to.z), yaw);
-                p.teleported = true;
+                p.teleports += 1;
             }
         }
         events

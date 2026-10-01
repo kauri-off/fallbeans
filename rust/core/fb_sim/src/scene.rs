@@ -1,7 +1,7 @@
 //! What the client draws for a map: filled by the same build code that makes the colliders.
 use crate::nodes::NodeId;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrimKind {
     Box,
     Cyl,

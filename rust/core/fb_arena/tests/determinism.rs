@@ -3,7 +3,17 @@
 use fb_arena::Arena;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 
-const DIRS: [(i8, i8); 9] = [(127, 0), (90, 90), (0, 127), (-90, 90), (-127, 0), (-90, -90), (0, -127), (90, -90), (0, 0)];
+const DIRS: [(i8, i8); 9] = [
+    (127, 0),
+    (90, 90),
+    (0, 127),
+    (-90, 90),
+    (-127, 0),
+    (-90, -90),
+    (0, -127),
+    (90, -90),
+    (0, 0),
+];
 const SEEDS: [u32; 3] = [1, 777, 123_456_789];
 
 fn script(id: u32, k: i64) -> InputFrame {
@@ -15,7 +25,11 @@ fn script(id: u32, k: i64) -> InputFrame {
     if k.rem_euclid(250) == id as i64 * 31 {
         buttons |= BTN_DIVE;
     }
-    InputFrame { mx: d.0, mz: d.1, buttons }
+    InputFrame {
+        mx: d.0,
+        mz: d.1,
+        buttons,
+    }
 }
 
 fn run(map: &str, seed: u32) -> String {
@@ -46,5 +60,9 @@ fn rounds_end_in_the_recorded_state() {
         return;
     }
     let want = std::fs::read_to_string(&path).expect("no recorded hashes: run with FB_BLESS=1");
-    assert_eq!(text, want.replace("\r\n", "\n"), "the simulation is not the same as recorded");
+    assert_eq!(
+        text,
+        want.replace("\r\n", "\n"),
+        "the simulation is not the same as recorded"
+    );
 }

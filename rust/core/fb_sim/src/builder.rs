@@ -9,8 +9,8 @@ use crate::world::{MoveCtx, World};
 use fb_shared::rng::Rng;
 
 pub const MODEL_NAMES: [&str; 19] = [
-    "bean", "crown", "hub", "arm", "hammer", "hex", "door", "finish", "bumper", "cloud", "tree", "pine", "flag", "cone",
-    "star", "island", "mushroom", "glove", "fan",
+    "bean", "crown", "hub", "arm", "hammer", "hex", "door", "finish", "bumper", "cloud", "tree", "pine", "flag",
+    "cone", "star", "island", "mushroom", "glove", "fan",
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -76,7 +76,17 @@ impl Builder {
         self.world.add(Collider::new(node, shape, o))
     }
 
-    fn prim(&mut self, kind: PrimKind, dims: [f64; 3], p: Palette, x: f64, y: f64, z: f64, o: &PrimOpts, freq: Option<f64>) -> NodeId {
+    fn prim(
+        &mut self,
+        kind: PrimKind,
+        dims: [f64; 3],
+        p: Palette,
+        x: f64,
+        y: f64,
+        z: f64,
+        o: &PrimOpts,
+        freq: Option<f64>,
+    ) -> NodeId {
         let node = self.world.nodes.add(o.parent.unwrap_or(ROOT), V3::new(x, y, z));
         if let Some(r) = o.rot {
             self.world.nodes.get_mut(node).rot = r;
@@ -132,7 +142,18 @@ impl Builder {
         self.result(node, Shape::Sphere { r }, o)
     }
 
-    pub fn ramp(&mut self, x: f64, z0: f64, y0: f64, z1: f64, y1: f64, width: f64, p: Palette, thick: f64, o: PrimOpts) -> Prim {
+    pub fn ramp(
+        &mut self,
+        x: f64,
+        z0: f64,
+        y0: f64,
+        z1: f64,
+        y1: f64,
+        width: f64,
+        p: Palette,
+        thick: f64,
+        o: PrimOpts,
+    ) -> Prim {
         let ang = m::atan2(y1 - y0, z1 - z0);
         let len = m::hypot(z1 - z0, y1 - y0);
         self.box_(
@@ -153,7 +174,16 @@ impl Builder {
     pub fn rails(&mut self, z0: f64, z1: f64, half_width: f64, y: f64, p: Palette) {
         let len = (z1 - z0).abs();
         for s in [-1.0, 1.0] {
-            self.box_(s * (half_width + 0.4), y + 0.6, (z0 + z1) / 2.0, 0.8, 1.2, len, p, PrimOpts::default());
+            self.box_(
+                s * (half_width + 0.4),
+                y + 0.6,
+                (z0 + z1) / 2.0,
+                0.8,
+                1.2,
+                len,
+                p,
+                PrimOpts::default(),
+            );
         }
     }
 
@@ -220,7 +250,10 @@ impl Builder {
         let a = self.anchor(x, y + 0.95 * s, z, ROOT);
         self.collider(
             a,
-            Shape::Cyl { r: 0.9 * s, hh: 0.9 * s },
+            Shape::Cyl {
+                r: 0.9 * s,
+                hh: 0.9 * s,
+            },
             ColliderOpts {
                 is_static: true,
                 bounce: power,

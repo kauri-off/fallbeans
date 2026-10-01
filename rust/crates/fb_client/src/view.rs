@@ -2,7 +2,9 @@
 use std::collections::HashMap;
 
 use bevy::gltf::GltfMaterialName;
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use fb_net::*;
 use fb_shared::BEAN_COLORS;
@@ -21,10 +23,18 @@ impl Plugin for ViewPlugin {
         app.add_systems(Startup, setup);
         app.add_systems(
             PostUpdate,
-            (spawn_map, pose_map, spawn_beans, place_beans, place_bonuses, follow_camera)
+            (
+                spawn_map,
+                pose_map,
+                spawn_beans,
+                place_beans,
+                place_bonuses,
+                follow_camera,
+            )
                 .chain()
                 .before(TransformSystems::Propagate),
         );
+        app.add_systems(Update, mouse_look);
         app.add_observer(tint_bean);
     }
 }
@@ -58,7 +68,10 @@ fn setup(mut commands: Commands) {
         Transform::from_xyz(0.0, 14.0, 22.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
         DistanceFog {
             color: Color::srgb(0.62, 0.8, 0.98),
-            falloff: FogFalloff::Linear { start: 60.0, end: 220.0 },
+            falloff: FogFalloff::Linear {
+                start: 60.0,
+                end: 220.0,
+            },
             ..default()
         },
     ));
@@ -78,7 +91,9 @@ fn setup(mut commands: Commands) {
 }
 
 pub fn hex(c: &str) -> Color {
-    Srgba::hex(c.trim_start_matches('#')).map(Color::from).unwrap_or(Color::WHITE)
+    Srgba::hex(c.trim_start_matches('#'))
+        .map(Color::from)
+        .unwrap_or(Color::WHITE)
 }
 
 fn mat4(m: &M4) -> Mat4 {
@@ -103,15 +118,26 @@ fn spawn_map(
     let root = commands
         .spawn((MapRoot(map.generation), Transform::default(), Visibility::default()))
         .id();
+    // Shared handles: identical primitives and colours batch into one draw.
     let mut mats: HashMap<&str, Handle<StandardMaterial>> = HashMap::new();
+    let mut prims: HashMap<(PrimKind, [u64; 3]), Handle<Mesh>> = HashMap::new();
     for item in &map.scene.items {
         let (node, child) = match item {
-            SceneItem::Prim { node, kind, dims, pal, .. } => {
-                let mesh = match kind {
-                    PrimKind::Box => meshes.add(Cuboid::new(dims[0] as f32, dims[1] as f32, dims[2] as f32)),
-                    PrimKind::Cyl => meshes.add(Cylinder::new(dims[0] as f32, dims[1] as f32).mesh().resolution(dims[2] as u32)),
-                    PrimKind::Sphere => meshes.add(Sphere::new(dims[0] as f32).mesh().uv(32, 18)),
-                };
+            SceneItem::Prim {
+                node, kind, dims, pal, ..
+            } => {
+                let mesh = prims
+                    .entry((*kind, dims.map(f64::to_bits)))
+                    .or_insert_with(|| match kind {
+                        PrimKind::Box => meshes.add(Cuboid::new(dims[0] as f32, dims[1] as f32, dims[2] as f32)),
+                        PrimKind::Cyl => meshes.add(
+                            Cylinder::new(dims[0] as f32, dims[1] as f32)
+                                .mesh()
+                                .resolution(dims[2] as u32),
+                        ),
+                        PrimKind::Sphere => meshes.add(Sphere::new(dims[0] as f32).mesh().uv(32, 18)),
+                    })
+                    .clone();
                 let mat = mats
                     .entry(pal[0])
                     .or_insert_with(|| {
@@ -178,14 +204,25 @@ fn pose_map(
         if *tf != next {
             *tf = next;
         }
-        let shown = if map.render.shown(piece.node) { Visibility::Inherited } else { Visibility::Hidden };
+        let shown = if map.render.shown(piece.node) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         vis.set_if_neq(shown);
     }
 }
 
 fn spawn_beans(
     mut commands: Commands,
-    beans: Query<(Entity, &BeanColor), (With<PlayerId>, Without<BeanView>, Or<(With<Predicted>, With<Interpolated>)>)>,
+    beans: Query<
+        (Entity, &BeanColor),
+        (
+            With<PlayerId>,
+            Without<BeanView>,
+            Or<(With<Predicted>, With<Interpolated>)>,
+        ),
+    >,
     assets: Res<AssetServer>,
 ) {
     for (e, color) in &beans {
@@ -225,7 +262,11 @@ fn tint_bean(
 fn bean_transform(pos: Vec3, yaw: f32, tilt: f32, tilt_dir: f32, size: f32) -> Transform {
     let pivot = Vec3::Y * 0.5 * size;
     let axis = Vec3::new(tilt_dir.cos(), 0.0, -tilt_dir.sin());
-    let tip = if tilt.abs() > 1e-4 { Quat::from_axis_angle(axis, tilt) } else { Quat::IDENTITY };
+    let tip = if tilt.abs() > 1e-4 {
+        Quat::from_axis_angle(axis, tilt)
+    } else {
+        Quat::IDENTITY
+    };
     let rot = tip * Quat::from_rotation_y(yaw);
     Transform {
         translation: pos + pivot - tip * pivot,
@@ -260,9 +301,15 @@ fn place_bonuses(
     let Some(map) = map else { return };
     let t = map.time(frame_tick(&timeline, &fixed));
     for (v, mut tf, mut vis) in &mut views {
-        let Some(b) = map.bonuses.list.get(v.0 as usize) else { continue };
+        let Some(b) = map.bonuses.list.get(v.0 as usize) else {
+            continue;
+        };
         let shown = t >= b.appear_at && b.taken_by.is_none();
-        vis.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        vis.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
         tf.translation.y = b.pos.y as f32 + 1.05 + (time.elapsed_secs() * 2.4 + v.0 as f32).sin() * 0.15;
     }
 }
@@ -276,10 +323,43 @@ fn follow_camera(
     let Ok(mut tf) = camera.single_mut() else { return };
     let target = match own.single() {
         Ok(t) => t.translation + Vec3::Y * 1.3,
-        Err(_) => map.and_then(|m| m.spec.view).map_or(Vec3::new(0.0, 2.0, 0.0), |v| v.as_vec3()),
+        Err(_) => map
+            .and_then(|m| m.spec.view)
+            .map_or(Vec3::new(0.0, 2.0, 0.0), |v| v.as_vec3()),
     };
     let fwd = Vec3::new(cam.yaw.sin(), 0.0, cam.yaw.cos());
     let dist = 10.0;
     let eye = target - fwd * dist * cam.pitch.cos() + Vec3::Y * dist * cam.pitch.sin();
     *tf = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+}
+
+fn mouse_look(
+    mut motion: MessageReader<MouseMotion>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut cam: ResMut<CameraAngles>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    let Ok(mut cursor) = cursor.single_mut() else { return };
+    if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
+        // Locked (pointer constraints) where the platform has it; Windows only confines.
+        cursor.grab_mode = if cfg!(target_os = "windows") {
+            CursorGrabMode::Confined
+        } else {
+            CursorGrabMode::Locked
+        };
+        cursor.visible = false;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
+    if cursor.grab_mode == CursorGrabMode::None {
+        motion.clear();
+        return;
+    }
+    for m in motion.read() {
+        cam.yaw -= m.delta.x * 0.004;
+        cam.pitch = (cam.pitch + m.delta.y * 0.003).clamp(-0.2, 1.2);
+    }
 }

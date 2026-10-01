@@ -194,7 +194,11 @@ impl Collider {
                         q.y = -hh;
                         depth = bot + r;
                     } else {
-                        n = if rl < 1e-6 { V3::new(1.0, 0.0, 0.0) } else { V3::new(l.x / rl, 0.0, l.z / rl) };
+                        n = if rl < 1e-6 {
+                            V3::new(1.0, 0.0, 0.0)
+                        } else {
+                            V3::new(l.x / rl, 0.0, l.z / rl)
+                        };
                         q = V3::new(n.x * cr, l.y, n.z * cr);
                         depth = side + r;
                     }

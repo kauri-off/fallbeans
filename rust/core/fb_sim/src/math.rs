@@ -56,8 +56,10 @@ impl M4 {
         let mut t = [0.0; 16];
         for col in 0..4 {
             for row in 0..4 {
-                t[col * 4 + row] =
-                    a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+                t[col * 4 + row] = a[row] * b[col * 4]
+                    + a[4 + row] * b[col * 4 + 1]
+                    + a[8 + row] * b[col * 4 + 2]
+                    + a[12 + row] * b[col * 4 + 3];
             }
         }
         M4(t)

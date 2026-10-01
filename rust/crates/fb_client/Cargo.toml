@@ -13,8 +13,9 @@ fb_arena.workspace = true
 fb_net.workspace = true
 bevy = { workspace = true, features = ["3d", "ui", "jpeg"] }
 # GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
-bevy_render = { version = "=0.19.1", default-features = false, features = ["gles"] }
-aeronet_websocket = { version = "0.21", default-features = false, features = ["client"] }
+bevy_render = { workspace = true, features = ["gles"] }
+aeronet_websocket = { workspace = true, features = ["client"] }
+clap.workspace = true
 lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
 
 [lints]

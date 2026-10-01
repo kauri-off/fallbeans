@@ -10,7 +10,8 @@ gives a tab its own).
 ## Rules
 
 - Git: the repo is on GitHub (kauri-off/fallbeans, `master`). Do not commit, push or open PRs unless asked.
-- Line endings are LF (`.gitattributes`). Biome formats on every edit (hook in `.claude/settings.json`).
+- Line endings are LF (`.gitattributes`). Biome (TS/JSON/CSS) and rustfmt (`.rs`) format on every edit (hook in
+  `.claude/settings.json` → `scripts/hooks/format-edited.ts`).
 - Deploy only when asked: `bun run deploy` (see README). Right after the confirmation everybody is sent off ("the game is
   updating", the flag file `/run/fallbeans-updating`); once the new server is up their pages reload into the new build
   (`build` in `/api/session`, see `src/server/build.ts`).
@@ -60,3 +61,32 @@ pipeline: scene/MSAA, composite, SMAA, TAA, output), `xegtao.ts` (AO), `fsr.ts` 
 `scenery.ts` + `decor.ts` (clouds, islands, themed set pieces, the ground below). Lighting: the sun is the only light (one
 shadow map, no cascades, statics baked: `shadowBake.ts`); ambient light is image-based (`environment.ts`). Looks: `src/sim/looks.ts` (per map in
 `defineMap(meta, build, looks)`: palettes, patterns, sky, sun, fog, motes, decor set; a round picks one by seed; visual only).
+
+## Rust port (branch `rogue/port-to-rust`, workspace `rust/`)
+
+The game is being ported to a native Rust + Bevy 0.19 + Lightyear 0.30 client and server; the TS version stays in
+production with frozen content until the switch. Read before working on it:
+
+- `plan.md` (Russian): the spec and the phases; section 12 says where we are and what comes next.
+- `rust/PHASE0.md`: Phase 0 state, measurements, review of every technical decision, open items.
+- `rust/README.md`: layout, commands, code rules, debugging, known issues.
+
+Essentials:
+
+- `rust/core/` (fb_shared, fb_sim, fb_maps, fb_arena) is the deterministic simulation: no Bevy, f64, maths only via
+  `fb_shared::m`, operation order as three.js; `rust/core/clippy.toml` forbids the rest (it applies to core only).
+  `rust/crates/` (fb_net, fb_server, fb_client) is Bevy/Lightyear code.
+- Verify with `cd rust && cargo xtask check` (fmt, clippy -D warnings, tests: golden traces against TS, recorded
+  determinism hashes, rollback replay). Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75
+  --jitter 15 --loss 0.05` (server + headless clients, compares predictions with the server tick by tick).
+- Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--lag 75]`, or `fb_client --screenshot f.png
+  --exit-after 15` against a running `fb_server`. There is no BRP probe yet (Phase 4); read `stats:`/`metrics:` logs.
+- Porting from TS: the source of truth is TS on `master`; port line by line and cover it with a golden trace
+  (`scripts/golden.ts` → `rust/core/fb_arena/tests/golden/`, `cargo xtask golden` re-exports with bun).
+- Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
+- Lightyear runs two `Server`s (UDP + WS), so its topology is `Invalid` (lightyear#1693) and topology-gated systems
+  are off; the server reads inputs itself (`room::frame_for`). Inputs go out at 60 Hz, input margin 3 ticks: both
+  chosen by stress measurements.
+- No traffic budget anywhere (decided by the author): traffic is measured and reported only. Target server and
+  minimum client: 2 vCPU / 2 GB RAM. Many players sit behind VPNs that drop UDP/443 (plan.md §5): the game's UDP
+  must stay off port 443 and not look like QUIC; WebSocket on 443 is the fallback.
