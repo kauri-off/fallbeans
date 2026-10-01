@@ -94,6 +94,6 @@ Essentials:
   redundancy, input margin 3 ticks: all chosen by stress measurements. The server runs every schedule single-threaded (`SingleThreadedExecutor`; the 1-vCPU host lost 15% of its
   core to the multi-threaded executor's hand-offs). `rust/vendor/aeronet_websocket` patches the
   WebSocket server (`TCP_NODELAY`); keep it until aeronet has it, carry it over on aeronet updates.
-- No traffic budget anywhere (decided by the author): traffic is measured and reported only. Target server and
-  minimum client: 2 vCPU / 2 GB RAM (the current host has 1 vCPU / 0.9 GB). Many players sit behind VPNs that drop UDP/443 (plan.md §5): the game's UDP
+- No traffic budget anywhere (decided by the author): traffic is measured and reported only. Server target: up
+  to 4 rooms of 8 players on the current host (1 vCPU / 0.9 GB, shared). Minimum client: 2 cores / 2 GB RAM. Many players sit behind VPNs that drop UDP/443 (plan.md §5): the game's UDP
   must stay off port 443 and not look like QUIC; WebSocket on 443 is the fallback.
