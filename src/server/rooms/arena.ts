@@ -547,7 +547,11 @@ export class ServerArena {
     }
     const others: BotView['others'][number][] = [];
     for (const o of this.pawns.values())
-      if (o !== p && o.status === 'play') others.push({ id: o.id, pos: o.body.pos, vel: o.body.vel, down: o.body.down });
+      if (o !== p && o.status === 'play') {
+        const ob = o.body;
+        const dive = ob.state === 'dive' || (ob.state === 'slide' && Math.hypot(ob.vel.x, ob.vel.z) > 6);
+        others.push({ id: o.id, pos: ob.pos, vel: ob.vel, down: ob.down, dive, reach: o.reaching });
+      }
     const view: BotView = {
       id: p.id,
       body: p.body,

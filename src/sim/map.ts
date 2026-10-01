@@ -73,7 +73,16 @@ export interface BotView {
   rng: Rng;
   mem: BotMem;
   plan: BotPlan;
-  others: readonly { id: number; pos: THREE.Vector3; vel: THREE.Vector3; down: boolean }[];
+  others: readonly {
+    id: number;
+    pos: THREE.Vector3;
+    vel: THREE.Vector3;
+    down: boolean;
+    /** Diving (or sliding fast): a tackle on its way. */
+    dive?: boolean;
+    /** Reaching out with the grab button, nobody in hand. */
+    reach?: boolean;
+  }[];
   /** Walkable ground of the static course (null before the start). */
   nav: NavGrid | null;
   /** Bonuses lying on the course right now. */

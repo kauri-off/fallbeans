@@ -38,7 +38,8 @@ export function initBot(bot: BotView) {
   const r = bot.rng;
   bot.mem.init = 1;
   bot.mem.skill = 0.45 + r() * 0.55;
-  bot.mem.aggro = r() ** 1.4;
+  // Most players get stuck in: few bots are entirely peaceful.
+  bot.mem.aggro = 0.15 + 0.85 * r() ** 1.1;
   bot.mem.jumpy = r();
   bot.mem.react = 0.06 + (1 - (bot.mem.skill ?? 0.7)) * 0.25 + r() * 0.05;
   // People hold the stick all the way; only a few ease off.
@@ -398,6 +399,166 @@ export interface HumanOpts {
   avoid?: boolean;
   /** Real ground for rescue dives, where the navigation grid does not know it (see LandCheck). */
   land?: LandCheck;
+  /** How keen on tackling others with a dive (0: never; races less than arenas). Default 1. */
+  attack?: number;
+  /** Where the bot may step aside to dodge (default: the navigation grid; none: jump only). */
+  safe?: (x: number, z: number) => boolean;
+}
+
+/** Tackle reach (centre to centre) and the height a tackle still connects within (see ServerArena.interact). */
+const TACKLE_REACH = 1.6;
+const TACKLE_HEIGHT = 1.3;
+
+/**
+ * The most urgent attack coming at the bot: a dive (or fast slide) whose line passes within tackle
+ * reach soon, or somebody reaching out to grab it from close by. `t`: seconds until it lands;
+ * (ax, az): which way to get out of it (across the attacker's line, or straight away from a grab).
+ */
+function incoming(bot: BotView): { t: number; ax: number; az: number; dive: boolean; id: number } | null {
+  const b = bot.body;
+  let best: { t: number; ax: number; az: number; dive: boolean; id: number } | null = null;
+  for (const o of bot.others) {
+    if (o.down || Math.abs(o.pos.y - b.pos.y) > TACKLE_HEIGHT + 0.4) continue;
+    const rx = b.pos.x - o.pos.x;
+    const rz = b.pos.z - o.pos.z;
+    const d = Math.hypot(rx, rz);
+    if (d > 7 || d < 1e-3) continue;
+    if (o.dive) {
+      const vx = o.vel.x - b.vel.x;
+      const vz = o.vel.z - b.vel.z;
+      const v2 = vx * vx + vz * vz;
+      if (v2 < 16) continue;
+      // Closest approach of the attacker's line.
+      const tca = (rx * vx + rz * vz) / v2;
+      if (tca < 0 || tca > 0.6) continue;
+      const mx = rx - vx * tca;
+      const mz = rz - vz * tca;
+      const miss = Math.hypot(mx, mz);
+      if (miss > TACKLE_REACH + 0.3) continue;
+      // Out across its line, on the side the bot is already on (a head-on dive: either side).
+      const v = Math.sqrt(v2);
+      let sx = -vz / v;
+      let sz = vx / v;
+      if (sx * mx + sz * mz < 0 || (miss < 0.2 && (bot.mem.off ?? 0) < 0)) {
+        sx = -sx;
+        sz = -sz;
+      }
+      if (!best || tca < best.t) best = { t: tca, ax: sx, az: sz, dive: true, id: o.id };
+    } else if (o.reach && d < 2.6) {
+      // Somebody about to grab: back off out of reach (a grab takes whatever is in front of them).
+      const closing = (o.vel.x * rx + o.vel.z * rz) / d;
+      const t = Math.max(0, d - 2.1) / Math.max(1, closing);
+      if (!best || t < best.t) best = { t, ax: rx / d, az: rz / d, dive: false, id: o.id };
+    }
+  }
+  return best;
+}
+
+/**
+ * Getting out of the way of a tackle or a grab, as people try to (the better ones, more often and
+ * sooner): a step aside where there is ground to step to, else a jump (a dive is low: a jump in
+ * time can clear it). Needs the bot's reaction time before it lands. Returns whether it dodges.
+ */
+function dodge(bot: BotView, out: BotInput, safe: ((x: number, z: number) => boolean) | null): boolean {
+  const b = bot.body;
+  const t = bot.t;
+  const m = bot.mem;
+  if ((m.dodgeUntil ?? -1) > t) {
+    out.mx = m.dodgeX ?? 0;
+    out.mz = m.dodgeZ ?? 0;
+    return true;
+  }
+  if (b.state !== 'normal' || (m.dodgeSeen ?? -1) > t) return false;
+  const threat = incoming(bot);
+  if (!threat) return false;
+  // Whoever went for the bot is remembered for a counterattack (see retaliate), dodged or not.
+  m.foe = threat.id;
+  m.foeUntil = t + 3;
+  const skill = m.skill ?? 0.7;
+  const react = m.react ?? 0.15;
+  // One look per attack: whether this bot notices it in time is decided once.
+  m.dodgeSeen = t + Math.max(0.3, threat.t + 0.1);
+  if (threat.t < react * 0.6 || bot.rng() > 0.25 + skill * 0.6) return false;
+  const step = [0.8, 1.6].every((k) => !safe || safe(b.pos.x + threat.ax * k, b.pos.z + threat.az * k));
+  // (Counted for audits and tuning.)
+  m.dodges = (m.dodges ?? 0) + 1;
+  if (safe && step) {
+    m.dodgeUntil = t + Math.min(0.45, threat.t + 0.2);
+    m.dodgeX = threat.ax;
+    m.dodgeZ = threat.az;
+    out.mx = threat.ax;
+    out.mz = threat.az;
+    return true;
+  }
+  // No room to step aside: hop over a dive (timed: just before it arrives).
+  if (threat.dive && b.grounded && threat.t < 0.35) {
+    out.jump = true;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A tackle the bot has a reason for, and where to aim it: back at whoever just went for it (once
+ * their own dive is spent: they are sliding or getting up, open to a hit), or at somebody who
+ * comes too close (to shove them off, as players do). `kind` says which.
+ */
+function retaliate(
+  bot: BotView,
+  safe: ((x: number, z: number) => boolean) | null,
+): { ux: number; uz: number; kind: 'counter' | 'space' } | null {
+  const b = bot.body;
+  const m = bot.mem;
+  const t = bot.t;
+  const landsSafe = (ux: number, uz: number) => !safe || [2, 3.5].every((k) => safe(b.pos.x + ux * k, b.pos.z + uz * k));
+  // Counterattack.
+  const foe = m.foe !== undefined && (m.foeUntil ?? -1) > t ? bot.others.find((o) => o.id === m.foe) : undefined;
+  if (foe && !foe.dive && Math.abs(foe.pos.y - b.pos.y) < 0.8) {
+    const dx = foe.pos.x + foe.vel.x * 0.2 - b.pos.x;
+    const dz = foe.pos.z + foe.vel.z * 0.2 - b.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 0.5 && d < 3.4 && landsSafe(dx / d, dz / d)) return { ux: dx / d, uz: dz / d, kind: 'counter' };
+  }
+  // Personal space: the nearest bean closing in (or already right on top of the bot).
+  let near: { ux: number; uz: number; d: number } | null = null;
+  for (const o of bot.others) {
+    if (o.down || o.dive || Math.abs(o.pos.y - b.pos.y) > 0.8) continue;
+    const dx = o.pos.x - b.pos.x;
+    const dz = o.pos.z - b.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 1.8 || d < 1e-3 || (near && d > near.d)) continue;
+    const closing = -((o.vel.x - b.vel.x) * dx + (o.vel.z - b.vel.z) * dz) / d;
+    if (closing > 0.3 || d < 1.2) near = { ux: dx / d, uz: dz / d, d };
+  }
+  if (near && landsSafe(near.ux, near.uz)) return { ux: near.ux, uz: near.uz, kind: 'space' };
+  return null;
+}
+
+/**
+ * Somebody worth tackling with a dive: within a dive's range where they will be in a moment, near
+ * the way the bot is going, on the same level, with safe ground to land on. Returns the direction.
+ */
+function tackleAim(bot: BotView, out: BotInput, safe: ((x: number, z: number) => boolean) | null) {
+  const b = bot.body;
+  const [hx, hz] = heading(bot, out);
+  let best: { ux: number; uz: number; d: number } | null = null;
+  for (const o of bot.others) {
+    if (o.down || o.dive || Math.abs(o.pos.y - b.pos.y) > 0.8) continue;
+    // Where they will be when the dive gets there (it covers ~3 m in a quarter of a second).
+    const px = o.pos.x + o.vel.x * 0.22;
+    const pz = o.pos.z + o.vel.z * 0.22;
+    const dx = px - b.pos.x;
+    const dz = pz - b.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1.4 || d > 3.4) continue;
+    const ux = dx / d;
+    const uz = dz / d;
+    // Roughly the way the bot is going: no turning round for it.
+    if (ux * hx + uz * hz < 0.6) continue;
+    if (safe && ![2, 3.5, 5].every((k) => safe(b.pos.x + ux * k, b.pos.z + uz * k))) continue;
+    if (!best || d < best.d) best = { ux, uz, d };
+  }
+  return best;
 }
 
 /**
@@ -410,6 +571,23 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   const ph = bot.mem.ph ?? 0;
   const t = bot.t;
   smartDive(bot, out, o.land);
+  const nav = bot.nav;
+  const gy = b.pos.y;
+  const safe = o.safe ?? (nav ? (x: number, z: number) => nav.safe(x, z, gy) : null);
+  // Out of the way of a tackle or a grab (on narrow ground: only by jumping).
+  if (!out.dive && dodge(bot, out, o.precise ? null : safe)) return;
+  // Held by somebody: that is who gets it once the bot is free.
+  if (b.grounded && b.slowUntil > t && b.slowK <= 0.5) {
+    let d = 2.6;
+    for (const x of bot.others) {
+      const dx = Math.hypot(x.pos.x - b.pos.x, x.pos.z - b.pos.z);
+      if (dx < d) {
+        d = dx;
+        bot.mem.foe = x.id;
+        bot.mem.foeUntil = t + 3;
+      }
+    }
+  }
   // Wobble: a slow, uneven drift of the aim.
   const amount = o.precise ? 0.03 + (1 - skill) * 0.03 : 0.12 + (1 - skill) * 0.14;
   const a = (Math.sin(t * 0.9 + ph) * 0.6 + Math.sin(t * 2.3 + ph * 1.7) * 0.4) * amount;
@@ -432,7 +610,6 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
   }
   if (o.rough !== false) {
     const aggro = bot.mem.aggro ?? 0.3;
-    const nav = bot.nav;
     const shove =
       ahead && nav && b.grounded && t > 5 && ahead.d > 1.3 && ahead.d < 2.8
         ? shoveOff(bot, ahead.o, (x, z) => nav.safe(x, z, ahead.o.pos.y))
@@ -443,15 +620,39 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
     else if (ahead && ahead.d < 1.35 && b.grounded && bot.rng() < aggro * 1.2 * BOT_DT) {
       bot.mem.grabUntil = t + 0.4 + bot.rng() * 0.9;
       out.grab = true;
-    } else if (
-      ahead &&
-      ahead.d > 1.8 &&
-      ahead.d < 2.8 &&
-      b.grounded &&
-      bot.rng() < aggro * 0.35 * BOT_DT &&
-      (!bot.nav || bot.nav.safe(b.pos.x + Math.sin(b.yaw) * 3.5, b.pos.z + Math.cos(b.yaw) * 3.5, b.pos.y))
-    )
-      out.dive = true;
+    } else if (b.grounded && b.state === 'normal' && t > 2) {
+      const scale = o.attack ?? 1;
+      // Paying back an attack, or shoving off whoever crowds the bot (now and then grabbing instead).
+      const back = retaliate(bot, safe);
+      const rate = back ? (back.kind === 'counter' ? 0.8 + aggro * 2.2 : 0.6 + aggro * 2.4) * scale : 0;
+      if (back && bot.rng() < rate * BOT_DT) {
+        if (back.kind === 'space' && bot.rng() < 0.3) {
+          bot.mem.grabUntil = t + 0.4 + bot.rng() * 0.6;
+          out.grab = true;
+          return;
+        }
+        out.mx = back.ux;
+        out.mz = back.uz;
+        out.dive = true;
+        bot.mem.aimed = 1;
+        // (Counted for audits and tuning.)
+        if (back.kind === 'counter') {
+          bot.mem.foe = undefined;
+          bot.mem.counters = (bot.mem.counters ?? 0) + 1;
+        } else bot.mem.shoves = (bot.mem.shoves ?? 0) + 1;
+        return;
+      }
+      // A tackle: dive at where somebody will be (the pushy ones, much more often).
+      const aim = tackleAim(bot, out, safe);
+      const keen = (0.2 + aggro * 1.5) * scale;
+      if (aim && bot.rng() < keen * BOT_DT) {
+        out.mx = aim.ux;
+        out.mz = aim.uz;
+        out.dive = true;
+        bot.mem.aimed = 1;
+        return;
+      }
+    }
   }
   // Bunny hops on open ground.
   if (o.fun !== false && b.grounded && moving && Math.hypot(b.vel.x, b.vel.z) > 5) {
@@ -470,6 +671,14 @@ export function humanize(bot: BotView, out: BotInput, o: HumanOpts = {}) {
  */
 export function smoothStick(bot: BotView, out: BotInput) {
   const m = bot.mem;
+  // A tackle goes where it is aimed, not where the eased stick happens to point.
+  const aimed = out.dive && m.aimed === 1;
+  m.aimed = 0;
+  if (aimed) {
+    m.smx = out.mx;
+    m.smz = out.mz;
+    return;
+  }
   const px = m.smx ?? out.mx;
   const pz = m.smz ?? out.mz;
   const k = Math.hypot(out.mx, out.mz) < 0.15 ? 0.7 : 0.5;
@@ -550,7 +759,17 @@ export function hopChain(
       bot.mem[key] = 0;
       const h = hops[0]!;
       if (ready && !ready(bot)) {
-        follow(bot, p.x, edge - 1.3, out);
+        // Wait where the first pad passes: knocked off to the side, a bot waited for a pad that
+        // never comes that far.
+        let lo = Number.POSITIVE_INFINITY;
+        let hi = Number.NEGATIVE_INFINITY;
+        for (let k = 0; k < 40; k++) {
+          const x = hx(h, bot.t + k * 0.25);
+          lo = Math.min(lo, x);
+          hi = Math.max(hi, x);
+        }
+        const wx = hi - lo > 1 ? Math.min(hi - 0.5, Math.max(lo + 0.5, p.x)) : lo;
+        follow(bot, wx, edge - 1.3, out);
         return true;
       }
       const x = hx(h, bot.t + 0.5);
@@ -618,7 +837,11 @@ export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: numb
     }
     bot.mem.wp = i;
     if (!wp) return;
-    if (wp.drive?.(bot, out)) return;
+    if (wp.drive?.(bot, out)) {
+      // Special stretches jam too (bots backing off for another run into the ones behind them).
+      unstick(bot, out);
+      return;
+    }
     const away = wp.detour?.(bot);
     if (away) {
       navTo(bot, away.x, away.z, out, 1, 0.4);
@@ -680,7 +903,7 @@ export function pathBrain(points: readonly Waypoint[], opts: { diveChance?: numb
     if (opts.diveChance && b.grounded && bot.rng() < opts.diveChance * BOT_DT) out.dive = true;
     // The last stretch: dive over the line like everybody does.
     if (i === points.length - 1 && !precise && d < 6 && d > 3 && b.grounded && bot.rng() < 0.4 + skill * 0.4) out.dive = true;
-    humanize(bot, out, { precise, fun: !precise });
+    humanize(bot, out, { precise, fun: !precise, attack: 0.6 });
     unstick(bot, out);
   };
 }
@@ -836,10 +1059,26 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
       if (shove.d > 1.3 && shove.d < 2.7 && b.grounded && bot.rng() < (0.2 + aggro * 0.6) * BOT_DT * 6) out.dive = true;
     } else if (hunt) {
       const hd = Math.hypot(hunt.pos.x - b.pos.x, hunt.pos.z - b.pos.z);
+      // Where the prey will be when a dive gets there.
+      const px = hunt.pos.x + hunt.vel.x * 0.22 - b.pos.x;
+      const pz = hunt.pos.z + hunt.vel.z * 0.22 - b.pos.z;
+      const pd = Math.hypot(px, pz);
       if (hd < 1.4) {
         out.grab = true;
         bot.mem.grabUntil = t + 0.3;
-      } else if (hd < 2.6 && hd > 1.8 && b.grounded && bot.rng() < aggro * 0.8 * BOT_DT) out.dive = true;
+      } else if (
+        pd > 1.6 &&
+        pd < 3.2 &&
+        b.grounded &&
+        b.state === 'normal' &&
+        [2, 3.5].every((k) => okAt(b.pos.x + (px / pd) * k, b.pos.z + (pz / pd) * k)) &&
+        bot.rng() < (0.3 + aggro * 1.5) * BOT_DT
+      ) {
+        out.mx = px / pd;
+        out.mz = pz / pd;
+        out.dive = true;
+        bot.mem.aimed = 1;
+      }
     } else if (d < (bot.mem.arrived ? 1.8 : 1)) {
       // There: potter about round the spot instead of freezing (and without leaving it and coming back).
       bot.mem.arrived = 1;
@@ -855,7 +1094,7 @@ export function arenaBrain(opts: ArenaOpts): BotBrain {
     // before landing counts too: the jump is kept for a moment and goes off on touchdown.
     const landing = !b.grounded && b.vel.y < 0 && b.pos.y - gy < 0.35;
     if (opts.jumpWhen?.(bot) && (b.grounded || landing)) out.jump = true;
-    humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt, avoid: !hunt });
+    humanize(bot, out, { fun: !opts.jumpWhen, rough: !hunt, avoid: !hunt, safe: okAt });
     unstick(bot, out);
   };
 }
