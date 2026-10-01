@@ -1,0 +1,16 @@
+[package]
+name = "fb_net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fb_shared.workspace = true
+fb_sim.workspace = true
+bevy = { workspace = true, features = ["std", "bevy_log"] }
+lightyear = { workspace = true, features = ["std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -7,6 +7,8 @@
  *   bun run assets --optimize      optimise the current files in place (dedup, prune, weld, unused
  *                                  UVs dropped, normals to 12 bits, vertex-cache order, meshopt
  *                                  compression; names, hierarchy and positions are kept exactly)
+ *   bun run assets --bevy          copies for the Rust client (rust/assets/models): Bevy reads neither
+ *                                  EXT_meshopt_compression nor KHR_mesh_quantization, so both are undone
  *
  * Checks: the Khronos glTF validator (errors fail), triangle / size / material budgets per model,
  * every model the code loads exists (MODEL_NAMES), and the node and material names the code looks
@@ -16,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join } from 'node:path';
 import { type Document, NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, EXTMeshoptCompression, KHRMeshQuantization } from '@gltf-transform/extensions';
-import { dedup, prune, quantize, reorder, weld } from '@gltf-transform/functions';
+import { dedup, dequantize, prune, quantize, reorder, weld } from '@gltf-transform/functions';
 import validator from 'gltf-validator';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 import { MODEL_NAMES } from '../src/sim/builder';
@@ -24,6 +26,7 @@ import { MODEL_NAMES } from '../src/sim/builder';
 const args = process.argv.slice(2);
 const MODELS = 'public/models';
 const STAGE = '.build/models';
+const BEVY = 'rust/assets/models';
 
 /** Budgets per model: triangles, file size (KB, the baked AO map included), materials. */
 const BUDGET: Record<string, { tris: number; kb: number; mats: number }> = {
@@ -209,6 +212,19 @@ async function optimize(dir: string) {
   }
 }
 
+/** The models as the Rust client loads them: buffers decompressed, attributes back to floats. */
+async function exportBevy(out: string) {
+  mkdirSync(out, { recursive: true });
+  for (const name of MODEL_NAMES) {
+    const doc = await io.read(join(MODELS, `${name}.glb`));
+    await doc.transform(dequantize());
+    for (const ext of doc.getRoot().listExtensionsUsed())
+      if (ext instanceof EXTMeshoptCompression || ext instanceof KHRMeshQuantization) ext.dispose();
+    await io.write(join(out, `${name}.glb`), doc);
+  }
+  console.log(`wrote ${MODEL_NAMES.length} models to ${out}`);
+}
+
 function print(reports: ModelReport[]) {
   console.log('model      KB     tris  meshes nodes mats');
   for (const r of reports) {
@@ -222,7 +238,9 @@ function print(reports: ModelReport[]) {
   console.log(`total ${Math.round(total)} KB`);
 }
 
-if (args.includes('--export')) {
+if (args.includes('--bevy')) {
+  await exportBevy(BEVY);
+} else if (args.includes('--export')) {
   const blender =
     process.env.BLENDER ??
     [

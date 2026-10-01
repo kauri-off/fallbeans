@@ -1,0 +1,15 @@
+disallowed-methods = [
+  { path = "f64::sin", reason = "use fb_shared::m (libm: same bits on every OS)" },
+  { path = "f64::cos", reason = "use fb_shared::m" },
+  { path = "f64::tan", reason = "use fb_shared::m" },
+  { path = "f64::atan", reason = "use fb_shared::m" },
+  { path = "f64::atan2", reason = "use fb_shared::m" },
+  { path = "f64::exp", reason = "use fb_shared::m" },
+  { path = "f64::powf", reason = "use fb_shared::m" },
+  { path = "f64::powi", reason = "use fb_shared::m" },
+  { path = "f64::hypot", reason = "use fb_shared::m::hypot (V8-exact)" },
+  { path = "f64::mul_add", reason = "no FMA in the simulation" },
+  { path = "f64::sin_cos", reason = "use fb_shared::m" },
+  { path = "std::time::Instant::now", reason = "no wall clock in the simulation" },
+  { path = "std::time::SystemTime::now", reason = "no wall clock in the simulation" },
+]
