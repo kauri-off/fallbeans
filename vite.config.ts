@@ -24,7 +24,8 @@ export default defineConfig({
   base: '/fallbeans/',
   publicDir: '../../public',
   plugins: [preact()],
-  define: { __BUILD__: JSON.stringify(buildStamp()) },
+  // scripts/build.ts passes the build id it gives the server too (see src/server/build.ts).
+  define: { __BUILD__: JSON.stringify(process.env.FB_BUILD_ID ?? buildStamp()) },
   resolve: { dedupe: ['three'] },
   build: {
     outDir: '../../dist/client',

@@ -9,6 +9,8 @@ WorkingDirectory=/opt/fallbeans/current
 ExecStart=/opt/fallbeans/bin/bun server/main.js
 EnvironmentFile=/etc/fallbeans/env
 Environment=NODE_ENV=production FB_HTTP_HOST=127.0.0.1 FB_HTTP_PORT=7777 FB_WT_PORT=443 FB_TRUST_PROXY=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+# While this file exists the game is being updated: players are sent off and wait (scripts/deploy.ts).
+Environment=FB_MAINTENANCE_FILE=/run/fallbeans-updating
 # TLS for WebTransport, readable by the dynamic user through $CREDENTIALS_DIRECTORY.
 LoadCredential=cert.pem:/etc/ssl/cybershield/fullchain.pem
 LoadCredential=key.pem:/etc/ssl/cybershield/privkey.pem

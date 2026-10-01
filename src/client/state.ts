@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
 import type { ArenaInfo, RoomInfo, RoomRef, ServerMsgOf } from '../shared/protocol';
 
-export type ConnStatus = 'loading' | 'connecting' | 'online' | 'reconnecting' | 'rejected';
+export type ConnStatus = 'loading' | 'connecting' | 'online' | 'reconnecting' | 'updating' | 'rejected';
 
 export const conn = signal<{ status: ConnStatus; transport: 'wt' | 'ws' | null; message: string; ping: number }>({
   status: 'loading',

@@ -22,6 +22,9 @@ export interface ConnSession {
  */
 export class Gateway {
   readonly hub: Hub;
+  /** Every open connection (at the room list, in a room, or before its hello). */
+  private readonly conns = new Set<Conn>();
+  private _updating = false;
 
   constructor(
     private readonly auth: Auth,
@@ -35,7 +38,32 @@ export class Gateway {
     return this.hub.all;
   }
 
+  /** The game is being updated (see Config.maintenanceFile). */
+  get updating() {
+    return this._updating;
+  }
+
+  /** Into or out of the update: going in, every connection is told and closed. */
+  setUpdating(on: boolean) {
+    if (on === this._updating) return;
+    this._updating = on;
+    this.log.info(on ? 'updating: disconnecting everybody' : 'update over: open again', { connections: this.conns.size });
+    if (on) for (const c of [...this.conns]) this.sendOff(c);
+  }
+
+  private sendOff(conn: Conn) {
+    try {
+      conn.send({ t: 'updating' });
+    } catch {}
+    conn.close('updating');
+  }
+
   open(conn: Conn): ConnSession {
+    if (this._updating) {
+      this.sendOff(conn);
+      return { control() {}, datagram() {}, close() {} };
+    }
+    this.conns.add(conn);
     let member: Member | null = null;
     let closed = false;
     let windowAt = 0;
@@ -104,6 +132,7 @@ export class Gateway {
       },
       close: () => {
         closed = true;
+        this.conns.delete(conn);
         clearTimeout(timeout);
         if (member) this.hub.drop(member);
       },

@@ -11,7 +11,9 @@ gives a tab its own).
 
 - Git: the repo is on GitHub (kauri-off/fallbeans, `master`). Do not commit, push or open PRs unless asked.
 - Line endings are LF (`.gitattributes`). Biome formats on every edit (hook in `.claude/settings.json`).
-- Deploy only when asked: `bun run deploy` (see README). Protocol changes (`PROTOCOL_VERSION`) make players refresh.
+- Deploy only when asked: `bun run deploy` (see README). Right after the confirmation everybody is sent off ("the game is
+  updating", the flag file `/run/fallbeans-updating`); once the new server is up their pages reload into the new build
+  (`build` in `/api/session`, see `src/server/build.ts`).
 - The server simulation must stay deterministic: no `Math.random`/`Date.now` in sim or map logic (use `b.rng`, the seed, sim time). The determinism audit and the replay test catch violations.
 
 ## Verify changes

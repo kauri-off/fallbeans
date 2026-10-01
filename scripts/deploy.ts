@@ -11,6 +11,11 @@
  *
  * Builds locally (the host is small), uploads one bundle and runs deploy/remote-install.sh with sudo:
  * checks first, release switch with health check, rollback on failure, checks from outside.
+ *
+ * Players: right after the confirmation the game goes into its update (the flag file the server
+ * watches: everybody is disconnected and sees "the game is updating"); the install lets them back
+ * in once the new server answers, and their pages reload into the new version. If anything fails
+ * on the way the flag is removed and the old version carries on.
  * The nginx site itself belongs to the shared server configuration (SharedServer repository),
  * which must be deployed once before this.
  */
@@ -25,8 +30,18 @@ const option = (n: string) => {
   const i = args.indexOf(n);
   return i >= 0 ? args[i + 1] : undefined;
 };
+/** The server's update flag (deploy/fallbeans.service: FB_MAINTENANCE_FILE). */
+const FLAG = '/run/fallbeans-updating';
+/** The flag was set: a failure must take it away again. */
+let flagged = false;
+let unflag = () => {};
 const fail = (msg: string): never => {
   console.error(`[deploy] ${msg}`);
+  if (flagged) {
+    flagged = false;
+    unflag();
+    console.error('[deploy] the old version carries on: players let back in');
+  }
   process.exit(1);
 };
 const log = (msg: string) => console.log(`[deploy] ${msg}`);
@@ -42,6 +57,26 @@ const debugKey = option('--debug-key');
 if (debugKey !== undefined && !/^[\w-]{16,64}$/.test(debugKey)) fail('debug key: 16–64 characters of A–Z a–z 0–9 _ -');
 
 const bun = process.execPath;
+const packOnly = flag('--pack-only');
+const ssh = ['-i', key, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
+if (!packOnly) {
+  if (!existsSync(key)) fail(`SSH key not found: ${key}`);
+  if (!flag('--yes')) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question(`[deploy] Update Fall Beans on ${host} (production)? [y/N] `);
+    rl.close();
+    if (!/^y(es)?$/i.test(answer.trim())) fail('cancelled');
+  }
+  // From now on the game is being updated: everybody is sent off at once.
+  unflag = () => {
+    Bun.spawnSync(['ssh', ...ssh, host, `sudo rm -f ${FLAG}`], { stdout: 'inherit', stderr: 'inherit' });
+  };
+  // Interrupted (Ctrl+C) on the way: let the players back in too.
+  process.on('SIGINT', () => fail('interrupted'));
+  log('players: the game is updating');
+  run(['ssh', ...ssh, host, `sudo touch ${FLAG}`]);
+  flagged = true;
+}
 if (!flag('--skip-checks')) {
   log('checks');
   run([bun, 'x', 'tsc', '--noEmit']);
@@ -68,16 +103,8 @@ for (const f of ['fallbeans.http', 'fallbeans.conf', 'fallbeans.headers'])
 const archive = join(stage, 'fallbeans-update.tar.gz');
 run(['tar', '-czf', '../fallbeans-update.tar.gz', '.'], { cwd: bundle });
 log(`bundle: ${archive} (${Math.round(Bun.file(archive).size / 1024)} KB)`);
-if (flag('--pack-only')) process.exit(0);
+if (packOnly) process.exit(0);
 
-if (!existsSync(key)) fail(`SSH key not found: ${key}`);
-if (!flag('--yes')) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`[deploy] Update Fall Beans on ${host} (production)? [y/N] `);
-  rl.close();
-  if (!/^y(es)?$/i.test(answer.trim())) fail('cancelled');
-}
-const ssh = ['-i', key, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15'];
 const dir = `fallbeans-update-${Date.now()}`;
 run(['scp', ...ssh, archive, `${host}:${dir}.tar.gz`]);
 const env = debugKey ? `DEBUG_KEY=${debugKey} ` : '';
@@ -87,4 +114,6 @@ run([
   host,
   `mkdir -p ~/${dir} && tar -xzf ~/${dir}.tar.gz -C ~/${dir} && sudo ${env}bash ~/${dir}/remote-install.sh; code=$?; rm -rf ~/${dir} ~/${dir}.tar.gz; exit $code`,
 ]);
+// (The install removed the flag itself, whatever happened.)
+flagged = false;
 log('done: https://киберщит-социум.рф/fallbeans/');

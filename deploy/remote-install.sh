@@ -12,8 +12,13 @@
 #   /etc/nginx/apps.d/fallbeans.{http,conf,headers}   nginx (included by the shared site)
 #   /etc/systemd/system/fallbeans.service    service (DynamicUser, TLS via LoadCredential)
 # Nothing changes until the checks pass; a failed release rolls back to the previous one.
+#
+# The update flag (/run/fallbeans-updating, made by scripts/deploy.ts when the deploy starts) keeps
+# players out; it is removed once the new server answers, and on any failure (the old one carries on).
 set -euo pipefail
 cd "$(dirname "$0")"
+FLAG=/run/fallbeans-updating
+trap 'rm -f $FLAG' EXIT
 
 BASE=/opt/fallbeans
 BUN_VERSION=1.4.2
@@ -151,6 +156,9 @@ healthy || {
   rollback "сервер игры не отвечает"
 }
 systemctl reload nginx
+# The new server is up: let the players back in (their pages reload into the new version).
+rm -f $FLAG
+say "Игроки впущены"
 rm -rf "$BACKUP"
 ls -1dt $BASE/releases/* | tail -n +4 | xargs -r rm -rf
 echo "Сервер игры обновлён: $R ($(cat "$R/VERSION" 2>/dev/null || echo '?'))"

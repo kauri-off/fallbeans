@@ -5,6 +5,8 @@ import { MAX_CONTROL_BYTES, type ServerMsg } from '../../shared/protocol';
 export interface SessionInfo {
   ticket: string;
   version: number;
+  /** The server's build (null in development): a page of another build reloads. */
+  build?: string | null;
   wt: { port: number; hashes: string[] } | null;
 }
 
@@ -147,9 +149,13 @@ export async function connect(info: SessionInfo, ev: TransportEvents, preferWs =
   return connectWebSocket(ev);
 }
 
-export async function fetchSession(): Promise<SessionInfo | 'error'> {
+export async function fetchSession(): Promise<SessionInfo | 'error' | 'updating'> {
   try {
     const r = await fetch(`${BASE_PATH}api/session`, { cache: 'no-store', credentials: 'same-origin' });
+    if (r.status === 503) {
+      const body = (await r.json().catch(() => null)) as { updating?: boolean } | null;
+      if (body?.updating) return 'updating';
+    }
     if (!r.ok) return 'error';
     return (await r.json()) as SessionInfo;
   } catch {

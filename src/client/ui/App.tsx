@@ -34,6 +34,16 @@ export function App({ game }: { game: Game }) {
         </div>
       </div>
     );
+  if (c.status === 'updating')
+    return (
+      <div class="screen">
+        <div class="glass card center">
+          <h1 class="logo small">Fall Beans</h1>
+          <p>Игра обновляется…</p>
+          <p class="muted">Страница перезагрузится сама, как только новая версия запустится.</p>
+        </div>
+      </div>
+    );
   if (c.status === 'rejected')
     return (
       <div class="screen">

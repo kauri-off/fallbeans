@@ -1,4 +1,10 @@
 import { PROTOCOL_VERSION } from '../../shared/consts';
+
+/** How often a page waiting out an update asks whether the new version is up (ms). */
+const UPDATE_POLL_MS = 1500;
+/** sessionStorage: the build this page last reloaded for (no reload loop if it did not take). */
+const RELOADED_FOR = 'fb_reloaded_for';
+
 import type { ClientMsg, Hello, ServerMsg } from '../../shared/protocol';
 import { conn } from '../state';
 import { connect, fetchSession, type Transport } from './transport';
@@ -73,6 +79,8 @@ export class Connection {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private retries = 0;
   private stopped = false;
+  /** The server said the game is being updated: waiting for the new version (see waitUpdate). */
+  private updating = false;
   private wtFailed = false;
 
   constructor(private readonly o: ConnectionOptions) {}
@@ -83,13 +91,28 @@ export class Connection {
 
   async start() {
     this.stopped = false;
-    conn.value = { ...conn.value, status: this.retries ? 'reconnecting' : 'connecting' };
+    if (!this.updating) conn.value = { ...conn.value, status: this.retries ? 'reconnecting' : 'connecting' };
     const s = await fetchSession();
-    if (s === 'error') return this.retry();
-    if (s.version !== PROTOCOL_VERSION) {
+    if (s === 'updating') return this.waitUpdate();
+    if (s === 'error') return this.updating ? this.waitUpdate() : this.retry();
+    // Another version is up: load it (once; if that did not take, ask for a manual reload).
+    const otherBuild = !!s.build && s.build !== __BUILD__;
+    if (s.version !== PROTOCOL_VERSION || otherBuild) {
+      const target = s.build ?? `protocol ${s.version}`;
+      let last: string | null = null;
+      try {
+        last = sessionStorage.getItem(RELOADED_FOR);
+        sessionStorage.setItem(RELOADED_FOR, target);
+      } catch {}
+      if (last !== target) {
+        conn.value = { ...conn.value, status: 'updating', message: '' };
+        location.reload();
+        return;
+      }
       conn.value = { ...conn.value, status: 'rejected', message: 'Вышла новая версия игры — обновите страницу' };
       return;
     }
+    this.updating = false;
     try {
       this.transport = await connect(
         s,
@@ -137,6 +160,12 @@ export class Connection {
       this.retries = 0;
       conn.value = { status: 'online', transport: this.transport?.kind ?? null, message: '', ping: Math.round(this.clock.rtt) };
     }
+    if (m.t === 'updating') {
+      // The connection is about to close: no "connection lost", just wait for the new version.
+      this.updating = true;
+      conn.value = { ...conn.value, status: 'updating', message: '' };
+      return;
+    }
     if (m.t === 'reject') {
       this.stopped = true;
       conn.value = { ...conn.value, status: 'rejected', message: m.msg };
@@ -151,7 +180,17 @@ export class Connection {
     if (this.transport?.kind === 'wt' && conn.value.status !== 'online') this.wtFailed = true;
     this.transport = null;
     this.o.onDisconnect();
-    if (!this.stopped) this.retry();
+    if (this.stopped) return;
+    if (this.updating) this.waitUpdate();
+    else this.retry();
+  }
+
+  /** The game is being updated: show it, and ask again shortly (the new version reloads the page). */
+  private waitUpdate() {
+    if (this.stopped) return;
+    this.updating = true;
+    conn.value = { ...conn.value, status: 'updating', message: '' };
+    setTimeout(() => this.start(), UPDATE_POLL_MS);
   }
 
   private retry() {

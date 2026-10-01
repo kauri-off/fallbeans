@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { Auth } from './auth';
 import { loadConfig } from './config';
 import { Diagnostics } from './diag';
@@ -13,6 +14,14 @@ diag.start();
 const auth = new Auth(cfg.secret);
 const gateway = new Gateway(auth, log, { minPlayers: cfg.solo ? 1 : 2, dev: cfg.dev });
 const http = startHttp(cfg, auth, gateway, log, diag);
+
+// The deploy creates the update flag before anything else and removes it once the new server is up.
+const flag = cfg.maintenanceFile;
+if (flag) {
+  const check = () => gateway.setUpdating(existsSync(flag));
+  check();
+  setInterval(check, 500).unref?.();
+}
 
 let wt: { close(): Promise<void> } | null = null;
 if (cfg.wtPort && cfg.certPem && cfg.keyPem) {

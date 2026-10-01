@@ -43,6 +43,7 @@ const RoomRef = z.object({ id: z.string(), title: z.string().max(ROOM_TITLE_MAX)
 export const ServerMsgSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('ready'), token: z.string(), dev: z.boolean() }),
   z.object({ t: z.literal('reject'), reason: z.enum(['version', 'auth', 'bad', 'busy', 'moved']), msg: z.string() }),
+  z.object({ t: z.literal('updating') }),
   z.object({ t: z.literal('pong'), c: Num, s: Num }),
   z.object({
     t: z.literal('rooms'),

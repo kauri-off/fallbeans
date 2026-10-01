@@ -259,6 +259,8 @@ export type ServerMsg =
   | { t: 'ready'; token: string; dev: boolean }
   /** The connection is refused and closed (`moved`: the player opened the game in another tab). */
   | { t: 'reject'; reason: 'version' | 'auth' | 'bad' | 'busy' | 'moved'; msg: string }
+  /** The game is being updated: the connection closes; the page waits for the new version and reloads. */
+  | { t: 'updating' }
   | { t: 'pong'; c: number; s: number }
   /** The room list, sent while the player is in no room; `mine` is the room they created, if it still exists. */
   | { t: 'rooms'; rooms: RoomInfo[]; mine: string | null }

@@ -5,6 +5,7 @@ import type { Server, ServerWebSocket } from 'bun';
 import { BASE_PATH, PROTOCOL_VERSION } from '../../shared/consts';
 import type { ServerMsg } from '../../shared/protocol';
 import type { Auth } from '../auth';
+import { BUILD } from '../build';
 import type { Config } from '../config';
 import { handleDebug, handleReport } from '../debugApi';
 import type { Diagnostics } from '../diag';
@@ -94,9 +95,12 @@ export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger
       }
       if (path === `${BASE_PATH}health`) {
         const { hub } = gateway;
+        // (200 while updating too: the deploy waits for this to know the new server is up.)
         return json({
           ok: true,
           version: PROTOCOL_VERSION,
+          build: BUILD,
+          updating: gateway.updating,
           rooms: hub.rooms.size,
           players: [...hub.rooms.values()].reduce((n, r) => n + r.players.size, 0),
           practice: hub.practice.size,
@@ -111,9 +115,12 @@ export function startHttp(cfg: Config, auth: Auth, gateway: Gateway, log: Logger
       }
       // What a page needs to open a game connection: a ticket for the hello, and how to reach WebTransport.
       if (path === `${BASE_PATH}api/session`) {
+        // Being updated: pages wait (and reload once the new version answers here).
+        if (gateway.updating) return json({ ok: false, updating: true, version: PROTOCOL_VERSION, build: BUILD }, 503);
         return json({
           ok: true,
           version: PROTOCOL_VERSION,
+          build: BUILD,
           ticket: auth.issueTicket(),
           wt: cfg.wtPort ? { port: cfg.wtPort, hashes: certHashes } : null,
         });

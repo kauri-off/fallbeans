@@ -20,6 +20,11 @@ export interface Config {
   secret: Buffer;
   /** Production debug page/API key (FB_DEBUG_KEY); without it the debug API is off outside dev. */
   debugKey: string | null;
+  /**
+   * While this file exists the game is being updated (FB_MAINTENANCE_FILE; the deploy creates it):
+   * everybody is disconnected and told so, and nobody is let in until it is gone.
+   */
+  maintenanceFile: string | null;
 }
 
 type Env = Record<string, string | undefined>;
@@ -66,5 +71,6 @@ export function loadConfig(argv: string[], env: Env = process.env, root = proces
     trustProxy: env.FB_TRUST_PROXY === '1',
     secret: Buffer.from(secretHex, 'hex'),
     debugKey: env.FB_DEBUG_KEY && env.FB_DEBUG_KEY.length >= 16 ? env.FB_DEBUG_KEY : null,
+    maintenanceFile: val('--maintenance-file') ?? env.FB_MAINTENANCE_FILE ?? null,
   };
 }
