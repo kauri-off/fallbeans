@@ -796,8 +796,8 @@ export class ServerArena {
       const fx = Math.sin(b.yaw);
       const fz = Math.cos(b.yaw);
       for (const o of active) {
-        // A bean already down can still be shoved along (only not while it is getting up).
-        if (o === p || o.body.state === 'getup' || (p.diveHits.get(o.id) ?? -1) > t) continue;
+        // Anyone can be hit, a bean already down or getting up too (each diver once per dive).
+        if (o === p || (p.diveHits.get(o.id) ?? -1) > t) continue;
         const dx = o.body.pos.x - b.pos.x;
         const dz = o.body.pos.z - b.pos.z;
         const d = Math.hypot(dx, dz);

@@ -379,3 +379,40 @@ describe('dev tools', () => {
     dev.dispose();
   });
 });
+
+describe('tackles', () => {
+  it('hit a bean that is already down or getting up', async () => {
+    const { LOBBY } = await import('../src/games');
+    const { ServerArena } = await import('../src/server/rooms/arena');
+    const hooks = { onFinish() {}, onKo() {}, onEvent() {}, onScore() {}, onSnapshot() {}, warn() {} };
+    for (const state of ['getup', 'tumble', 'stun'] as const) {
+      const a = new ServerArena({
+        id: 1,
+        kind: 'lobby',
+        module: LOBBY,
+        seed: 1,
+        startAt: 0,
+        participants: [1, 2],
+        now: 0,
+        hooks,
+      });
+      a.addPawn(1, false);
+      a.addPawn(2, false);
+      a.advance(500);
+      const diver = a.pawns.get(1)!.body;
+      const target = a.pawns.get(2)!.body;
+      target.pos.copy(diver.pos).add(new THREE.Vector3(0, 0, 1.2));
+      target.vel.set(0, 0, 0);
+      target.state = state;
+      target.stateT = 0.4;
+      diver.yaw = 0;
+      diver.state = 'dive';
+      diver.stateT = 0.6;
+      diver.vel.set(0, 2, 12);
+      a.advance(500 + TICK_MS * 2);
+      expect(target.state, `tackling a bean in ${state}`).toBe('tumble');
+      expect(Math.hypot(target.vel.x, target.vel.z), `tackling a bean in ${state}`).toBeGreaterThan(3);
+      a.dispose();
+    }
+  });
+});
