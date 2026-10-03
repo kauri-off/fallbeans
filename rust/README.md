@@ -32,9 +32,10 @@ rust/
     fb_proto       управляющие сообщения (ClientMsg/ServerMsg с проверкой границ), события карты; без Bevy
     fb_net         протокол Lightyear: компоненты, ввод, каналы, форматы передачи (wire.rs),
                    фильтры видимости (комната, владелец), NetSim (флаги имитации сети), NetStats (трафик)
-    fb_server      rooms/ (Hub, Room, GameClock, награды — обычный Rust, тесты без сети), auth,
-                   play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход), metrics, opts
-    fb_client      net, session (hello, комната, лобби; --start), game (карта, предсказание, ввод, автопилот),
+    fb_server      rooms/ (Hub, Room, GameClock, награды, debug — обычный Rust, тесты без сети), auth,
+                   play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход),
+                   http (axum в своём потоке: сессия и connect token, health, debug API), logbook, metrics, opts
+    fb_client      net (сессия по HTTP, подключение, переподключение), session (hello, комната, лобби; --start), game (карта, предсказание, ввод, автопилот),
                    view, hud, stats, assets, opts
   xtask            cargo xtask <check|golden|audit|assets|dev|stress|deploy>
   deploy/          что ставится на хост: systemd-юнит, nginx (wss), установщик с откатом; README — сам хост
@@ -42,7 +43,8 @@ rust/
   assets/models    glb для Bevy (делаются из ../public/models: cargo xtask assets)
 ```
 
-Игрок входит так: соединение → `Hello` → список комнат или сразу комната (`--room`, тренировка `--practice`). У
+Игрок входит так: `POST /fallbeans/api/session` (identity и connect token netcode с id игрока внутри) →
+соединение → `Hello` → список комнат или сразу комната (`--room`, тренировка `--practice`). У
 каждой комнаты на сервере сущность `Round` (её текущая арена: лобби, раунд или подиум) и по сущности на боба в игре;
 ссылке игрока видны только сущности его комнаты (`RoomTag`/`InRoom`). Сервер строит карту от сида без сцены; клиент
 строит ту же карту со сценой (`SceneDesc`) и сверяет хэш коллайдеров (`Round.static_hash`). По сети идут только
@@ -55,6 +57,7 @@ cargo xtask check                 # fmt --check, clippy -D warnings, тесты 
 cargo xtask dev --clients 2       # сервер --dev и два окна в комнате dev, игра --map; --autopilot, --lag/--jitter/--loss, --seed, --release
 cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05
 cargo xtask stress --clients 32 --rooms 4 --secs 100 --lag 75 --jitter 15 --loss 0.05   # 4 комнаты по 8
+cargo xtask stress --release --clients 16 --rooms 4 --secs 100 --client-arg=--fill   # 4 комнаты по 4 игрока и 4 бота
 cargo xtask stress --transport ws --lag 75 --jitter 15   # по WebSocket (потери не задавать: TCP не теряет)
 cargo xtask stress --remote --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
 cargo xtask golden                # переснять следы из TS и сверить (после изменений в TS-физике или карте)
@@ -68,10 +71,13 @@ cargo xtask deploy                # выложить сервер на прод 
 
 - сервер: `--dev` (dev-команды, комната `dev`), `--solo` (игра с одним игроком), `--open-rooms a,b` (постоянные
   комнаты), `--seed`, `--intro`, `--maintenance-file` (пока файл есть — «игра обновляется»), `--udp-port`,
-  `--ws-addr`, `--ws-port`, `--lag/--jitter/--loss`, `--trace файл`, `--metrics-every с`, `--exit-after с`;
-  `FB_SECRET` (64 hex) подписывает identity, без него — случайный на запуск;
-- клиент: `--server`, `--transport auto|udp|ws`, `--ws-url`, `--id`, `--name`, `--token`, `--room`, `--pin`,
-  `--practice карта`, `--color`, `--start карта --start-players n` (хостом стартует игру из раундов этой карты),
+  `--ws-addr`, `--ws-port`, `--http-addr`, `--http-port` (5887), `--public-host` (IP для UDP в connect token; без
+  него — адрес, по которому клиент спросил HTTP, и без проверки адреса), `--lag/--jitter/--loss`, `--trace файл`,
+  `--metrics-every с`, `--exit-after с`; `FB_SECRET` (64 hex) — секрет identity, ключа netcode и cookie
+  (без него — случайный на запуск), `FB_DEBUG_KEY` — ключ debug API на проде;
+- клиент: `--server`, `--http-url` (по умолчанию `http://<server>:5887/fallbeans`), `--transport auto|udp|ws`,
+  `--ws-url`, `--name`, `--token` (identity), `--room`, `--pin`, `--practice карта`, `--color`, `--start карта
+  --start-players n` (хостом стартует игру из раундов этой карты), `--fill` (хост заполняет комнату ботами),
   `--lag/--jitter/--loss`, `--input-margin`,
   `--backend vulkan|dx12|gl`, `--headless` (без окна и GPU, автопилот), `--fps`, `--autopilot`, `--trace файл`,
   `--screenshot файл --exit-after с`, `--check-assets`.
@@ -115,8 +121,11 @@ cargo xtask deploy                # выложить сервер на прод 
 - Настройки ввода (`INPUT_SEND_INTERVAL`, `INPUT_REDUNDANCY` = `LATE_TICKS`) и `--input-margin` подобраны
   замерами (`port/phases/0.md`); менять — с прогоном `xtask stress` (и `--remote`) до и после.
 - Один `Server` Lightyear слушает оба транспорта (`net::start_server`: `ServerUdpIo` и `WebSocketServerIo` на одной
-  сущности), топология обычная `Server`. Проверка адреса в connect token выключена (`server_addr_check`): с
-  нулевым ключом она пускала только localhost; вернуть с токенами Фазы 3.
+  сущности), топология обычная `Server`. Connect token выдаёт HTTP API (`http.rs`): ключ netcode выводится из
+  `FB_SECRET`, в user data — id игрока, адрес — публичный UDP (`--public-host`), он же проверяется как
+  `additional_expected_addresses`. Токен — на одну попытку (30 с); таймаут соединения в токене: UDP 3 с, WS 10 с.
+- HTTP API отвечает из своего потока; всё, что читает комнаты, — задание главному циклу (`http::Api::ask`,
+  выполняется в `Update`). Флаг обновления и замеры для `/api/debug/health` идут в поток HTTP через `HttpShared`.
 - Сервер однопоточный: все расписания на `SingleThreadedExecutor` (`fb_server/src/main.rs`), фича Bevy
   `multi_threaded` у `fb_server` не включается. На 1 vCPU многопоточный исполнитель тратил 15% ядра в простое на
   передачу систем пулу. Параллелить (комнаты по потокам) — только по замерам Фазы 3.
@@ -136,6 +145,11 @@ cargo xtask deploy                # выложить сервер на прод 
   ввод, позиция) и логи. Таблица показывает по каждому клиенту опоздавший ввод и расхождения по причинам;
   «прочие» печатаются тиками — смотреть строки этих тиков в трассах сервера и клиента.
 - **Без стресса:** сервер и клиент с `--trace` и теми же флагами сети, сравнение тех же строк.
+- **Debug API сервера** (порт `debugApi.ts`): `state`, `health`, `logs?level=&n=`, `trace?room=&id=&s=`,
+  `replay?room=&i=` (запись раунда; комнаты пишут раунды только с `--dev`), `maps`; `?format=text` — компактный
+  текст. Локально с `--dev` — без ключа: `curl "http://127.0.0.1:5887/fallbeans/api/debug/state?format=text"`.
+  На проде — cookie: `curl -c c.txt "https://…/fallbeans/api/debug/login?key=$FB_DEBUG_KEY"`, затем `-b c.txt`
+  (ключ — в `/etc/fallbeans.env` на хосте).
 - **Логи.** Клиент раз в секунду пишет `stats:` (транспорт, RTT, джиттер, самый длинный кадр за секунду,
   сдвиги часов Lightyear, откаты, предсказанные тики, трафик, раунд, `MAP HASH MISMATCH` при расхождении
   карты), сервер раз в `--metrics-every` с — `metrics:` (тик p50/p99/max, самый длинный кадр, тики без ввода
@@ -153,17 +167,22 @@ cargo xtask deploy                # выложить сервер на прод 
 `deploy@168.113.157.12` и `~/.ssh/cybershield_deploy`) запускает `deploy/remote-install.sh`:
 
 - релиз в `/opt/fallbeans/releases/<время>`, ссылка `current`, три последних релиза хранятся;
+- секреты `/etc/fallbeans.env` (`FB_SECRET`, `FB_DEBUG_KEY`) создаются один раз и дальше не трогаются: новый
+  секрет даёт всем игрокам новые identity;
 - systemd-юнит `fallbeans.service` (`DynamicUser`, `MemoryMax=300M`): UDP 5888 наружу, WebSocket на
-  127.0.0.1:5889;
+  127.0.0.1:5889, HTTP API на 127.0.0.1:5887;
 - nginx: `/etc/nginx/apps.d/fallbeans.conf` (сайт из репозитория SharedServer включает `apps.d/*.conf`):
-  `wss://…/fallbeans/ws` → 5889, `/fallbeans/ws-probe` → 5891 (сервер пробы);
+  `wss://…/fallbeans/ws` → 5889, `/fallbeans/api/` и `/fallbeans/health` → 5887, `/fallbeans/ws-probe` → 5891 и
+  `/fallbeans/probe/` → 5892 (сервер пробы);
+- на время перезапуска — `/run/fallbeans-updating`: старый сервер говорит игрокам «игра обновляется» и отпускает
+  их, клиенты ждут, пока `/api/session` не перестанет отвечать `updating`;
 - ufw: 5888/udp (игра), 5890/udp (проба);
-- проверка: служба жива и слушает оба порта; иначе откат на прежний релиз.
+- проверка: служба жива, слушает оба порта, `/fallbeans/health` отвечает; иначе откат на прежний релиз.
 
 `--pack-only` только собирает архив (`target/deploy/`), `--yes` не спрашивает, `--skip-checks` пропускает `check`.
 
 **Проба** (`stress --remote`): та же сборка этого дерева запускается в `~/fb-probe` пользователя deploy (UDP 5890,
-WS 5891 за nginx) на время прогона; клиенты идут с этой машины по настоящей сети, трасса сервера скачивается и
+WS 5891 и HTTP 5892 за nginx, `--public-host` — адрес хоста) на время прогона; клиенты идут с этой машины по настоящей сети, трасса сервера скачивается и
 сверяется как в локальном `stress`. Прод-службу проба не трогает.
 
 ## Известные проблемы
@@ -179,14 +198,13 @@ WS 5891 за nginx) на время прогона; клиенты идут с �
 - Таймаут netcode — 3 с: остановка TCP-потока внутри VPN (VLESS xhttp) рвёт WS-соединение. На таких путях
   рывки джиттера вызывают серии сдвигов часов (`port/phases/0.md`, «Матрица VPN»); `fb_client --sync-max-error` —
   флаг для опытов с порогом.
-- Клиент не переподключается после обрыва на WS и с `--transport udp`; с `auto` обрыв UDP переводит на WS, и
-  клиент возвращается в свою комнату тем же игроком (identity из `Ready`, место держится 30 с).
-- «Игра обновляется»: сервер с `--maintenance-file` отключает всех, пока файл есть; деплой его ещё не создаёт.
+- После обрыва клиент берёт новый токен и подключается снова тем же игроком (identity из `/api/session`, место
+  держится 30 с), с `auto` обрыв UDP переводит на WS; обратно с WS на UDP он не возвращается.
 - Сервер не может разорвать одного клиента netcode: клиент, которому отказали, уходит сам; не ушедший
   отваливается по таймауту (`Received UDP packet for unknown entity` в логе; `port/decisions.md`).
-- Сборка следующего раунда и сетки навигации ботов идёт внутри тика: до 6 мс на тике старта раунда.
+- Следующий раунд игры собирается в потоке во время результатов (вместе с сеткой ботов); первый раунд игры и
+  тренировка — ещё в тике (до 6 мс), их сетка ботов — в тике интро.
 - На GL wgpu пишет ~70 ошибок `CubeArray` в секунду; безвредно. SSAO на GL отключён через лимит storage-текстур
   (`fb_client/src/main.rs`).
 - Респаун не предсказывается: каждое падение даёт 2–3 отката (как в TS).
-- Аутентификация netcode — нулевой ключ и id от клиента, проверка адреса в токене выключена (только Фаза 0).
 - Золотые следы есть только для `jump-club`: лестницы, уступы, порталы, конвейеры, батуты, лёд с TS не сверены.

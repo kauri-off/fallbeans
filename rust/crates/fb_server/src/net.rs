@@ -4,10 +4,12 @@ use core::net::{Ipv4Addr, SocketAddr};
 use bevy::prelude::*;
 use fb_net::*;
 use lightyear::connection::client::Connected;
-use lightyear::netcode::NetcodeServer;
+use lightyear::netcode::{NetcodeServer, TokenUserData};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
+use crate::auth::uid_from_user_data;
+use crate::http::Keys;
 use crate::opts::Opts;
 use crate::play::{Rooms, conn_of};
 
@@ -27,7 +29,7 @@ impl Plugin for NetPlugin {
 /// it came in. One netcode server sees all clients (one id cannot be in twice over two transports),
 /// and Lightyear's topology is a valid `Server` (with a server per transport it was `Invalid`,
 /// lightyear#1693, and the systems that need one server stayed off).
-fn start_server(mut commands: Commands, opts: Res<Opts>) {
+fn start_server(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>) {
     let udp_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), opts.udp_port);
     let ws_addr = SocketAddr::new(opts.ws_addr, opts.ws_port);
     let ws_config = lightyear::websocket::server::ServerConfig::builder()
@@ -39,13 +41,14 @@ fn start_server(mut commands: Commands, opts: Res<Opts>) {
             Server::new(opts.net.config().map(RecvLinkConditioner::new)),
             NetcodeServer::new(NetcodeConfig {
                 protocol_id: PROTOCOL_ID,
-                private_key: DEV_KEY,
-                // Netcode drops a connect token whose server address is not `LocalAddr`, and 0.0.0.0
-                // matches only loopback: no client from another machine would get in (the token holds
-                // the public address; behind nginx, nginx's). The WebSocket listener also rewrites
-                // `LocalAddr` to its own port. Phase 3 tokens come from /api/session; with a real key,
-                // `additional_expected_addresses` (the public UDP and WS addresses) can turn it back on.
-                server_addr_check: false,
+                private_key: keys.0.netcode_key(),
+                // Tokens name the public UDP address, never `LocalAddr`; without `--public-host` there is none to check.
+                server_addr_check: opts.public_host.is_some(),
+                additional_expected_addresses: opts
+                    .public_host
+                    .map(|h| SocketAddr::new(h, opts.udp_port))
+                    .into_iter()
+                    .collect(),
                 ..default()
             }),
             LocalAddr(udp_addr),
@@ -67,21 +70,22 @@ fn on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
         .insert((ReplicationSender, Name::new("client")));
 }
 
-/// A client is in: the hub waits for its hello.
+/// A client is in, as the player of its connect token: the hub waits for its hello.
 fn on_connected(
     trigger: On<Add, Connected>,
-    links: Query<(&RemoteId, Option<&PeerAddr>), With<ClientOf>>,
+    links: Query<(&RemoteId, Option<&PeerAddr>, Option<&TokenUserData>), With<ClientOf>>,
     rooms: Option<ResMut<Rooms>>,
 ) {
     let link = trigger.entity;
-    let (Ok((remote, addr)), Some(mut rooms)) = (links.get(link), rooms) else {
+    let (Ok((remote, addr, data)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };
     // The address the link came from: a player's own, a VPN's exit, or nginx's (WebSocket: its access log
     // has the player's).
     let from = addr.map_or_else(|| "?".to_string(), |a| a.0.ip().to_string());
     info!("connected: {:?} from {from}", remote.0);
-    rooms.hub.open(conn_of(link), from);
+    let uid = data.map(|d| uid_from_user_data(&d.0)).unwrap_or_default();
+    rooms.hub.open(conn_of(link), from, uid);
 }
 
 /// A client is gone (it left, timed out, or was let go of).

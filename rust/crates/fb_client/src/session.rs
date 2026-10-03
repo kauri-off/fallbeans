@@ -12,15 +12,13 @@ use crate::opts::Opts;
 
 #[derive(Resource, Default)]
 pub struct Session {
-    /// Identity the server gave (sent again on a reconnect: the same player, back in their room).
-    pub token: Option<String>,
     pub dev: bool,
     /// Player id in the room, and the room's id.
     pub me: Option<Pid>,
     pub room: Option<String>,
     pub lobby: Option<Lobby>,
     pub arena: Option<ArenaInfo>,
-    /// The server sent the client away (another window, an update): no more reconnecting.
+    /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
     /// The host already asked to start the game in this lobby.
     started: bool,
@@ -44,7 +42,6 @@ fn say_hello(
 ) {
     let hello = Hello {
         name: opts.name.clone(),
-        token: session.token.clone().or_else(|| opts.token.clone()),
         // Back into the room after a reconnect.
         room: session
             .room
@@ -76,22 +73,19 @@ fn receive(
     for mut r in &mut receivers {
         for msg in r.receive() {
             match msg {
-                ServerMsg::Ready { token, dev } => {
-                    session.token = Some(token);
-                    session.dev = dev;
-                }
+                ServerMsg::Ready { dev } => session.dev = dev,
                 ServerMsg::Reject { reason, msg } => {
                     warn!("refused ({reason:?}): {msg}");
                     session.refused = true;
-                    if let Some(c) = &conn {
-                        commands.trigger(Disconnect { entity: c.entity });
+                    if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
+                        commands.trigger(Disconnect { entity });
                     }
                 }
+                // Back once the new version is up (the session API says when).
                 ServerMsg::Updating => {
                     warn!("the game is being updated");
-                    session.refused = true;
-                    if let Some(c) = &conn {
-                        commands.trigger(Disconnect { entity: c.entity });
+                    if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
+                        commands.trigger(Disconnect { entity });
                     }
                 }
                 ServerMsg::Rooms { rooms, mine } => {
@@ -174,6 +168,9 @@ fn start_game(
     }
     session.started = true;
     info!("starting {map} with {n} players");
+    if opts.fill {
+        send(&mut senders, ClientMsg::Fill(true));
+    }
     send(
         &mut senders,
         ClientMsg::Playlist(Playlist {

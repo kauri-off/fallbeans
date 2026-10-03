@@ -93,6 +93,16 @@ pub struct RoundInfo {
     pub total: u32,
 }
 
+/// The next round, drawn when the last one ended and built on another thread while the results show.
+struct Upcoming {
+    game: &'static str,
+    seed: u32,
+    start: i64,
+    participants: Vec<Pid>,
+    dev_seed: Option<u32>,
+    arena: std::thread::JoinHandle<Arena>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Timer {
     NextRound,
@@ -146,6 +156,7 @@ pub struct Room {
     rng: Rng,
     /// Dev: seed of the next round's map.
     next_seed: Option<u32>,
+    upcoming: Option<Upcoming>,
     /// Dev: the last rounds as played (newest last).
     pub replays: VecDeque<Recording>,
     /// Map events of this arena that someone arriving later must hear of.
@@ -192,6 +203,7 @@ impl Room {
             timer: None,
             rng: Rng::new(opts.seed.unwrap_or_else(random_u32)),
             next_seed: None,
+            upcoming: None,
             replays: VecDeque::new(),
             history: Vec::new(),
             out: Vec::new(),
@@ -642,6 +654,7 @@ impl Room {
             }
             DevCmd::Seed { seed } => {
                 self.next_seed = Some(*seed);
+                self.upcoming = None;
                 Ok(format!("next round seed {seed}"))
             }
         }
@@ -852,46 +865,115 @@ impl Room {
         self.next_round();
     }
 
+    /// The game of the next round, its number and the number of rounds (None: the game is over).
+    fn next_game(&self) -> Option<(&'static GameMeta, u32, u32)> {
+        let session = self.session.as_ref()?;
+        if self.practice() {
+            return Some((director::game(session.plan.first()?)?, 1, 1));
+        }
+        let game = director::game(session.plan.get(session.index)?)?;
+        Some((game, session.index as u32 + 1, session.plan.len() as u32))
+    }
+
+    /// Arena tick a round is made at (the intro runs before tick 0).
+    fn round_start(&self) -> i64 {
+        let zero = self.now().floor() + f64::from(self.opts.intro_ticks);
+        (self.now() - zero).floor() as i64 - 1
+    }
+
+    /// The map's seed and the spawn order.
+    fn draw_round(&mut self, mut ids: Vec<Pid>) -> (u32, Vec<Pid>) {
+        let seed = self.next_seed.unwrap_or_else(|| (self.rng.next() * 1e9).floor() as u32);
+        // A dev seed fixes the spawn order too (screenshots, repeatable tests).
+        match self.next_seed.take() {
+            Some(s) => shuffle(&mut ids, &mut Rng::new(s ^ 0x5eed)),
+            None => shuffle(&mut ids, &mut self.rng),
+        }
+        (seed, ids)
+    }
+
+    #[cfg(test)]
+    pub fn round_prepared(&self) -> bool {
+        self.upcoming.is_some()
+    }
+
+    /// Draws the next round now and builds its arena (and the bots' grid) on another thread: off the tick.
+    fn prepare_round(&mut self) {
+        let Some((game, _, _)) = self.next_game() else { return };
+        let dev_seed = self.next_seed;
+        let (seed, participants) = self.draw_round(self.roster());
+        let bots = participants.iter().any(|&id| self.player(id).is_some_and(|p| p.bot));
+        let (map, start, ids) = (arena_map(game.id), self.round_start(), participants.clone());
+        let built = std::thread::Builder::new().name("round".into()).spawn(move || {
+            let (mut arena, _) = Arena::new(map, ArenaKind::Round, seed, start, &ids, false);
+            if bots {
+                arena.prepare_nav();
+            }
+            arena
+        });
+        match built {
+            Ok(arena) => {
+                self.upcoming = Some(Upcoming {
+                    game: game.id,
+                    seed,
+                    start,
+                    participants,
+                    dev_seed,
+                    arena,
+                });
+            }
+            Err(e) => {
+                warn!(room = %self.id, "no thread for the next round: {e}");
+                self.next_seed = dev_seed;
+            }
+        }
+    }
+
     fn next_round(&mut self) {
         self.timer = None;
-        let practice = self.practice();
-        let Some(session) = &mut self.session else { return };
-        let ids = self
-            .players
-            .iter()
-            .filter(|p| p.bot || p.conn.is_some())
-            .map(|p| p.id)
-            .collect::<Vec<_>>();
+        if self.session.is_none() {
+            return;
+        }
+        let ids = self.roster();
         if ids.is_empty() {
             return self.back_to_lobby();
         }
-        if !practice && session.index >= session.plan.len() {
-            return self.end_game();
-        }
-        let game_id = if practice {
-            session.plan[0]
-        } else {
-            session.plan[session.index]
-        };
-        let Some(game) = director::game(game_id) else {
+        let Some((game, index, total)) = self.next_game() else {
             return self.end_game();
         };
-        if !practice {
+        if !self.practice()
+            && let Some(session) = self.session.as_mut()
+        {
             session.index += 1;
         }
-        let (index, total) = if practice {
-            (1, 1)
-        } else {
-            (session.index as u32, session.plan.len() as u32)
-        };
         self.phase = Phase::Round;
-        let seed = self.next_seed.unwrap_or_else(|| (self.rng.next() * 1e9).floor() as u32);
-        // A dev seed fixes the spawn order too (screenshots, repeatable tests).
-        let mut participants = ids;
-        match self.next_seed.take() {
-            Some(s) => shuffle(&mut participants, &mut Rng::new(s ^ 0x5eed)),
-            None => shuffle(&mut participants, &mut self.rng),
+        let zero = self.now().floor() + f64::from(self.opts.intro_ticks);
+        let start = self.round_start();
+        // The round drawn ahead, if the same players are here for it.
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        let (ready, stale): (Option<Upcoming>, Option<Upcoming>) = match self.upcoming.take() {
+            Some(u) => {
+                let mut theirs = u.participants.clone();
+                theirs.sort_unstable();
+                if u.game == game.id && u.start == start && theirs == sorted {
+                    (Some(u), None)
+                } else {
+                    (None, Some(u))
+                }
+            }
+            None => (None, None),
+        };
+        if let Some(u) = stale {
+            self.next_seed = u.dev_seed;
         }
+        let (seed, participants, built) = match ready {
+            Some(u) => (u.seed, u.participants, u.arena.join().ok()),
+            None => {
+                let (seed, participants) = self.draw_round(ids);
+                (seed, participants, None)
+            }
+        };
         for p in &mut self.players {
             p.spectator = !participants.contains(&p.id);
         }
@@ -901,9 +983,8 @@ impl Room {
             index,
             total,
         });
-        let zero = self.now().floor() + f64::from(self.opts.intro_ticks);
-        let start = (self.now() - zero).floor() as i64 - 1;
-        let (mut arena, _) = Arena::new(arena_map(game.id), ArenaKind::Round, seed, start, &participants, false);
+        let mut arena = built
+            .unwrap_or_else(|| Arena::new(arena_map(game.id), ArenaKind::Round, seed, start, &participants, false).0);
         if !self.opts.eliminate && arena.fall == FallBehaviour::Out {
             arena.fall = FallBehaviour::Spawn;
         }
@@ -1009,6 +1090,7 @@ impl Room {
         });
         let wait = if self.practice() { PRACTICE_RESULTS_S } else { RESULTS_S };
         self.later(wait, Timer::NextRound);
+        self.prepare_round();
         self.send_lobby();
     }
 
@@ -1219,8 +1301,19 @@ impl Room {
         }
     }
 
+    /// Seconds of game time until the room's timer (next round, back to the lobby) goes off.
+    pub fn timer_in(&self) -> Option<f64> {
+        self.timer.map(|(at, _)| (at - self.now()) / TICK_RATE as f64)
+    }
+
+    /// Seconds of game time until the round's time is up (rounds with a time limit).
+    pub fn ends_in(&self) -> Option<f64> {
+        let d = self.arena.map.meta().duration;
+        (self.arena.kind == ArenaKind::Round && d > 0.0)
+            .then(|| (self.zero + ticks(d) as f64 - self.now()) / TICK_RATE as f64)
+    }
+
     /// A recorded round: the last finished ones (0 newest), or (`None`) the one running now.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) serves it"))]
     pub fn debug_replay(&self, i: Option<usize>) -> Option<Recording> {
         match i {
             None => self.arena.take_recording(),

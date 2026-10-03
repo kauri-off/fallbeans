@@ -1,8 +1,9 @@
 //! What the server signs with its secret (port of `server/auth.ts`). The game is open to everyone:
-//!   identities    a random player id the client keeps, so a player is one person across restarts
-//!                 (one room at a time, their own room stays theirs);
-//!   debug cookie  access to the production debug API, earned with the debug key.
-//! It also rate limits guessing (PINs of private rooms, the debug key). A new secret resets both.
+//!   identities     a random player id the client keeps, so a player is one person across restarts
+//!                  (one room at a time, their own room stays theirs);
+//!   connect tokens netcode's, encrypted with a key derived from the secret, the player id inside;
+//!   debug cookie   access to the production debug API, earned with the debug key.
+//! It also rate limits guessing (PINs of private rooms, the debug key). A new secret resets all of them.
 use std::collections::BTreeMap;
 
 use base64::Engine;
@@ -12,16 +13,30 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) uses it"))]
 pub const DEBUG_COOKIE: &str = "fb_debug";
-#[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) uses it"))]
-const DEBUG_TTL_S: u64 = 7 * 24 * 3600;
+pub const DEBUG_TTL_S: u64 = 7 * 24 * 3600;
 
 pub struct Auth {
     secret: Vec<u8>,
 }
 
-fn random_bytes<const N: usize>() -> [u8; N] {
+/// The server's secret: FB_SECRET (64 hex characters), else a new one per run (players get new identities
+/// when the server restarts).
+pub fn secret() -> Vec<u8> {
+    if let Ok(hex) = std::env::var("FB_SECRET") {
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .collect();
+        match bytes {
+            Some(b) if b.len() == 32 => return b,
+            _ => bevy::log::warn!("FB_SECRET is not 64 hex characters: using a random secret"),
+        }
+    }
+    random_bytes::<32>().to_vec()
+}
+
+pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     getrandom::fill(&mut b).expect("system randomness");
     b
@@ -51,6 +66,13 @@ impl Auth {
         m.verify_slice(&sig).is_ok()
     }
 
+    /// The key netcode encrypts connect tokens with.
+    pub fn netcode_key(&self) -> [u8; 32] {
+        let mut m = self.mac();
+        m.update(b"netcode key");
+        m.finalize().into_bytes().into()
+    }
+
     /// A new player: the id the server knows them by, and the token their client keeps.
     pub fn issue_identity(&self) -> (String, String) {
         let uid = B64.encode(random_bytes::<12>());
@@ -68,14 +90,12 @@ impl Auth {
         (!uid.is_empty() && self.verify(&format!("u1.{uid}"), sig)).then(|| uid.to_string())
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) uses it"))]
     /// Debug API access (production): a week. `now` in seconds since the epoch.
     pub fn issue_debug_cookie(&self, now: u64) -> String {
         let payload = format!("d1.{now}");
         format!("{payload}.{}", self.sign(&payload))
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) uses it"))]
     pub fn valid_debug_cookie(&self, value: &str, now: u64) -> bool {
         let mut parts = value.split('.');
         let (Some("d1"), Some(at), Some(sig), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
@@ -126,7 +146,19 @@ pub fn same_key(given: &str, want: &str) -> bool {
     digest(given) == digest(want)
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the debug API (Phase 3) uses it"))]
+/// A player id into a connect token's user data, and back (empty when there is none).
+pub fn uid_to_user_data(uid: &str) -> [u8; 256] {
+    let mut data = [0u8; 256];
+    let n = uid.len().min(data.len());
+    data[..n].copy_from_slice(&uid.as_bytes()[..n]);
+    data
+}
+
+pub fn uid_from_user_data(data: &[u8]) -> String {
+    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+    String::from_utf8_lossy(&data[..end]).into_owned()
+}
+
 pub fn read_cookie<'a>(header: Option<&'a str>, name: &str) -> Option<&'a str> {
     header?.split(';').find_map(|part| {
         let (k, v) = part.split_once('=')?;
@@ -174,6 +206,9 @@ mod tests {
     fn compares_keys_and_reads_cookies() {
         assert!(same_key("1234", "1234"));
         assert!(!same_key("1234", "1235"));
+        assert_eq!(uid_from_user_data(&uid_to_user_data("abc")), "abc");
+        assert_eq!(uid_from_user_data(&[0; 256]), "");
+        assert_ne!(Auth::new(&[1; 32]).netcode_key(), Auth::new(&[2; 32]).netcode_key());
         assert_eq!(
             read_cookie(Some("a=1; fb_debug=x.y.z; b=2"), DEBUG_COOKIE),
             Some("x.y.z")

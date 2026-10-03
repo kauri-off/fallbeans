@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::Resource;
 use clap::{Parser, ValueEnum};
-use fb_net::{NetSim, UDP_PORT, WS_PORT};
+use fb_net::{HTTP_PORT, NetSim, WS_PORT};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
@@ -24,8 +24,11 @@ pub enum Backend {
 pub struct Opts {
     #[arg(long, default_value = "127.0.0.1")]
     pub server: String,
-    #[arg(long, default_value_t = UDP_PORT)]
-    pub udp_port: u16,
+    /// The server's HTTP API, where connect tokens come from (default http://<server>:<http-port>/fallbeans).
+    #[arg(long)]
+    pub http_url: Option<String>,
+    #[arg(long, default_value_t = HTTP_PORT)]
+    pub http_port: u16,
     #[arg(long, default_value_t = WS_PORT)]
     pub ws_port: u16,
     /// WebSocket URL (default ws://<server>:<ws-port>; wss:// behind a proxy).
@@ -33,13 +36,10 @@ pub struct Opts {
     pub ws_url: Option<String>,
     #[arg(long, value_enum, default_value_t = Transport::Auto)]
     pub transport: Transport,
-    /// Netcode client id (default: random). Phase 0 trusts it; the session endpoint will issue tokens.
-    #[arg(long)]
-    pub id: Option<u64>,
     /// The player's name.
     #[arg(long, default_value = "")]
     pub name: String,
-    /// Identity token from an earlier session (the same player again).
+    /// Identity from an earlier session (the same player again).
     #[arg(long)]
     pub token: Option<String>,
     /// Go straight into this room (its PIN for a private one).
@@ -58,6 +58,9 @@ pub struct Opts {
     pub start: Option<String>,
     #[arg(long)]
     pub start_players: Option<usize>,
+    /// As the room's host, fill its empty places with bots (with `--start`).
+    #[arg(long)]
+    pub fill: bool,
     #[command(flatten)]
     pub net: NetSim,
     /// Ticks of input lead on top of Lightyear's jitter margin. Its default of 1 let about 0.4% of inputs

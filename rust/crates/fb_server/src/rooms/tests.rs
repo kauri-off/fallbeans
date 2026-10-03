@@ -10,7 +10,6 @@ use fb_sim::math::V3;
 use super::hub::Hub;
 use super::room::{Practice, Room, RoomOptions, Who};
 use super::{ConnId, Inputs, Out, ticks};
-use crate::auth::Auth;
 
 /// What every client holds down, and one-tick presses on top.
 #[derive(Default)]
@@ -548,6 +547,46 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
 }
 
 #[test]
+fn builds_the_next_round_ahead_and_it_replays_the_same() {
+    let mut t = Bench::new(RoomOptions {
+        min_players: 1,
+        seed: Some(4),
+        dev: true,
+        ..opts()
+    });
+    let a = t.hello("A", "ua");
+    let cmd = |t: &mut Bench, cmd: DevCmd| t.ctl(a, ClientMsg::Dev { q: None, cmd });
+    cmd(
+        &mut t,
+        DevCmd::Start {
+            games: vec!["jump-club".into(), "door-dash".into()],
+            rounds: Some(2),
+            bots: Some(3),
+        },
+    );
+    cmd(&mut t, DevCmd::EndRound);
+    assert_eq!(t.room.phase, Phase::Results);
+    assert!(t.room.round_prepared());
+    t.until(15.0, |t| t.room.arena.map.meta().id == "door-dash", |_| {});
+    assert!(!t.room.round_prepared());
+    t.inputs.held.insert(
+        a.id,
+        InputFrame {
+            mx: 0,
+            mz: 127,
+            buttons: 0,
+        },
+    );
+    t.advance(8.0);
+    cmd(&mut t, DevCmd::Lobby);
+    let rec = t.room.debug_replay(Some(0)).expect("a recording");
+    assert_eq!(rec.game, "door-dash");
+    let r = fb_arena::replay(&rec, |_| false).unwrap();
+    assert!(r.ticks > 900);
+    assert!(r.matches);
+}
+
+#[test]
 fn a_bot_gives_up_its_place_and_status_follows_the_arena() {
     let mut t = Bench::new(RoomOptions {
         max_players: 2,
@@ -573,7 +612,7 @@ impl HubBench {
     fn new(dev: bool) -> Self {
         let base = RoomOptions { dev, ..opts() };
         Self {
-            hub: Hub::new(Auth::new(&[1; 32]), base, 1000),
+            hub: Hub::new(base, 1000),
             real: 1000,
             mail: BTreeMap::new(),
             next_conn: 0,
@@ -589,9 +628,15 @@ impl HubBench {
         }
     }
 
+    /// A connection of a new player.
     fn open(&mut self) -> ConnId {
+        let uid = format!("u{}", self.next_conn + 1);
+        self.open_as(&uid)
+    }
+
+    fn open_as(&mut self, uid: &str) -> ConnId {
         self.next_conn += 1;
-        self.hub.open(self.next_conn, "127.0.0.1".into());
+        self.hub.open(self.next_conn, "127.0.0.1".into(), uid.into());
         self.next_conn
     }
 
@@ -602,6 +647,12 @@ impl HubBench {
 
     fn hello(&mut self, h: Hello) -> ConnId {
         let c = self.open();
+        self.send(c, ClientMsg::Hello(h));
+        c
+    }
+
+    fn hello_as(&mut self, uid: &str, h: Hello) -> ConnId {
+        let c = self.open_as(uid);
         self.send(c, ClientMsg::Hello(h));
         c
     }
@@ -628,13 +679,6 @@ impl HubBench {
     }
 }
 
-fn token_of(m: Option<ServerMsg>) -> String {
-    match m {
-        Some(ServerMsg::Ready { token, .. }) => token,
-        other => panic!("no ready: {other:?}"),
-    }
-}
-
 #[test]
 fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
     let mut t = HubBench::new(false);
@@ -642,8 +686,7 @@ fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
         name: "ok".into(),
         ..Default::default()
     });
-    let token = token_of(t.last(c, |m| matches!(m, ServerMsg::Ready { .. })));
-    assert!(Auth::new(&[1; 32]).identity(&token).is_some());
+    assert!(t.last(c, |m| matches!(m, ServerMsg::Ready { .. })).is_some());
     assert_eq!(
         t.last(c, |m| matches!(m, ServerMsg::Rooms { .. })),
         Some(ServerMsg::Rooms {
@@ -731,11 +774,13 @@ fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
 #[test]
 fn hub_moves_a_player_to_their_newest_connection() {
     let mut t = HubBench::new(false);
-    let c1 = t.hello(Hello {
-        name: "me".into(),
-        ..Default::default()
-    });
-    let token = token_of(t.last(c1, |m| matches!(m, ServerMsg::Ready { .. })));
+    let c1 = t.hello_as(
+        "me",
+        Hello {
+            name: "me".into(),
+            ..Default::default()
+        },
+    );
     t.send(
         c1,
         ClientMsg::Create {
@@ -743,11 +788,13 @@ fn hub_moves_a_player_to_their_newest_connection() {
             private: false,
         },
     );
-    let c2 = t.hello(Hello {
-        name: "me".into(),
-        token: Some(token),
-        ..Default::default()
-    });
+    let c2 = t.hello_as(
+        "me",
+        Hello {
+            name: "me".into(),
+            ..Default::default()
+        },
+    );
     assert!(matches!(
         t.last(c1, |m| matches!(m, ServerMsg::Reject { .. })),
         Some(ServerMsg::Reject {
@@ -793,6 +840,10 @@ fn hub_closes_rooms_left_empty_and_times_out_silent_connections() {
     let silent = t.open();
     t.advance(6.0);
     assert!(t.closed(silent));
+    // A token without an identity is turned away.
+    let nobody = t.open_as("");
+    t.pump();
+    assert!(t.closed(nobody));
     // Being updated: everyone is told and sent off.
     let d = t.hello(Hello::default());
     t.hub.set_updating(true);

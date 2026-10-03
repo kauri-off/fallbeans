@@ -12,7 +12,7 @@ use fb_shared::*;
 
 use super::room::{Practice, Room, RoomOptions, Who, make_pin};
 use super::{ConnId, Inputs, Out, random_u32, ticks};
-use crate::auth::{Auth, Limiter, same_key};
+use crate::auth::{Limiter, same_key};
 
 /// A connection that sent no hello within this long is closed (s).
 const HELLO_TIMEOUT_S: f64 = 5.0;
@@ -43,6 +43,8 @@ pub struct Member {
 #[derive(Clone, Debug)]
 pub struct Session {
     pub ip: String,
+    /// The player's id, from the connect token (`/api/session` checked their identity).
+    pub uid: String,
     opened: u64,
     pub member: Option<Member>,
     window: u64,
@@ -51,7 +53,6 @@ pub struct Session {
 }
 
 pub struct Hub {
-    auth: Auth,
     /// What every room is made with.
     base: RoomOptions,
     /// Every room being simulated, by key (listed ones and practice).
@@ -71,9 +72,8 @@ pub struct Hub {
 }
 
 impl Hub {
-    pub fn new(auth: Auth, base: RoomOptions, real: u64) -> Self {
+    pub fn new(base: RoomOptions, real: u64) -> Self {
         let mut hub = Self {
-            auth,
             base,
             rooms: BTreeMap::new(),
             next_key: 1,
@@ -98,6 +98,11 @@ impl Hub {
         if !self.listed().any(|(_, r)| r.id == id) {
             self.open_room(id.into(), title.into(), None, None, true);
         }
+    }
+
+    /// Server tick of the last update.
+    pub fn real_tick(&self) -> u64 {
+        self.real
     }
 
     pub fn updating(&self) -> bool {
@@ -171,16 +176,23 @@ impl Hub {
 
     // ------------------------------------------------------------------ connections
 
-    pub fn open(&mut self, conn: ConnId, ip: String) {
+    /// A connection of player `uid` (empty: the token had no identity, the connection is refused).
+    pub fn open(&mut self, conn: ConnId, ip: String, uid: String) {
         if self.updating {
             self.send(conn, ServerMsg::Updating);
             self.out.push(Out::Close(conn));
+            return;
+        }
+        if uid.is_empty() {
+            warn!(ip, "connection without an identity");
+            self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
             return;
         }
         self.sessions.insert(
             conn,
             Session {
                 ip,
+                uid,
                 opened: self.real,
                 member: None,
                 window: 0,
@@ -263,16 +275,13 @@ impl Hub {
         s.count <= LIST_RATE
     }
 
-    /// An accepted hello: the connection learns its identity token and goes where the hello says.
+    /// An accepted hello: the connection goes where the hello says, as the player of its token.
     fn hello(&mut self, conn: ConnId, h: Hello) {
-        // A player is whoever holds the identity token; a client without one gets a new identity.
-        let known = h.token.as_deref().and_then(|t| self.auth.identity(t));
-        let (uid, token) = match (known, &h.token) {
-            (Some(uid), Some(t)) => (uid, t.clone()),
-            _ => self.auth.issue_identity(),
+        let Some(uid) = self.sessions.get(&conn).map(|s| s.uid.clone()) else {
+            return;
         };
         let dev = self.base.dev;
-        self.send(conn, ServerMsg::Ready { token, dev });
+        self.send(conn, ServerMsg::Ready { dev });
         self.enter(conn, uid, h);
     }
 

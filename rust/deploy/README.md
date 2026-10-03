@@ -34,11 +34,12 @@ CPU не планируется.
 | --- | --- |
 | Служба | `fallbeans.service` (`deploy/fallbeans.service`): `DynamicUser`, песочница systemd, `MemoryMax=300M`, `TasksMax=64`, `Restart=always` |
 | Бинарник | `/opt/fallbeans/releases/<время>/fb_server` (статический musl), `/opt/fallbeans/current` → текущий; хранятся три последних, в каждом `VERSION` (коммит, `-dirty` при незакоммиченных правках) |
-| Запуск | `fb_server --udp-port 5888 --ws-addr 127.0.0.1 --ws-port 5889 --metrics-every 60`, лог — `journalctl -u fallbeans` |
-| Порты | UDP 5888 наружу (игра); TCP 127.0.0.1:5889 (WebSocket) за nginx: `wss://киберщит-социум.рф/fallbeans/ws` |
-| nginx | `/etc/nginx/apps.d/fallbeans.conf` и `fallbeans.ws` (`deploy/nginx/`): апгрейд до WebSocket, без буферизации, `tcp_nodelay`, час без трафика до разрыва |
+| Запуск | `fb_server --udp-port 5888 --ws-addr 127.0.0.1 --ws-port 5889 --http-addr 127.0.0.1 --http-port 5887 --public-host 168.113.157.12 --maintenance-file /run/fallbeans-updating --metrics-every 60`, лог — `journalctl -u fallbeans` |
+| Секреты | `/etc/fallbeans.env` (root, 600): `FB_SECRET` (identity, ключ netcode, cookie), `FB_DEBUG_KEY` (вход в debug API); делается установщиком один раз |
+| Порты | UDP 5888 наружу (игра); TCP 127.0.0.1:5889 (WebSocket) и 127.0.0.1:5887 (HTTP API) за nginx: `wss://киберщит-социум.рф/fallbeans/ws`, `https://киберщит-социум.рф/fallbeans/api/…`, `/fallbeans/health` |
+| nginx | `/etc/nginx/apps.d/fallbeans.conf`, `fallbeans.ws`, `fallbeans.http` (`deploy/nginx/`): WebSocket без буферизации, `tcp_nodelay`, час без трафика до разрыва; HTTP с `X-Real-IP` |
 | ufw | открыты 22/tcp, 80/tcp, 443/tcp, 5888/udp (игра), 5890/udp (проба); 443/udp закрыт (был у TS для WebTransport) |
-| Проба | `~/fb-probe/` пользователя deploy: сервер `cargo xtask stress --remote`, UDP 5890 и TCP 127.0.0.1:5891 за `/fallbeans/ws-probe`; запускается только на время прогона |
+| Проба | `~/fb-probe/` пользователя deploy: сервер `cargo xtask stress --remote`, UDP 5890, TCP 127.0.0.1:5891 за `/fallbeans/ws-probe` и 127.0.0.1:5892 за `/fallbeans/probe/`; запускается только на время прогона |
 
 ## Нагрузка (сервер Фазы 0: одна комната, `jump-club`)
 
@@ -58,5 +59,6 @@ CPU не планируется.
 ssh … 'lscpu; free -m; df -h /; sudo ufw status; systemctl status fallbeans; journalctl -u fallbeans -n 50'
 ssh … 'P=$(pgrep -x fb_server); grep -E "VmRSS|Threads|ctxt" /proc/$P/status'   # память, потоки, переключения
 curl -s -o /dev/null -w '%{http_code}' --http1.1 -m 3 -H 'Connection: Upgrade' -H 'Upgrade: websocket'   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='   https://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/ws                      # 101 (curl выйдет по таймауту); без апгрейда — 502
+curl -s https://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/health                     # версия, сборка, updating, комнаты, игроки
 cargo xtask stress --remote --clients 8 --secs 100                                # игра через настоящую сеть
 ```

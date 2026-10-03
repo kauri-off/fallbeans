@@ -2,6 +2,7 @@
 //! and inputs in and sends what comes out (`Out`). Tests drive it the same way.
 pub mod awards;
 pub mod clock;
+pub mod debug;
 pub mod hub;
 pub mod players;
 pub mod room;

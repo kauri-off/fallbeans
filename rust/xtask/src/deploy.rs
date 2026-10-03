@@ -175,6 +175,7 @@ pub fn deploy(a: &DeployArgs) -> bool {
         "fallbeans.service",
         "nginx/fallbeans.conf",
         "nginx/fallbeans.ws",
+        "nginx/fallbeans.http",
     ] {
         fs::copy(src.join(f), bundle.join(f)).unwrap_or_else(|e| panic!("deploy/{f}: {e}"));
     }

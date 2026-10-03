@@ -7,6 +7,7 @@ use bevy::diagnostic::{DiagnosticsStore, SystemInformationDiagnosticsPlugin};
 use bevy::prelude::*;
 use fb_net::NetStats;
 
+use crate::http::HttpShared;
 use crate::opts::Opts;
 use crate::play::{InputState, Pawn, RoomTick, Rooms};
 
@@ -53,6 +54,7 @@ fn report(
     diag: Res<DiagnosticsStore>,
     mut pawns: Query<&mut InputState, With<Pawn>>,
     rooms: Option<Res<Rooms>>,
+    shared: Res<HttpShared>,
 ) {
     let now = time.elapsed_secs_f64();
     let span = now - t.last_report;
@@ -84,6 +86,18 @@ fn report(
     }
     let frame_max = core::mem::take(&mut t.frame_max) * 1000.0;
     let value = |p| diag.get(p).and_then(|d| d.smoothed()).unwrap_or(f64::NAN);
+    let (cpu, mem) = (
+        value(&SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE),
+        value(&SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE) * 1024.0,
+    );
+    shared.0.sample(serde_json::json!({
+        "at": std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs(),
+        "players": players, "bots": bots, "rooms": open,
+        "tickUs": { "mean": mean.round(), "p50": pct(0.5), "p99": pct(0.99), "max": us.last().copied().unwrap_or(0) },
+        "frameMaxMs": frame_max.round(), "inputMissed": missed,
+        "outBps": bytes.round(), "packetsPerS": packets.round(),
+        "cpu": (cpu * 10.0).round() / 10.0, "memMb": mem.round(),
+    }));
     info!(
         "metrics: players {players} bots {bots} rooms {open} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {:.1}% mem {:.0} MB",
         pct(0.5),
@@ -92,8 +106,8 @@ fn report(
         us.len(),
         bytes,
         bytes / players.max(1) as f64,
-        value(&SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE),
-        value(&SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE) * 1024.0,
+        cpu,
+        mem,
     );
 }
 

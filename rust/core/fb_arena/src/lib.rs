@@ -787,6 +787,13 @@ impl Arena {
         )
     }
 
+    /// Builds the bots' navigation grid now, ahead of the round (a server room does it off its tick).
+    pub fn prepare_nav(&mut self) {
+        if self.nav.is_none() && self.nav_pre.is_none() && self.kind == ArenaKind::Round && self.spec.bot.is_some() {
+            self.nav_pre = Some((self.build_nav(), self.world.hash(true)));
+        }
+    }
+
     /// The navigation grid takes a while to build: it is built before the start, and used at the
     /// start if the static world has not changed.
     fn prebuild_nav(&mut self) {

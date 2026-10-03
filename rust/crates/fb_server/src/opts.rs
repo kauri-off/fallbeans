@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::Resource;
 use clap::Parser;
-use fb_net::{NetSim, UDP_PORT, WS_PORT};
+use fb_net::{HTTP_PORT, NetSim, UDP_PORT, WS_PORT};
 
 #[derive(Parser, Resource, Clone, Debug)]
 #[command(about = "Fall Beans server: rooms of players and bots over UDP and WebSocket")]
@@ -15,6 +15,16 @@ pub struct Opts {
     /// Address the WebSocket listener binds (production: 127.0.0.1, behind nginx's wss on 443).
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub ws_addr: IpAddr,
+    /// Port of the HTTP API: sessions (connect tokens), health, debug.
+    #[arg(long, default_value_t = HTTP_PORT)]
+    pub http_port: u16,
+    /// Address the HTTP API binds (production: 127.0.0.1, behind nginx's https on 443).
+    #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
+    pub http_addr: IpAddr,
+    /// The address players reach the UDP port at, put into connect tokens (and checked by netcode). Default:
+    /// the address the client asked the HTTP API at when it is an IP, else 127.0.0.1, and no check.
+    #[arg(long)]
+    pub public_host: Option<IpAddr>,
     /// Seed of the rooms' random choices (games, map seeds, spawn order; default: a new one per room).
     #[arg(long)]
     pub seed: Option<u32>,

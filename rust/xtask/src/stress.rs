@@ -46,6 +46,9 @@ pub struct StressArgs {
     server: Option<String>,
     #[arg(long, default_value = "wss://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/ws-probe")]
     ws_url: String,
+    /// The probe's HTTP API (connect tokens), behind nginx.
+    #[arg(long, default_value = "https://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/probe")]
+    http_url: String,
     /// Extra flags for every client, e.g. `--client-arg=--sync-max-error=40`.
     #[arg(long, allow_hyphen_values = true)]
     client_arg: Vec<String>,
@@ -56,9 +59,10 @@ pub struct StressArgs {
 
 /// Where the probe server of `--remote` lives on the host (the deploy user's home: no root needed).
 const PROBE_DIR: &str = "fb-probe";
-/// Its ports: UDP open in ufw, WebSocket behind nginx at /fallbeans/ws-probe (`deploy/`).
+/// Its ports: UDP open in ufw, WebSocket and HTTP behind nginx at /fallbeans/ws-probe and /fallbeans/probe/ (`deploy/`).
 const PROBE_UDP: u16 = 5890;
 const PROBE_WS: u16 = 5891;
+const PROBE_HTTP: u16 = 5892;
 /// Matches only the probe (a server started from PROBE_DIR), never the production service.
 const PROBE_MATCH: &str = "pgrep -u \"$(id -u)\" -f '^./fb_server --udp-port 5890'";
 
@@ -100,27 +104,14 @@ pub fn stress(a: &StressArgs) -> bool {
     let mut server = None;
     let mut client_net: Vec<String> = Vec::new();
     if a.remote {
-        if !start_remote(a, &dir, &server_flags("server.trace")) {
-            return false;
-        }
         let ip = a.server.clone().unwrap_or_else(|| {
             let t = a.host.target();
             t.rsplit('@').next().unwrap_or(&t).to_string()
         });
-        let (udp, ws) = (PROBE_UDP.to_string(), PROBE_WS.to_string());
-        client_net.extend(
-            [
-                "--server",
-                &ip,
-                "--udp-port",
-                &udp,
-                "--ws-port",
-                &ws,
-                "--ws-url",
-                &a.ws_url,
-            ]
-            .map(String::from),
-        );
+        if !start_remote(a, &dir, &server_flags("server.trace"), &ip) {
+            return false;
+        }
+        client_net.extend(["--server", &ip, "--ws-url", &a.ws_url, "--http-url", &a.http_url].map(String::from));
     } else {
         let mut server_cmd = Command::new(a.shared.bin("fb_server"));
         server_cmd
@@ -141,8 +132,6 @@ pub fn stress(a: &StressArgs) -> bool {
         let mut c = Command::new(a.shared.bin("fb_client"));
         c.args([
             "--headless",
-            "--id",
-            &(1000 + i).to_string(),
             "--name",
             &format!("stress {i}"),
             "--transport",
@@ -200,7 +189,7 @@ fn first_word(out: std::io::Result<std::process::Output>) -> String {
 
 /// The probe server on the host: a fresh Linux build of this tree (local clients and the server must
 /// speak the same protocol), uploaded when it differs from the one there, started in the background.
-fn start_remote(a: &StressArgs, dir: &Path, flags: &[String]) -> bool {
+fn start_remote(a: &StressArgs, dir: &Path, flags: &[String], public_ip: &str) -> bool {
     let bin = dir.join("fb_server-linux");
     eprintln!("stress: Linux build of the server for the host");
     if !crate::deploy::build_linux_server(&a.wsl_distro, &bin) {
@@ -227,7 +216,8 @@ fn start_remote(a: &StressArgs, dir: &Path, flags: &[String]) -> bool {
     // A probe left over from an interrupted run would hold the ports.
     let script = format!(
         "cd {PROBE_DIR} && chmod +x fb_server && ({kill} || true) && rm -f server.trace server.log \
-         && (setsid nohup ./fb_server --udp-port {PROBE_UDP} --ws-addr 127.0.0.1 --ws-port {PROBE_WS} {} \
+         && (setsid nohup ./fb_server --udp-port {PROBE_UDP} --ws-addr 127.0.0.1 --ws-port {PROBE_WS} \
+         --http-addr 127.0.0.1 --http-port {PROBE_HTTP} --public-host {public_ip} {} \
          > server.log 2>&1 < /dev/null &) && sleep 1 && {PROBE_MATCH} > /dev/null",
         args.join(" "),
         kill = PROBE_MATCH.replacen("pgrep", "pkill", 1),

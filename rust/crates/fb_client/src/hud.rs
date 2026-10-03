@@ -61,10 +61,9 @@ fn update(
     let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
     let conn_s = conn.map_or("—".to_string(), |c| {
         format!(
-            "{:?} {} id {}",
+            "{:?} {}",
             c.transport,
-            if c.connected { "connected" } else { "connecting…" },
-            c.id
+            if c.connected { "connected" } else { "connecting…" }
         )
     });
     let (round_s, t) = map.as_ref().map_or(("no round".to_string(), 0.0), |m| {

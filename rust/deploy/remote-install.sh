@@ -6,7 +6,10 @@
 #   /opt/fallbeans/releases/<ts>/fb_server     releases (a static Linux binary each)
 #   /opt/fallbeans/current → releases/<ts>     the live one
 #   /etc/systemd/system/fallbeans.service      the service (DynamicUser)
-#   /etc/nginx/apps.d/fallbeans.{conf,ws}      wss://…/fallbeans/ws → 127.0.0.1:5889 (included by the shared site)
+#   /etc/nginx/apps.d/fallbeans.{conf,ws,http} wss://…/fallbeans/ws → 127.0.0.1:5889, https://…/fallbeans/api/
+#                                              and /health → 127.0.0.1:5887 (included by the shared site)
+#   /etc/fallbeans.env                         FB_SECRET (identities, connect tokens), FB_DEBUG_KEY; made once
+#   /run/fallbeans-updating                    exists while a release goes in: players are told and wait
 #   ufw: 5888/udp (the game), 5890/udp (the probe server of `cargo xtask stress --remote`)
 # Nothing changes until the checks pass; a failed release rolls back to the previous one. The TS version
 # (Bun, the web page, WebTransport on udp/443) is cleared away once the new server is up.
@@ -17,6 +20,8 @@ BASE=/opt/fallbeans
 DOMAIN=xn----9sbmkcbiwqrnkr4b1b.xn--p1ai
 APPS=/etc/nginx/apps.d
 UNIT=/etc/systemd/system/fallbeans.service
+SECRETS=/etc/fallbeans.env
+UPDATING=/run/fallbeans-updating
 CONFIGS="$UNIT $APPS/fallbeans.conf $APPS/fallbeans.ws $APPS/fallbeans.http $APPS/fallbeans.headers"
 TS=$(date +%Y%m%d%H%M%S)
 
@@ -59,6 +64,7 @@ install -m 755 fb_server "$R/fb_server"
 switch_to() { ln -sfn "$1" $BASE/current.next && mv -T $BASE/current.next $BASE/current; }
 rollback() {
   echo "ОШИБКА: $1 — возвращаем прежнюю версию" >&2
+  rm -f $UPDATING
   journalctl -u fallbeans -n 30 --no-pager >&2 || true
   for f in $CONFIGS; do
     if [ -f "$BACKUP/$(basename "$f")" ]; then cp -a "$BACKUP/$(basename "$f")" "$f"; else rm -f "$f"; fi
@@ -74,11 +80,12 @@ rollback() {
   rm -rf "$R" "$BACKUP"
   exit 1
 }
-# Up: the service runs and listens on its UDP port and on the WebSocket port behind nginx.
+# Up: the service runs, listens on its UDP port and on the WebSocket port, and its HTTP API answers.
 healthy() {
   for _ in $(seq 1 30); do
     if systemctl is-active --quiet fallbeans && ss -Hlnu 'sport = :5888' | grep -q . &&
-      ss -Hlnt 'sport = :5889' | grep -q .; then
+      ss -Hlnt 'sport = :5889' | grep -q . &&
+      curl -sf -m 2 http://127.0.0.1:5887/fallbeans/health | grep -q '"ok":true'; then
       sleep 2
       systemctl is-active --quiet fallbeans && return 0
     fi
@@ -87,21 +94,35 @@ healthy() {
   return 1
 }
 
+# Made once: a new secret would give every player a new identity.
+if [ ! -f $SECRETS ]; then
+  say "Секреты: $SECRETS (ключ debug API — FB_DEBUG_KEY там же)"
+  umask 077
+  printf 'FB_SECRET=%s\nFB_DEBUG_KEY=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+    "$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')" >$SECRETS
+  umask 022
+fi
 install -m 644 fallbeans.service $UNIT
 install -m 644 nginx/fallbeans.conf $APPS/fallbeans.conf
 install -m 644 nginx/fallbeans.ws $APPS/fallbeans.ws
-# The TS version's: the static page's headers and its API's request limits.
-rm -f $APPS/fallbeans.http $APPS/fallbeans.headers
+install -m 644 nginx/fallbeans.http $APPS/fallbeans.http
+# The TS version's static page headers.
+rm -f $APPS/fallbeans.headers
 systemctl daemon-reload
 nginx -t -q 2>/dev/null || {
   nginx -t || true
   rollback "конфигурация nginx не прошла проверку"
 }
+# The running server tells its players the game is being updated and lets them go; their clients wait for
+# the new one (the session API says "updating" until the flag is gone).
+touch $UPDATING
+sleep 2
 switch_to "$R"
 systemctl enable fallbeans >/dev/null 2>&1
 systemctl restart fallbeans
 healthy || rollback "сервер игры не поднялся"
 systemctl reload nginx
+rm -f $UPDATING
 rm -rf "$BACKUP"
 echo "Сервер игры обновлён: $R ($(cat "$R/VERSION" 2>/dev/null || echo '?'))"
 
@@ -143,6 +164,9 @@ check() {
 check "WebSocket игры" "https://$DOMAIN/fallbeans/ws" 101 --http1.1 -m 3 \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
   -H 'Sec-WebSocket-Key: ZmFsbGJlYW5zLXByb2JlLTE='
+check "Health" "https://$DOMAIN/fallbeans/health" 200
+check "Сессия" "https://$DOMAIN/fallbeans/api/session" 200 -X POST -H 'Content-Type: application/json' \
+  -d '{"identity":null,"protocol":0,"transport":"udp"}'
 check "Сайт КиберЩита" "https://$DOMAIN/" 200
 ss -Hlnup 'sport = :5888' | grep -q fb_server && echo "UDP 5888 слушает fb_server" || {
   echo "ВНИМАНИЕ: UDP 5888 не слушается"

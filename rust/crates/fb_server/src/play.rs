@@ -18,7 +18,7 @@ use lightyear::prelude::input::InputBuffer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::auth::Auth;
+use crate::http::HttpShared;
 use crate::opts::Opts;
 use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
@@ -72,24 +72,6 @@ impl Plugin for PlayPlugin {
     }
 }
 
-/// The secret identities are signed with: FB_SECRET (64 hex characters), else a new one per run (players get
-/// new identities when the server restarts).
-fn secret() -> Vec<u8> {
-    if let Ok(hex) = std::env::var("FB_SECRET") {
-        let bytes: Option<Vec<u8>> = (0..hex.len())
-            .step_by(2)
-            .map(|i| hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
-            .collect();
-        match bytes {
-            Some(b) if b.len() == 32 => return b,
-            _ => warn!("FB_SECRET is not 64 hex characters: using a random secret"),
-        }
-    }
-    let mut b = vec![0; 32];
-    getrandom::fill(&mut b).expect("system randomness");
-    b
-}
-
 fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) {
     let base = RoomOptions {
         min_players: if opts.solo { 1 } else { 2 },
@@ -100,7 +82,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         eliminate: false,
         ..default()
     };
-    let mut hub = Hub::new(Auth::new(&secret()), base, u64::from(timeline.tick().0));
+    let mut hub = Hub::new(base, u64::from(timeline.tick().0));
     for id in &opts.open_rooms {
         hub.open_permanent(id, id);
     }
@@ -488,7 +470,13 @@ fn measure_rtt(
 }
 
 /// `--maintenance-file`: while it exists the game is being updated (the deploy makes it).
-fn watch_update_flag(opts: Res<Opts>, time: Res<Time<Real>>, mut last: Local<f64>, rooms: Option<ResMut<Rooms>>) {
+fn watch_update_flag(
+    opts: Res<Opts>,
+    time: Res<Time<Real>>,
+    mut last: Local<f64>,
+    rooms: Option<ResMut<Rooms>>,
+    shared: Res<HttpShared>,
+) {
     let (Some(flag), Some(mut rooms)) = (&opts.maintenance_file, rooms) else {
         return;
     };
@@ -500,5 +488,6 @@ fn watch_update_flag(opts: Res<Opts>, time: Res<Time<Real>>, mut last: Local<f64
     let on = flag.exists();
     if on != rooms.hub.updating() {
         rooms.hub.set_updating(on);
+        shared.0.updating.store(on, core::sync::atomic::Ordering::Relaxed);
     }
 }

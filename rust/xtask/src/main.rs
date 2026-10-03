@@ -29,7 +29,7 @@ enum Task {
     Dev(DevArgs),
     /// Server plus headless clients under a simulated network; checks prediction, traffic and tick cost.
     /// `--remote`: against a probe server on the production host, over the real network.
-    Stress(stress::StressArgs),
+    Stress(Box<stress::StressArgs>),
     /// Builds the server for Linux and installs it on the production host.
     Deploy(deploy::DeployArgs),
 }
@@ -200,8 +200,6 @@ fn dev(a: &DevArgs) -> bool {
             let mut c = Command::new(a.shared.bin("fb_client"));
             let profile = (b'a' + i as u8) as char;
             c.args([
-                "--id",
-                &(1000 + i).to_string(),
                 "--name",
                 &format!("Боб {profile}"),
                 "--title",

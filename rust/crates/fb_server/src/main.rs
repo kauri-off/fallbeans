@@ -1,10 +1,14 @@
 //! Authoritative server: rooms of players and bots over UDP and WebSocket.
 mod auth;
+mod http;
+mod logbook;
 mod metrics;
 mod net;
 mod opts;
 mod play;
 mod rooms;
+
+use std::sync::Arc;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, SystemInformationDiagnosticsPlugin};
@@ -30,6 +34,7 @@ fn main() -> AppExit {
         MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(SERVER_FRAME)),
         LogPlugin {
             filter: "bevy_ecs=warn,lightyear=warn,aeronet=warn".into(),
+            custom_layer: logbook::layer,
             ..default()
         },
         bevy::state::app::StatesPlugin,
@@ -41,7 +46,14 @@ fn main() -> AppExit {
     fb_net::add_server_filters(&mut app);
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(opts);
-    app.add_plugins((net::NetPlugin, play::PlayPlugin, metrics::MetricsPlugin));
+    app.insert_resource(http::Keys(Arc::new(auth::Auth::new(&auth::secret()))));
+    app.insert_resource(http::HttpShared(Arc::default()));
+    app.add_plugins((
+        net::NetPlugin,
+        play::PlayPlugin,
+        metrics::MetricsPlugin,
+        http::HttpPlugin,
+    ));
     // Every schedule on the main thread. The multi-threaded executor hands systems to the compute pool and
     // waits for them each frame: on the 1-vCPU host that cost 15% of the core and 9 000 context switches a
     // second with nobody playing, for a frame of a few dozen microseconds of work.

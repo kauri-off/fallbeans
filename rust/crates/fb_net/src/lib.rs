@@ -26,6 +26,8 @@ pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
 /// Dev key for netcode's manual authentication (phase 0: no session endpoint yet).
 pub const DEV_KEY: [u8; 32] = [0; 32];
 pub const UDP_PORT: u16 = 5888;
+/// The HTTP API (session, health, debug); production: behind nginx at https://…/fallbeans/.
+pub const HTTP_PORT: u16 = 5887;
 pub const WS_PORT: u16 = 5889;
 pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / TICK_RATE as u64);
 /// Snapshots at 30 Hz, as the TS server.

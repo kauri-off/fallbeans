@@ -21,12 +21,30 @@ pub fn valid_pin(pin: &str) -> bool {
     pin.len() == ROOM_PIN_DIGITS && pin.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// `POST /fallbeans/api/session`: what a client asks for before each connection attempt.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SessionRequest {
+    /// The identity token of an earlier session; without a valid one the server makes a new player.
+    pub identity: Option<String>,
+    pub protocol: u32,
+    /// The transport the connection will go over: "udp" or "ws".
+    pub transport: String,
+}
+
+/// The player's identity to keep and a connect token (base64) for one attempt; none while updating or on another protocol.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SessionReply {
+    pub protocol: u32,
+    pub build: String,
+    pub updating: bool,
+    pub identity: String,
+    pub token: Option<String>,
+}
+
 /// The first message of a connection.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Hello {
     pub name: String,
-    /// The player's identity from an earlier session (see `ServerMsg::Ready`); without it the server makes a new one.
-    pub token: Option<String>,
     /// Go straight into this room (a link to it, a restart, a reconnect).
     pub room: Option<String>,
     pub pin: Option<String>,
@@ -231,7 +249,6 @@ impl ClientMsg {
         match self {
             ClientMsg::Hello(h) => {
                 ensure(chars_max(&h.name, 64), "name")?;
-                ensure(h.token.as_deref().is_none_or(|t| t.len() <= 128), "token")?;
                 ensure(h.room.as_deref().is_none_or(valid_room_id), "room")?;
                 ensure(h.pin.as_deref().is_none_or(valid_pin), "pin")?;
                 ensure(h.practice.as_deref().is_none_or(|p| chars_max(p, 32)), "practice")?;
@@ -389,9 +406,8 @@ pub enum DenyReason {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ServerMsg {
-    /// The hello was accepted: `token` is the player's identity, to be sent with every later hello.
+    /// The hello was accepted (the player's identity came with the connect token, see `Session`).
     Ready {
-        token: String,
         dev: bool,
     },
     /// The connection is refused and closed.
