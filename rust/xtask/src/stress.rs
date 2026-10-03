@@ -33,7 +33,7 @@ pub struct StressArgs {
     #[command(flatten)]
     shared: Shared,
     /// Against a probe server on the production host (UDP 5890, wss …/fallbeans/ws-probe) instead of a
-    /// local one: the network between here and there is the real one (the VPN matrix, plan.md §5).
+    /// local one: the network between here and there is the real one (the VPN matrix, port/plan.md §5).
     #[arg(long)]
     remote: bool,
     #[command(flatten)]

@@ -1,4 +1,5 @@
-//! Project tasks: `cargo xtask <check|golden|assets|dev|stress|deploy>`.
+//! Project tasks: `cargo xtask <check|golden|audit|assets|dev|stress|deploy>`.
+mod audit;
 mod deploy;
 mod stress;
 
@@ -18,8 +19,10 @@ struct Cli {
 enum Task {
     /// fmt, clippy (warnings are errors), tests.
     Check,
-    /// Re-exports the TS golden traces (needs bun) and runs the comparison test.
-    Golden,
+    /// Re-exports the TS golden traces (needs bun and the wasm32 target) and runs the comparison tests.
+    Golden(GoldenArgs),
+    /// Map and system audits (`fb_audit`); `--vs-ts` compares them with the TS audits.
+    Audit(audit::AuditArgs),
     /// Re-exports the models for Bevy (needs bun) and loads them in the client.
     Assets,
     /// Server plus windowed clients on this machine.
@@ -108,16 +111,57 @@ pub fn run(cmd: &mut Command) -> bool {
     cmd.status().is_ok_and(|s| s.success())
 }
 
-fn cargo() -> Command {
+pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(root());
     c
 }
 
-fn bun(args: &[&str]) -> Command {
+pub fn bun(args: &[&str]) -> Command {
     let mut c = Command::new("bun");
     c.args(args).current_dir(root().parent().unwrap());
     c
+}
+
+#[derive(Args, Clone, Debug)]
+struct GoldenArgs {
+    /// Only these maps (ids; `scenarios` for the physics scenarios). Default: all.
+    maps: Vec<String>,
+}
+
+/// The TS side computes sin, cos, atan2, exp and pow with the same libm as Rust (`tools/golden_libm`
+/// built for wasm32, loaded by scripts/golden-math.ts): otherwise the last bits differ and rounds drift
+/// apart. The module is kept in scripts/ so bun alone can re-export.
+fn golden(a: &GoldenArgs) -> bool {
+    if !build_golden_libm() {
+        return false;
+    }
+    let mut args = vec!["--preload", "./scripts/golden-math.ts", "scripts/golden.ts"];
+    args.extend(a.maps.iter().map(String::as_str));
+    run(&mut bun(&args)) && run(cargo().args(["test", "-p", "fb_arena", "--test", "golden", "--test", "scenarios"]))
+}
+
+/// Builds `tools/golden_libm` for wasm32 and puts it where scripts/golden-math.ts loads it.
+fn build_golden_libm() -> bool {
+    let wasm = root().join("target/wasm32-unknown-unknown/release/golden_libm.wasm");
+    let built = run(cargo().args([
+        "build",
+        "-p",
+        "golden_libm",
+        "--release",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]));
+    if !built {
+        eprintln!("(needs `rustup target add wasm32-unknown-unknown`)");
+        return false;
+    }
+    let to = root().parent().unwrap().join("scripts/golden-libm.wasm");
+    if let Err(e) = std::fs::copy(&wasm, &to) {
+        eprintln!("{}: {e}", to.display());
+        return false;
+    }
+    true
 }
 
 fn check() -> bool {
@@ -165,10 +209,8 @@ fn dev(a: &DevArgs) -> bool {
 fn main() -> ExitCode {
     let ok = match Cli::parse().task {
         Task::Check => check(),
-        Task::Golden => {
-            run(&mut bun(&["scripts/golden.ts"]))
-                && run(cargo().args(["test", "-p", "fb_arena", "--test", "golden", "--test", "scenarios"]))
-        }
+        Task::Golden(a) => golden(&a),
+        Task::Audit(a) => audit::audit(&a),
         Task::Assets => {
             run(&mut bun(&["scripts/assets.ts", "--bevy"]))
                 && run(cargo().args(["run", "-p", "fb_client", "--", "--check-assets"]))

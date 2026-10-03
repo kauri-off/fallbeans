@@ -23,6 +23,14 @@ impl Rng {
     }
 }
 
+/// Fisher–Yates as `shuffle` in TS (the same draws in the same order).
+pub fn shuffle<T>(a: &mut [T], rng: &mut Rng) {
+    for i in (1..a.len()).rev() {
+        let j = (rng.next() * (i + 1) as f64).floor() as usize;
+        a.swap(i, j);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

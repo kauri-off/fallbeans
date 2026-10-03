@@ -2,7 +2,7 @@
 //! and bots, compared by state hash every tick, full rows every `rowEvery` ticks, events and stats.
 mod common;
 
-use common::{check_bodies, check_colliders, f, load};
+use common::{check_bodies, check_colliders, close, f, load};
 use fb_arena::{Arena, ArenaEvent, ArenaKind, PawnStatus};
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use serde_json::Value;
@@ -43,11 +43,17 @@ fn ids(v: &Value) -> Vec<u32> {
         .collect()
 }
 
+const TOL: f64 = 1e-9;
+
 /// An arena event as the TS hooks record it (without the tick).
 fn same_event(e: &ArenaEvent, w: &Value) -> bool {
+    let num = |v: &Value, x: f64| v.as_f64().is_some_and(|y| (x - y).abs() <= TOL * 1f64.max(x.abs()));
     match e {
-        ArenaEvent::Bonus(b) => w["e"] == "@bonus" && w["i"] == b.i && w["id"] == b.id,
-        ArenaEvent::Finish { id, .. } => w["e"] == "finish" && w["id"] == *id,
+        ArenaEvent::Bonus(b) => {
+            let d = &w["data"];
+            w["e"] == "@bonus" && d["i"] == b.i && d["id"] == b.id && num(&d["at"], b.at)
+        }
+        ArenaEvent::Finish { id, t } => w["e"] == "finish" && w["id"] == *id && num(&w["t"], *t),
         ArenaEvent::Ko(ko) => {
             w["e"] == "ko"
                 && w["id"] == ko.id
@@ -57,12 +63,22 @@ fn same_event(e: &ArenaEvent, w: &Value) -> bool {
                 && w["by"].as_u64().map(|b| b as u32) == ko.by
         }
         ArenaEvent::Emote { id, e } => w["e"] == "emote" && w["id"] == *id && w["emote"] == *e,
+        ArenaEvent::Event { name, data, .. } => w["e"] == name.as_str() && close(data, &w["data"], TOL),
+        ArenaEvent::Score { id, v } => w["e"] == "score" && w["id"] == *id && num(&w["v"], *v),
+    }
+}
+
+fn kind(v: &Value) -> ArenaKind {
+    match v.as_str() {
+        Some("lobby") => ArenaKind::Lobby,
+        Some("podium") => ArenaKind::Podium,
+        _ => ArenaKind::Round,
     }
 }
 
 fn check_map(id: &str) {
     let data = load(id);
-    let map = fb_maps::by_id(id).unwrap();
+    let map = fb_maps::by_id(id).unwrap_or_else(|| panic!("no map {id} in fb_maps"));
     for run in data["runs"].as_array().unwrap() {
         let seed = run["seed"].as_u64().unwrap() as u32;
         let what = format!("{id} seed {seed}");
@@ -71,7 +87,7 @@ fn check_map(id: &str) {
         let humans = ids(&run["humans"]);
         let bots = ids(&run["bots"]);
         let participants: Vec<u32> = humans.iter().chain(&bots).copied().collect();
-        let (mut arena, _) = Arena::new(map, ArenaKind::Round, seed, tick0, &participants, false);
+        let (mut arena, _) = Arena::new(map, kind(&run["kind"]), seed, tick0, &participants, false);
         assert_eq!(
             arena.static_hash,
             run["staticHash"].as_str().unwrap(),
@@ -93,11 +109,21 @@ fn check_map(id: &str) {
         }
         let states = run["states"].as_array().unwrap();
         let worlds = run["worlds"].as_array().unwrap();
+        let want = run["events"].as_array().unwrap();
         let mut rows = run["rows"].as_array().unwrap().iter().peekable();
-        let mut events = Vec::new();
+        let mut events: Vec<(i64, ArenaEvent)> = Vec::new();
         let mut worst = 0.0f64;
         for (n, k) in (tick0 + 1..=end).enumerate() {
+            let before = events.len();
             events.extend(arena.step(k, |pid| script(pid, k)).into_iter().map(|e| (k, e)));
+            for (j, (k, e)) in events.iter().enumerate().skip(before) {
+                let w = want.get(j);
+                assert!(
+                    w.is_some_and(|w| w["k"].as_i64() == Some(*k) && same_event(e, w)),
+                    "{what}: event {j} at tick {k}: rust {e:?}, ts {}",
+                    w.map_or("none".to_string(), Value::to_string)
+                );
+            }
             if let Some(row) = rows.next_if(|r| r[0].as_i64() == Some(k)) {
                 worst = worst.max(check_bodies(&what, row, arena.pawns.iter().map(|p| (p.id, &p.body))));
                 let extra = &row.as_array().unwrap()[1 + arena.pawns.len() * 10..];
@@ -119,7 +145,7 @@ fn check_map(id: &str) {
             assert_eq!(
                 arena.state_hash(),
                 states[n].as_str().unwrap(),
-                "{what}: state hash at tick {k} (compare the rows around it; `rowEvery` 1 in scripts/golden.ts gives every tick)"
+                "{what}: state hash at tick {k} (compare the rows around it; ROW_EVERY = 1 in scripts/golden.ts gives every tick)"
             );
             if let Some(w) = worlds.iter().find(|w| w[0].as_i64() == Some(k)) {
                 assert_eq!(
@@ -129,20 +155,7 @@ fn check_map(id: &str) {
                 );
             }
         }
-
-        let want = run["events"].as_array().unwrap();
-        let got: Vec<String> = events.iter().map(|(k, e)| format!("{k} {e:?}")).collect();
-        assert_eq!(
-            events.len(),
-            want.len(),
-            "{what}: events\nrust: {got:#?}\nts: {want:#?}"
-        );
-        for ((k, e), w) in events.iter().zip(want) {
-            assert!(
-                *k == w["k"].as_i64().unwrap() && same_event(e, w),
-                "{what}: event at tick {k}: rust {e:?}, ts {w}"
-            );
-        }
+        assert_eq!(events.len(), want.len(), "{what}: number of events");
         assert_eq!(arena.finished, ids(&run["finished"]), "{what}: finishing order");
         assert_eq!(arena.out, ids(&run["out"]), "{what}: elimination order");
         for (p, s) in arena.pawns.iter().zip(run["stats"].as_array().unwrap()) {
@@ -163,6 +176,14 @@ fn check_map(id: &str) {
                 p.id
             );
         }
+        let scores: Vec<(u32, f64)> = arena.scores.iter().map(|(&k, &v)| (k, v)).collect();
+        let want_scores: Vec<(u32, f64)> = run["scores"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_u64().unwrap() as u32, f(&p[1])))
+            .collect();
+        assert_eq!(scores, want_scores, "{what}: scores");
         eprintln!(
             "{what}: {} ticks, {} events, out {:?}, worst difference {worst:e}",
             end - tick0,
@@ -172,7 +193,35 @@ fn check_map(id: &str) {
     }
 }
 
-#[test]
-fn jump_club_matches_ts() {
-    check_map("jump-club");
+macro_rules! golden {
+    ($($name:ident: $id:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                check_map($id);
+            }
+        )*
+    };
+}
+
+golden! {
+    door_dash: "door-dash",
+    hammer_swing: "hammer-swing",
+    ball_hill: "ball-hill",
+    hidden_bridge: "hidden-bridge",
+    drum_roll: "drum-roll",
+    jump_club: "jump-club",
+    roll_out: "roll-out",
+    wall_rush: "wall-rush",
+    hex_a_gone: "hex-a-gone",
+    crown_peak: "crown-peak",
+    plate_drop: "plate-drop",
+    portal_panic: "portal-panic",
+    bounce_park: "bounce-park",
+    cliff_climb: "cliff-climb",
+    frost_sky: "frost-sky",
+    tail_tag: "tail-tag",
+    star_fall: "star-fall",
+    lobby: "lobby",
+    podium: "podium",
 }

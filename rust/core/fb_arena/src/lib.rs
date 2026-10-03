@@ -1,7 +1,8 @@
 //! The authoritative arena (port of `server/rooms/arena.ts`): pawns (players and bots), bot brains,
-//! grabs and tackles, finishes, checkpoints, falls and knockouts, bonuses. The network side (inputs
-//! from packets, snapshots) stays in the server.
-use std::collections::BTreeMap;
+//! grabs and tackles, finishes, checkpoints, falls and knockouts, bonuses, the map's own logic, the
+//! debug journal and trace, and recording for replays. The network side (inputs from packets,
+//! snapshots) stays in the server.
+use std::collections::{BTreeMap, VecDeque};
 
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::rng::Rng;
@@ -9,12 +10,18 @@ use fb_shared::{BOT_EVERY, DT, m};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
 use fb_sim::builder::Builder;
-use fb_sim::map::{Genre, MapCtx, MapDef, MapSpec, spec_problems};
+use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapOut, MapSpec, NoBodies, Touches, Value, json, spec_problems};
 use fb_sim::math::V3;
 use fb_sim::nav::{Nav, NavGrid};
-use fb_sim::physics::{Body, BodyInput, BodyState, OtherBody, StepEvents};
+use fb_sim::physics::{Body, BodyInput, BodyState, OtherBody, StepEvents, Touch};
 use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
+
+pub use fb_shared::game::{ArenaKind, FallBehaviour, can_move, fall_behaviour};
+pub use fb_shared::rules::RoundStats;
+pub use record::{Recording, Replay, replay};
+
+mod record;
 
 /// How far a grab reaches (centre to centre; beans never get closer than BEAN_GAP).
 const GRAB_REACH: f64 = 2.1;
@@ -35,33 +42,13 @@ const CREDIT_WINDOW: f64 = 3.0;
 const FORBIDDEN_GRACE: f64 = 0.6;
 /// How far (m) a lobby spawn point must be from every bean to count as free.
 const SPAWN_CLEAR: f64 = 2.5;
+/// Trace: one entry every TRACE_EVERY ticks, the last TRACE_LEN entries per bean (30 s).
+const TRACE_EVERY: i64 = 12;
+const TRACE_LEN: usize = 300;
+const JOURNAL_LEN: usize = 300;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArenaKind {
-    Lobby,
-    Round,
-    Podium,
-}
-
-/// Beans stand still before the start of a round (the intro) and on the podium.
-pub fn can_move(kind: ArenaKind, t: f64) -> bool {
-    kind == ArenaKind::Lobby || (kind == ArenaKind::Round && t >= 0.0)
-}
-
-/// What happens when a bean falls off: back to the last checkpoint, back to its spawn, or out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FallBehaviour {
-    Checkpoint,
-    Spawn,
-    Out,
-}
-
-pub fn fall_behaviour(genre: Genre) -> FallBehaviour {
-    match genre {
-        Genre::Race => FallBehaviour::Checkpoint,
-        Genre::Points => FallBehaviour::Spawn,
-        Genre::Survival => FallBehaviour::Out,
-    }
+fn r3(v: f64) -> f64 {
+    m::round_js(v * 1000.0) / 1000.0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,22 +56,6 @@ pub enum PawnStatus {
     Play,
     Finished,
     Out,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RoundStats {
-    pub falls: u32,
-    pub shortcuts: u32,
-    /// Knockouts caused (others fell or were eliminated after our hit).
-    pub kos: u32,
-    pub grabs: u32,
-    pub tackles: u32,
-    /// Longest stretch without any input (s).
-    pub idle: f64,
-    /// Finish time in a race (s since the start).
-    pub finish_at: Option<f64>,
-    /// When the player was eliminated in a survival round (s since the start).
-    pub out_at: Option<f64>,
 }
 
 pub struct BotState {
@@ -110,6 +81,9 @@ pub struct Pawn {
     pub bot: Option<BotState>,
     /// The frame used this tick (idle before the start).
     pub frame: InputFrame,
+    /// What the step got: the frame, but for bots with the sign of a zero stick kept (a stick of −0
+    /// turns a dive the other way round, as in TS).
+    pub input: BodyInput,
     pub spawn: V3,
     /// Index into the map's checkpoints.
     pub checkpoint: Option<usize>,
@@ -141,15 +115,83 @@ pub struct KoInfo {
     pub by: Option<u32>,
     pub cause: &'static str,
     pub shortcut: bool,
+    /// Where the bean was when it fell.
+    pub pos: V3,
 }
 
 /// Something that happened in a tick, for the room to pass on.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ArenaEvent {
     Bonus(BonusTaken),
-    Finish { id: u32, t: f64 },
+    Finish {
+        id: u32,
+        t: f64,
+    },
     Ko(KoInfo),
-    Emote { id: u32, e: u32 },
+    Emote {
+        id: u32,
+        e: u32,
+    },
+    /// A map event (`keep`: sent again to whoever joins later).
+    Event {
+        name: String,
+        data: Value,
+        keep: bool,
+    },
+    Score {
+        id: u32,
+        v: f64,
+    },
+}
+
+/// Something that happened in the arena (debug journal).
+#[derive(Clone, Debug, PartialEq)]
+pub struct JournalEntry {
+    pub t: f64,
+    pub what: &'static str,
+    pub id: Option<u32>,
+    pub data: Option<Value>,
+}
+
+/// One line of a bean's recent history (debug tracer, 10 per second).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceEntry {
+    pub t: f64,
+    pub pos: [f64; 3],
+    pub vel: [f64; 3],
+    pub state: BodyState,
+    pub grounded: bool,
+    /// Input used: move x/z (−127…127) and buttons (1 jump, 2 dive, 4 grab).
+    pub input: [i32; 3],
+    pub grabbing: Option<u32>,
+    pub hazard: Option<&'static str>,
+}
+
+/// The beans in play, for map logic.
+struct PawnBodies<'a>(&'a mut [Pawn]);
+
+impl Bodies for PawnBodies<'_> {
+    fn ids(&self) -> Vec<u32> {
+        self.0
+            .iter()
+            .filter(|p| p.status == PawnStatus::Play)
+            .map(|p| p.id)
+            .collect()
+    }
+
+    fn get(&self, id: u32) -> Option<&Body> {
+        self.0
+            .iter()
+            .find(|p| p.id == id && p.status == PawnStatus::Play)
+            .map(|p| &p.body)
+    }
+
+    fn get_mut(&mut self, id: u32) -> Option<&mut Body> {
+        self.0
+            .iter_mut()
+            .find(|p| p.id == id && p.status == PawnStatus::Play)
+            .map(|p| &mut p.body)
+    }
 }
 
 pub struct Arena {
@@ -167,6 +209,15 @@ pub struct Arena {
     pub tick: i64,
     pub static_hash: String,
     pub scores: BTreeMap<u32, f64>,
+    /// Map events so far that whoever joins later must hear of (bonuses taken, tiles that fell).
+    pub events: Vec<(String, Value)>,
+    /// Debug: recent history of every bean, and of the arena.
+    pub trace: BTreeMap<u32, VecDeque<TraceEntry>>,
+    pub journal: VecDeque<JournalEntry>,
+    /// The round so far, for replays (None unless recording).
+    pub recording: Option<Recording>,
+    /// What map logic said during the current handler call.
+    map_out: Vec<MapOut>,
     /// In finishing order.
     pub finished: Vec<u32>,
     /// In elimination order.
@@ -190,9 +241,41 @@ pub struct Stepper<'a> {
     pub input: BodyInput,
 }
 
+/// What a body's step does when it touches a collider with a handler: (world, id, body, events, touch).
+pub type TouchHook<'a> = dyn FnMut(&mut World, u32, &mut Body, &mut StepEvents, Touch) + 'a;
+
+/// For worlds without map logic.
+pub fn no_touch(_: &mut World, _: u32, _: &mut Body, _: &mut StepEvents, _: Touch) {}
+
+/// Runs a map's touch handlers for bodies stepped outside an arena (client prediction, tests): no
+/// events are applied here (on a client they come from the server).
+pub fn touch_hook<'a>(
+    touches: &'a mut Touches,
+    server: bool,
+    t: f64,
+    me: Option<u32>,
+    scores: &'a mut BTreeMap<u32, f64>,
+    out: &'a mut Vec<MapOut>,
+) -> impl FnMut(&mut World, u32, &mut Body, &mut StepEvents, Touch) + 'a {
+    move |world, _, body, ev, tc| {
+        let Some(h) = touches.handler(tc) else { return };
+        let mut cx = Cx {
+            server,
+            t,
+            me,
+            world,
+            bodies: &mut NoBodies,
+            scores: &mut *scores,
+            out: &mut *out,
+            on_event: None,
+        };
+        h(&mut cx, body, ev, tc);
+    }
+}
+
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
-pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody]) {
+pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], touch: &mut TouchHook) {
     // Where a body stands on a moving platform is read in the world of the previous tick. The server's
     // world is always there; a client replaying a rollback finds it at its latest prediction instead.
     // (Compared with a tolerance: k·DT − DT and (k − 1)·DT may differ in the last bit.)
@@ -218,7 +301,10 @@ pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[O
     for s in bodies.iter_mut() {
         rest.clear();
         rest.extend(others.iter().copied().filter(|o| o.id != s.id));
-        s.body.step(s.ev, DT, s.input, world, t, &mut rest);
+        let id = s.id;
+        s.body.step(s.ev, DT, s.input, world, t, &mut rest, &mut |w, b, e, tc| {
+            touch(w, id, b, e, tc)
+        });
     }
     others.clear();
 }
@@ -244,9 +330,10 @@ pub fn build_map(map: &'static dyn MapDef, seed: u32, with_scene: bool, particip
         seed,
         participants,
     };
-    let spec = map.build(&mut b, &ctx);
+    let mut spec = map.build(&mut b, &ctx);
     let bad = spec_problems(&spec);
     assert!(bad.is_empty(), "map {}: {}", map.meta().id, bad.join(", "));
+    spec.touches = core::mem::take(&mut b.touches);
     (b, spec)
 }
 
@@ -298,6 +385,11 @@ impl Arena {
                 tick,
                 static_hash,
                 scores: BTreeMap::new(),
+                events: Vec::new(),
+                trace: BTreeMap::new(),
+                journal: VecDeque::new(),
+                recording: None,
+                map_out: Vec::new(),
                 finished: Vec::new(),
                 out: Vec::new(),
                 frozen: false,
@@ -332,15 +424,31 @@ impl Arena {
 
     /// Adds a player or a bot at the next spawn (in the lobby: a free one).
     pub fn add_pawn(&mut self, id: u32, bot: bool) -> &mut Pawn {
+        self.add_pawn_at(id, bot, None)
+    }
+
+    /// Adds a pawn at spawn point `spawn` (None: the next one, in the lobby a free one).
+    pub fn add_pawn_at(&mut self, id: u32, bot: bool, spawn: Option<usize>) -> &mut Pawn {
         if let Some(i) = self.index(id) {
             return &mut self.pawns[i];
         }
-        let i = if self.kind == ArenaKind::Lobby {
-            self.free_spawn()
-        } else {
-            self.spawn_cursor += 1;
-            self.spawn_cursor - 1
+        let i = match spawn {
+            // (Moves the turn on as the other ways do: a replay adds pawns by spawn index, and a pawn
+            // joining later must get the spawn it got live. TS left the turn alone here.)
+            Some(i) => {
+                self.spawn_cursor = i + 1;
+                i
+            }
+            None if self.kind == ArenaKind::Lobby => self.free_spawn(),
+            None => {
+                self.spawn_cursor += 1;
+                self.spawn_cursor - 1
+            }
         };
+        let tick = self.tick;
+        if let Some(r) = &mut self.recording {
+            r.pawns.push((id, bot, Some(i), tick));
+        }
         let spawns = &self.spec.spawns;
         let spawn = spawns[i % spawns.len()];
         let mut body = Body::new(id as i32);
@@ -364,6 +472,7 @@ impl Arena {
             status: PawnStatus::Play,
             bot,
             frame: InputFrame::IDLE,
+            input: BodyInput::default(),
             spawn,
             checkpoint: None,
             progress: spawn.z,
@@ -413,7 +522,76 @@ impl Arena {
     }
 
     pub fn remove_pawn(&mut self, id: u32) {
+        self.op("remove", json!([id]));
         self.pawns.retain(|p| p.id != id);
+    }
+
+    /// Dev: bot brains run (false: bots stand still).
+    pub fn set_bots_on(&mut self, on: bool) {
+        self.op("bots", json!([on]));
+        self.bots_on = on;
+    }
+
+    /// Records something that changes the simulation from outside, before the next tick.
+    fn op(&mut self, name: &str, args: Value) {
+        let tick = self.tick;
+        if let Some(r) = &mut self.recording {
+            r.ops.push((tick, name.to_string(), args));
+        }
+    }
+
+    /// Starts recording the round for replays (before pawns are added).
+    pub fn record(&mut self) {
+        self.recording = Some(Recording {
+            v: 1,
+            game: self.map.meta().id.to_string(),
+            kind: record::kind_name(self.kind).to_string(),
+            seed: self.seed,
+            tick0: self.tick,
+            participants: self.participants.clone(),
+            pawns: Vec::new(),
+            frames: BTreeMap::new(),
+            ops: Vec::new(),
+            end_tick: 0,
+            hash: String::new(),
+        });
+    }
+
+    /// The recording so far, closed at the current tick.
+    pub fn take_recording(&self) -> Option<Recording> {
+        let mut r = self.recording.clone()?;
+        r.end_tick = self.tick;
+        r.hash = self.state_hash();
+        Some(r)
+    }
+
+    /// Adds a line to the debug journal.
+    pub fn note(&mut self, what: &'static str, id: Option<u32>, data: Option<Value>) {
+        self.journal.push_back(JournalEntry {
+            t: r3(self.time()),
+            what,
+            id,
+            data,
+        });
+        if self.journal.len() > JOURNAL_LEN {
+            self.journal.pop_front();
+        }
+    }
+
+    /// What map logic said: into the tick's events (and the kept ones).
+    fn flush(&mut self, events: &mut Vec<ArenaEvent>) {
+        for o in self.map_out.drain(..) {
+            match o {
+                MapOut::Event { name, data, keep } => {
+                    if keep {
+                        self.events.push((name.clone(), data.clone()));
+                    }
+                    events.push(ArenaEvent::Event { name, data, keep });
+                }
+                MapOut::Score { id, v } => events.push(ArenaEvent::Score { id, v }),
+                MapOut::Sfx(_) | MapOut::Decorate { .. } => {}
+            }
+        }
     }
 
     /// Runs tick k. Players' frames come from `frame` (the room's input buffers); bots think here.
@@ -429,19 +607,29 @@ impl Arena {
                 continue;
             }
             active.push(i);
-            let got = if self.pawns[i].bot.is_some() {
+            let (got, input) = if self.pawns[i].bot.is_some() {
                 self.bot_frame(i, k, &mut events)
             } else {
-                frame(self.pawns[i].id)
+                let f = frame(self.pawns[i].id);
+                (f, f.into())
             };
             let p = &mut self.pawns[i];
             // Before the start (and on the podium) nobody moves.
-            p.frame = if moving { got } else { InputFrame::IDLE };
+            (p.frame, p.input) = if moving {
+                (got, input)
+            } else {
+                (InputFrame::IDLE, BodyInput::default())
+            };
             if round && t >= 0.0 {
                 if p.frame != InputFrame::IDLE {
                     p.active_at = t;
                 }
                 p.stats.idle = p.stats.idle.max(t - p.active_at);
+            }
+            if let Some(r) = &mut self.recording
+                && p.bot.is_none()
+            {
+                r.record_frame(p.id, k, p.frame);
             }
         }
 
@@ -453,14 +641,31 @@ impl Arena {
                     it.next();
                     steppers.push(Stepper {
                         id: p.id,
-                        input: p.frame.into(),
+                        input: p.input,
                         body: &mut p.body,
                         ev: &mut p.ev,
                     });
                 }
             }
-            tick_bodies(&mut self.world, t, &mut steppers, &[]);
+            let MapSpec { touches, on_event, .. } = &mut self.spec;
+            let (scores, out) = (&mut self.scores, &mut self.map_out);
+            let mut touch = |world: &mut World, _: u32, body: &mut Body, ev: &mut StepEvents, tc: Touch| {
+                let Some(h) = touches.handler(tc) else { return };
+                let mut cx = Cx {
+                    server: true,
+                    t,
+                    me: None,
+                    world,
+                    bodies: &mut NoBodies,
+                    scores,
+                    out,
+                    on_event: on_event.as_mut(),
+                };
+                h(&mut cx, body, ev, tc);
+            };
+            tick_bodies(&mut self.world, t, &mut steppers, &[], &mut touch);
         }
+        self.flush(&mut events);
         for &i in &active {
             let p = &mut self.pawns[i];
             if let Some(cause) = p.ev.hazard {
@@ -469,7 +674,7 @@ impl Arena {
             }
         }
         for &i in &active {
-            self.interact(i, &active, t);
+            self.interact(i, &active, t, &mut events);
         }
         if round && t >= 0.0 && !self.frozen {
             let mut bodies: Vec<(u32, &mut Body)> = Vec::with_capacity(active.len());
@@ -480,29 +685,99 @@ impl Arena {
                     bodies.push((p.id, &mut p.body));
                 }
             }
-            events.extend(self.bonuses.check(t, &mut bodies).into_iter().map(ArenaEvent::Bonus));
+            for b in self.bonuses.check(t, &mut bodies) {
+                let data = json!({ "i": b.i, "id": b.id, "at": b.at });
+                self.note("bonus", None, Some(data.clone()));
+                self.events.push(("@bonus".to_string(), data));
+                events.push(ArenaEvent::Bonus(b));
+            }
         }
         for &i in &active {
             self.rules(i, t, &mut events);
         }
+        if k % TRACE_EVERY == 0 {
+            for &i in &active {
+                self.trace_pawn(i, t);
+            }
+        }
+        self.map_tick(t, &mut events);
         self.prebuild_nav();
         events
     }
 
-    fn bot_frame(&mut self, i: usize, k: i64, events: &mut Vec<ArenaEvent>) -> InputFrame {
+    /// Runs `f` with the map's context (the server's: every bean in play).
+    fn with_cx<R>(&mut self, t: f64, f: impl FnOnce(&mut MapSpec, &mut Cx) -> R) -> R {
+        let mut bodies = PawnBodies(&mut self.pawns);
+        let spec = &mut self.spec;
+        let mut on_event = spec.on_event.take();
+        let mut cx = Cx {
+            server: true,
+            t,
+            me: None,
+            world: &mut self.world,
+            bodies: &mut bodies,
+            scores: &mut self.scores,
+            out: &mut self.map_out,
+            on_event: on_event.as_mut(),
+        };
+        let r = f(spec, &mut cx);
+        spec.on_event = on_event;
+        r
+    }
+
+    fn map_tick(&mut self, t: f64, events: &mut Vec<ArenaEvent>) {
+        if self.spec.tick.is_none() {
+            return;
+        }
+        self.with_cx(t, |spec, cx| {
+            if let Some(f) = spec.tick.as_mut() {
+                f(cx, t);
+            }
+        });
+        self.flush(events);
+    }
+
+    fn trace_pawn(&mut self, i: usize, t: f64) {
+        let p = &self.pawns[i];
+        let b = &p.body;
+        let e = TraceEntry {
+            t: r3(t),
+            pos: [r3(b.pos.x), r3(b.pos.y), r3(b.pos.z)],
+            vel: [r3(b.vel.x), r3(b.vel.y), r3(b.vel.z)],
+            state: b.state,
+            grounded: b.grounded,
+            input: [i32::from(p.frame.mx), i32::from(p.frame.mz), i32::from(p.frame.buttons)],
+            grabbing: p.grabbing,
+            hazard: p.ev.hazard,
+        };
+        let list = self.trace.entry(p.id).or_default();
+        list.push_back(e);
+        if list.len() > TRACE_LEN {
+            list.pop_front();
+        }
+    }
+
+    fn bot_frame(&mut self, i: usize, k: i64, events: &mut Vec<ArenaEvent>) -> (InputFrame, BodyInput) {
         let fresh = k % BOT_EVERY as i64 == 0;
         if fresh {
             self.think(i, events);
         }
         let b = self.pawns[i].bot.as_ref().unwrap().input;
-        let axis = |v: f64| m::round_js(v.clamp(-1.0, 1.0) * 127.0) as i8;
-        InputFrame {
-            mx: axis(b.mx),
-            mz: axis(b.mz),
+        let axis = |v: f64| m::round_js(v.clamp(-1.0, 1.0) * 127.0);
+        let (mx, mz) = (axis(b.mx), axis(b.mz));
+        let f = InputFrame {
+            mx: mx as i8,
+            mz: mz as i8,
             buttons: (if fresh && b.jump { BTN_JUMP } else { 0 })
                 | (if fresh && b.dive { BTN_DIVE } else { 0 })
                 | (if b.grab { BTN_GRAB } else { 0 }),
-        }
+        };
+        let input = BodyInput {
+            mx: mx / 127.0,
+            mz: mz / 127.0,
+            ..f.into()
+        };
+        (f, input)
     }
 
     fn build_nav(&self) -> NavGrid {
@@ -567,6 +842,7 @@ impl Arena {
             world,
             nav,
             spec,
+            scores,
             ..
         } = self;
         let p = &mut pawns[i];
@@ -582,6 +858,8 @@ impl Arena {
             others: &others,
             nav: nav.as_ref().map(|g| Nav::new(g, world)),
             bonuses: &bonuses,
+            world,
+            scores,
         };
         (spec.bot.as_ref().unwrap())(&mut view, &mut out);
         smooth_stick(&mut st.mem, &mut out);
@@ -593,7 +871,7 @@ impl Arena {
 
     /// Grabbing holds on (pulling the other bean along) until released, broken free or timed out;
     /// dives knock over.
-    fn interact(&mut self, i: usize, active: &[usize], t: f64) {
+    fn interact(&mut self, i: usize, active: &[usize], t: f64, events: &mut Vec<ArenaEvent>) {
         let round = self.kind == ArenaKind::Round;
         let f = self.pawns[i].frame;
         let frame_of = |pawns: &[Pawn], j: usize| active.contains(&j).then(|| pawns[j].frame);
@@ -663,15 +941,24 @@ impl Arena {
                 target = Some(oj);
             }
             if let Some(oj) = target {
-                let tid = self.pawns[oj].id;
+                let (pid, tid) = (self.pawns[i].id, self.pawns[oj].id);
+                self.note("grab", Some(pid), Some(json!({ "target": tid })));
                 let p = &mut self.pawns[i];
                 p.grabbing = Some(tid);
                 p.hold_since = t;
-                if round {
-                    p.stats.grabs += 1;
-                }
-                p.reaching = false;
                 self.pawns[oj].struggle = 0;
+                if round {
+                    self.pawns[i].stats.grabs += 1;
+                }
+                if self.spec.on_grab.is_some() {
+                    self.with_cx(t, |spec, cx| {
+                        if let Some(f) = spec.on_grab.as_mut() {
+                            f(cx, pid, tid);
+                        }
+                    });
+                    self.flush(events);
+                }
+                self.pawns[i].reaching = false;
                 let (b, ob) = (&self.pawns[i].body, &self.pawns[oj].body);
                 let dist = m::hypot(ob.pos.x - b.pos.x, ob.pos.z - b.pos.z);
                 let of = frame_of(&self.pawns, oj);
@@ -782,8 +1069,10 @@ impl Arena {
             if !self.frozen {
                 p.status = PawnStatus::Finished;
                 p.stats.finish_at = Some(t);
-                self.finished.push(p.id);
-                events.push(ArenaEvent::Finish { id: p.id, t });
+                let id = p.id;
+                self.note("finish", Some(id), None);
+                self.finished.push(id);
+                events.push(ArenaEvent::Finish { id, t });
             }
             return;
         }
@@ -836,7 +1125,9 @@ impl Arena {
             by,
             cause,
             shortcut,
+            pos,
         };
+        let what = json!({ "by": by, "cause": cause, "pos": [r3(pos.x), r3(pos.y), r3(pos.z)] });
         if self.fall == FallBehaviour::Out && !shortcut && round {
             if self.frozen {
                 return;
@@ -844,6 +1135,7 @@ impl Arena {
             let p = &mut self.pawns[i];
             p.status = PawnStatus::Out;
             p.stats.out_at = Some(t.max(0.0));
+            self.note("out", Some(id), Some(what));
             self.out.push(id);
             events.push(ArenaEvent::Ko(ko(true)));
             return;
@@ -851,8 +1143,17 @@ impl Arena {
         if counts && !shortcut {
             self.pawns[i].stats.falls += 1;
         }
+        self.note(if shortcut { "shortcut" } else { "fall" }, Some(id), Some(what));
         if counts || self.kind == ArenaKind::Lobby {
             events.push(ArenaEvent::Ko(ko(false)));
+        }
+        if counts && !shortcut && self.spec.on_fall.is_some() {
+            self.with_cx(t, |spec, cx| {
+                if let Some(f) = spec.on_fall.as_mut() {
+                    f(cx, id, by);
+                }
+            });
+            self.flush(events);
         }
         let to = match self.pawns[i].checkpoint {
             Some(c) if self.fall == FallBehaviour::Checkpoint => self.spec.checkpoints[c].p,
@@ -889,4 +1190,145 @@ impl Arena {
         }
         format!("{h:08x}")
     }
+}
+
+// ------------------------------------------------------------------ dev tools (server --dev only)
+
+impl Arena {
+    /// Adds a pawn to a running arena (a bot joining mid-round), at `at` or the next spawn.
+    pub fn add_late_pawn(&mut self, id: u32, bot: bool, at: Option<V3>) {
+        if self.index(id).is_some() {
+            return;
+        }
+        self.op("late", json!([id, bot, at.map(|p| [p.x, p.y, p.z])]));
+        // The op adds it again on replay: keep it out of the list of pawns added at the start.
+        let n = self.recording.as_ref().map_or(0, |r| r.pawns.len());
+        if !self.participants.contains(&id) {
+            self.participants.push(id);
+        }
+        self.add_pawn(id, bot);
+        if let Some(r) = &mut self.recording
+            && r.pawns.len() > n
+        {
+            r.pawns.pop();
+        }
+        if let Some(p) = at {
+            self.place(id, p, None);
+        }
+    }
+
+    fn place(&mut self, id: u32, pos: V3, yaw: Option<f64>) -> bool {
+        let Some(i) = self.index(id) else { return false };
+        let p = &mut self.pawns[i];
+        if p.status != PawnStatus::Play {
+            return false;
+        }
+        let yaw = yaw.unwrap_or(p.body.yaw);
+        p.body.reset(pos, yaw);
+        p.teleports += 1;
+        p.forbidden_for = 0.0;
+        true
+    }
+
+    pub fn dev_teleport(&mut self, id: u32, pos: V3, yaw: Option<f64>) -> bool {
+        self.op("teleport", json!([id, [pos.x, pos.y, pos.z], yaw]));
+        self.place(id, pos, yaw)
+    }
+
+    /// Where `goto` sends a bean: its spawn, a checkpoint, or 3 m before the finish line.
+    pub fn dev_place(&self, id: u32, to: DevPlace) -> Option<V3> {
+        let p = self.pawn(id)?;
+        match to {
+            DevPlace::Spawn => Some(p.spawn),
+            DevPlace::Finish => self.spec.finish.map(|f| V3::new(0.0, f.y + 1.5, f.z - 3.0)),
+            DevPlace::Checkpoint(i) => self.spec.checkpoints.get(i).map(|c| V3::new(c.p.x, c.p.y + 0.5, c.p.z)),
+        }
+    }
+
+    pub fn dev_knock(&mut self, id: u32, v: [f64; 3]) -> bool {
+        self.op("knock", json!([id, v]));
+        let t = self.time();
+        let Some(i) = self.index(id) else { return false };
+        let p = &mut self.pawns[i];
+        if p.status != PawnStatus::Play {
+            return false;
+        }
+        p.body.knock(&mut p.ev, v[0], v[2], v[1], 1.0, false);
+        p.last_hit = Some(Hit {
+            by: None,
+            cause: "dev",
+            t,
+        });
+        true
+    }
+
+    /// Drops a bean below the kill height: it falls by the map's rules on the next tick.
+    pub fn dev_kill(&mut self, id: u32) -> bool {
+        self.op("kill", json!([id]));
+        let kill_y = self.spec.kill_y;
+        let Some(i) = self.index(id) else { return false };
+        let p = &mut self.pawns[i];
+        if p.status != PawnStatus::Play {
+            return false;
+        }
+        p.body.pos.y = kill_y - 1.0;
+        true
+    }
+
+    pub fn dev_grab(&mut self, actor: u32, target: u32, seconds: f64) -> Result<(), &'static str> {
+        self.op("grab", json!([actor, target, seconds]));
+        let (Some(a), Some(o)) = (self.index(actor), self.index(target)) else {
+            return Err("no such beans in play");
+        };
+        if a == o || self.pawns[a].status != PawnStatus::Play || self.pawns[o].status != PawnStatus::Play {
+            return Err("no such beans in play");
+        }
+        let t = self.time();
+        let p = &mut self.pawns[a];
+        p.force_grab_until = t + seconds;
+        p.grabbing = Some(target);
+        p.hold_since = t;
+        self.pawns[o].struggle = 0;
+        Ok(())
+    }
+
+    /// Replays: applies a recorded operation.
+    pub fn apply_op(&mut self, name: &str, args: &Value) {
+        let id = args[0].as_u64().unwrap_or(0) as u32;
+        let v3 = |v: &Value| {
+            let a = |i: usize| v[i].as_f64().unwrap_or(0.0);
+            V3::new(a(0), a(1), a(2))
+        };
+        match name {
+            "remove" => self.remove_pawn(id),
+            "late" => {
+                let at = args[2].is_array().then(|| v3(&args[2]));
+                self.add_late_pawn(id, args[1].as_bool().unwrap_or(false), at);
+            }
+            "teleport" => {
+                self.dev_teleport(id, v3(&args[1]), args[2].as_f64());
+            }
+            "knock" => {
+                let v = v3(&args[1]);
+                self.dev_knock(id, [v.x, v.y, v.z]);
+            }
+            "kill" => {
+                self.dev_kill(id);
+            }
+            "grab" => {
+                let target = args[1].as_u64().unwrap_or(0) as u32;
+                let _ = self.dev_grab(id, target, args[2].as_f64().unwrap_or(0.0));
+            }
+            "bots" => self.set_bots_on(args[0].as_bool().unwrap_or(true)),
+            _ => {}
+        }
+    }
+}
+
+/// Where a dev `goto` sends a bean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevPlace {
+    Spawn,
+    Finish,
+    Checkpoint(usize),
 }

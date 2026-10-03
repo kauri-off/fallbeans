@@ -13,6 +13,10 @@ pub type Palette = [&'static str; 2];
 
 pub mod pal {
     use super::Palette;
+    /// One colour for both tones (a hex colour in TS, where a palette is expected).
+    pub const fn hex(c: &'static str) -> Palette {
+        [c, c]
+    }
     pub const BLUE: Palette = ["#7ccfff", "#9bdcff"];
     pub const PURPLE: Palette = ["#a98bff", "#bca4ff"];
     pub const PINK: Palette = ["#ff8cc8", "#ffa6d6"];
@@ -33,10 +37,21 @@ pub enum SceneItem {
         dims: [f64; 3],
         pal: Palette,
         freq: f64,
+        /// Surface finish and pattern (None: the default for the shape and the map's style).
+        surface: Option<&'static str>,
+        pattern: Option<&'static str>,
     },
     Model {
         node: NodeId,
         name: &'static str,
+        /// Colour of the part a prop has for it (a flag's pennant, a mushroom's cap).
+        tint: Option<&'static str>,
+    },
+    /// Something only the client draws, by kind ("portal", "glass-bridge", …), at a node.
+    Special {
+        node: NodeId,
+        kind: &'static str,
+        color: &'static str,
     },
 }
 

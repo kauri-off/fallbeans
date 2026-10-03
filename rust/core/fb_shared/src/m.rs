@@ -25,8 +25,21 @@ pub fn atan(x: f64) -> f64 {
 pub fn exp(x: f64) -> f64 {
     libm::exp(x)
 }
-#[inline]
+/// `Math.pow` / `**` as JavaScriptCore computes them: a whole exponent up to 1000 by repeated squaring
+/// (`x ** 3` is `x * (x * x)`, exactly), anything else by libm.
 pub fn pow(x: f64, y: f64) -> f64 {
+    if y.fract() == 0.0 && (0.0..=1000.0).contains(&y) {
+        let mut n = y as u32;
+        let (mut base, mut result) = (x, 1.0);
+        while n != 0 {
+            if n & 1 != 0 {
+                result *= base;
+            }
+            base *= base;
+            n >>= 1;
+        }
+        return result;
+    }
     libm::pow(x, y)
 }
 /// IEEE square root is exact on every platform.
@@ -94,7 +107,9 @@ pub fn sign(x: f64) -> f64 {
 #[inline]
 pub fn round_js(x: f64) -> f64 {
     let f = x.floor();
-    if x - f >= 0.5 { f + 1.0 } else { f }
+    let r = if x - f >= 0.5 { f + 1.0 } else { f };
+    // Rounding up to zero from below gives −0 in JS (a stick of −0 turns a bean the other way round).
+    if r == 0.0 && x < 0.0 { -0.0 } else { r }
 }
 
 /// ToInt32 of a finite number (`x | 0`).
@@ -130,6 +145,8 @@ mod tests {
         assert_eq!(hypot(1e-3, 0.7), 0.7000007142853498);
         assert_eq!(hypot3(0.1, 0.2, 0.3), 0.37416573867739417);
         assert_eq!(round_js(-0.5), 0.0);
+        assert!(round_js(-0.3).is_sign_negative() && round_js(-0.0).is_sign_negative());
+        assert!(round_js(0.3).is_sign_positive());
         assert_eq!(round_js(2.5), 3.0);
     }
 }

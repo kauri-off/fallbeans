@@ -1,11 +1,15 @@
 //! The map-building API (`b.cyl`, `b.rotor`, …). The server builds without a scene: only nodes,
 //! colliders and movers; the client also gets a `SceneDesc` to draw.
+use std::sync::Arc;
+
 use crate::collider::{ColId, Collider, ColliderOpts, Shape};
 use crate::m;
+use crate::map::{Cx, MapOut, Touches, json};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
+use crate::physics::{Body, StepEvents, Touch};
 use crate::scene::{Palette, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal};
-use crate::world::{MoveCtx, World};
+use crate::world::{MoveCtx, PORTAL_CLOSED, PortalPair, St, World};
 use fb_shared::rng::Rng;
 
 pub const MODEL_NAMES: [&str; 19] = [
@@ -23,12 +27,61 @@ pub struct PrimOpts {
     /// The primitive moves (a mover changes it): its collider is re-read every tick.
     pub dynamic: bool,
     pub seg: Option<u32>,
+    /// Surface finish (default: padded for big floors, rubber for balls, plastic otherwise).
+    pub surface: Option<&'static str>,
+    /// Pattern of a two-colour palette (default: the map's style).
+    pub pattern: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Prim {
     pub node: NodeId,
     pub col: Option<ColId>,
+}
+
+impl Prim {
+    /// The collider (the primitive was built solid).
+    pub fn col(&self) -> ColId {
+        self.col.expect("a primitive without a collider")
+    }
+}
+
+/// A decorative model's placement (`b.prop`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PropOpts {
+    pub yaw: f64,
+    pub scale: Option<f64>,
+    pub tint: Option<&'static str>,
+}
+
+/// One end of a pair of portals: a ring standing at (x, y, z), facing `yaw`.
+#[derive(Clone, Copy, Debug)]
+pub struct PortalEnd {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f64,
+}
+
+pub type OpenFn = Arc<dyn Fn(f64) -> bool + Send + Sync>;
+
+#[derive(Clone, Default)]
+pub struct PortalOpts {
+    /// Only the first end takes beans in; the second only lets them out.
+    pub one_way: bool,
+    /// Beans come out with at least this speed (m/s; default 6), thrown up at `lift` m/s when given.
+    pub speed: Option<f64>,
+    pub lift: Option<f64>,
+    /// How long (s) the ends stay shut after a trip (default PORTAL_CLOSED).
+    pub closed: Option<f64>,
+    /// Open only while this says so (a pure function of sim time): shut in between.
+    pub open: Option<OpenFn>,
+}
+
+/// Shut right now (after a trip, or out of its rhythm)? (Not in the tick it closed: prediction may
+/// replay that tick, and must go through again.)
+pub fn portal_shut(pair: &PortalPair, open: Option<&OpenFn>, t: f64) -> bool {
+    (t > pair.at && t < pair.closed_until) || open.is_some_and(|o| !o(t))
 }
 
 pub struct Builder {
@@ -38,6 +91,10 @@ pub struct Builder {
     pub scene: Option<SceneDesc>,
     /// Candidate spots for bonuses (bonus.rs picks a few per round).
     pub bonus_spots: Vec<V3>,
+    /// Touch handlers of colliders (moved into the map's spec after the build).
+    pub touches: Touches,
+    /// Look of the map (client only): the pattern its palette materials use by default.
+    pub pattern: &'static str,
 }
 
 impl Builder {
@@ -48,6 +105,8 @@ impl Builder {
             seed,
             scene: with_scene.then(SceneDesc::default),
             bonus_spots: Vec::new(),
+            touches: Touches::default(),
+            pattern: "stripes",
         }
     }
 
@@ -65,15 +124,51 @@ impl Builder {
     }
 
     pub fn model(&mut self, name: &'static str, parent: NodeId) -> NodeId {
+        self.model_tinted(name, parent, None)
+    }
+
+    fn model_tinted(&mut self, name: &'static str, parent: NodeId, tint: Option<&'static str>) -> NodeId {
         let node = self.world.nodes.add(parent, V3::ZERO);
         if let Some(s) = &mut self.scene {
-            s.items.push(SceneItem::Model { node, name });
+            s.items.push(SceneItem::Model { node, name, tint });
         }
         node
     }
 
+    /// Something only the client draws (portal rings, glass panes…), at a node.
+    pub fn special(&mut self, node: NodeId, kind: &'static str, color: &'static str) {
+        if let Some(s) = &mut self.scene {
+            s.items.push(SceneItem::Special { node, kind, color });
+        }
+    }
+
     pub fn collider(&mut self, node: NodeId, shape: Shape, o: ColliderOpts) -> ColId {
         self.world.add(Collider::new(node, shape, o))
+    }
+
+    /// State the map keeps (movers, logic and bot brains reach it through the handle).
+    pub fn state<S: core::any::Any + Send + Sync>(&mut self, s: S) -> St<S> {
+        self.world.add_state(s)
+    }
+
+    /// `col.onTouch`: called whenever a body touches the collider (once per contact, inside its step).
+    pub fn on_touch(
+        &mut self,
+        col: ColId,
+        f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
+    ) {
+        self.world.colliders[col as usize].on_touch = true;
+        self.touches.touch.insert(col, Box::new(f));
+    }
+
+    /// `col.onGround`: called on every step a body stands on the collider.
+    pub fn on_ground(
+        &mut self,
+        col: ColId,
+        f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
+    ) {
+        self.world.colliders[col as usize].on_ground = true;
+        self.touches.ground.insert(col, Box::new(f));
     }
 
     fn prim(
@@ -98,6 +193,8 @@ impl Builder {
                 dims,
                 pal: p,
                 freq: o.freq.or(freq).unwrap_or(1.0),
+                surface: o.surface,
+                pattern: o.pattern,
             });
         }
         node
@@ -328,8 +425,8 @@ impl Builder {
 
     /// A bouncy mushroom standing at (x, y, z): its cap throws beans up at `power` m/s; the stem is solid.
     #[allow(clippy::approx_constant, reason = "6.283 as in TS, not TAU")]
-    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64) -> ColId {
-        let mush = self.model("mushroom", ROOT);
+    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64, tint: Option<&'static str>) -> ColId {
+        let mush = self.model_tinted("mushroom", ROOT, tint);
         let n = self.world.nodes.get_mut(mush);
         n.pos = V3::new(x, y, z);
         n.scale = V3::splat(scale);
@@ -362,7 +459,7 @@ impl Builder {
     }
 
     /// A ladder up a wall: its foot at (x, y0, z) on the wall's face, up to y1, the rungs facing `yaw`.
-    pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64) {
+    pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64, color: &'static str) {
         let h = y1 - y0;
         let holder = self.anchor(x, y0, z, ROOT);
         self.world.nodes.get_mut(holder).rot.y = yaw;
@@ -384,10 +481,11 @@ impl Builder {
         if self.server() {
             return;
         }
-        let wood = ["#ffb347", "#ffb347"];
+        let wood = pal::hex(color);
         let deco = PrimOpts {
             parent: Some(holder),
             no_collide: true,
+            surface: Some("wood"),
             ..Default::default()
         };
         for sx in [-0.45, 0.45] {
@@ -455,16 +553,205 @@ impl Builder {
 
     /// Decorative clouds around the course (client only).
     pub fn clouds(&mut self, cx: f64, cz: f64, spread: f64) {
+        self.clouds_with(cx, cz, spread, 26, -30.0, -4.0);
+    }
+
+    pub fn clouds_with(&mut self, cx: f64, cz: f64, spread: f64, clouds: u32, y_min: f64, y_max: f64) {
         if let Some(s) = &mut self.scene {
             s.scenery.push(SceneryRequest {
                 cx,
                 cz,
                 spread,
-                clouds: 26,
-                y_min: -30.0,
-                y_max: -4.0,
+                clouds,
+                y_min,
+                y_max,
             });
         }
+    }
+
+    /// A decorative model (client only, no collision): trees, flags, cones, stars, fans, mushrooms.
+    pub fn prop(&mut self, name: &'static str, x: f64, y: f64, z: f64, o: PropOpts) -> Option<NodeId> {
+        if self.server() {
+            return None;
+        }
+        let node = self.model_tinted(name, ROOT, o.tint);
+        let n = self.world.nodes.get_mut(node);
+        n.pos = V3::new(x, y, z);
+        n.rot.y = o.yaw;
+        n.scale = V3::splat(o.scale.unwrap_or(1.0));
+        Some(node)
+    }
+
+    pub fn finish(&mut self, x: f64, y: f64, z: f64) {
+        let f = self.model("finish", ROOT);
+        self.world.nodes.get_mut(f).pos = V3::new(x, y, z);
+        for sx in [-8.5, 8.5] {
+            let a = self.anchor(x + sx, y + 3.0, z, ROOT);
+            self.collider(
+                a,
+                Shape::Cyl { r: 0.6, hh: 3.0 },
+                ColliderOpts {
+                    is_static: true,
+                    ..Default::default()
+                },
+            );
+        }
+        // Stars twirling over the arch; flags just past the line (finished beans have left the course).
+        for sx in [-5.0, 0.0, 5.0] {
+            let star_y = y + 8.2 + if sx != 0.0 { 0.0 } else { 0.6 };
+            let scale = Some(if sx != 0.0 { 1.1 } else { 1.5 });
+            self.prop(
+                "star",
+                x + sx,
+                star_y,
+                z,
+                PropOpts {
+                    scale,
+                    ..Default::default()
+                },
+            );
+        }
+        for sx in [-7.0, 7.0] {
+            let o = PropOpts {
+                tint: Some(if sx < 0.0 { "#ffd23f" } else { "#4fdc6a" }),
+                yaw: if sx < 0.0 { m::PI } else { 0.0 },
+                scale: None,
+            };
+            self.prop("flag", x + sx, y, z + 3.0, o);
+        }
+    }
+
+    /// Start pen with a gate that opens at t = 0; returns 8 spawn points.
+    pub fn start_area(&mut self, z0: f64) -> Vec<V3> {
+        let d = PrimOpts::default;
+        self.box_(0.0, -1.0, z0, 18.0, 2.0, 14.0, pal::PURPLE, d());
+        self.box_(-9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
+        self.box_(9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
+        self.box_(0.0, 0.6, z0 - 7.4, 19.6, 1.2, 0.8, pal::PINK, d());
+        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, d());
+        // Flags and cones by the gate (on the rails: nothing to trip over, out of the camera's way).
+        let flag = |tint, yaw| PropOpts {
+            tint: Some(tint),
+            yaw,
+            scale: None,
+        };
+        self.prop("flag", -9.4, 1.2, z0 + 6.4, flag("#ff5fa2", m::PI));
+        self.prop("flag", 9.4, 1.2, z0 + 6.4, flag("#3fa9ff", 0.0));
+        for sx in [-1.0, 1.0] {
+            let o = PropOpts {
+                scale: Some(0.9),
+                ..Default::default()
+            };
+            self.prop("cone", sx * 9.4, 1.2, z0 + 4.2, o);
+        }
+        let (node, col) = (gate.node, gate.col());
+        self.mover(move |t, ctx| {
+            ctx.set_enabled(col, t < 0.0);
+            ctx.node(node).visible = t < 0.0;
+        });
+        (0..8).map(|i| V3::new(-7.0 + i as f64 * 2.0, 0.05, z0 - 2.0)).collect()
+    }
+
+    /// Two linked portals (rings standing up, facing yaw): running into either takes PORTAL_T, out of
+    /// sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip closes
+    /// both ends (solid sashes) until a moment after the traveller is out. One-way: only `a` takes beans
+    /// in. Returns the pair's index.
+    pub fn portal(&mut self, a: PortalEnd, b: PortalEnd, color: &'static str, o: PortalOpts) -> usize {
+        let k = self.world.portals.len();
+        self.world.portals.push(PortalPair {
+            at: -1e9,
+            from: 0,
+            closed_until: -1e9,
+            close_for: o.closed.unwrap_or(PORTAL_CLOSED),
+        });
+        let ends = [a, b];
+        for (i, e) in ends.iter().enumerate() {
+            let other = ends[1 - i];
+            let exit_only = o.one_way && i == 1;
+            let to = V3::new(
+                other.x + m::sin(other.yaw) * 1.9,
+                other.y + 0.05,
+                other.z + m::cos(other.yaw) * 1.9,
+            );
+            let ring = self.anchor(e.x, e.y, e.z, ROOT);
+            self.world.nodes.get_mut(ring).rot.y = e.yaw;
+            if !exit_only {
+                let at = self.anchor(0.0, 1.35, 0.0, ring);
+                let trigger = self.collider(
+                    at,
+                    Shape::Box {
+                        hx: 1.05,
+                        hy: 1.25,
+                        hz: 0.3,
+                    },
+                    ColliderOpts {
+                        is_static: true,
+                        trigger: true,
+                        nav_skip: true,
+                        ..Default::default()
+                    },
+                );
+                let (open, speed, lift, yaw) = (o.open.clone(), o.speed.unwrap_or(6.0), o.lift, other.yaw);
+                self.on_touch(trigger, move |cx, body, ev, _| {
+                    let t = cx.world.t;
+                    if body.in_portal() || portal_shut(&cx.world.portals[k], open.as_ref(), t) {
+                        return;
+                    }
+                    cx.world.portal_used(k, i as u32, t);
+                    body.enter_portal(ev, to, yaw, speed, lift);
+                    // Clients hear of it (it shuts, they show the light); not kept for late joiners.
+                    if cx.server {
+                        cx.out.push(MapOut::Event {
+                            name: "portal".to_string(),
+                            data: json!({ "pair": k, "from": i, "t": t }),
+                            keep: false,
+                        });
+                    }
+                });
+                // Shut: the sashes are a wall.
+                let at = self.anchor(0.0, 1.35, 0.0, ring);
+                let sash = self.collider(
+                    at,
+                    Shape::Box {
+                        hx: 1.25,
+                        hy: 1.3,
+                        hz: 0.12,
+                    },
+                    ColliderOpts {
+                        is_static: true,
+                        nav_skip: true,
+                        ..Default::default()
+                    },
+                );
+                self.world.colliders[sash as usize].enabled = false;
+                let open = o.open.clone();
+                self.mover(move |t, ctx: &mut MoveCtx| {
+                    let shut = portal_shut(ctx.portal(k), open.as_ref(), t);
+                    ctx.set_enabled(sash, shut);
+                });
+            }
+            if self.server() {
+                continue;
+            }
+            self.special(ring, if exit_only { "portal-exit" } else { "portal" }, color);
+            for sx in [-1.0, 1.0] {
+                let deco = PrimOpts {
+                    no_collide: true,
+                    ..Default::default()
+                };
+                self.box_(
+                    e.x + m::cos(e.yaw) * sx * 1.35,
+                    e.y + 0.15,
+                    e.z - m::sin(e.yaw) * sx * 1.35,
+                    0.5,
+                    0.3,
+                    0.5,
+                    pal::hex(color),
+                    deco,
+                );
+            }
+        }
+        k
     }
 
     pub fn ring_spawns(&self, n: u32, radius: f64, y: f64, offset: f64) -> Vec<V3> {

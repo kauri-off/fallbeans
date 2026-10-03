@@ -1,12 +1,15 @@
 //! Bot behaviour shared by the maps (port of `sim/bots.ts`): personalities, steering, A* routes,
 //! getting unstuck, dodging, tackles and grabs, and the waypoint and arena brains. Brains run at
 //! 20 Hz on the server; everything random comes from the bot's own `rng`.
+use core::borrow::Borrow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::m;
 use crate::math::V3;
 use crate::nav::{Nav, NavPoint, PathOpts};
 use crate::physics::{Body, BodyState, DIVE_SPEED, GRAVITY, RUN_SPEED};
+use crate::world::World;
 use fb_shared::EMOTES;
 use fb_shared::rng::Rng;
 
@@ -104,16 +107,26 @@ pub struct BotMem {
     pub until: Option<f64>,
     pub arrived: bool,
     /// Keys of a map's own brain.
-    pub ext: BTreeMap<&'static str, f64>,
+    pub ext: BTreeMap<String, f64>,
 }
 
 impl BotMem {
-    pub fn get(&self, key: &'static str) -> Option<f64> {
+    pub fn get(&self, key: &str) -> Option<f64> {
         self.ext.get(key).copied()
     }
 
-    pub fn set(&mut self, key: &'static str, v: f64) {
-        self.ext.insert(key, v);
+    pub fn set(&mut self, key: &str, v: f64) {
+        match self.ext.get_mut(key) {
+            Some(x) => *x = v,
+            None => {
+                self.ext.insert(key.to_string(), v);
+            }
+        }
+    }
+
+    /// The key back to `undefined`.
+    pub fn remove(&mut self, key: &str) {
+        self.ext.remove(key);
     }
 
     fn skill(&self) -> f64 {
@@ -135,6 +148,16 @@ pub struct BotView<'a> {
     pub nav: Option<Nav<'a>>,
     /// Bonuses lying on the course right now.
     pub bonuses: &'a [V3],
+    /// The map (its state: tiles that fell, doors that broke).
+    pub world: &'a World,
+    /// Points of everybody in the round (points games).
+    pub scores: &'a BTreeMap<u32, f64>,
+}
+
+impl BotView<'_> {
+    pub fn score(&self, id: u32) -> f64 {
+        self.scores.get(&id).copied().unwrap_or(0.0)
+    }
 }
 
 pub type BotBrain = Box<dyn Fn(&mut BotView, &mut BotInput) + Send + Sync>;
@@ -166,10 +189,32 @@ pub struct Waypoint {
     pub drive: Option<Box<dyn Fn(&mut BotView, &mut BotInput) -> bool + Send + Sync>>,
 }
 
+pub type Detour = Box<dyn Fn(&mut BotView) -> Option<(f64, f64)> + Send + Sync>;
+pub type Drive = Box<dyn Fn(&mut BotView, &mut BotInput) -> bool + Send + Sync>;
+/// A test several waypoints share.
+pub type SharedTest = Arc<dyn Fn(&mut BotView) -> bool + Send + Sync>;
+
 impl Waypoint {
     pub fn at(x: f64, z: f64) -> Self {
+        Self::new(WpX::At(x), z)
+    }
+
+    /// `{ x, z, w }` in TS.
+    pub fn w(x: f64, z: f64, w: f64) -> Self {
         Self {
-            x: WpX::At(x),
+            w: Some(w),
+            ..Self::at(x, z)
+        }
+    }
+
+    /// A moving target: x is a function of time.
+    pub fn moving(x: impl Fn(f64) -> f64 + Send + Sync + 'static, z: f64) -> Self {
+        Self::new(WpX::Moving(Box::new(x)), z)
+    }
+
+    fn new(x: WpX, z: f64) -> Self {
+        Self {
+            x,
             z,
             w: None,
             jump: false,
@@ -179,6 +224,41 @@ impl Waypoint {
             detour: None,
             drive: None,
         }
+    }
+
+    pub fn jump_when(mut self, f: impl Fn(&mut BotView) -> bool + Send + Sync + 'static) -> Self {
+        self.jump_when = Some(Box::new(f));
+        self
+    }
+
+    pub fn jump_shared(self, f: &SharedTest) -> Self {
+        let f = f.clone();
+        self.jump_when(move |bot| f(bot))
+    }
+
+    pub fn wait(mut self, f: impl Fn(&mut BotView) -> bool + Send + Sync + 'static) -> Self {
+        self.wait = Some(Box::new(f));
+        self
+    }
+
+    pub fn speed(mut self, s: f64) -> Self {
+        self.speed = Some(s);
+        self
+    }
+
+    pub fn detour(mut self, f: impl Fn(&mut BotView) -> Option<(f64, f64)> + Send + Sync + 'static) -> Self {
+        self.detour = Some(Box::new(f));
+        self
+    }
+
+    pub fn drive(mut self, f: impl Fn(&mut BotView, &mut BotInput) -> bool + Send + Sync + 'static) -> Self {
+        self.drive = Some(Box::new(f));
+        self
+    }
+
+    pub fn drive_boxed(mut self, f: Drive) -> Self {
+        self.drive = Some(f);
+        self
     }
 }
 
@@ -1081,7 +1161,7 @@ fn hop_x(h: &Hop, t: f64) -> f64 {
 
 /// Bouncing across pads to a landing spot: a waypoint `drive`. Returns false once on the ground past `edge`.
 pub fn hop_chain(
-    key: &'static str,
+    key: String,
     hops: Vec<Hop>,
     land: V3,
     edge: f64,
@@ -1107,11 +1187,11 @@ pub fn hop_chain(
                 if (n.y - p.y).abs() > 1.0 {
                     return false;
                 }
-                bot.mem.set(key, near as f64);
+                bot.mem.set(&key, near as f64);
                 steer(bot, hop_x(n, bot.t), n.z, out, 1.0);
                 return true;
             }
-            bot.mem.set(key, 0.0);
+            bot.mem.set(&key, 0.0);
             let h = &hops[0];
             if let Some(ready) = &ready
                 && !ready(bot)
@@ -1142,7 +1222,7 @@ pub fn hop_chain(
         if b.state != BodyState::Normal {
             return false;
         }
-        let mut i = bot.mem.get(key).unwrap_or(0.0) as usize;
+        let mut i = bot.mem.get(&key).unwrap_or(0.0) as usize;
         // Just thrown up by a pad: the next one is the target.
         for (j, h) in hops.iter().enumerate() {
             if b.vel.y > h.power * 0.7
@@ -1152,7 +1232,7 @@ pub fn hop_chain(
                 i = i.max(j + 1);
             }
         }
-        bot.mem.set(key, i as f64);
+        bot.mem.set(&key, i as f64);
         let Some(h) = hops.get(i) else {
             aim_landing(bot, land.x, land.y, land.z, out);
             return true;
@@ -1199,29 +1279,34 @@ pub fn path_brain(points: Vec<Waypoint>, dive_chance: f64) -> BotBrain {
     Box::new(move |bot, out| path_step(&points, dive_chance, bot, out))
 }
 
-fn path_step(points: &[Waypoint], dive_chance: f64, bot: &mut BotView, out: &mut BotInput) {
+pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut BotView, out: &mut BotInput) {
     init_bot(bot);
     let b = bot.body;
     let n = points.len();
     let reach = |w: &Waypoint| if w.w == Some(0.0) { 0.5 } else { 1.2 };
     let mut i = bot.mem.wp.map_or(-1, |w| w as i64);
-    let behind = i >= 1 && b.pos.z < points[i as usize - 1].z - 4.0;
+    let behind = i >= 1 && b.pos.z < points[i as usize - 1].borrow().z - 4.0;
     if i < 0 || behind {
         i = points
             .iter()
-            .position(|p| p.z > b.pos.z - 0.5)
+            .position(|p| p.borrow().z > b.pos.z - 0.5)
             .map_or(n as i64 - 1, |k| k as i64);
     }
     let mut i = i as usize;
     while i < n
-        && (b.pos.z > points[i].z + 0.3
-            || m::hypot(target_x(bot, &points[i]) - b.pos.x, points[i].z - b.pos.z) < reach(&points[i]))
+        && (b.pos.z > points[i].borrow().z + 0.3
+            || m::hypot(
+                target_x(bot, points[i].borrow()) - b.pos.x,
+                points[i].borrow().z - b.pos.z,
+            ) < reach(points[i].borrow()))
         && i < n - 1
     {
         i += 1;
     }
     bot.mem.wp = Some(i);
-    let Some(wp) = points.get(i) else { return };
+    let Some(wp) = points.get(i).map(Borrow::borrow) else {
+        return;
+    };
     if let Some(drive) = &wp.drive
         && drive(bot, out)
     {
@@ -1273,7 +1358,7 @@ fn path_step(points: &[Waypoint], dive_chance: f64, bot: &mut BotView, out: &mut
     if wp.wait.is_some() && bot.mem.go != Some(i) {
         // Hold at the previous waypoint (keeps a corridor position exact).
         if i > 0 {
-            let hold = &points[i - 1];
+            let hold = points[i - 1].borrow();
             let hx = target_x(bot, hold);
             follow(bot, hx, hold.z, out);
         } else {

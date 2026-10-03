@@ -150,10 +150,11 @@ fn spawn_map(
                     .clone();
                 (*node, commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat))).id())
             }
-            SceneItem::Model { node, name } => {
+            SceneItem::Model { node, name, .. } => {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
                 (*node, commands.spawn(WorldAssetRoot(scene)).id())
             }
+            SceneItem::Special { .. } => continue,
         };
         commands.entity(child).insert((
             MapPiece { node },

@@ -3,10 +3,12 @@
 mod common;
 
 use common::{check_bodies, check_colliders, f, load};
-use fb_arena::{Stepper, tick_bodies};
+use std::collections::BTreeMap;
+
+use fb_arena::{Stepper, tick_bodies, touch_hook};
 use fb_shared::input::InputFrame;
 use fb_shared::{DT, m};
-use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, StepEvents};
@@ -80,7 +82,7 @@ fn build(name: &str, b: &mut Builder) {
             b.pad(6.0, 0.0, 5.0, 1.4, 17.0, None);
             b.pad(-6.0, 0.0, 5.0, 1.4, 16.0, Some((0.0, 8.0)));
             b.trampoline(12.0, 0.0, 5.0, 1.8, 19.0);
-            b.mushroom(-12.0, 0.0, 5.0, 1.5, 17.0);
+            b.mushroom(-12.0, 0.0, 5.0, 1.5, 17.0, None);
         }
         "platforms" => {
             floor(b);
@@ -96,9 +98,26 @@ fn build(name: &str, b: &mut Builder) {
             wall(b, 0.0, 1.3, 7.0, 6.0, 2.6, 6.0);
             wall(b, 8.0, 2.1, 7.0, 6.0, 4.2, 6.0);
             wall(b, -8.0, 2.5, 7.0, 6.0, 5.0, 6.0);
-            b.ladder(-8.0, 0.0, 4.0, 5.0, m::PI);
+            b.ladder(-8.0, 0.0, 4.0, 5.0, m::PI, "#ffb347");
             wall(b, -16.0, 2.5, 7.0, 6.0, 5.0, 6.0);
-            b.ladder(-16.0, 0.0, 4.0, 5.0, m::PI);
+            b.ladder(-16.0, 0.0, 4.0, 5.0, m::PI, "#ffb347");
+        }
+        "portal" => {
+            b.box_(0.0, -1.0, 0.0, 60.0, 2.0, 60.0, pal::BLUE, PrimOpts::default());
+            let end = |x, z, yaw| PortalEnd { x, y: 0.0, z, yaw };
+            b.portal(
+                end(0.0, 5.0, m::PI),
+                end(20.0, 0.0, m::PI / 2.0),
+                "#a66bff",
+                PortalOpts::default(),
+            );
+            let o = PortalOpts {
+                one_way: true,
+                speed: Some(9.0),
+                lift: Some(6.0),
+                ..Default::default()
+            };
+            b.portal(end(-10.0, 5.0, m::PI), end(-10.0, 20.0, 0.0), "#ffffff", o);
         }
         _ => panic!("unknown scenario {name}"),
     }
@@ -131,8 +150,11 @@ fn check(name: &str) {
         .unwrap_or_else(|| panic!("no scenario {name} in scenarios.json: re-export with `cargo xtask golden`"));
     let mut b = Builder::new(1, false);
     build(name, &mut b);
+    let mut touches = core::mem::take(&mut b.touches);
     let mut world = b.world;
     world.finalize(0.0);
+    let mut scores = BTreeMap::new();
+    let mut out = Vec::new();
     assert_eq!(
         world.hash(true),
         sc["staticHash"].as_str().unwrap(),
@@ -169,7 +191,9 @@ fn check(name: &str) {
                 input: frame(d, k).into(),
             })
             .collect();
-        tick_bodies(&mut world, k as f64 * DT, &mut steppers, &[]);
+        let t = k as f64 * DT;
+        let mut touch = touch_hook(&mut touches, true, t, None, &mut scores, &mut out);
+        tick_bodies(&mut world, t, &mut steppers, &[], &mut touch);
         worst = worst.max(check_bodies(name, row, bodies.iter().map(|(id, body, _)| (*id, body))));
         if let Some(h) = hashes.iter().find(|h| h[0].as_i64() == Some(k)) {
             assert_eq!(
@@ -225,4 +249,9 @@ fn platforms() {
 #[test]
 fn climb() {
     check("climb");
+}
+
+#[test]
+fn portal() {
+    check("portal");
 }

@@ -1,14 +1,14 @@
 # Fall Beans на Rust
 
-Перенос игры на Rust + Bevy + Lightyear. ТЗ и план по фазам — [`../plan.md`](../plan.md); итог, замеры и
-разбор решений Фазы 0 — [`PHASE0.md`](PHASE0.md); прод-сервер — [`deploy/README.md`](deploy/README.md). Этот файл —
-как работать с кодом.
+Перенос игры на Rust + Bevy + Lightyear. **С чего продолжать — [`port/state.md`](port/state.md).** ТЗ и фазы —
+[`port/plan.md`](port/plan.md), решения вне плана — [`port/decisions.md`](port/decisions.md), отчёты фаз — [`port/phases/`](port/phases/);
+прод-сервер — [`deploy/README.md`](deploy/README.md). Этот файл — как работать с кодом.
 
 ## Что нужно
 
 - Rust stable ≥ 1.95 (`rustup`), компоненты `rustfmt` и `clippy`.
 - Linux: `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev` (как в CI).
-- Bun — только для `cargo xtask golden` и `cargo xtask assets`: они берут данные из TS-версии.
+- Bun — только для `cargo xtask golden`, `cargo xtask assets` и `cargo xtask audit --vs-ts`: они берут данные из TS-версии.
 
 Первая сборка долгая (Bevy). В `dev` профиле зависимости собираются с `opt-level = 3`, свой код — с 1.
 
@@ -21,17 +21,19 @@ rust/
     fb_shared      константы, ввод (InputFrame), mulberry32, m (libm, hypot как в V8, round_js)
     fb_sim         физика боба (physics.rs), коллайдеры, World (узлы + movers), Builder, бонусы, SceneDesc,
                    навигация ботов (nav.rs), поведение ботов (bots.rs)
-    fb_maps        карты (сейчас jump-club) и реестр MAPS
+    fb_maps        все карты (по модулю на карту), реестры GAMES/MAPS, director (план раундов игры)
     fb_arena       арена: пешки и боты, захваты, таклы, финиш, чекпоинты, падения, выбывание, бонусы;
                    tick_bodies — общий шаг сервера и предсказания
       tests/       golden.rs (полные раунды карт с ботами против TS-арены), scenarios.rs (ветки физики боба в малых мирах против TS),
-                   determinism.rs (записанные хэши), replay.rs (откат = прямой прогон)
+                   determinism.rs (записанные хэши), replay.rs (откат = прямой прогон), recording.rs (запись раунда → replay)
+    fb_audit       аудиты карт и систем (порт src/audit), harness безголовых раундов; бинарник fb_audit; rayon
+      tests/       quick.rs (быстрые аудиты: 0 ошибок и 0 предупреждений)
   crates/          всё на Bevy и Lightyear
     fb_net         протокол Lightyear: компоненты, ввод, события, форматы передачи (wire.rs),
                    фильтры видимости, NetSim (флаги имитации сети), NetStats (трафик)
     fb_server      net (транспорты, вход), room (раунды, тик), metrics, opts
     fb_client      net, game (карта, предсказание, ввод, автопилот), view, hud, stats, assets, opts
-  xtask            cargo xtask <check|golden|assets|dev|stress|deploy>
+  xtask            cargo xtask <check|golden|audit|assets|dev|stress|deploy>
   deploy/          что ставится на хост: systemd-юнит, nginx (wss), установщик с откатом; README — сам хост
   vendor/          зависимости с нашими правками ([patch.crates-io] в Cargo.toml; см. «Известные проблемы»)
   assets/models    glb для Bevy (делаются из ../public/models: cargo xtask assets)
@@ -49,6 +51,8 @@ cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05
 cargo xtask stress --transport ws --lag 75 --jitter 15   # по WebSocket (потери не задавать: TCP не теряет)
 cargo xtask stress --remote --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
 cargo xtask golden                # переснять следы из TS и сверить (после изменений в TS-физике или карте)
+cargo xtask audit [карта…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics] [--notes] [--json]
+cargo xtask audit --vs-ts         # те же аудиты TS (с этой libm) и сверка: всё, кроме замеров времени, должно совпасть
 cargo xtask assets                # переэкспортировать модели и проверить загрузку в Bevy
 cargo xtask deploy                # выложить сервер на прод (только по просьбе автора, см. «Деплой»)
 ```
@@ -98,7 +102,7 @@ cargo xtask deploy                # выложить сервер на прод 
   `ActionState` выключен, он выбрасывает поздний ввод): без ввода держит стик и захват `INPUT_HOLD` тиков,
   нажатие, пришедшее до `LATE_TICKS` (250 мс) позже своего тика, выполняет на следующем.
 - Настройки ввода (`INPUT_SEND_INTERVAL`, `INPUT_REDUNDANCY` = `LATE_TICKS`) и `--input-margin` подобраны
-  замерами (`PHASE0.md`); менять — с прогоном `xtask stress` (и `--remote`) до и после.
+  замерами (`port/phases/0.md`); менять — с прогоном `xtask stress` (и `--remote`) до и после.
 - Один `Server` Lightyear слушает оба транспорта (`net::start_server`: `ServerUdpIo` и `WebSocketServerIo` на одной
   сущности), топология обычная `Server`. Проверка адреса в connect token выключена (`server_addr_check`): с
   нулевым ключом она пускала только localhost; вернуть с токенами Фазы 3.
@@ -157,7 +161,7 @@ WS 5891 за nginx) на время прогона; клиенты идут с �
   переразмечает буфер ввода. Уже отправленный ввод уходит на другие тики: сервер видит опоздание или
   «переписанную историю» (ошибки `lightyear_debug::input` в логе), клиент откатывается.
 - Таймаут netcode — 3 с: остановка TCP-потока внутри VPN (VLESS xhttp) рвёт WS-соединение. На таких путях
-  рывки джиттера вызывают серии сдвигов часов (`PHASE0.md`, «Матрица VPN»); `fb_client --sync-max-error` —
+  рывки джиттера вызывают серии сдвигов часов (`port/phases/0.md`, «Матрица VPN»); `fb_client --sync-max-error` —
   флаг для опытов с порогом.
 - Клиент не переподключается после обрыва на WS и с `--transport udp`; с `auto` обрыв UDP переводит на WS.
   Переподключение даёт нового игрока (удержание места — Фаза 3).

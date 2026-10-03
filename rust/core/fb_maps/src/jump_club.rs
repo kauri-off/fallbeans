@@ -11,14 +11,14 @@ use fb_sim::scene::pal;
 
 pub struct JumpClub;
 
-static META: GameMeta = GameMeta {
-    id: "jump-club",
-    title: "Прыг-клуб",
-    genre: Genre::Survival,
-    desc: "Перепрыгивайте нижнюю балку и не попадайтесь под верхнюю. Со временем обе крутятся всё быстрее!",
-    goal: "Не упадите",
-    duration: 75.0,
-};
+static META: GameMeta = GameMeta::new(
+    "jump-club",
+    "Прыг-клуб",
+    Genre::Survival,
+    "Перепрыгивайте нижнюю балку и не попадайтесь под верхнюю. Со временем обе крутятся всё быстрее!",
+    "Не упадите",
+    75.0,
+);
 
 impl MapDef for JumpClub {
     fn meta(&self) -> &'static GameMeta {

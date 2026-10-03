@@ -39,7 +39,8 @@ fn run(map: &str, seed: u32) -> String {
     for id in 1..=8 {
         arena.add_pawn(id, id > 4);
     }
-    let end = (def.meta().duration * 120.0) as i64;
+    // (The lobby and the podium have no end: a minute of them.)
+    let end = (def.meta().duration.min(60.0) * 120.0) as i64;
     let mut events = 0;
     for k in -719..=end {
         events += arena.step(k, |id| script(id, k)).len();

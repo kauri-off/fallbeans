@@ -1,6 +1,6 @@
 //! Client prediction replays ticks from a server state after its world has run ahead: the replay must give
 //! the same bodies, bit for bit, as ticking straight through (a bean riding a moving, turning platform).
-use fb_arena::{Stepper, tick_bodies};
+use fb_arena::{Stepper, no_touch, tick_bodies};
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::math::V3;
@@ -51,7 +51,7 @@ fn step(world: &mut World, body: &mut Body, k: i64) {
         ev: &mut ev,
         input: input(k),
     }];
-    tick_bodies(world, k as f64 * DT, &mut s, &[]);
+    tick_bodies(world, k as f64 * DT, &mut s, &[], &mut no_touch);
 }
 
 #[test]

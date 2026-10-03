@@ -1,14 +1,50 @@
+use core::any::Any;
+use core::marker::PhantomData;
 use std::collections::BTreeMap;
 
 use crate::collider::{ColId, Collider, Shape};
 use crate::m;
 use crate::nodes::{NodeId, Nodes};
+use crate::physics::PORTAL_T;
 use fb_shared::DT;
 
-/// What a mover may change: transforms of nodes and whether colliders are solid.
+/// State a map keeps besides geometry (tiles that fell, doors that broke): movers read it, map logic
+/// and bot brains get at it through its handle.
+pub type StateBox = Box<dyn Any + Send + Sync>;
+
+/// Handle to a map state of type S in its world.
+pub struct St<S>(usize, PhantomData<fn() -> S>);
+
+impl<S> Clone for St<S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for St<S> {}
+
+/// How long (s) both ends of a portal stay shut after the traveller came out.
+pub const PORTAL_CLOSED: f64 = 1.0;
+
+/// The last trip through a pair of portals (the same on the server and on clients).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PortalPair {
+    /// Sim time somebody went in, and at which end (0 or 1).
+    pub at: f64,
+    pub from: u32,
+    /// Both ends are shut until then.
+    pub closed_until: f64,
+    /// How long (s) the ends stay shut after a traveller came out.
+    pub close_for: f64,
+}
+
+/// What a mover may change: transforms of nodes and whether colliders are solid. It reads the map's
+/// state and its portals.
 pub struct MoveCtx<'a> {
     pub nodes: &'a mut Nodes,
     colliders: Option<&'a mut [Collider]>,
+    states: &'a [StateBox],
+    portals: &'a [PortalPair],
 }
 
 impl MoveCtx<'_> {
@@ -21,6 +57,18 @@ impl MoveCtx<'_> {
             c[col as usize].enabled = on;
         }
     }
+
+    pub fn st<S: 'static>(&self, h: St<S>) -> &S {
+        state(self.states, h)
+    }
+
+    pub fn portal(&self, pair: usize) -> &PortalPair {
+        &self.portals[pair]
+    }
+}
+
+fn state<S: 'static>(states: &[StateBox], h: St<S>) -> &S {
+    states[h.0].downcast_ref().expect("map state of another type")
 }
 
 /// Pure function of sim time: positions the moving parts of a map. Runs on server and client.
@@ -83,6 +131,9 @@ pub struct World {
     pub movers: Vec<Mover>,
     pub grid: ColliderGrid,
     pub t: f64,
+    pub states: Vec<StateBox>,
+    /// Portal pairs in build order (their index is how the server names them to clients).
+    pub portals: Vec<PortalPair>,
     /// Nodes whose matrices a tick must refresh (ancestors of moving colliders), in order.
     dyn_nodes: Vec<NodeId>,
     finalized: bool,
@@ -100,6 +151,8 @@ impl Default for World {
                 cells: BTreeMap::new(),
             },
             t: f64::NEG_INFINITY,
+            states: Vec::new(),
+            portals: Vec::new(),
             dyn_nodes: Vec::new(),
             finalized: false,
         }
@@ -115,10 +168,36 @@ impl World {
         id
     }
 
+    pub fn add_state<S: Any + Send + Sync>(&mut self, s: S) -> St<S> {
+        self.states.push(Box::new(s));
+        St(self.states.len() - 1, PhantomData)
+    }
+
+    pub fn st<S: 'static>(&self, h: St<S>) -> &S {
+        state(&self.states, h)
+    }
+
+    pub fn st_mut<S: 'static>(&mut self, h: St<S>) -> &mut S {
+        self.states[h.0].downcast_mut().expect("map state of another type")
+    }
+
+    /// A trip through portal pair `pair`, in at end `from` at time t: both ends shut till it is over.
+    pub fn portal_used(&mut self, pair: usize, from: u32, t: f64) {
+        let Some(p) = self.portals.get_mut(pair) else { return };
+        if t < p.at {
+            return;
+        }
+        p.at = t;
+        p.from = from;
+        p.closed_until = t + PORTAL_T + p.close_for;
+    }
+
     fn run_movers(&mut self, t: f64) {
         let mut ctx = MoveCtx {
             nodes: &mut self.nodes,
             colliders: Some(&mut self.colliders),
+            states: &self.states,
+            portals: &self.portals,
         };
         for mv in &self.movers {
             mv(t, &mut ctx);
@@ -175,7 +254,12 @@ impl World {
 
     /// Poses `nodes` (a copy of this world's) for drawing at time t; colliders are left alone.
     pub fn pose(&self, t: f64, nodes: &mut Nodes) {
-        let mut ctx = MoveCtx { nodes, colliders: None };
+        let mut ctx = MoveCtx {
+            nodes,
+            colliders: None,
+            states: &self.states,
+            portals: &self.portals,
+        };
         for mv in &self.movers {
             mv(t, &mut ctx);
         }

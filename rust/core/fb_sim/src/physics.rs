@@ -111,11 +111,23 @@ pub struct StepEvents {
     pub hazard: Option<&'static str>,
     pub portal_in: bool,
     pub portal_out: bool,
-    /// Colliders that report touches (`on_touch`), with the contact normal.
-    pub touches: Vec<(ColId, V3)>,
-    /// A ground collider that reports standing on it (`on_ground`).
-    pub on_ground: Option<ColId>,
 }
+
+/// A collider that reports touches was touched (`on_touch`: with the contact normal) or stood on
+/// (`on_ground`), in the middle of a step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Touch {
+    pub col: ColId,
+    /// The contact normal; None when standing on it.
+    pub normal: Option<V3>,
+}
+
+/// Called right where TS calls a collider's `onTouch`/`onGround`: it may change the body (a portal)
+/// and the world (a door that breaks) before the step goes on.
+pub type OnTouch<'a> = dyn FnMut(&mut World, &mut Body, &mut StepEvents, Touch) + 'a;
+
+/// For steps in worlds without map logic.
+pub fn no_touch(_: &mut World, _: &mut Body, _: &mut StepEvents, _: Touch) {}
 
 /// Where the body stands on its ground before the world moves (see `before_world_update`).
 #[derive(Clone, Copy, Debug, Default)]
@@ -411,9 +423,10 @@ impl Body {
         ev: &mut StepEvents,
         dt: f64,
         input: BodyInput,
-        world: &World,
+        world: &mut World,
         t: f64,
         others: &mut [OtherBody],
+        touch: &mut OnTouch,
     ) {
         if self.state == BodyState::Portal {
             return self.portal_step(ev, dt);
@@ -599,6 +612,9 @@ impl Body {
                         continue;
                     }
                     for si in 0..SPHERES.len() {
+                        // (Read again: a touch may have changed the world, as in TS; whether the
+                        // collider is solid was looked at once, above.)
+                        let col = world.col(ci);
                         let c = self.sphere(si);
                         if !col.contact(c, r, &mut hit) {
                             continue;
@@ -609,7 +625,8 @@ impl Body {
                                 if col.ladder {
                                     ladder = Some(ci);
                                 } else if col.on_touch {
-                                    ev.touches.push((ci, hit.normal));
+                                    let normal = Some(hit.normal);
+                                    touch(world, self, ev, Touch { col: ci, normal });
                                 }
                             }
                             break;
@@ -701,7 +718,15 @@ impl Body {
                             wall_n = n;
                         }
                         if col.on_touch {
-                            ev.touches.push((ci, n));
+                            touch(
+                                world,
+                                self,
+                                ev,
+                                Touch {
+                                    col: ci,
+                                    normal: Some(n),
+                                },
+                            );
                         }
                     }
                 }
@@ -828,12 +853,12 @@ impl Body {
                 self.vel.x += GRAVITY * ground_n.x * ground_n.y * slide * dt;
                 self.vel.z += GRAVITY * ground_n.z * ground_n.y * slide * dt;
             }
-            if let Some(c) = ng
-                && c.on_ground
+            if let Some(ci) = new_ground
+                && world.col(ci).on_ground
             {
-                ev.on_ground = Some(c.index);
+                touch(world, self, ev, Touch { col: ci, normal: None });
             }
-            if let Some(c) = ng
+            if let Some(c) = new_ground.map(|c| world.col(c))
                 && c.pad != 0.0
             {
                 self.vel.y = c.pad;

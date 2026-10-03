@@ -1,11 +1,14 @@
 /**
  * Golden traces for the Rust port (rust/core/fb_arena/tests/golden): plays whole rounds of the TS
  * server arena (scripted players and bots) and records everything the Rust side must reproduce.
- *   bun scripts/golden.ts [map…]   (default: the maps ported so far, and the physics scenarios)
+ *   cargo xtask golden [map…|scenarios]   (default: every map, and the physics scenarios), or
+ *   bun --preload ./scripts/golden-math.ts scripts/golden.ts [map…|scenarios]
+ * Written gzipped (<map>.json.gz): the traces of 19 maps are large.
  */
-import './golden-math';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import * as THREE from 'three';
+import { getMap, LOBBY, MAPS, PODIUM } from '../src/games';
 import { type ArenaHooks, ServerArena } from '../src/server/rooms/arena';
 import { BTN } from '../src/shared/codec';
 import { DT, TICK_MS } from '../src/shared/consts';
@@ -13,14 +16,22 @@ import { Builder, PAL } from '../src/sim/builder';
 import type { MapModule } from '../src/sim/map';
 import { BODY_STATES, type OtherBody, PlayerBody, POWER } from '../src/sim/physics';
 
+const goldenMath = (globalThis as { __goldenMath?: () => number }).__goldenMath;
+if (!goldenMath) throw new Error('run with --preload ./scripts/golden-math.ts (cargo xtask golden does)');
+if (goldenMath() !== 1) throw new Error('golden-math: the source rewrite of sim/bots.ts did not happen');
+
 const OUT = 'rust/core/fb_arena/tests/golden';
 const SEEDS = [1, 777, 123456789];
+/** Seeds that draw a map's sections the common ones miss (frost-sky: ice rotors). */
+const EXTRA_SEEDS: Record<string, number[]> = { 'frost-sky': [5] };
 const INTRO_TICKS = 720;
 /** Players with scripted input, and bots. */
 const HUMANS = [1, 2];
 const BOTS = [3, 4, 5, 6];
 /** Full state rows every this many ticks (the state hash is kept every tick). */
-const ROW_EVERY = 30;
+const ROW_EVERY = Number(process.env.GOLDEN_ROWS ?? 120);
+/** The lobby and the podium have no end: this many seconds of them. */
+const ENDLESS_S = 60;
 const DIRS = [
   [127, 0],
   [90, 90],
@@ -111,13 +122,13 @@ function colliderList(world: Builder['world']) {
 
 const STATUS = ['play', 'finished', 'out'];
 
-function trace(id: string, mod: MapModule, seed: number) {
+function trace(id: string, mod: MapModule, seed: number, withColliders: boolean) {
   const events: unknown[] = [];
   let k = 0;
   const hooks: ArenaHooks = {
     onFinish: (pid, time) => events.push({ k, e: 'finish', id: pid, t: time }),
     onKo: (ko) => events.push({ k, e: 'ko', ...ko }),
-    onEvent: (name, data) => events.push({ k, e: name, ...(data as object) }),
+    onEvent: (name, data) => events.push({ k, e: name, data }),
     onScore: (pid, v) => events.push({ k, e: 'score', id: pid, v }),
     onSnapshot: () => {},
     onEmote: (pid, e) => events.push({ k, e: 'emote', id: pid, emote: e }),
@@ -126,9 +137,10 @@ function trace(id: string, mod: MapModule, seed: number) {
     },
   };
   const participants = [...HUMANS, ...BOTS];
+  const kind = id === 'lobby' ? 'lobby' : id === 'podium' ? 'podium' : 'round';
   const arena = new ServerArena({
     id: 1,
-    kind: 'round',
+    kind,
     module: mod,
     seed,
     startAt: 0,
@@ -141,7 +153,7 @@ function trace(id: string, mod: MapModule, seed: number) {
   const colliders = colliderList(arena.world);
   for (const p of participants) arena.addPawn(p, BOTS.includes(p));
   const step = (arena as unknown as { step(k: number): void }).step.bind(arena);
-  const end = Math.round(mod.meta.duration / DT);
+  const end = Math.round(Math.min(mod.meta.duration, kind === 'round' ? 1e9 : ENDLESS_S) / DT);
   const states: string[] = [];
   const worlds: [number, string][] = [];
   const rows: number[][] = [];
@@ -160,6 +172,7 @@ function trace(id: string, mod: MapModule, seed: number) {
   const pawns = [...arena.pawns.values()];
   return {
     map: id,
+    kind,
     seed,
     tick0,
     end,
@@ -167,7 +180,7 @@ function trace(id: string, mod: MapModule, seed: number) {
     bots: BOTS,
     rowEvery: ROW_EVERY,
     staticHash,
-    colliders,
+    colliders: withColliders ? colliders : null,
     bonuses: (arena.bonuses?.list ?? []).map((x) => ({ i: x.i, x: x.x, y: x.y, z: x.z, kind: x.kind, appearAt: x.appearAt })),
     events,
     states,
@@ -176,6 +189,7 @@ function trace(id: string, mod: MapModule, seed: number) {
     finished: arena.finished,
     out: arena.out,
     stats: pawns.map((p) => ({ id: p.id, ...p.stats })),
+    scores: [...arena.scores].sort((a, b) => a[0] - b[0]),
   };
 }
 
@@ -209,6 +223,25 @@ const run = (k: number, mx: number, mz: number, stop: number): [number, number, 
 ];
 
 const SCENARIOS: Scenario[] = [
+  {
+    name: 'portal',
+    ticks: 600,
+    build: (b) => {
+      b.box(0, -1, 0, 60, 2, 60);
+      b.portal({ x: 0, y: 0, z: 5, yaw: Math.PI }, { x: 20, y: 0, z: 0, yaw: Math.PI / 2 });
+      b.portal({ x: -10, y: 0, z: 5, yaw: Math.PI }, { x: -10, y: 0, z: 20, yaw: 0 }, '#ffffff', {
+        oneWay: true,
+        speed: 9,
+        lift: 6,
+      });
+    },
+    bodies: [
+      { id: 1, at: [0, 0.02, 0], stick: run(1, 0, 127, 200) },
+      { id: 2, at: [0.5, 0.02, -2.5], stick: run(1, 0, 127, 300) },
+      { id: 3, at: [-10, 0.02, 0], stick: run(1, 0, 127, 100) },
+      { id: 4, at: [-10, 0.02, 24], stick: run(1, 0, -127, 160) },
+    ],
+  },
   {
     name: 'moves',
     ticks: 720,
@@ -482,20 +515,20 @@ function scenario(sc: Scenario) {
   };
 }
 
-const maps = process.argv.slice(2);
-const ids = maps.length ? maps : ['jump-club'];
+const args = process.argv.slice(2);
+const ids = args.length ? args.filter((a) => a !== 'scenarios') : [...MAPS.map((m) => m.meta.id), LOBBY.meta.id, PODIUM.meta.id];
 mkdirSync(OUT, { recursive: true });
 for (const id of ids) {
-  const mod = (await import(`../src/games/${id}/map.ts`)).default as MapModule;
-  const runs = [];
-  for (const seed of SEEDS) runs.push(trace(id, mod, seed));
-  const file = `${OUT}/${id}.json`;
-  writeFileSync(file, JSON.stringify({ runs }));
+  const mod = getMap(id);
+  if (!mod) throw new Error(`unknown map ${id}`);
+  const runs = [...SEEDS, ...(EXTRA_SEEDS[id] ?? [])].map((seed, i) => trace(id, mod, seed, i === 0));
+  const file = `${OUT}/${id}.json.gz`;
+  writeFileSync(file, gzipSync(JSON.stringify({ runs }), { level: 9 }));
   const outcome = runs.map((r) => `seed ${r.seed}: ${r.events.length} events, out ${r.out.join(',') || '-'}`).join('; ');
   console.log(`${file}: ${runs.length} seeds × ${runs[0]!.states.length} ticks (${outcome})`);
 }
-if (!maps.length) {
-  const file = `${OUT}/scenarios.json`;
-  writeFileSync(file, JSON.stringify({ scenarios: SCENARIOS.map(scenario) }));
+if (!args.length || args.includes('scenarios')) {
+  const file = `${OUT}/scenarios.json.gz`;
+  writeFileSync(file, gzipSync(JSON.stringify({ scenarios: SCENARIOS.map(scenario) }), { level: 9 }));
   console.log(`${file}: ${SCENARIOS.map((s) => s.name).join(', ')}`);
 }

@@ -8,14 +8,33 @@ pub fn f(v: &Value) -> f64 {
     v.as_f64().unwrap()
 }
 
+/// A trace written by `bun scripts/golden.ts` (gzipped JSON).
 pub fn load(name: &str) -> Value {
-    let path = format!("{}/tests/golden/{name}.json", env!("CARGO_MANIFEST_DIR"));
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    let path = format!("{}/tests/golden/{name}.json.gz", env!("CARGO_MANIFEST_DIR"));
+    let file =
+        std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e} (export it with `cargo xtask golden`)"));
+    serde_json::from_reader(std::io::BufReader::new(flate2::read::GzDecoder::new(file))).unwrap()
+}
+
+/// JSON values equal up to `tol` in every number (the TS side writes what JS computed).
+#[allow(dead_code, reason = "golden.rs uses it, scenarios.rs does not")]
+pub fn close(a: &Value, b: &Value, tol: f64) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
+            (x - y).abs() <= tol * 1f64.max(x.abs())
+        }
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(a, b, tol)),
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| close(v, w, tol)))
+        }
+        _ => a == b,
+    }
 }
 
 /// Shapes, flags and matrices of every collider, in build order.
 pub fn check_colliders(what: &str, world: &World, cols: &Value) {
-    let cols = cols.as_array().unwrap();
+    let Some(cols) = cols.as_array() else { return };
     assert_eq!(cols.len(), world.colliders.len(), "{what}: collider count");
     for (i, (c, g)) in world.colliders.iter().zip(cols).enumerate() {
         assert_eq!(

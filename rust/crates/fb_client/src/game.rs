@@ -5,7 +5,7 @@ use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use fb_arena::{Stepper, build_map, tick_bodies};
+use fb_arena::{Stepper, build_map, tick_bodies, touch_hook};
 use fb_net::*;
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
@@ -295,7 +295,11 @@ fn predict(
         ev: &mut ev.0,
         input,
     }];
-    tick_bodies(&mut map.world, t, &mut steppers, &extra);
+    // Map logic predicted here (a portal, a pane that breaks); what it says (sounds) waits for Phase 4.
+    let map = &mut *map;
+    let (mut scores, mut out) = (Default::default(), Vec::new());
+    let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
+    tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
     stats.ticks += 1;
     if let Some(mut trace) = trace {
         let b = &full.body;

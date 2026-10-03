@@ -3168,6 +3168,20 @@ dependencies = [
  "fb_maps",
  "fb_shared",
  "fb_sim",
+ "flate2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fb_audit"
+version = "0.1.0"
+dependencies = [
+ "fb_arena",
+ "fb_maps",
+ "fb_shared",
+ "fb_sim",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -3238,6 +3252,7 @@ dependencies = [
  "fb_shared",
  "glam",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3701,6 +3716,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c4ee00b289aba7a9e5306d57c2d05499b2e5dc427f84ac708bd2c090212cf3e"
 dependencies = [
  "gl_generator",
+]
+
+[[package]]
+name = "golden_libm"
+version = "0.1.0"
+dependencies = [
+ "fb_shared",
 ]
 
 [[package]]
@@ -8966,6 +8988,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "serde_json",
 ]
 
 [[package]]
