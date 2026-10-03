@@ -4,6 +4,10 @@ use bevy::prelude::Resource;
 use clap::{Parser, ValueEnum};
 use fb_net::{HTTP_PORT, NetSim, WS_PORT};
 
+fn map_ids() -> clap::builder::PossibleValuesParser {
+    fb_maps::GAMES.iter().map(|m| m.meta().id).collect::<Vec<_>>().into()
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
     /// UDP, then WebSocket if UDP gets no answer within 2 s.
@@ -53,12 +57,16 @@ pub struct Opts {
     /// Suit colour (index into the palette).
     #[arg(long)]
     pub color: Option<u8>,
-    /// As the room's host, start a game of this map (all rounds) once `--start-players` are in.
-    #[arg(long)]
+    /// Map id: if this client hosts the room, it starts a game where every round is this map.
+    #[arg(long, value_name = "MAP", value_parser = map_ids())]
     pub start: Option<String>,
-    #[arg(long)]
+    /// With `--start`: wait until the room has this many players (default: 2, or 1 if the server runs with `--solo`; never fewer).
+    #[arg(long, value_name = "N")]
     pub start_players: Option<usize>,
-    /// As the room's host, fill its empty places with bots (with `--start`).
+    /// With `--start`: number of rounds in the game.
+    #[arg(long, value_name = "N", default_value_t = 12, value_parser = clap::value_parser!(u32).range(1..=12))]
+    pub start_rounds: u32,
+    /// With `--start`: fill the room's empty places with bots.
     #[arg(long)]
     pub fill: bool,
     #[command(flatten)]
@@ -95,6 +103,10 @@ pub struct Opts {
     /// Quits after this many seconds.
     #[arg(long)]
     pub exit_after: Option<f32>,
+    /// Serves the Bevy Remote Protocol with the game's `fb/*` methods on 127.0.0.1 (default port 15702).
+    #[cfg(feature = "brp")]
+    #[arg(long, num_args = 0..=1, default_missing_value = "15702")]
+    pub brp: Option<u16>,
     /// Loads every model through Bevy's glTF loader, reports and quits.
     #[arg(long)]
     pub check_assets: bool,

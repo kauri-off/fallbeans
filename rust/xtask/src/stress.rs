@@ -91,6 +91,7 @@ pub fn stress(a: &StressArgs) -> bool {
                 &open,
                 "--intro",
                 "2",
+                "--respawn",
                 "--metrics-every",
                 "5",
                 "--exit-after",

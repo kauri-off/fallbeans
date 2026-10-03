@@ -1,6 +1,8 @@
 //! The client's side of the control protocol (no UI yet, Phase 5): the hello, where the player is (room list,
 //! a room, its lobby and arena), and the log of what the server says. `--start` plays a game by itself as
 //! the room's host (stress runs, `xtask dev`).
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use fb_net::*;
 use fb_proto::*;
@@ -18,6 +20,8 @@ pub struct Session {
     pub room: Option<String>,
     pub lobby: Option<Lobby>,
     pub arena: Option<ArenaInfo>,
+    /// Points of the current arena (the map's own scoring: stars, tails).
+    pub scores: BTreeMap<Pid, f64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
     /// The host already asked to start the game in this lobby.
@@ -131,6 +135,7 @@ fn receive(
                         },
                         a.participants.len()
                     );
+                    session.scores = a.scores.iter().copied().collect();
                     session.arena = Some(a);
                 }
                 ServerMsg::RoundEnd { game, index, rows, .. } => {
@@ -144,7 +149,8 @@ fn receive(
                 ServerMsg::Chat { name, text, .. } => info!("chat {name}: {text}"),
                 ServerMsg::DevAck { ok, msg, .. } => info!("dev: {} {msg}", if ok { "ok" } else { "failed" }),
                 ServerMsg::Clock { rate } => info!("game time ×{rate}"),
-                ServerMsg::Scores(_) | ServerMsg::Emote { .. } | ServerMsg::Left(_) => {}
+                ServerMsg::Scores(s) => session.scores.extend(s),
+                ServerMsg::Emote { .. } | ServerMsg::Left(_) => {}
             }
         }
     }
@@ -175,8 +181,8 @@ fn start_game(
         &mut senders,
         ClientMsg::Playlist(Playlist {
             mode: Mode::Custom,
-            games: vec![map.clone(); 12],
-            rounds: 12,
+            games: vec![map.clone(); opts.start_rounds as usize],
+            rounds: opts.start_rounds,
         }),
     );
     send(&mut senders, ClientMsg::Start);

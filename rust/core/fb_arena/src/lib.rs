@@ -273,6 +273,84 @@ pub fn touch_hook<'a>(
     }
 }
 
+/// A map event from the server applied to a client's copy of the map (TS `ClientArena.onEvent`): a portal
+/// trip shuts its pair, the rest go to the map's handler. What the map says back (sounds, decorations)
+/// lands in `out`.
+pub fn client_event(
+    world: &mut World,
+    spec: &mut MapSpec,
+    scores: &mut BTreeMap<u32, f64>,
+    me: Option<u32>,
+    name: &str,
+    data: &Value,
+    out: &mut Vec<MapOut>,
+) {
+    if name == "portal" {
+        let (Some(pair), Some(from), Some(t)) = (data["pair"].as_u64(), data["from"].as_u64(), data["t"].as_f64())
+        else {
+            return;
+        };
+        world.portal_used(pair as usize, from as u32, t);
+        return;
+    }
+    let Some(h) = spec.on_event.as_mut() else { return };
+    let mut cx = Cx {
+        server: false,
+        t: world.t,
+        me,
+        world,
+        bodies: &mut NoBodies,
+        scores,
+        out,
+        on_event: None,
+    };
+    h(&mut cx, name, data);
+}
+
+/// A client's map once built: what TS map code did at build time with the client's context (decorations).
+pub fn client_start(
+    world: &mut World,
+    spec: &mut MapSpec,
+    scores: &mut BTreeMap<u32, f64>,
+    me: Option<u32>,
+    out: &mut Vec<MapOut>,
+) {
+    let Some(h) = spec.on_start.as_mut() else { return };
+    let mut cx = Cx {
+        server: false,
+        t: world.t,
+        me,
+        world,
+        bodies: &mut NoBodies,
+        scores,
+        out,
+        on_event: None,
+    };
+    h(&mut cx);
+}
+
+/// The map's line of HUD text for the local player (TS `spec.hud`).
+pub fn client_hud(
+    world: &mut World,
+    spec: &MapSpec,
+    scores: &mut BTreeMap<u32, f64>,
+    me: Option<u32>,
+) -> Option<String> {
+    let h = spec.hud.as_ref()?;
+    let mut out = Vec::new();
+    let cx = Cx {
+        server: false,
+        t: world.t,
+        me,
+        world,
+        bodies: &mut NoBodies,
+        scores,
+        out: &mut out,
+        on_event: None,
+    };
+    h(&cx)
+}
+
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
 pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], touch: &mut TouchHook) {

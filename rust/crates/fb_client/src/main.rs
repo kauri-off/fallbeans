@@ -1,6 +1,8 @@
 //! Native client: connects, enters a room, predicts its bean, interpolates the others, draws the map.
 //! `--headless` runs the same game without a window or GPU (stress runs, CI).
 mod assets;
+#[cfg(feature = "brp")]
+mod brp;
 mod game;
 mod hud;
 mod net;
@@ -122,6 +124,10 @@ fn main() -> AppExit {
         game::GamePlugin,
         stats::StatsPlugin,
     ));
+    #[cfg(feature = "brp")]
+    if let Some(port) = opts.brp {
+        app.add_plugins(brp::BrpPlugin { port });
+    }
     app.add_systems(Update, exit_after);
     app.insert_resource(opts);
     app.run()

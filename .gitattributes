@@ -5,6 +5,7 @@
 *.glb binary
 *.blend binary
 *.woff2 binary
+*.ttf binary
 *.png binary
 *.jpg binary
 *.ogg binary

@@ -37,6 +37,9 @@ pub struct Opts {
     /// A game may start with one player (otherwise two).
     #[arg(long)]
     pub solo: bool,
+    /// A fall in a survival round is a respawn, not the end of the round (stress runs keep everybody in play).
+    #[arg(long)]
+    pub respawn: bool,
     /// Rooms that stay open with nobody in them, by id (stress runs meet in them), e.g. `s1,s2`.
     #[arg(long, value_delimiter = ',')]
     pub open_rooms: Vec<String>,

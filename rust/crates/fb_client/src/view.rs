@@ -6,6 +6,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
+use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_shared::COLORS;
 use fb_sim::math::M4;
@@ -34,7 +35,8 @@ impl Plugin for ViewPlugin {
                 .chain()
                 .before(TransformSystems::Propagate),
         );
-        app.add_systems(Update, mouse_look);
+        app.init_resource::<Spectate>();
+        app.add_systems(Update, (spectate, mouse_look).chain());
         app.add_observer(tint_bean);
     }
 }
@@ -60,6 +62,16 @@ struct BeanTint(Color);
 
 #[derive(Component)]
 pub struct MainCamera;
+
+/// Who the camera follows while the player has no bean in a round (finished, out, or not taking part).
+#[derive(Resource, Default)]
+pub struct Spectate {
+    /// None: the overview of the map.
+    pub target: Option<u32>,
+    /// The player picked the target; until then (or until it leaves) the first bean in play is followed.
+    manual: bool,
+    generation: u32,
+}
 
 fn setup(mut commands: Commands) {
     commands.spawn((
@@ -276,10 +288,23 @@ fn bean_transform(pos: Vec3, yaw: f32, tilt: f32, tilt_dir: f32, size: f32) -> T
     }
 }
 
+type OtherBeans<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static PlayerId,
+        &'static RemotePose,
+        &'static mut Transform,
+        &'static mut Visibility,
+    ),
+    (With<Interpolated>, With<BeanView>, Without<Predicted>),
+>;
+
 fn place_beans(
     fixed: Res<Time<Fixed>>,
+    map: Option<Res<Map>>,
     own: Query<(&BodyFull, &PrevPos, &mut Transform), (With<Predicted>, With<BeanView>)>,
-    mut others: Query<(&RemotePose, &mut Transform), (With<Interpolated>, With<BeanView>, Without<Predicted>)>,
+    mut others: OtherBeans,
 ) {
     let a = fixed.overstep_fraction();
     for (full, prev, mut tf) in own {
@@ -287,8 +312,15 @@ fn place_beans(
         let pos = prev.0.as_vec3().lerp(b.pos.as_vec3(), a);
         *tf = bean_transform(pos, b.yaw as f32, b.tilt as f32, b.tilt_dir as f32, b.size as f32);
     }
-    for (p, mut tf) in &mut others {
+    for (id, p, mut tf, mut vis) in &mut others {
         *tf = bean_transform(p.pos, p.yaw, p.tilt, p.tilt_dir, p.size);
+        // Finished or out: gone at once (the last snapshots may still carry the bean).
+        let gone = map.as_ref().is_some_and(|m| m.gone(id.0));
+        vis.set_if_neq(if gone {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
     }
 }
 
@@ -318,13 +350,19 @@ fn place_bonuses(
 fn follow_camera(
     cam: Res<CameraAngles>,
     map: Option<Res<Map>>,
+    spectate: Res<Spectate>,
     own: Query<&Transform, (With<Predicted>, With<BeanView>, Without<MainCamera>)>,
+    others: Query<(&PlayerId, &Transform), (With<Interpolated>, With<BeanView>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, With<MainCamera>>,
 ) {
     let Ok(mut tf) = camera.single_mut() else { return };
-    let target = match own.single() {
-        Ok(t) => t.translation + Vec3::Y * 1.3,
-        Err(_) => map
+    let followed = own.single().ok().or_else(|| {
+        let id = spectate.target?;
+        others.iter().find(|(p, _)| p.0 == id).map(|(_, t)| t)
+    });
+    let target = match followed {
+        Some(t) => t.translation + Vec3::Y * 1.3,
+        None => map
             .and_then(|m| m.spec.view)
             .map_or(Vec3::new(0.0, 2.0, 0.0), |v| v.as_vec3()),
     };
@@ -332,6 +370,56 @@ fn follow_camera(
     let dist = 10.0;
     let eye = target - fwd * dist * cam.pitch.cos() + Vec3::Y * dist * cam.pitch.sin();
     *tf = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+}
+
+const PREV_KEYS: [KeyCode; 3] = [KeyCode::ArrowLeft, KeyCode::KeyA, KeyCode::KeyQ];
+const NEXT_KEYS: [KeyCode; 3] = [KeyCode::ArrowRight, KeyCode::KeyD, KeyCode::KeyE];
+
+/// Without a bean of one's own in a round: follow someone still in play, or look over the map. The keys
+/// (and, with the mouse captured, its buttons) go through the beans and the overview.
+fn spectate(
+    map: Option<Res<Map>>,
+    own: Query<(), (With<Predicted>, With<PlayerId>)>,
+    beans: Query<&PlayerId, (With<Interpolated>, Without<Predicted>)>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut spec: ResMut<Spectate>,
+) {
+    let Some(map) = map else { return };
+    if spec.generation != map.generation {
+        *spec = Spectate {
+            generation: map.generation,
+            ..default()
+        };
+    }
+    if !own.is_empty() || map.round.kind != ArenaKind::Round {
+        spec.target = None;
+        return;
+    }
+    let mut ids: Vec<u32> = beans.iter().map(|p| p.0).filter(|id| !map.gone(*id)).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if spec.target.is_some_and(|t| !ids.contains(&t)) {
+        spec.manual = false;
+    }
+    // (Checked before `mouse_look`: the click that captures the mouse does not switch.)
+    let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
+    let dir = if keys.any_just_pressed(PREV_KEYS) || (captured && mouse.just_pressed(MouseButton::Right)) {
+        -1
+    } else if keys.any_just_pressed(NEXT_KEYS) || (captured && mouse.just_pressed(MouseButton::Left)) {
+        1
+    } else {
+        0
+    };
+    if dir != 0 {
+        let all: Vec<Option<u32>> = core::iter::once(None).chain(ids.iter().copied().map(Some)).collect();
+        let i = all.iter().position(|t| *t == spec.target).unwrap_or(0) as i32;
+        spec.target = all[(i + dir).rem_euclid(all.len() as i32) as usize];
+        spec.manual = true;
+    } else if !spec.manual {
+        spec.target = ids.first().copied();
+    }
 }
 
 fn mouse_look(

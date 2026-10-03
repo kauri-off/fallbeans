@@ -110,6 +110,9 @@ struct DevArgs {
     /// Clients play by themselves.
     #[arg(long)]
     autopilot: bool,
+    /// The host fills the room's empty places with bots.
+    #[arg(long)]
+    fill: bool,
     #[command(flatten)]
     shared: Shared,
 }
@@ -209,6 +212,9 @@ fn dev(a: &DevArgs) -> bool {
             .args(a.shared.play_args("dev", a.clients));
             if a.autopilot {
                 c.arg("--autopilot");
+            }
+            if a.fill {
+                c.arg("--fill");
             }
             c.spawn().ok()
         })

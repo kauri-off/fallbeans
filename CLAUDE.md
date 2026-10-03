@@ -61,8 +61,9 @@ Everything about the port's progress lives in `rust/port/`. Each file has one jo
 - Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` (server + headless
   clients, predictions compared with the server tick by tick); over the real network: `cargo xtask stress --remote
   --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto` (a probe server on that host).
-- Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--lag 75]`, or `fb_client --screenshot f.png
-  --exit-after 15` against a running `fb_server`. No BRP probe yet (Phase 4); read `stats:`/`metrics:` logs.
+- Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--fill] [--lag 75]`, or `fb_client --screenshot f.png
+  --exit-after 15` against a running `fb_server`; drive a client with `--brp` (`fb/state`, `fb/send`, `fb/dev`,
+  `fb/input`: `rust/README.md`, «Отладка»); read `stats:`/`metrics:` logs.
 - Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
 - One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`play::frame_for`: late presses
   happen on the next tick; Lightyear's copy into `ActionState` is off). Inputs go out at 60 Hz with 15 messages of

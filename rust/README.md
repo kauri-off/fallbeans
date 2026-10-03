@@ -35,12 +35,13 @@ rust/
     fb_server      rooms/ (Hub, Room, GameClock, награды, debug — обычный Rust, тесты без сети), auth,
                    play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход),
                    http (axum в своём потоке: сессия и connect token, health, debug API), logbook, metrics, opts
-    fb_client      net (сессия по HTTP, подключение, переподключение), session (hello, комната, лобби; --start), game (карта, предсказание, ввод, автопилот),
-                   view, hud, stats, assets, opts
+    fb_client      net (сессия по HTTP, подключение, переподключение), session (hello, комната, лобби; --start), game (карта, предсказание,
+                   события карты, ввод, автопилот), view (карта, бобы, камера, режим зрителя), hud, brp (BRP-probe), stats, assets, opts
   xtask            cargo xtask <check|golden|audit|assets|dev|stress|deploy>
   deploy/          что ставится на хост: systemd-юнит, nginx (wss), установщик с откатом; README — сам хост
   vendor/          зависимости с нашими правками ([patch.crates-io] в Cargo.toml; см. «Известные проблемы»)
   assets/models    glb для Bevy (делаются из ../public/models: cargo xtask assets)
+  assets/fonts     Nunito Bold/Black с кириллицей (из ../public/fonts, port/decisions.md), OFL
 ```
 
 Игрок входит так: `POST /fallbeans/api/session` (identity и connect token netcode с id игрока внутри) →
@@ -54,7 +55,7 @@ rust/
 
 ```sh
 cargo xtask check                 # fmt --check, clippy -D warnings, тесты — перед каждой сдачей работы
-cargo xtask dev --clients 2       # сервер --dev и два окна в комнате dev, игра --map; --autopilot, --lag/--jitter/--loss, --seed, --release
+cargo xtask dev --clients 2       # сервер --dev и два окна в комнате dev, игра --map; --autopilot, --fill (боты на пустые места), --lag/--jitter/--loss, --seed, --release
 cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05
 cargo xtask stress --clients 32 --rooms 4 --secs 100 --lag 75 --jitter 15 --loss 0.05   # 4 комнаты по 8
 cargo xtask stress --release --clients 16 --rooms 4 --secs 100 --client-arg=--fill   # 4 комнаты по 4 игрока и 4 бота
@@ -71,7 +72,8 @@ cargo xtask deploy --host … --domain …   # выложить сервер н�
 
 Бинарники напрямую (`cargo run -p fb_server -- --help`, `cargo run -p fb_client -- --help`):
 
-- сервер: `--dev` (dev-команды, комната `dev`), `--solo` (игра с одним игроком), `--open-rooms a,b` (постоянные
+- сервер: `--dev` (dev-команды, комната `dev`), `--solo` (игра с одним игроком), `--respawn` (упавший в
+  «выживании» возвращается на респаун, а не выбывает; так гоняет `stress`), `--open-rooms a,b` (постоянные
   комнаты), `--seed`, `--intro`, `--maintenance-file` (пока файл есть — «игра обновляется»), `--udp-port`,
   `--ws-addr`, `--ws-port`, `--http-addr`, `--http-port` (5887), `--public-host` (IP для UDP в connect token; без
   него — адрес, по которому клиент спросил HTTP, и без проверки адреса), `--lag/--jitter/--loss`, `--trace файл`,
@@ -79,10 +81,10 @@ cargo xtask deploy --host … --domain …   # выложить сервер н�
   (без него — случайный на запуск), `FB_DEBUG_KEY` — ключ debug API без `--dev`;
 - клиент: `--server`, `--http-url` (по умолчанию `http://<server>:5887/fallbeans`), `--transport auto|udp|ws`,
   `--ws-url`, `--name`, `--token` (identity), `--room`, `--pin`, `--practice карта`, `--color`, `--start карта
-  --start-players n` (хостом стартует игру из раундов этой карты), `--fill` (хост заполняет комнату ботами),
+  --start-players n --start-rounds n` (хостом стартует игру из раундов этой карты), `--fill` (хост заполняет комнату ботами),
   `--lag/--jitter/--loss`, `--input-margin`, `--udp-blocked с` (проверка `auto`: всё, что приходит по UDP, первые
   N секунд выбрасывается), `--backend vulkan|dx12|gl`, `--headless` (без окна и GPU, автопилот), `--fps`, `--autopilot`, `--trace файл`,
-  `--screenshot файл --exit-after с`, `--check-assets`.
+  `--screenshot файл --exit-after с`, `--check-assets`, `--brp [порт]` (BRP-probe, см. «Отладка»).
 
 ## Правила
 
@@ -142,6 +144,14 @@ cargo xtask deploy --host … --domain …   # выложить сервер н�
 точно. Комментарии и вывод инструментов — по-английски, текст для игрока — по-русски. Переводы строк — LF.
 
 ## Отладка
+
+- **BRP-probe клиента** (`fb_client --brp [порт]`, по умолчанию 15702, только 127.0.0.1; фича `brp`, в раздаваемых
+  сборках выключается): JSON-RPC по HTTP, методы Bevy (`world.query`, `world.get_resources`…) и свои —
+  `fb/state` (соединение, комната, лобби, арена с финишем и выбывшими, свой боб, чужие, статус
+  `play|finished|out|spectating`), `fb/send` (`ClientMsg` в JSON: `"Start"`, `{"Fill":true}`), `fb/dev` (`DevCmd`:
+  `"SkipIntro"`, `{"Goto":{"id":null,"to":"Finish"}}`, `{"Kill":{"id":null}}`), `fb/input` (стик в мировых осях
+  и кнопки на `secs` секунд вместо клавиатуры и автопилота: `{"mx":0,"mz":1,"jump":true,"secs":2}`):
+  `curl -d '{"jsonrpc":"2.0","id":1,"method":"fb/state"}' 127.0.0.1:15702`.
 
 - **Предсказание.** `cargo xtask stress` пишет трассы (`target/stress/server.trace`, `client-N.trace`: тик, id,
   ввод, позиция) и логи. Таблица показывает по каждому клиенту опоздавший ввод и расхождения по причинам;

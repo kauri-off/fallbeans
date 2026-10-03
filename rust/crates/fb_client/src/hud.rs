@@ -1,15 +1,22 @@
-//! A debug overlay: what phase 0 measures (RTT, rollbacks, transport, map hash, fps).
+//! A debug overlay (RTT, rollbacks, transport, map hash, fps) and, until the HUD of Phase 5, one line of
+//! the player's status in the round.
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
+use fb_arena::{ArenaKind, client_hud};
 use fb_net::*;
 use lightyear::prelude::*;
 
 use crate::game::{Map, Stats};
 use crate::net::Conn;
+use crate::session::Session;
+use crate::view::Spectate;
 
 #[derive(Component)]
 struct HudText;
+
+#[derive(Component)]
+struct StatusText;
 
 pub struct HudPlugin;
 
@@ -17,11 +24,14 @@ impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         app.add_systems(Startup, setup);
-        app.add_systems(Update, update.run_if(on_timer(core::time::Duration::from_millis(250))));
+        app.add_systems(
+            Update,
+            (update, status).run_if(on_timer(core::time::Duration::from_millis(250))),
+        );
     }
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn((
         HudText,
         Text::new(""),
@@ -38,6 +48,75 @@ fn setup(mut commands: Commands) {
             ..default()
         },
     ));
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            top: px(16),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_child((
+            StatusText,
+            Text::new(""),
+            TextFont {
+                // The game's font (Latin and Cyrillic): Bevy's built-in one has no Cyrillic.
+                font: assets.load("fonts/Nunito-Black.ttf").into(),
+                font_size: FontSize::Px(24.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::WHITE),
+            TextShadow::default(),
+        ));
+}
+
+fn status(
+    mut text: Query<&mut Text, With<StatusText>>,
+    map: Option<ResMut<Map>>,
+    session: Res<Session>,
+    spectate: Option<Res<Spectate>>,
+    own: Query<(), (With<Predicted>, With<PlayerId>)>,
+) {
+    let Ok(mut text) = text.single_mut() else { return };
+    let line = match map {
+        Some(mut map) if map.round.kind == ArenaKind::Round => {
+            let map = &mut *map;
+            let me = session.me;
+            let name = |id: u32| {
+                session
+                    .lobby
+                    .as_ref()
+                    .and_then(|l| l.players.iter().find(|p| p.id == id))
+                    .map_or_else(|| format!("#{id}"), |p| p.name.clone())
+            };
+            if !own.is_empty() {
+                let mut scores = session.scores.clone();
+                client_hud(&mut map.world, &map.spec, &mut scores, me).unwrap_or_default()
+            } else {
+                let mine = me.and_then(|me| {
+                    let place = map.info.finished.iter().position(|id| *id == me);
+                    match place {
+                        Some(i) => Some(format!("Финиш! Место: {}", i + 1)),
+                        None => map.info.out.contains(&me).then(|| "Вы выбыли".to_string()),
+                    }
+                });
+                let camera = match spectate.and_then(|s| s.target) {
+                    Some(id) => format!("Камера: {}", name(id)),
+                    None => "Камера: обзор арены".to_string(),
+                };
+                let lines: Vec<String> = mine
+                    .into_iter()
+                    .chain([format!("{camera} · A / D — другой игрок")])
+                    .collect();
+                lines.join("\n")
+            }
+        }
+        _ => String::new(),
+    };
+    if text.0 != line {
+        text.0 = line;
+    }
 }
 
 fn update(

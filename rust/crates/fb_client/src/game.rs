@@ -1,16 +1,18 @@
 //! The client's copy of the round: the same map built from the seed, own-bean prediction, map events,
 //! and the input it sends.
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use fb_arena::{ArenaKind, Stepper, build_map, can_move, tick_bodies, touch_hook};
+use fb_arena::{ArenaKind, Stepper, build_map, can_move, client_event, client_start, tick_bodies, touch_hook};
 use fb_net::*;
+use fb_proto::{ArenaInfo, Pid};
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_sim::bonus::{BonusTaken, Bonuses};
-use fb_sim::map::MapSpec;
+use fb_sim::map::{BeanDeco, MapOut, MapSpec, Value};
 use fb_sim::math::V3;
 use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
@@ -21,6 +23,13 @@ use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::*;
 
 use crate::opts::Opts;
+
+/// Input a tool holds for a while (`fb/input` over BRP).
+#[derive(Resource)]
+pub struct ProbeInput {
+    pub frame: InputFrame,
+    pub until: f64,
+}
 use crate::session::Session;
 
 /// The map of the current round as this client built it.
@@ -37,11 +46,40 @@ pub struct Map {
     /// Map events waiting for their tick on the interpolated timeline.
     pub pending: Vec<MapEventMsg>,
     pub generation: u32,
+    /// Who plays this arena, and who of them finished (in order) or is out.
+    pub info: ArenaInfo,
+    /// Decorations maps put on beans (tails, badges).
+    pub deco: BTreeMap<Pid, BeanDeco>,
+    /// Sounds the map asked for, for the audio to take.
+    pub sfx: Vec<&'static str>,
 }
 
 impl Map {
     pub fn time(&self, tick: f64) -> f64 {
         (tick - self.round.zero_tick as f64) * DT
+    }
+
+    /// Finished or out: the bean has left the arena.
+    pub fn gone(&self, id: Pid) -> bool {
+        self.info.finished.contains(&id) || self.info.out.contains(&id)
+    }
+
+    fn take_out(&mut self, out: Vec<MapOut>) {
+        for o in out {
+            match o {
+                MapOut::Sfx(s) => self.sfx.push(s),
+                MapOut::Decorate { id, deco } => {
+                    let d = self.deco.entry(id).or_default();
+                    if deco.tail.is_some() {
+                        d.tail = deco.tail;
+                    }
+                    if deco.badge.is_some() {
+                        d.badge = deco.badge;
+                    }
+                }
+                MapOut::Event { .. } | MapOut::Score { .. } => {}
+            }
+        }
     }
 }
 
@@ -107,7 +145,15 @@ fn open_trace(mut commands: Commands, opts: Res<Opts>) {
     }
 }
 
-fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<ResMut<Map>>, mut stats: ResMut<Stats>) {
+/// Builds the arena's map once both the replicated `Round` and its `ArenaInfo` (who plays: maps deal
+/// tails and stars from it) are in.
+fn build_round(
+    mut commands: Commands,
+    rounds: Query<&Round>,
+    map: Option<ResMut<Map>>,
+    mut session: ResMut<Session>,
+    mut stats: ResMut<Stats>,
+) {
     let Some(round) = rounds.iter().next() else { return };
     let mut map = map;
     if let Some(m) = map.as_mut().filter(|m| m.round.same_arena(round)) {
@@ -117,11 +163,14 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<ResMut
         }
         return;
     }
+    let Some(info) = session.arena.clone().filter(|a| a.id == round.arena) else {
+        return;
+    };
     let Some(def) = fb_maps::by_id(&round.map) else {
         error!("unknown map {}", round.map);
         return;
     };
-    let (mut b, spec) = build_map(def, round.seed, true, &[]);
+    let (mut b, mut spec) = build_map(def, round.seed, true, &info.participants);
     let meta = def.meta();
     let bonuses = if round.kind == ArenaKind::Round {
         Bonuses::new(&b.bonus_spots, round.seed, spec.finish.is_none(), meta.duration)
@@ -139,8 +188,11 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<ResMut
         "arena {}: {} seed {} (static {static_hash})",
         round.arena, round.map, round.seed
     );
+    let mut out = Vec::new();
+    let me = session.me;
+    client_start(&mut b.world, &mut spec, &mut session.scores, me, &mut out);
     let render = b.world.nodes.clone();
-    commands.insert_resource(Map {
+    let mut next = Map {
         round: round.clone(),
         world: b.world,
         spec,
@@ -150,7 +202,12 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<ResMut
         static_hash,
         pending: Vec::new(),
         generation: map.map_or(0, |m| m.generation + 1),
-    });
+        info,
+        deco: BTreeMap::new(),
+        sfx: Vec::new(),
+    };
+    next.take_out(out);
+    commands.insert_resource(next);
 }
 
 fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Query<(), With<PlayerId>>) {
@@ -240,11 +297,18 @@ fn write_input(
     opts: Res<Opts>,
     timeline: Res<LocalTimeline>,
     map: Option<Res<Map>>,
+    mut probe: Option<ResMut<ProbeInput>>,
+    time: Res<Time<Real>>,
     mut q: Query<(&mut ActionState<FbInput>, Option<(&PlayerId, &BodyFull)>), With<InputMarker<FbInput>>>,
 ) {
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
     let pressed = core::mem::take(&mut presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };
+    if let Some(p) = probe.as_mut().filter(|p| time.elapsed_secs_f64() < p.until) {
+        state.0 = p.frame.into();
+        p.frame.buttons &= BTN_GRAB;
+        return;
+    }
     let (f, r, buttons) = if opts.autopilot() {
         match autopilot(timeline.tick().0, map.as_deref(), own) {
             Ok(v) => v,
@@ -376,12 +440,15 @@ fn receive_map_events(
     }
 }
 
-/// Events about the own bean apply at once (it is drawn ahead); the rest when the others are drawn at their tick.
+/// Bonuses about the own bean apply at once (it is drawn ahead), the others' when they are drawn at their
+/// tick. The rest apply as they come, as in TS: a map event changes the world the own bean is predicted in
+/// (a tile falls, a portal shuts), and a bean that finished or is out leaves the arena.
 fn apply_map_events(
     map: Option<ResMut<Map>>,
     mut inbox: ResMut<Inbox>,
     interp: Option<Res<InterpolationTimeline>>,
     own: Query<&PlayerId, With<Predicted>>,
+    mut session: ResMut<Session>,
     time: Res<Time<Real>>,
 ) {
     let Some(mut map) = map else { return };
@@ -398,15 +465,53 @@ fn apply_map_events(
     });
     let me = own.single().ok().map(|p| p.0);
     let now = interp.map(|t| t.tick().0);
-    map.pending.retain(|msg| {
-        // Only bonuses so far; finishes, falls and the maps' own events wait for Phase 4.
-        let MapEventKind::Bonus { i, id, at } = msg.ev else {
-            return false;
-        };
-        let due = Some(id) == me || now.is_none_or(|n| n >= msg.tick);
-        if due {
-            map.bonuses.on_event(BonusTaken { i, id, at });
+    let session = &mut *session;
+    let mut out = Vec::new();
+    let pending = core::mem::take(&mut map.pending);
+    for msg in pending {
+        match &msg.ev {
+            MapEventKind::Bonus { i, id, at } => {
+                if Some(*id) == me || now.is_none_or(|n| n >= msg.tick) {
+                    map.bonuses.on_event(BonusTaken {
+                        i: *i,
+                        id: *id,
+                        at: *at,
+                    });
+                } else {
+                    map.pending.push(msg);
+                }
+            }
+            MapEventKind::Finish { id, place, time } => {
+                info!("player {id} finished, place {place} in {time:.2} s");
+                if !map.info.finished.contains(id) {
+                    map.info.finished.push(*id);
+                }
+            }
+            MapEventKind::Ko {
+                id, out: true, cause, ..
+            } => {
+                info!("player {id} is out ({cause})");
+                if !map.info.out.contains(id) {
+                    map.info.out.push(*id);
+                }
+            }
+            MapEventKind::Ko { .. } => {}
+            MapEventKind::Map { name, data } => {
+                let Ok(data) = serde_json::from_str::<Value>(data) else {
+                    warn!("map event {name}: bad data");
+                    continue;
+                };
+                client_event(
+                    &mut map.world,
+                    &mut map.spec,
+                    &mut session.scores,
+                    session.me,
+                    name,
+                    &data,
+                    &mut out,
+                );
+            }
         }
-        !due
-    });
+    }
+    map.take_out(out);
 }

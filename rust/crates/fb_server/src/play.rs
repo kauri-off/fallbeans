@@ -78,8 +78,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         seed: opts.seed,
         intro_ticks: ticks(opts.intro) as u32,
         dev: opts.dev,
-        // The client has no spectator view yet (Phase 4): a fall is a respawn, not the end of the round.
-        eliminate: false,
+        eliminate: !opts.respawn,
         ..default()
     };
     let mut hub = Hub::new(base, u64::from(timeline.tick().0));
