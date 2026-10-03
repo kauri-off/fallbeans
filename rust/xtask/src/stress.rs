@@ -35,20 +35,12 @@ pub struct StressArgs {
     max_tick_us: u64,
     #[command(flatten)]
     shared: Shared,
-    /// Against a probe server on the production host (UDP 5890, wss …/fallbeans/ws-probe) instead of a
-    /// local one: the network between here and there is the real one (the VPN matrix, port/plan.md §5).
+    /// Against a probe server on a server host (`--host`, `--domain`; UDP 5890, wss …/fallbeans/ws-probe)
+    /// instead of a local one: the network between here and there is the real one (the VPN matrix, port/plan.md §5).
     #[arg(long)]
     remote: bool,
     #[command(flatten)]
     host: crate::deploy::Host,
-    /// The host's address for UDP (default: the SSH target's).
-    #[arg(long)]
-    server: Option<String>,
-    #[arg(long, default_value = "wss://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/ws-probe")]
-    ws_url: String,
-    /// The probe's HTTP API (connect tokens), behind nginx.
-    #[arg(long, default_value = "https://xn----9sbmkcbiwqrnkr4b1b.xn--p1ai/fallbeans/probe")]
-    http_url: String,
     /// Extra flags for every client, e.g. `--client-arg=--sync-max-error=40`.
     #[arg(long, allow_hyphen_values = true)]
     client_arg: Vec<String>,
@@ -63,7 +55,7 @@ const PROBE_DIR: &str = "fb-probe";
 const PROBE_UDP: u16 = 5890;
 const PROBE_WS: u16 = 5891;
 const PROBE_HTTP: u16 = 5892;
-/// Matches only the probe (a server started from PROBE_DIR), never the production service.
+/// Matches only the probe (a server started from PROBE_DIR), never the game's service.
 const PROBE_MATCH: &str = "pgrep -u \"$(id -u)\" -f '^./fb_server --udp-port 5890'";
 
 pub fn stress(a: &StressArgs) -> bool {
@@ -104,14 +96,17 @@ pub fn stress(a: &StressArgs) -> bool {
     let mut server = None;
     let mut client_net: Vec<String> = Vec::new();
     if a.remote {
-        let ip = a.server.clone().unwrap_or_else(|| {
-            let t = a.host.target();
-            t.rsplit('@').next().unwrap_or(&t).to_string()
-        });
+        if !a.host.complete() {
+            return false;
+        }
+        let ip = a.host.public_ip().to_string();
         if !start_remote(a, &dir, &server_flags("server.trace"), &ip) {
             return false;
         }
-        client_net.extend(["--server", &ip, "--ws-url", &a.ws_url, "--http-url", &a.http_url].map(String::from));
+        let domain = a.host.domain();
+        let ws_url = format!("wss://{domain}/fallbeans/ws-probe");
+        let http_url = format!("https://{domain}/fallbeans/probe");
+        client_net.extend(["--server", &ip, "--ws-url", &ws_url, "--http-url", &http_url].map(String::from));
     } else {
         let mut server_cmd = Command::new(a.shared.bin("fb_server"));
         server_cmd

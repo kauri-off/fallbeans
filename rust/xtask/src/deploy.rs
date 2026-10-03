@@ -6,6 +6,7 @@
 //! `x86_64-unknown-linux-musl` target and `build-essential cmake musl-tools`.
 use std::fs;
 use std::io::Write;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,41 +16,89 @@ use crate::{root, run};
 
 pub const LINUX_TARGET: &str = "x86_64-unknown-linux-musl";
 
-/// The production host, as in the SharedServer repository.
+/// A server host over SSH (`deploy`, `stress --remote`); no defaults: flags or DEPLOY_* variables.
 #[derive(Args, Clone, Debug)]
 pub struct Host {
-    /// SSH target (default DEPLOY_HOST or deploy@168.113.157.12).
+    /// SSH target, e.g. `user@203.0.113.7` (default DEPLOY_HOST).
     #[arg(long)]
     pub host: Option<String>,
-    /// SSH key (default DEPLOY_KEY or ~/.ssh/cybershield_deploy).
+    /// SSH key (default DEPLOY_KEY, else ssh's own choice).
     #[arg(long)]
     pub key: Option<PathBuf>,
+    /// Domain whose nginx site serves the game's https and wss (default DEPLOY_DOMAIN).
+    #[arg(long)]
+    pub domain: Option<String>,
+    /// The address players reach UDP at (default DEPLOY_PUBLIC_IP, else the SSH target when it is an IP).
+    #[arg(long)]
+    pub public_ip: Option<IpAddr>,
 }
 
 impl Host {
-    pub fn target(&self) -> String {
-        self.host
-            .clone()
-            .or_else(|| std::env::var("DEPLOY_HOST").ok())
-            .unwrap_or_else(|| "deploy@168.113.157.12".into())
+    pub fn complete(&self) -> bool {
+        let missing: Vec<&str> = [
+            ("--host / DEPLOY_HOST", self.try_target().is_some()),
+            ("--domain / DEPLOY_DOMAIN", self.try_domain().is_some()),
+            ("--public-ip / DEPLOY_PUBLIC_IP", self.try_public_ip().is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, ok)| !ok)
+        .map(|(name, _)| name)
+        .collect();
+        if !missing.is_empty() {
+            eprintln!("no server host given: {}", missing.join(", "));
+            return false;
+        }
+        if let Some(k) = self.try_key()
+            && !k.exists()
+        {
+            eprintln!("SSH key not found: {}", k.display());
+            return false;
+        }
+        true
     }
 
-    pub fn key(&self) -> PathBuf {
+    fn try_target(&self) -> Option<String> {
+        self.host.clone().or_else(|| std::env::var("DEPLOY_HOST").ok())
+    }
+
+    fn try_key(&self) -> Option<PathBuf> {
         self.key
             .clone()
             .or_else(|| std::env::var_os("DEPLOY_KEY").map(PathBuf::from))
-            .unwrap_or_else(|| home().join(".ssh").join("cybershield_deploy"))
+    }
+
+    fn try_domain(&self) -> Option<String> {
+        self.domain.clone().or_else(|| std::env::var("DEPLOY_DOMAIN").ok())
+    }
+
+    fn try_public_ip(&self) -> Option<IpAddr> {
+        self.public_ip
+            .or_else(|| std::env::var("DEPLOY_PUBLIC_IP").ok()?.parse().ok())
+            .or_else(|| {
+                let t = self.try_target()?;
+                t.rsplit('@').next()?.parse().ok()
+            })
+    }
+
+    pub fn target(&self) -> String {
+        self.try_target().expect("Host::complete")
+    }
+
+    pub fn domain(&self) -> String {
+        self.try_domain().expect("Host::complete")
+    }
+
+    pub fn public_ip(&self) -> IpAddr {
+        self.try_public_ip().expect("Host::complete")
     }
 
     fn opts(&self) -> Vec<String> {
-        vec![
-            "-i".into(),
-            self.key().to_string_lossy().into(),
-            "-o".into(),
-            "BatchMode=yes".into(),
-            "-o".into(),
-            "ConnectTimeout=15".into(),
-        ]
+        let mut v: Vec<String> = self
+            .try_key()
+            .map(|k| vec!["-i".into(), k.to_string_lossy().into()])
+            .unwrap_or_default();
+        v.extend(["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"].map(String::from));
+        v
     }
 
     pub fn ssh(&self, remote_cmd: &str) -> Command {
@@ -68,13 +117,6 @@ impl Host {
         c.args(self.opts()).arg(side(from)).arg(side(to));
         c
     }
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_default()
 }
 
 #[derive(Args)]
@@ -142,15 +184,15 @@ fn confirm(question: &str) -> bool {
 }
 
 pub fn deploy(a: &DeployArgs) -> bool {
-    if !a.pack_only && !a.host.key().exists() {
-        eprintln!("[deploy] SSH key not found: {}", a.host.key().display());
+    if !a.pack_only && !a.host.complete() {
         return false;
     }
     if !a.pack_only
         && !a.yes
         && !confirm(&format!(
-            "[deploy] Update Fall Beans on {} (production)?",
-            a.host.target()
+            "[deploy] Update Fall Beans on {} ({})?",
+            a.host.target(),
+            a.host.domain()
         ))
     {
         eprintln!("[deploy] cancelled");
@@ -202,8 +244,9 @@ pub fn deploy(a: &DeployArgs) -> bool {
     }
     let stamp = std::time::SystemTime::UNIX_EPOCH.elapsed().map_or(0, |d| d.as_secs());
     let dir = format!("fallbeans-update-{stamp}");
+    let (domain, ip) = (a.host.domain(), a.host.public_ip());
     run(&mut a.host.scp(&archive.to_string_lossy(), &format!(":{dir}.tar.gz")))
         && run(&mut a.host.ssh(&format!(
-            "mkdir -p ~/{dir} && tar -xzf ~/{dir}.tar.gz -C ~/{dir} && sudo bash ~/{dir}/remote-install.sh; code=$?; rm -rf ~/{dir} ~/{dir}.tar.gz; exit $code"
+            "mkdir -p ~/{dir} && tar -xzf ~/{dir}.tar.gz -C ~/{dir} && sudo bash ~/{dir}/remote-install.sh '{domain}' '{ip}'; code=$?; rm -rf ~/{dir} ~/{dir}.tar.gz; exit $code"
         )))
 }

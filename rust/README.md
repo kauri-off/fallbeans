@@ -2,7 +2,7 @@
 
 Перенос игры на Rust + Bevy + Lightyear. **С чего продолжать — [`port/state.md`](port/state.md).** ТЗ и фазы —
 [`port/plan.md`](port/plan.md), решения вне плана — [`port/decisions.md`](port/decisions.md), отчёты фаз — [`port/phases/`](port/phases/);
-прод-сервер — [`deploy/README.md`](deploy/README.md). Этот файл — как работать с кодом.
+сервер на своём хосте — [`deploy/README.md`](deploy/README.md). Этот файл — как работать с кодом.
 
 ## Что нужно
 
@@ -59,12 +59,12 @@ cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05
 cargo xtask stress --clients 32 --rooms 4 --secs 100 --lag 75 --jitter 15 --loss 0.05   # 4 комнаты по 8
 cargo xtask stress --release --clients 16 --rooms 4 --secs 100 --client-arg=--fill   # 4 комнаты по 4 игрока и 4 бота
 cargo xtask stress --transport ws --lag 75 --jitter 15   # по WebSocket (потери не задавать: TCP не теряет)
-cargo xtask stress --remote --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
+cargo xtask stress --remote --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
 cargo xtask golden                # переснять следы из TS и сверить (после изменений в TS-физике или карте)
 cargo xtask audit [карта…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics] [--notes] [--json]
 cargo xtask audit --vs-ts         # те же аудиты TS (с этой libm) и сверка: всё, кроме замеров времени, должно совпасть
 cargo xtask assets                # переэкспортировать модели и проверить загрузку в Bevy
-cargo xtask deploy                # выложить сервер на прод (только по просьбе автора, см. «Деплой»)
+cargo xtask deploy --host … --domain …   # выложить сервер на свой хост (только по просьбе автора, см. «Деплой»)
 ```
 
 Бинарники напрямую (`cargo run -p fb_server -- --help`, `cargo run -p fb_client -- --help`):
@@ -74,7 +74,7 @@ cargo xtask deploy                # выложить сервер на прод 
   `--ws-addr`, `--ws-port`, `--http-addr`, `--http-port` (5887), `--public-host` (IP для UDP в connect token; без
   него — адрес, по которому клиент спросил HTTP, и без проверки адреса), `--lag/--jitter/--loss`, `--trace файл`,
   `--metrics-every с`, `--exit-after с`; `FB_SECRET` (64 hex) — секрет identity, ключа netcode и cookie
-  (без него — случайный на запуск), `FB_DEBUG_KEY` — ключ debug API на проде;
+  (без него — случайный на запуск), `FB_DEBUG_KEY` — ключ debug API без `--dev`;
 - клиент: `--server`, `--http-url` (по умолчанию `http://<server>:5887/fallbeans`), `--transport auto|udp|ws`,
   `--ws-url`, `--name`, `--token` (identity), `--room`, `--pin`, `--practice карта`, `--color`, `--start карта
   --start-players n` (хостом стартует игру из раундов этой карты), `--fill` (хост заполняет комнату ботами),
@@ -148,8 +148,8 @@ cargo xtask deploy                # выложить сервер на прод 
 - **Debug API сервера** (порт `debugApi.ts`): `state`, `health`, `logs?level=&n=`, `trace?room=&id=&s=`,
   `replay?room=&i=` (запись раунда; комнаты пишут раунды только с `--dev`), `maps`; `?format=text` — компактный
   текст. Локально с `--dev` — без ключа: `curl "http://127.0.0.1:5887/fallbeans/api/debug/state?format=text"`.
-  На проде — cookie: `curl -c c.txt "https://…/fallbeans/api/debug/login?key=$FB_DEBUG_KEY"`, затем `-b c.txt`
-  (ключ — в `/etc/fallbeans.env` на хосте).
+  Без `--dev` — cookie: `curl -c c.txt "https://…/fallbeans/api/debug/login?key=$FB_DEBUG_KEY"`, затем `-b c.txt`
+  (после `deploy` ключ — в `/etc/fallbeans.env` на хосте).
 - **Логи.** Клиент раз в секунду пишет `stats:` (транспорт, RTT, джиттер, самый длинный кадр за секунду,
   сдвиги часов Lightyear, откаты, предсказанные тики, трафик, раунд, `MAP HASH MISMATCH` при расхождении
   карты), сервер раз в `--metrics-every` с — `metrics:` (тик p50/p99/max, самый длинный кадр, тики без ввода
@@ -159,19 +159,36 @@ cargo xtask deploy                # выложить сервер на прод 
   — сеть. `stress` выводит оба столбца.
 - **Графика.** `fb_client --backend gl --screenshot shot.png --exit-after 15` против запущенного сервера.
 
+## Игра по локальной сети
+
+Постоянного сервера нет: сервер запускается на одной машине, клиенты — на ней и на других в той же сети.
+
+```sh
+cargo build --release -p fb_server -p fb_client
+target/release/fb_server --dev --public-host <LAN-IP сервера>        # --solo: игра с одним игроком
+target/release/fb_client --server 127.0.0.1 --room dev --name A --start jump-club   # на машине сервера
+fb_client --server <LAN-IP сервера> --room dev --name B                              # на другой машине
+```
+
+Открыть на сервере 5887/tcp (HTTP API), 5888/udp (игра), 5889/tcp (WebSocket). Клиенту нужна папка `assets/`
+рядом с бинарником (или `BEVY_ASSET_ROOT`). `--public-host` обязателен, если клиенты обращаются к серверу по
+имени: без него в токен уходит IP из запроса, а для имени — 127.0.0.1. https сессии через свой обратный прокси
+со своим CA не пройдёт: `ureq` проверяет сертификат по встроенным корням (wss берёт системные).
+
 ## Деплой
 
-Только по просьбе автора. `cargo xtask deploy` прогоняет `check`, собирает статический Linux-бинарник сервера
-(musl; на Windows — в WSL, `--wsl-distro`, нужны rustup с целью `x86_64-unknown-linux-musl` и
-`build-essential cmake musl-tools`), пакует его с `deploy/` и по SSH (`--host`, `--key`, по умолчанию
-`deploy@168.113.157.12` и `~/.ssh/cybershield_deploy`) запускает `deploy/remote-install.sh`:
+Только по просьбе автора; своего хоста сейчас нет. `cargo xtask deploy` прогоняет `check`, собирает статический
+Linux-бинарник сервера (musl: нужна цель `x86_64-unknown-linux-musl`; на Windows — в WSL, `--wsl-distro`, плюс
+`build-essential cmake musl-tools`), пакует его с `deploy/` и по SSH запускает `deploy/remote-install.sh`. Хост
+задаётся явно, умолчаний нет: `--host user@ip`, `--domain`, при необходимости `--key`, `--public-ip` (или
+`DEPLOY_HOST`, `DEPLOY_KEY`, `DEPLOY_DOMAIN`, `DEPLOY_PUBLIC_IP`); требования к хосту — `deploy/README.md`.
 
 - релиз в `/opt/fallbeans/releases/<время>`, ссылка `current`, три последних релиза хранятся;
 - секреты `/etc/fallbeans.env` (`FB_SECRET`, `FB_DEBUG_KEY`) создаются один раз и дальше не трогаются: новый
   секрет даёт всем игрокам новые identity;
 - systemd-юнит `fallbeans.service` (`DynamicUser`, `MemoryMax=300M`): UDP 5888 наружу, WebSocket на
   127.0.0.1:5889, HTTP API на 127.0.0.1:5887;
-- nginx: `/etc/nginx/apps.d/fallbeans.conf` (сайт из репозитория SharedServer включает `apps.d/*.conf`):
+- nginx: `/etc/nginx/apps.d/fallbeans.conf` (https-сайт домена включает `apps.d/*.conf`):
   `wss://…/fallbeans/ws` → 5889, `/fallbeans/api/` и `/fallbeans/health` → 5887, `/fallbeans/ws-probe` → 5891 и
   `/fallbeans/probe/` → 5892 (сервер пробы);
 - на время перезапуска — `/run/fallbeans-updating`: старый сервер говорит игрокам «игра обновляется» и отпускает
@@ -181,14 +198,14 @@ cargo xtask deploy                # выложить сервер на прод 
 
 `--pack-only` только собирает архив (`target/deploy/`), `--yes` не спрашивает, `--skip-checks` пропускает `check`.
 
-**Проба** (`stress --remote`): та же сборка этого дерева запускается в `~/fb-probe` пользователя deploy (UDP 5890,
+**Проба** (`stress --remote`, тот же `--host`/`--domain`): та же сборка этого дерева запускается в `~/fb-probe` SSH-пользователя (UDP 5890,
 WS 5891 и HTTP 5892 за nginx, `--public-host` — адрес хоста) на время прогона; клиенты идут с этой машины по настоящей сети, трасса сервера скачивается и
-сверяется как в локальном `stress`. Прод-службу проба не трогает.
+сверяется как в локальном `stress`. Службу игры проба не трогает.
 
 ## Известные проблемы
 
-- Прод-хост маленький: 1 vCPU и 0,9 ГБ RAM, делится с другими службами (`deploy/README.md`); сервер рассчитан
-  на 4 комнаты по 8 игроков на нём, это ещё не проверено стрессом (Фаза 3).
+- Сервер рассчитан на 4 комнаты по 8 игроков в одном ядре (1 vCPU, ~1 ГБ RAM, раздел 11 плана); стрессом 4 × 8
+  в таких рамках ещё не проверено (Фаза 3).
 - `vendor/aeronet_websocket`: сервер WebSocket не включал `TCP_NODELAY` (клиент умеет, сервер нет), это давало
   +15 мс RTT на wss. Правка в одну строку (`server/backend.rs`); убрать, когда появится в aeronet, а при обновлении aeronet перенести.
 - Пересинхронизация часов Lightyear: если опережение клиента ушло от цели больше чем на

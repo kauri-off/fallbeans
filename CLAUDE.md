@@ -2,8 +2,9 @@
 
 Fall Beans is a party game (up to 8 beans, races / survival / points rounds, 120 Hz authoritative server) being
 **rewritten from a browser game into a native Rust + Bevy 0.19 + Lightyear 0.30 client and server** (workspace
-`rust/`, branch `rogue/port-to-rust`). The Rust server has run in production since 2026-10-01; the TS version (Bun
-server, three.js + Preact client) is frozen, off the host, and kept on `master` as the porting source — a
+`rust/`, branch `rogue/port-to-rust`). There is no production server: the game is tested over the local network,
+with the server on the author's machine. The TS version (Bun server, three.js + Preact client) is frozen and kept
+on `master` as the porting source — a
 prototype, not a reference: where it behaves badly, the Rust version does better. Player-facing text and the
 port's docs are Russian; code, comments and tool output are English.
 
@@ -31,15 +32,16 @@ Everything about the port's progress lives in `rust/port/`. Each file has one jo
 - **Do not track completion.** No "done" lists or ✓ marks anywhere: the code, tests and git show what is done.
   Record only what they do not show — where to start, what is half-done, why something is the way it is.
 - `rust/README.md` describes the code as it is (layout, commands, rules, known issues); `rust/deploy/README.md` —
-  the production host.
+  what a server host needs for `cargo xtask deploy`.
 
 ## Rules
 
 - Git: the repo is on GitHub (kauri-off/fallbeans, `master`). Do not commit, push or open PRs unless asked.
 - Line endings are LF (`.gitattributes`). rustfmt (`.rs`) and Biome (TS/JSON/CSS) format on every edit (hook in
   `.claude/settings.json` → `scripts/hooks/format-edited.ts`); files changed by scripts need `cargo fmt --all`.
-- Deploy only when asked: `cd rust && cargo xtask deploy` (`rust/README.md`, "Деплой"). The TS version is not
-  deployed any more. There is no "the game is updating" step yet: connected clients just lose the connection.
+- Deploy only when asked, and only to a host the author names: `cd rust && cargo xtask deploy --host … --domain …`
+  (`rust/README.md`, "Деплой"); there are no default hosts. Local network play: `rust/README.md`, "Игра по
+  локальной сети". The repository is public: no private hosts, addresses or keys in committed files.
 - The simulation must stay deterministic: `rust/core/` uses no wall clock, no unseeded randomness, no `HashMap`,
   maths only through `fb_shared::m` (`rust/core/clippy.toml` enforces it). The same rule held in TS (`b.rng`, the
   seed, sim time).
@@ -58,19 +60,18 @@ Everything about the port's progress lives in `rust/port/`. Each file has one jo
   and `golden!` in `tests/golden.rs`; check that every section of its pools lands in at least one traced seed.
 - Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` (server + headless
   clients, predictions compared with the server tick by tick); over the real network: `cargo xtask stress --remote
-  --clients 8 --secs 100 --transport udp|ws|auto` (a probe server next to the game on the production host; the
-  production service is not touched).
+  --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto` (a probe server on that host).
 - Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--lag 75]`, or `fb_client --screenshot f.png
   --exit-after 15` against a running `fb_server`. No BRP probe yet (Phase 4); read `stats:`/`metrics:` logs.
 - Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
 - One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`play::frame_for`: late presses
   happen on the next tick; Lightyear's copy into `ActionState` is off). Inputs go out at 60 Hz with 15 messages of
   redundancy, input margin 3 ticks: all chosen by stress measurements. The server runs every schedule
-  single-threaded (`SingleThreadedExecutor`; the 1-vCPU host lost 15% of its core to the multi-threaded executor's
+  single-threaded (`SingleThreadedExecutor`; a 1-vCPU VPS lost 15% of its core to the multi-threaded executor's
   hand-offs). `rust/vendor/aeronet_websocket` patches the WebSocket server (`TCP_NODELAY`); keep it until aeronet
   has it, carry it over on aeronet updates.
 - No traffic budget anywhere (decided by the author): traffic is measured and reported only. Server target: up to 4
-  rooms of 8 players on the current host (1 vCPU / 0.9 GB, shared). Minimum client: 2 cores / 2 GB RAM. Many players
+  rooms of 8 players in one core (1 vCPU / ~1 GB). Minimum client: 2 cores / 2 GB RAM. Many players
   sit behind VPNs that drop UDP/443 (`rust/port/plan.md` §5): the game's UDP must stay off port 443 and not look
   like QUIC; WebSocket on 443 is the fallback.
 

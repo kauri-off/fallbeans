@@ -28,9 +28,9 @@ enum Task {
     /// Server plus windowed clients on this machine.
     Dev(DevArgs),
     /// Server plus headless clients under a simulated network; checks prediction, traffic and tick cost.
-    /// `--remote`: against a probe server on the production host, over the real network.
+    /// `--remote`: against a probe server on a server host (`--host`), over the real network.
     Stress(Box<stress::StressArgs>),
-    /// Builds the server for Linux and installs it on the production host.
+    /// Builds the server for Linux and installs it on a server host (`--host`, `--domain`).
     Deploy(deploy::DeployArgs),
 }
 

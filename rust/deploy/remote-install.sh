@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Installs a Fall Beans server release on the host. Runs as root from the bundle `cargo xtask deploy` made
-# (fb_server, fallbeans.service, nginx/ next to this script).
+# (fb_server, fallbeans.service, nginx/ next to this script): remote-install.sh <domain> <public IP>.
 #
 # Layout:
 #   /opt/fallbeans/releases/<ts>/fb_server     releases (a static Linux binary each)
 #   /opt/fallbeans/current → releases/<ts>     the live one
 #   /etc/systemd/system/fallbeans.service      the service (DynamicUser)
 #   /etc/nginx/apps.d/fallbeans.{conf,ws,http} wss://…/fallbeans/ws → 127.0.0.1:5889, https://…/fallbeans/api/
-#                                              and /health → 127.0.0.1:5887 (included by the shared site)
+#                                              and /health → 127.0.0.1:5887 (included by the domain's site)
 #   /etc/fallbeans.env                         FB_SECRET (identities, connect tokens), FB_DEBUG_KEY; made once
 #   /run/fallbeans-updating                    exists while a release goes in: players are told and wait
 #   ufw: 5888/udp (the game), 5890/udp (the probe server of `cargo xtask stress --remote`)
-# Nothing changes until the checks pass; a failed release rolls back to the previous one. The TS version
-# (Bun, the web page, WebTransport on udp/443) is cleared away once the new server is up.
+# Nothing changes until the checks pass; a failed release rolls back to the previous one.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 BASE=/opt/fallbeans
-DOMAIN=xn----9sbmkcbiwqrnkr4b1b.xn--p1ai
+DOMAIN=${1:?домен сайта: remote-install.sh <домен> <публичный IP>}
+PUBLIC_IP=${2:?публичный IP для UDP: remote-install.sh <домен> <публичный IP>}
 APPS=/etc/nginx/apps.d
 UNIT=/etc/systemd/system/fallbeans.service
 SECRETS=/etc/fallbeans.env
 UPDATING=/run/fallbeans-updating
-CONFIGS="$UNIT $APPS/fallbeans.conf $APPS/fallbeans.ws $APPS/fallbeans.http $APPS/fallbeans.headers"
+CONFIGS="$UNIT $APPS/fallbeans.conf $APPS/fallbeans.ws $APPS/fallbeans.http"
 TS=$(date +%Y%m%d%H%M%S)
 
 say() { echo "==> $*"; }
@@ -39,9 +39,8 @@ say "Проверки"
 chmod 755 fb_server # (packed on Windows: tar keeps no mode bits)
 ./fb_server --help >/dev/null || fail "fb_server не запускается на этом хосте"
 command -v nginx >/dev/null || fail "nginx не установлен"
-[ -L /etc/nginx/sites-enabled/shared-site ] && [ -d $APPS ] ||
-  fail "общий сайт nginx не установлен — сначала выложите SharedServer (node deploy.mjs)"
-grep -q "apps.d/\*.conf" /etc/nginx/sites-available/shared-site || fail "общий сайт не подключает /etc/nginx/apps.d/*.conf"
+[ -d $APPS ] || fail "нет $APPS: сайт $DOMAIN в nginx должен подключать $APPS/*.conf"
+grep -rqs "apps.d/\*.conf" /etc/nginx/ || fail "nginx не подключает $APPS/*.conf (include в server-блоке сайта $DOMAIN)"
 for port in 5888 5890; do
   if ss -Hlnu "sport = :$port" | grep -q . && ! systemctl is-active --quiet fallbeans; then
     fail "UDP $port уже занят: $(ss -Hlnup "sport = :$port")"
@@ -102,12 +101,11 @@ if [ ! -f $SECRETS ]; then
     "$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')" >$SECRETS
   umask 022
 fi
-install -m 644 fallbeans.service $UNIT
+sed "s/@PUBLIC_IP@/$PUBLIC_IP/" fallbeans.service >$UNIT
+chmod 644 $UNIT
 install -m 644 nginx/fallbeans.conf $APPS/fallbeans.conf
 install -m 644 nginx/fallbeans.ws $APPS/fallbeans.ws
 install -m 644 nginx/fallbeans.http $APPS/fallbeans.http
-# The TS version's static page headers.
-rm -f $APPS/fallbeans.headers
 systemctl daemon-reload
 nginx -t -q 2>/dev/null || {
   nginx -t || true
@@ -131,21 +129,8 @@ echo "Сервер игры обновлён: $R ($(cat "$R/VERSION" 2>/dev/null
 if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
   ufw status | grep -qE '^5888/udp .*ALLOW' || ufw allow 5888/udp comment 'Fall Beans' >/dev/null
   ufw status | grep -qE '^5890/udp .*ALLOW' || ufw allow 5890/udp comment 'Fall Beans probe' >/dev/null
-  if ufw status | grep -qE '^443/udp '; then
-    say "ufw: закрываем 443/udp (WebTransport TS-версии)"
-    ufw delete allow 443/udp >/dev/null || true
-  fi
 fi
 
-# ------------------------------------------------------------------ the TS version
-
-if [ -d $BASE/bin ] || [ -d /etc/fallbeans ] || ls -d $BASE/releases/*/server >/dev/null 2>&1; then
-  say "Убираем TS-версию (Bun, страница, секреты)"
-  rm -rf $BASE/bin /etc/fallbeans
-  for d in $BASE/releases/*; do
-    if [ -d "$d/server" ] || [ -d "$d/www" ]; then rm -rf "$d"; fi
-  done
-fi
 ls -1dt $BASE/releases/* | tail -n +4 | xargs -r rm -rf
 
 # ------------------------------------------------------------------ checks from outside
@@ -167,7 +152,6 @@ check "WebSocket игры" "https://$DOMAIN/fallbeans/ws" 101 --http1.1 -m 3 \
 check "Health" "https://$DOMAIN/fallbeans/health" 200
 check "Сессия" "https://$DOMAIN/fallbeans/api/session" 200 -X POST -H 'Content-Type: application/json' \
   -d '{"identity":null,"protocol":0,"transport":"udp"}'
-check "Сайт КиберЩита" "https://$DOMAIN/" 200
 ss -Hlnup 'sport = :5888' | grep -q fb_server && echo "UDP 5888 слушает fb_server" || {
   echo "ВНИМАНИЕ: UDP 5888 не слушается"
   status=1
