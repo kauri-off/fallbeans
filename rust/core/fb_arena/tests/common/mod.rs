@@ -24,8 +24,7 @@ pub fn check_colliders(what: &str, world: &World, cols: &Value) {
             "{what}: collider {i} static"
         );
         let s = &g["shape"];
-        // Sizes may differ in the last bit: Bun's two-argument Math.hypot is the platform libm's.
-        let eq = |a: f64, key: &str| (a - f(&s[key])).abs() < 1e-12;
+        let eq = |a: f64, key: &str| a == f(&s[key]);
         let ok = match c.shape {
             Shape::Box { hx, hy, hz } => s["type"] == "box" && eq(hx, "hx") && eq(hy, "hy") && eq(hz, "hz"),
             Shape::Cyl { r, hh } => s["type"] == "cyl" && eq(r, "r") && eq(hh, "hh"),

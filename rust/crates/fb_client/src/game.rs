@@ -10,7 +10,7 @@ use fb_net::*;
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_sim::bonus::{BonusTaken, Bonuses};
-use fb_sim::map::{Genre, MapSpec};
+use fb_sim::map::MapSpec;
 use fb_sim::math::V3;
 use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
@@ -103,9 +103,9 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<Res<Ma
         error!("unknown map {}", round.map);
         return;
     };
-    let (mut b, spec) = build_map(def, round.seed, true);
+    let (mut b, spec) = build_map(def, round.seed, true, &[]);
     let meta = def.meta();
-    let bonuses = Bonuses::new(&b.bonus_spots, round.seed, meta.genre != Genre::Race, meta.duration);
+    let bonuses = Bonuses::new(&b.bonus_spots, round.seed, spec.finish.is_none(), meta.duration);
     b.world.finalize(-1e3);
     let static_hash = b.world.hash(true);
     if static_hash != round.static_hash {

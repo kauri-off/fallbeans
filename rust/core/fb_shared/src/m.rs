@@ -3,6 +3,7 @@
 
 pub const PI: f64 = core::f64::consts::PI;
 pub const TAU: f64 = core::f64::consts::TAU;
+pub const SQRT2: f64 = core::f64::consts::SQRT_2;
 
 #[inline]
 pub fn sin(x: f64) -> f64 {
@@ -103,6 +104,13 @@ pub fn to_i32(x: f64) -> i32 {
         return 0;
     }
     (x.trunc() as i64) as i32
+}
+
+/// `Math.fround` (what a `Float32Array` keeps): IEEE rounding to f32, the same on every platform.
+#[inline]
+#[allow(clippy::disallowed_types)]
+pub fn fround(x: f64) -> f64 {
+    x as f32 as f64
 }
 
 #[inline]

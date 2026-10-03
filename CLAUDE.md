@@ -70,6 +70,7 @@ production (Phase 0, closed 2026-10-01: `jump-club`); the TS version is frozen, 
 
 - `plan.md` (Russian): the spec and the phases; section 12 says where we are and what comes next.
 - `rust/PHASE0.md`: Phase 0 state, measurements, review of every technical decision, open items.
+- `rust/PHASE2.md`: Phase 2 progress (bots, navigation, arena), measurements, decisions, what comes next.
 - `rust/README.md`: layout, commands, code rules, debugging, known issues.
 - `rust/deploy/README.md`: the production host (hardware, what else runs there, ports, ufw, nginx, load measured).
 

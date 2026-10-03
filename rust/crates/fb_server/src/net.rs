@@ -82,7 +82,7 @@ fn on_connected(
     };
     let peer = remote.0;
     let id = room.next_player_id();
-    let pawn = room.arena.add_pawn(id.0);
+    let pawn = room.arena.add_pawn(id.0, false);
     let full = BodyFull {
         body: pawn.body.clone(),
         teleports: pawn.teleports,

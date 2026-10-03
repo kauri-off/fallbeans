@@ -1,24 +1,26 @@
 /**
- * Golden traces for the Rust port (rust/core/fb_arena/tests/golden): builds maps with the TS code,
- * runs a few bodies through a scripted round and records everything the Rust side must reproduce.
+ * Golden traces for the Rust port (rust/core/fb_arena/tests/golden): plays whole rounds of the TS
+ * server arena (scripted players and bots) and records everything the Rust side must reproduce.
  *   bun scripts/golden.ts [map…]   (default: the maps ported so far, and the physics scenarios)
- * The loop is the body part of server/rooms/arena.ts step(): events cleared, world moved, bodies
- * stepped against each other, bonuses, falls.
  */
+import './golden-math';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as THREE from 'three';
+import { type ArenaHooks, ServerArena } from '../src/server/rooms/arena';
 import { BTN } from '../src/shared/codec';
-import { DT } from '../src/shared/consts';
-import { Bonuses } from '../src/sim/bonus';
+import { DT, TICK_MS } from '../src/shared/consts';
 import { Builder, PAL } from '../src/sim/builder';
-import type { MapCtx, MapModule } from '../src/sim/map';
+import type { MapModule } from '../src/sim/map';
 import { BODY_STATES, type OtherBody, PlayerBody, POWER } from '../src/sim/physics';
 
 const OUT = 'rust/core/fb_arena/tests/golden';
 const SEEDS = [1, 777, 123456789];
 const INTRO_TICKS = 720;
-const PLAY_TICKS = 1800;
-const IDS = [1, 2, 3];
+/** Players with scripted input, and bots. */
+const HUMANS = [1, 2];
+const BOTS = [3, 4, 5, 6];
+/** Full state rows every this many ticks (the state hash is kept every tick). */
+const ROW_EVERY = 30;
 const DIRS = [
   [127, 0],
   [90, 90],
@@ -33,10 +35,11 @@ const DIRS = [
 
 /** The scripted input of body `id` at tick k (integers only: both sides compute it identically). */
 function script(id: number, k: number) {
-  const d = DIRS[(Math.floor(k / 90) * 5 + id * 3) % DIRS.length]!;
+  const mod = (a: number, n: number) => ((a % n) + n) % n;
+  const d = DIRS[mod(Math.floor(k / 90) * 5 + id * 3, DIRS.length)]!;
   let buttons = 0;
-  if (k % 70 === id * 7) buttons |= BTN.jump;
-  if (k % 250 === id * 31) buttons |= BTN.dive;
+  if (k >= 0 && k % 70 === id * 7) buttons |= BTN.jump;
+  if (k >= 0 && k % 250 === id * 31) buttons |= BTN.dive;
   return { mx: d[0], mz: d[1], buttons };
 }
 
@@ -106,71 +109,73 @@ function colliderList(world: Builder['world']) {
   }));
 }
 
+const STATUS = ['play', 'finished', 'out'];
+
 function trace(id: string, mod: MapModule, seed: number) {
-  const b = new Builder(seed, null);
-  const ctx: MapCtx = {
-    server: true,
-    seed,
-    participants: [],
-    now: () => 0,
-    emit: () => {},
-    score: () => 0,
-    setScore: () => {},
-    bodies: () => new Map(),
-    sfx: () => {},
-    me: () => -1,
-    decorate: () => {},
-  };
-  const spec = mod.build(b, ctx);
-  const bonuses = new Bonuses(b, seed, { arena: !spec.finish, duration: mod.meta.duration });
-  const tick0 = -INTRO_TICKS;
-  const world = b.world;
-  world.finalize(tick0 * DT);
-  const staticHash = world.hash(true);
-  const colliders = colliderList(world);
-  const faceYaw = (p: THREE.Vector3) => (spec.faceCenter ? Math.atan2(-p.x, -p.z) : 0);
-  const pawns = IDS.map((pid, i) => {
-    const spawn = spec.spawns[i % spec.spawns.length]!.clone();
-    const body = new PlayerBody(pid);
-    body.reset(spawn, faceYaw(spawn));
-    return { id: pid, body, spawn };
-  });
-  const frames: number[][] = [];
-  const hashes: [number, string][] = [];
   const events: unknown[] = [];
-  for (let k = tick0 + 1; k <= PLAY_TICKS; k++) {
-    const t = k * DT;
-    const moving = t >= 0;
-    tickBodies(world, t, pawns, (p) => (moving ? script(p.id, k) : { mx: 0, mz: 0, buttons: 0 }));
-    if (t >= 0)
-      bonuses.check(
-        t,
-        pawns.map((p) => p.body),
-        (_name, data) => {
-          bonuses.onEvent(data);
-          events.push({ k, ...(data as object) });
-        },
-      );
-    for (const p of pawns) {
-      if (p.body.pos.y >= spec.killY) continue;
-      const to = p.spawn;
-      const jitter = ((p.id * 7919) % 100) / 100 - 0.5;
-      p.body.reset(new THREE.Vector3(to.x + jitter * 2, to.y + 0.5, to.z), faceYaw(to));
+  let k = 0;
+  const hooks: ArenaHooks = {
+    onFinish: (pid, time) => events.push({ k, e: 'finish', id: pid, t: time }),
+    onKo: (ko) => events.push({ k, e: 'ko', ...ko }),
+    onEvent: (name, data) => events.push({ k, e: name, ...(data as object) }),
+    onScore: (pid, v) => events.push({ k, e: 'score', id: pid, v }),
+    onSnapshot: () => {},
+    onEmote: (pid, e) => events.push({ k, e: 'emote', id: pid, emote: e }),
+    warn: (msg, data) => {
+      throw new Error(`${msg} ${JSON.stringify(data)}`);
+    },
+  };
+  const participants = [...HUMANS, ...BOTS];
+  const arena = new ServerArena({
+    id: 1,
+    kind: 'round',
+    module: mod,
+    seed,
+    startAt: 0,
+    participants,
+    now: -INTRO_TICKS * TICK_MS,
+    hooks,
+  });
+  const tick0 = arena.tick;
+  const staticHash = arena.staticHash;
+  const colliders = colliderList(arena.world);
+  for (const p of participants) arena.addPawn(p, BOTS.includes(p));
+  const step = (arena as unknown as { step(k: number): void }).step.bind(arena);
+  const end = Math.round(mod.meta.duration / DT);
+  const states: string[] = [];
+  const worlds: [number, string][] = [];
+  const rows: number[][] = [];
+  for (k = tick0 + 1; k <= end; k++) {
+    for (const h of HUMANS) arena.forceInput(h, k, script(h, k));
+    step(k);
+    states.push(arena.stateHash());
+    if (k % 60 === 0) worlds.push([k, arena.world.hash()]);
+    if (k % ROW_EVERY === 0) {
+      const pawns = [...arena.pawns.values()];
+      const row = bodyRow(pawns, k);
+      for (const p of pawns) row.push(STATUS.indexOf(p.status), p.grabbing ?? -1);
+      rows.push(row);
     }
-    frames.push(bodyRow(pawns, k));
-    if (k % 60 === 0) hashes.push([k, world.hash()]);
   }
+  const pawns = [...arena.pawns.values()];
   return {
     map: id,
     seed,
-    intro: INTRO_TICKS,
-    ids: IDS,
+    tick0,
+    end,
+    humans: HUMANS,
+    bots: BOTS,
+    rowEvery: ROW_EVERY,
     staticHash,
     colliders,
-    bonuses: bonuses.list.map((x) => ({ i: x.i, x: x.x, y: x.y, z: x.z, kind: x.kind, appearAt: x.appearAt })),
+    bonuses: (arena.bonuses?.list ?? []).map((x) => ({ i: x.i, x: x.x, y: x.y, z: x.z, kind: x.kind, appearAt: x.appearAt })),
     events,
-    hashes,
-    frames,
+    states,
+    worlds,
+    rows,
+    finished: arena.finished,
+    out: arena.out,
+    stats: pawns.map((p) => ({ id: p.id, ...p.stats })),
   };
 }
 
@@ -486,7 +491,8 @@ for (const id of ids) {
   for (const seed of SEEDS) runs.push(trace(id, mod, seed));
   const file = `${OUT}/${id}.json`;
   writeFileSync(file, JSON.stringify({ runs }));
-  console.log(`${file}: ${runs.length} seeds × ${runs[0]!.frames.length} ticks`);
+  const outcome = runs.map((r) => `seed ${r.seed}: ${r.events.length} events, out ${r.out.join(',') || '-'}`).join('; ');
+  console.log(`${file}: ${runs.length} seeds × ${runs[0]!.states.length} ticks (${outcome})`);
 }
 if (!maps.length) {
   const file = `${OUT}/scenarios.json`;

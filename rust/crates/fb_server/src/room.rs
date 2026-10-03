@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
-use fb_arena::{Arena, MapEvent};
+use fb_arena::{Arena, ArenaEvent, ArenaKind, FallBehaviour};
 use fb_net::*;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::{DT, INPUT_HOLD, RESULTS_S};
@@ -73,7 +73,9 @@ fn new_round(opts: &Opts, now: Tick, number: u32) -> (Arena, Round) {
     });
     let intro_ticks = (opts.intro / DT).round() as u32;
     let zero_tick = now.0 + intro_ticks + 1;
-    let (arena, _) = Arena::new(map, seed, now.0 as i64 - zero_tick as i64, false);
+    let (mut arena, _) = Arena::new(map, ArenaKind::Round, seed, now.0 as i64 - zero_tick as i64, &[], false);
+    // The client has no spectator view yet (Phase 4): a fall is a respawn, not the end of the round.
+    arena.fall = FallBehaviour::Spawn;
     info!("round {number}: {} seed {seed}, starts at tick {zero_tick}", opts.map);
     let round = Round {
         map: opts.map.clone(),
@@ -205,7 +207,7 @@ fn tick_room(
         let (mut arena, round) = new_round(&opts, tick, room.round.number + 1);
         for p in &room.arena.pawns {
             // To the new spawn as a teleport: views snap instead of gliding across the map.
-            arena.add_pawn(p.id).teleports = p.teleports + 1;
+            arena.add_pawn(p.id, false).teleports = p.teleports + 1;
         }
         room.arena = arena;
         room.round = round.clone();
@@ -234,7 +236,7 @@ fn tick_room(
         }
     }
     for e in events {
-        let MapEvent::Bonus(b) = e;
+        let ArenaEvent::Bonus(b) = e else { continue };
         let msg = MapEventMsg {
             round: room.round.number,
             tick: tick.0,

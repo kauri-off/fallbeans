@@ -10,6 +10,8 @@ pub const DT: f64 = 1.0 / TICK_RATE as f64;
 pub const SNAPSHOT_EVERY: u32 = 4;
 /// Bot brains decide at 20 Hz.
 pub const BOT_EVERY: u32 = 6;
+/// Emotes 1…EMOTES: wave, dance, laugh, cry, fright.
+pub const EMOTES: u32 = 5;
 /// Missing input: the last one is kept this many ticks (never its jump or dive), then idle.
 pub const INPUT_HOLD: u32 = 60;
 

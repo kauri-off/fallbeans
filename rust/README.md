@@ -19,10 +19,12 @@ rust/
   core/            детерминированное ядро: без Bevy, f64, математика только через fb_shared::m
     clippy.toml    правила детерминизма (действуют только на core/*)
     fb_shared      константы, ввод (InputFrame), mulberry32, m (libm, hypot как в V8, round_js)
-    fb_sim         физика боба (physics.rs), коллайдеры, World (узлы + movers), Builder, бонусы, SceneDesc
+    fb_sim         физика боба (physics.rs), коллайдеры, World (узлы + movers), Builder, бонусы, SceneDesc,
+                   навигация ботов (nav.rs), поведение ботов (bots.rs)
     fb_maps        карты (сейчас jump-club) и реестр MAPS
-    fb_arena       арена: пешки, бонусы, падения; tick_bodies — общий шаг сервера и предсказания
-      tests/       golden.rs (карты против TS), scenarios.rs (ветки физики боба в малых мирах против TS),
+    fb_arena       арена: пешки и боты, захваты, таклы, финиш, чекпоинты, падения, выбывание, бонусы;
+                   tick_bodies — общий шаг сервера и предсказания
+      tests/       golden.rs (полные раунды карт с ботами против TS-арены), scenarios.rs (ветки физики боба в малых мирах против TS),
                    determinism.rs (записанные хэши), replay.rs (откат = прямой прогон)
   crates/          всё на Bevy и Lightyear
     fb_net         протокол Lightyear: компоненты, ввод, события, форматы передачи (wire.rs),
