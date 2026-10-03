@@ -1,4 +1,5 @@
 //! Connecting: a connect token from the HTTP API, then UDP (WebSocket if UDP is silent for 2 s); after a drop, again.
+//! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
 use core::net::{Ipv4Addr, SocketAddr};
 use core::time::Duration;
 use std::sync::Mutex;
@@ -7,7 +8,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bevy::prelude::*;
-use fb_proto::{SessionReply, SessionRequest};
+use fb_proto::{Phase, SessionReply, SessionRequest};
 use fb_shared::PROTOCOL_VERSION;
 use lightyear::connection::client::Connected;
 use lightyear::netcode::client_plugin::NetcodeConfig;
@@ -20,7 +21,9 @@ use crate::opts::{Opts, Transport};
 use crate::session::Session;
 
 /// How long UDP gets to answer before `auto` goes over WebSocket.
-const UDP_TRY_S: f32 = 2.0;
+pub const UDP_TRY_S: f32 = 2.0;
+/// How often `auto` on WebSocket checks whether UDP works.
+const PROBE_EVERY_S: f32 = 60.0;
 /// Waits before asking the HTTP API again: after a failed request, and while the game is being updated.
 const RETRY_S: f32 = 2.0;
 const UPDATING_RETRY_S: f32 = 5.0;
@@ -40,6 +43,12 @@ pub struct Conn {
     asking: Option<Asked>,
     /// When to ask the HTTP API for a connection.
     next_try: Option<f32>,
+    /// `auto` on WebSocket: the UDP check under way, when the next one is due, and that UDP worked.
+    probe: Option<Mutex<Receiver<bool>>>,
+    next_probe: Option<f32>,
+    udp_works: bool,
+    /// The link is being closed to come back over UDP.
+    moving: bool,
 }
 
 pub struct NetPlugin;
@@ -47,7 +56,10 @@ pub struct NetPlugin;
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_input_delay, connect_first).chain());
-        app.add_systems(Update, (receive_session, watch_link, fallback_to_ws).chain());
+        app.add_systems(
+            Update,
+            (receive_session, watch_link, fallback_to_ws, back_to_udp).chain(),
+        );
     }
 }
 
@@ -76,40 +88,61 @@ fn http_url(opts: &Opts) -> String {
         .unwrap_or_else(|| format!("http://{}:{}/fallbeans", opts.server, opts.http_port))
 }
 
+fn session_request(conn: &Conn, transport: Transport) -> SessionRequest {
+    SessionRequest {
+        identity: conn.identity.clone(),
+        protocol: PROTOCOL_VERSION,
+        transport: if transport == Transport::Ws { "ws" } else { "udp" }.into(),
+    }
+}
+
+/// `POST <url>` of the session API (blocking).
+pub fn request(url: &str, req: &SessionRequest) -> Result<SessionReply, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(5)))
+        .build()
+        .into();
+    agent
+        .post(url)
+        .send_json(req)
+        .and_then(|mut r| r.body_mut().read_json::<SessionReply>())
+        .map_err(|e| format!("{url}: {e}"))
+}
+
+pub fn token_of(reply: &SessionReply) -> Option<ConnectToken> {
+    let bytes = B64.decode(reply.token.as_ref()?).ok()?;
+    ConnectToken::try_from_bytes(&bytes).ok()
+}
+
+/// What a link over `transport` receives through: `--udp-blocked` drops everything UDP brings for a while.
+fn conditioner(opts: &Opts, transport: Transport, now: f32) -> Option<LinkConditionerConfig> {
+    if transport != Transport::Ws && now < opts.udp_blocked {
+        return Some(LinkConditionerConfig::default().with_fixed_loss(1.0));
+    }
+    opts.net.config()
+}
+
 /// Asks the HTTP API for a connect token on a thread of its own.
 fn ask(conn: &mut Conn, opts: &Opts, now: f32) {
     let (tx, rx) = channel();
     let url = format!("{}/api/session", http_url(opts));
-    let req = SessionRequest {
-        identity: conn.identity.clone(),
-        protocol: PROTOCOL_VERSION,
-        transport: if conn.transport == Transport::Ws { "ws" } else { "udp" }.into(),
-    };
+    let req = session_request(conn, conn.transport);
     std::thread::spawn(move || {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(5)))
-            .build()
-            .into();
-        let reply = agent
-            .post(&url)
-            .send_json(&req)
-            .and_then(|mut r| r.body_mut().read_json::<SessionReply>())
-            .map_err(|e| format!("{url}: {e}"));
-        let _ = tx.send(reply);
+        let _ = tx.send(request(&url, &req));
     });
     conn.asking = Some(Mutex::new(rx));
     conn.next_try = None;
     conn.started = now;
 }
 
-fn spawn_client(commands: &mut Commands, opts: &Opts, token: ConnectToken, transport: Transport) -> Entity {
+fn spawn_client(commands: &mut Commands, opts: &Opts, token: ConnectToken, transport: Transport, now: f32) -> Entity {
     let netcode = NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()).expect("netcode client");
     // The server address comes from the token (`PeerAddr` set by `NetcodeClient`).
     let mut e = commands.spawn((
         Name::new("client"),
         Client,
         ReplicationReceiver,
-        Link::default().with_conditioner(opts.net.config().map(RecvLinkConditioner::new)),
+        Link::default().with_conditioner(conditioner(opts, transport, now).map(RecvLinkConditioner::new)),
         LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
         netcode,
     ));
@@ -156,6 +189,10 @@ fn connect_first(mut commands: Commands, opts: Res<Opts>, time: Res<Time>) {
         identity: opts.token.clone(),
         asking: None,
         next_try: None,
+        probe: None,
+        next_probe: None,
+        udp_works: false,
+        moving: false,
     };
     ask(&mut conn, &opts, time.elapsed_secs());
     commands.insert_resource(conn);
@@ -190,7 +227,7 @@ fn receive_session(
             return;
         }
     };
-    conn.identity = Some(reply.identity);
+    conn.identity = Some(reply.identity.clone());
     if reply.protocol != PROTOCOL_VERSION {
         error!(
             "this client is out of date: the server speaks protocol {} (build {}), this one {PROTOCOL_VERSION}",
@@ -199,11 +236,7 @@ fn receive_session(
         session.refused = true;
         return;
     }
-    let token = reply
-        .token
-        .and_then(|t| B64.decode(t).ok())
-        .and_then(|b| ConnectToken::try_from_bytes(&b).ok());
-    let Some(token) = token else {
+    let Some(token) = token_of(&reply) else {
         if reply.updating {
             info!("the game is being updated: waiting");
         } else {
@@ -213,7 +246,7 @@ fn receive_session(
         return;
     };
     let transport = conn.transport;
-    conn.entity = Some(spawn_client(&mut commands, &opts, token, transport));
+    conn.entity = Some(spawn_client(&mut commands, &opts, token, transport, now));
     conn.started = now;
 }
 
@@ -235,6 +268,9 @@ fn watch_link(
     if connected && !conn.connected {
         conn.connected = true;
         info!("connected over {:?}", conn.transport);
+        if opts.transport == Transport::Auto && conn.transport == Transport::Ws {
+            conn.next_probe = Some(now + PROBE_EVERY_S);
+        }
     }
     // (A new link is `Disconnected` until `Connect` is applied.)
     if !down || now - conn.started < 0.2 {
@@ -243,7 +279,14 @@ fn watch_link(
     let was = core::mem::take(&mut conn.connected);
     commands.entity(entity).despawn();
     conn.entity = None;
+    (conn.probe, conn.next_probe, conn.udp_works) = (None, None, false);
     if session.refused {
+        return;
+    }
+    if core::mem::take(&mut conn.moving) {
+        info!("UDP works again: moving back to it");
+        conn.transport = Transport::Udp;
+        ask(&mut conn, &opts, now);
         return;
     }
     if was {
@@ -274,4 +317,58 @@ fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time>, conn
     conn.entity = None;
     conn.transport = Transport::Ws;
     ask(&mut conn, &opts, now);
+}
+
+/// `auto` on WebSocket: checks UDP every minute; once it works, closes the link at a moment that costs nothing
+/// (between rounds, or outside a room: a drop takes the player out of a lobby) and reconnects over UDP, back
+/// into the room. Should UDP fail after all, `auto` goes back to WebSocket as on any start.
+fn back_to_udp(
+    mut commands: Commands,
+    opts: Res<Opts>,
+    time: Res<Time>,
+    session: Res<Session>,
+    conn: Option<ResMut<Conn>>,
+) {
+    let Some(mut conn) = conn else { return };
+    let Some(entity) = conn.entity else { return };
+    if !conn.connected || conn.moving || opts.transport != Transport::Auto || conn.transport != Transport::Ws {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if let Some(probe) = &conn.probe {
+        let got = probe.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
+        match got {
+            Err(TryRecvError::Empty) => {}
+            Ok(works) => {
+                conn.probe = None;
+                conn.udp_works = works;
+                if !works {
+                    info!("UDP still does not work: staying on WebSocket");
+                    conn.next_probe = Some(now + PROBE_EVERY_S);
+                }
+            }
+            Err(TryRecvError::Disconnected) => {
+                conn.probe = None;
+                conn.next_probe = Some(now + PROBE_EVERY_S);
+            }
+        }
+    } else if conn.next_probe.is_some_and(|t| now >= t) {
+        conn.next_probe = None;
+        let url = format!("{}/api/session", http_url(&opts));
+        let req = session_request(&conn, Transport::Udp);
+        conn.probe = Some(Mutex::new(crate::probe::start(
+            url,
+            req,
+            conditioner(&opts, Transport::Udp, now),
+        )));
+    }
+    let calm = session.room.is_none()
+        || session
+            .lobby
+            .as_ref()
+            .is_some_and(|l| matches!(l.phase, Phase::Results | Phase::Podium));
+    if conn.udp_works && calm {
+        conn.moving = true;
+        commands.trigger(Disconnect { entity });
+    }
 }

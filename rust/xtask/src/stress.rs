@@ -33,6 +33,16 @@ pub struct StressArgs {
     /// Fails when the room tick's 99th percentile is above this, µs.
     #[arg(long, default_value_t = 1000)]
     max_tick_us: u64,
+    /// Fails when the server process used more than this share of one core in a window, %.
+    #[arg(long, default_value_t = 60.0)]
+    max_cpu: f64,
+    /// Fails when the server's resident memory went above this, MB.
+    #[arg(long, default_value_t = 300.0)]
+    max_mem: f64,
+    /// Runs the local server as on the 1-vCPU host (Linux): alone on the last core, the clients on the
+    /// others, and in a systemd scope with `MemoryMax=300M` and no swap.
+    #[arg(long)]
+    limit_server: bool,
     #[command(flatten)]
     shared: Shared,
     /// Against a probe server on a server host (`--host`, `--domain`; UDP 5890, wss …/fallbeans/ws-probe)
@@ -93,6 +103,14 @@ pub fn stress(a: &StressArgs) -> bool {
         v
     };
 
+    let pin = match a.limit_server.then(server_cores) {
+        None => None,
+        Some(Some(p)) if !a.remote => Some(p),
+        Some(_) => {
+            eprintln!("--limit-server: a local server on Linux with at least 2 cores only");
+            return false;
+        }
+    };
     let mut server = None;
     let mut client_net: Vec<String> = Vec::new();
     if a.remote {
@@ -108,7 +126,25 @@ pub fn stress(a: &StressArgs) -> bool {
         let http_url = format!("https://{domain}/fallbeans/probe");
         client_net.extend(["--server", &ip, "--ws-url", &ws_url, "--http-url", &http_url].map(String::from));
     } else {
-        let mut server_cmd = Command::new(a.shared.bin("fb_server"));
+        let mut server_cmd = match &pin {
+            Some(p) => {
+                let mut c = Command::new("systemd-run");
+                c.args([
+                    "--user",
+                    "--scope",
+                    "--quiet",
+                    "-p",
+                    "MemoryMax=300M",
+                    "-p",
+                    "MemorySwapMax=0",
+                    "--",
+                ])
+                .args(["taskset", "-c", &p.server])
+                .arg(a.shared.bin("fb_server"));
+                c
+            }
+            None => Command::new(a.shared.bin("fb_server")),
+        };
         server_cmd
             .args(server_flags(&dir.join("server.trace").to_string_lossy()))
             .stdout(log("server.log"))
@@ -124,7 +160,14 @@ pub fn stress(a: &StressArgs) -> bool {
     for i in 0..a.clients {
         let room = &rooms[i as usize % rooms.len()];
         let in_room = (0..a.clients).filter(|j| *j as usize % rooms.len() == i as usize % rooms.len());
-        let mut c = Command::new(a.shared.bin("fb_client"));
+        let mut c = match &pin {
+            Some(p) => {
+                let mut c = Command::new("taskset");
+                c.args(["-c", &p.clients]).arg(a.shared.bin("fb_client"));
+                c
+            }
+            None => Command::new(a.shared.bin("fb_client")),
+        };
         c.args([
             "--headless",
             "--name",
@@ -166,6 +209,20 @@ pub fn stress(a: &StressArgs) -> bool {
         return false;
     }
     report(a, &dir)
+}
+
+struct Pin {
+    server: String,
+    clients: String,
+}
+
+/// The last core for the server, the rest for the clients.
+fn server_cores() -> Option<Pin> {
+    let n = std::thread::available_parallelism().ok()?.get();
+    (cfg!(target_os = "linux") && n >= 2).then(|| Pin {
+        server: (n - 1).to_string(),
+        clients: format!("0-{}", n - 2),
+    })
 }
 
 /// The first word of `sha256sum`'s output.
@@ -285,6 +342,15 @@ fn parse_trace(path: &Path, tag: &str) -> Vec<(u32, Bean, Row)> {
         .collect()
 }
 
+/// Ticks where a client's connection (the first one, or one after a reconnect) starts its trace: `R tick`.
+fn connects(path: &Path) -> BTreeSet<u32> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("R ")?.trim().parse().ok())
+        .collect()
+}
+
 fn dist(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
@@ -308,6 +374,7 @@ fn compare(
     by_tick: &BTreeMap<u32, Vec<(Bean, [f64; 3])>>,
     teleports: &BTreeSet<(Bean, u32)>,
     client: &[(u32, Bean, Row)],
+    connects: &BTreeSet<u32>,
 ) -> Divergence {
     let mut first: BTreeMap<u32, (&Bean, Row)> = BTreeMap::new();
     for (tick, id, row) in client {
@@ -321,8 +388,11 @@ fn compare(
             continue;
         };
         let late = c.input != s.input;
-        // Just after joining the server has nothing from the client yet (its pawn is there before the
-        // client knows it is its own): compared from the first input the server got.
+        // Just after joining (and after a reconnect) the server has nothing from the client yet (its pawn is
+        // there before the client knows it is its own): compared from the first input the server got.
+        if connects.contains(&tick) {
+            streaming = false;
+        }
         streaming |= !late;
         if !streaming {
             continue;
@@ -436,7 +506,8 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
             .rev()
             .find_map(|l| l.split_once(" stats: ").map(|(_, m)| m))
             .unwrap_or("");
-        let d = compare(&server, &by_tick, &teleports, &rows);
+        let connects = connects(&dir.join(format!("client-{i}.trace")));
+        let d = compare(&server, &by_tick, &teleports, &rows, &connects);
         // Stalls of this machine (the longest frame) and clock resyncs, the first (joining) one aside.
         let stat_lines: Vec<&str> = log
             .lines()
@@ -517,10 +588,13 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     let p99 = worst(&|l| num_after(l, "p99 "));
     let max = worst(&|l| num_after(l, "max "));
     let per_player = worst(&|l| num_before(l, " per player"));
-    let cpu = worst(&|l| num_after(l, "cpu "));
     let mem = worst(&|l| num_after(l, "mem "));
     // The first line also holds the start and the joins (the clients' clocks not synced yet).
     let settled = metrics.iter().skip(1);
+    let cpu = settled
+        .clone()
+        .filter_map(|l| num_after(l, "cpu "))
+        .fold(f64::NAN, f64::max);
     let frame_max = settled
         .clone()
         .filter_map(|l| num_after(l, "frame max "))
@@ -534,6 +608,12 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     }
     if p99 > a.max_tick_us as f64 {
         failures.push(format!("server: tick p99 {p99:.0} µs (max {})", a.max_tick_us));
+    }
+    if cpu > a.max_cpu {
+        failures.push(format!("server: cpu {cpu:.1}% of a core (max {})", a.max_cpu));
+    }
+    if mem > a.max_mem {
+        failures.push(format!("server: mem {mem:.0} MB (max {})", a.max_mem));
     }
 
     if failures.is_empty() {

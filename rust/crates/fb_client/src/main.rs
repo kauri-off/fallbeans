@@ -5,6 +5,7 @@ mod game;
 mod hud;
 mod net;
 mod opts;
+mod probe;
 mod session;
 mod stats;
 mod view;

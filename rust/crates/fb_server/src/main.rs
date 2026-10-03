@@ -11,7 +11,7 @@ mod rooms;
 use std::sync::Arc;
 
 use bevy::app::ScheduleRunnerPlugin;
-use bevy::diagnostic::{DiagnosticsPlugin, SystemInformationDiagnosticsPlugin};
+use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::ecs::schedule::SingleThreadedExecutor;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
@@ -39,7 +39,6 @@ fn main() -> AppExit {
         },
         bevy::state::app::StatesPlugin,
         DiagnosticsPlugin,
-        SystemInformationDiagnosticsPlugin,
     ));
     app.add_plugins(ServerPlugins { tick_duration: TICK });
     app.add_plugins((ProtocolPlugin, NetStatsPlugin));

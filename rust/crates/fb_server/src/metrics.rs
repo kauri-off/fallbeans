@@ -1,11 +1,11 @@
 //! What stress runs measure on the server, logged as one `metrics:` line every `--metrics-every` s:
 //! the rooms' tick cost (all rooms), the longest frame (a stalled server reads inputs late), ticks run without a player's
-//! input in time, traffic out, process CPU and memory.
+//! input in time, traffic out, process CPU (share of one core over the window) and resident memory.
 use std::time::Instant;
 
-use bevy::diagnostic::{DiagnosticsStore, SystemInformationDiagnosticsPlugin};
 use bevy::prelude::*;
 use fb_net::NetStats;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::http::HttpShared;
 use crate::opts::Opts;
@@ -16,6 +16,11 @@ pub struct MetricsPlugin;
 impl Plugin for MetricsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TickTimes>();
+        app.insert_resource(Usage {
+            sys: System::new(),
+            pid: Pid::from_u32(std::process::id()),
+            cpu_ms: 0,
+        });
         app.add_systems(FixedUpdate, (start_tick.before(RoomTick), end_tick.after(RoomTick)));
         app.add_systems(Update, (track_frames, report, exit_after).chain());
     }
@@ -30,6 +35,28 @@ struct TickTimes {
     last_bytes: u64,
     last_packets: u64,
     frame_max: f64,
+}
+
+#[derive(Resource)]
+struct Usage {
+    sys: System,
+    pid: Pid,
+    cpu_ms: u64,
+}
+
+impl Usage {
+    /// Percent of one core since the last call and the resident set in MB.
+    fn sample(&mut self, span: f64) -> (f64, f64) {
+        let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        self.sys
+            .refresh_processes_specifics(ProcessesToUpdate::Some(&[self.pid]), false, kind);
+        let Some(p) = self.sys.process(self.pid) else {
+            return (f64::NAN, f64::NAN);
+        };
+        let ms = p.accumulated_cpu_time();
+        let cpu = (ms - core::mem::replace(&mut self.cpu_ms, ms)) as f64 / 10.0 / span;
+        (cpu, p.memory() as f64 / 1048576.0)
+    }
 }
 
 fn track_frames(time: Res<Time<Real>>, mut t: ResMut<TickTimes>) {
@@ -51,7 +78,7 @@ fn report(
     time: Res<Time<Real>>,
     mut t: ResMut<TickTimes>,
     stats: Res<NetStats>,
-    diag: Res<DiagnosticsStore>,
+    mut usage: ResMut<Usage>,
     mut pawns: Query<&mut InputState, With<Pawn>>,
     rooms: Option<Res<Rooms>>,
     shared: Res<HttpShared>,
@@ -85,11 +112,7 @@ fn report(
         missed_max = missed_max.max(core::mem::take(&mut st.missed));
     }
     let frame_max = core::mem::take(&mut t.frame_max) * 1000.0;
-    let value = |p| diag.get(p).and_then(|d| d.smoothed()).unwrap_or(f64::NAN);
-    let (cpu, mem) = (
-        value(&SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE),
-        value(&SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE) * 1024.0,
-    );
+    let (cpu, mem) = usage.sample(span);
     shared.0.sample(serde_json::json!({
         "at": std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs(),
         "players": players, "bots": bots, "rooms": open,

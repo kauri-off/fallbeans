@@ -3288,6 +3288,7 @@ dependencies = [
  "fb_shared",
  "fb_sim",
  "lightyear",
+ "lightyear_udp",
  "ureq",
 ]
 
@@ -3343,6 +3344,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sysinfo",
  "tokio",
 ]
 

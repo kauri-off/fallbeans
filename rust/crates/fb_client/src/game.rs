@@ -67,9 +67,13 @@ pub struct Stats {
     pub hash_mismatch: bool,
 }
 
-/// `--trace`: one line per predicted tick, `C tick id mx mz buttons x y z` (rollback replays repeat ticks).
+/// `--trace`: one line per predicted tick while connected, `C tick room id mx mz buttons x y z` (rollback
+/// replays repeat ticks), and `R tick` before the first one of each connection.
 #[derive(Resource)]
-struct Trace(BufWriter<File>);
+struct Trace {
+    out: BufWriter<File>,
+    fresh: bool,
+}
 
 pub struct GamePlugin;
 
@@ -85,13 +89,21 @@ impl Plugin for GamePlugin {
         app.add_systems(FixedUpdate, predict);
         app.add_systems(Update, (receive_map_events, apply_map_events).chain());
         app.add_observer(on_controlled);
+        app.add_observer(|_: On<Add, Connected>, trace: Option<ResMut<Trace>>| {
+            if let Some(mut t) = trace {
+                t.fresh = true;
+            }
+        });
     }
 }
 
 fn open_trace(mut commands: Commands, opts: Res<Opts>) {
     if let Some(path) = &opts.trace {
         let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
-        commands.insert_resource(Trace(BufWriter::new(file)));
+        commands.insert_resource(Trace {
+            out: BufWriter::new(file),
+            fresh: true,
+        });
     }
 }
 
@@ -275,6 +287,7 @@ fn predict(
     others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     trace: Option<ResMut<Trace>>,
     session: Res<Session>,
+    link: Query<(), (With<Client>, With<Connected>)>,
 ) {
     let Some(mut map) = map else { return };
     let Ok((id, mut full, state, mut ev, mut prev)) = own.single_mut() else {
@@ -316,10 +329,15 @@ fn predict(
     let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
     tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
     stats.ticks += 1;
-    if let Some(mut trace) = trace {
+    if let Some(mut trace) = trace
+        && !link.is_empty()
+    {
         let b = &full.body;
+        if core::mem::take(&mut trace.fresh) {
+            let _ = writeln!(trace.out, "R {}", timeline.tick().0);
+        }
         let _ = writeln!(
-            trace.0,
+            trace.out,
             "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
             timeline.tick().0,
             session.room.as_deref().unwrap_or("?"),
