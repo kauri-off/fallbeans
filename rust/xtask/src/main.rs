@@ -166,7 +166,8 @@ fn main() -> ExitCode {
     let ok = match Cli::parse().task {
         Task::Check => check(),
         Task::Golden => {
-            run(&mut bun(&["scripts/golden.ts"])) && run(cargo().args(["test", "-p", "fb_arena", "--test", "golden"]))
+            run(&mut bun(&["scripts/golden.ts"]))
+                && run(cargo().args(["test", "-p", "fb_arena", "--test", "golden", "--test", "scenarios"]))
         }
         Task::Assets => {
             run(&mut bun(&["scripts/assets.ts", "--bevy"]))

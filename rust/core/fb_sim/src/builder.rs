@@ -296,6 +296,158 @@ impl Builder {
         h
     }
 
+    /// A launch pad: throws beans up (power, m/s), and along `launch` (horizontal m/s) when given.
+    pub fn pad(&mut self, x: f64, y: f64, z: f64, r: f64, power: f64, launch: Option<(f64, f64)>) -> Prim {
+        self.cyl(
+            x,
+            y - 0.26,
+            z,
+            r + 0.2,
+            0.6,
+            ["#5a3fb8", "#5a3fb8"],
+            PrimOpts::default(),
+        );
+        self.cyl(
+            x,
+            y + 0.07,
+            z,
+            r,
+            0.2,
+            if launch.is_some() { pal::ORANGE } else { pal::TEAL },
+            PrimOpts {
+                col: ColliderOpts {
+                    pad: power,
+                    launch: launch.map(|(lx, lz)| V3::new(lx, 0.0, lz)),
+                    ..Default::default()
+                },
+                freq: Some(1.2),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// A bouncy mushroom standing at (x, y, z): its cap throws beans up at `power` m/s; the stem is solid.
+    #[allow(clippy::approx_constant, reason = "6.283 as in TS, not TAU")]
+    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64) -> ColId {
+        let mush = self.model("mushroom", ROOT);
+        let n = self.world.nodes.get_mut(mush);
+        n.pos = V3::new(x, y, z);
+        n.scale = V3::splat(scale);
+        n.rot.y = (x * 1.7 + z * 0.9) % 6.283;
+        let stem = self.anchor(x, y + 0.6 * scale, z, ROOT);
+        self.collider(
+            stem,
+            Shape::Cyl {
+                r: 0.42 * scale,
+                hh: 0.6 * scale,
+            },
+            ColliderOpts {
+                is_static: true,
+                ..Default::default()
+            },
+        );
+        let cap = self.anchor(x, y + 1.66 * scale, z, ROOT);
+        self.collider(
+            cap,
+            Shape::Cyl {
+                r: 0.98 * scale,
+                hh: 0.26 * scale,
+            },
+            ColliderOpts {
+                is_static: true,
+                pad: power,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// A ladder up a wall: its foot at (x, y0, z) on the wall's face, up to y1, the rungs facing `yaw`.
+    pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64) {
+        let h = y1 - y0;
+        let holder = self.anchor(x, y0, z, ROOT);
+        self.world.nodes.get_mut(holder).rot.y = yaw;
+        let a = self.anchor(0.0, h / 2.0, 0.45, holder);
+        self.collider(
+            a,
+            Shape::Box {
+                hx: 0.55,
+                hy: h / 2.0,
+                hz: 0.3,
+            },
+            ColliderOpts {
+                is_static: true,
+                ladder: true,
+                nav_skip: true,
+                ..Default::default()
+            },
+        );
+        if self.server() {
+            return;
+        }
+        let wood = ["#ffb347", "#ffb347"];
+        let deco = PrimOpts {
+            parent: Some(holder),
+            no_collide: true,
+            ..Default::default()
+        };
+        for sx in [-0.45, 0.45] {
+            self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco.clone());
+        }
+        let rungs = m::round_js(h / 0.38).max(2.0) as u32;
+        for k in 1..rungs {
+            self.cyl(
+                0.0,
+                (k as f64 / rungs as f64) * h,
+                0.14,
+                0.045,
+                0.9,
+                wood,
+                PrimOpts {
+                    rot: Some(V3::new(0.0, 0.0, m::PI / 2.0)),
+                    seg: Some(8),
+                    ..deco.clone()
+                },
+            );
+        }
+    }
+
+    /// A trampoline: a springy mat on a ring frame that throws beans up (power: m/s upwards).
+    pub fn trampoline(&mut self, x: f64, y: f64, z: f64, r: f64, power: f64) -> Prim {
+        let legs = 6;
+        for k in 0..legs {
+            let a = (k as f64 / legs as f64) * m::PI * 2.0;
+            self.cyl(
+                x + m::cos(a) * (r + 0.1),
+                y - 0.65,
+                z + m::sin(a) * (r + 0.1),
+                0.09,
+                1.2,
+                ["#39406b", "#39406b"],
+                PrimOpts {
+                    no_collide: true,
+                    seg: Some(10),
+                    ..Default::default()
+                },
+            );
+        }
+        self.cyl(x, y - 0.03, z, r + 0.3, 0.3, pal::ORANGE, PrimOpts::default());
+        self.cyl(
+            x,
+            y + 0.14,
+            z,
+            r,
+            0.1,
+            pal::BLUE,
+            PrimOpts {
+                col: ColliderOpts {
+                    pad: power,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+    }
+
     /// A spot where a bonus may lie (on the ground at y).
     pub fn bonus(&mut self, x: f64, y: f64, z: f64) {
         self.bonus_spots.push(V3::new(x, y, z));

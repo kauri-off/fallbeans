@@ -22,7 +22,8 @@ rust/
     fb_sim         физика боба (physics.rs), коллайдеры, World (узлы + movers), Builder, бонусы, SceneDesc
     fb_maps        карты (сейчас jump-club) и реестр MAPS
     fb_arena       арена: пешки, бонусы, падения; tick_bodies — общий шаг сервера и предсказания
-      tests/       golden.rs (против TS), determinism.rs (записанные хэши), replay.rs (откат = прямой прогон)
+      tests/       golden.rs (карты против TS), scenarios.rs (ветки физики боба в малых мирах против TS),
+                   determinism.rs (записанные хэши), replay.rs (откат = прямой прогон)
   crates/          всё на Bevy и Lightyear
     fb_net         протокол Lightyear: компоненты, ввод, события, форматы передачи (wire.rs),
                    фильтры видимости, NetSim (флаги имитации сети), NetStats (трафик)

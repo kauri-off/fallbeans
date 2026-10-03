@@ -1,7 +1,7 @@
 /**
  * Golden traces for the Rust port (rust/core/fb_arena/tests/golden): builds maps with the TS code,
  * runs a few bodies through a scripted round and records everything the Rust side must reproduce.
- *   bun scripts/golden.ts [map…]   (default: the maps ported so far)
+ *   bun scripts/golden.ts [map…]   (default: the maps ported so far, and the physics scenarios)
  * The loop is the body part of server/rooms/arena.ts step(): events cleared, world moved, bodies
  * stepped against each other, bonuses, falls.
  */
@@ -10,9 +10,9 @@ import * as THREE from 'three';
 import { BTN } from '../src/shared/codec';
 import { DT } from '../src/shared/consts';
 import { Bonuses } from '../src/sim/bonus';
-import { Builder } from '../src/sim/builder';
+import { Builder, PAL } from '../src/sim/builder';
 import type { MapCtx, MapModule } from '../src/sim/map';
-import { BODY_STATES, type OtherBody, PlayerBody } from '../src/sim/physics';
+import { BODY_STATES, type OtherBody, PlayerBody, POWER } from '../src/sim/physics';
 
 const OUT = 'rust/core/fb_arena/tests/golden';
 const SEEDS = [1, 777, 123456789];
@@ -40,6 +40,72 @@ function script(id: number, k: number) {
   return { mx: d[0], mz: d[1], buttons };
 }
 
+type Pawn = { id: number; body: PlayerBody };
+type Frame = { mx: number; mz: number; buttons: number };
+
+/** One tick of bodies in a world, as arena.ts (and fb_arena::tick_bodies) does it. */
+function tickBodies(world: Builder['world'], t: number, pawns: Pawn[], frame: (p: Pawn) => Frame) {
+  for (const p of pawns) {
+    p.body.clearEvents();
+    p.body.beforeWorldUpdate();
+  }
+  world.setTime(t);
+  for (const p of pawns) p.body.afterWorldUpdate();
+  const others: OtherBody[] = pawns
+    .filter((p) => !p.body.inPortal)
+    .map((p) => ({
+      id: p.id,
+      x: p.body.pos.x,
+      y: p.body.pos.y,
+      z: p.body.pos.z,
+      vx: p.body.vel.x,
+      vz: p.body.vel.z,
+      touching: false,
+      size: p.body.size,
+    }));
+  for (const p of pawns) {
+    const f = frame(p);
+    const input = { mx: f.mx / 127, mz: f.mz / 127, jump: (f.buttons & BTN.jump) !== 0, dive: (f.buttons & BTN.dive) !== 0 };
+    p.body.step(
+      DT,
+      input,
+      world,
+      t,
+      others.filter((o) => o.id !== p.id),
+    );
+  }
+}
+
+/** What the Rust side compares each tick: pos, vel, yaw, tilt, state, ground collider. */
+function bodyRow(pawns: Pawn[], k: number) {
+  const row = [k];
+  for (const p of pawns) {
+    const s = p.body;
+    row.push(
+      s.pos.x,
+      s.pos.y,
+      s.pos.z,
+      s.vel.x,
+      s.vel.y,
+      s.vel.z,
+      s.yaw,
+      s.tilt,
+      BODY_STATES.indexOf(s.state),
+      s.groundCol?.index ?? -1,
+    );
+  }
+  return row;
+}
+
+function colliderList(world: Builder['world']) {
+  return world.colliders.map((c) => ({
+    shape: c.shape,
+    isStatic: c.isStatic,
+    enabled: c.enabled,
+    cur: [...c.cur.elements],
+  }));
+}
+
 function trace(id: string, mod: MapModule, seed: number) {
   const b = new Builder(seed, null);
   const ctx: MapCtx = {
@@ -61,12 +127,7 @@ function trace(id: string, mod: MapModule, seed: number) {
   const world = b.world;
   world.finalize(tick0 * DT);
   const staticHash = world.hash(true);
-  const colliders = world.colliders.map((c) => ({
-    shape: c.shape,
-    isStatic: c.isStatic,
-    enabled: c.enabled,
-    cur: [...c.cur.elements],
-  }));
+  const colliders = colliderList(world);
   const faceYaw = (p: THREE.Vector3) => (spec.faceCenter ? Math.atan2(-p.x, -p.z) : 0);
   const pawns = IDS.map((pid, i) => {
     const spawn = spec.spawns[i % spec.spawns.length]!.clone();
@@ -80,35 +141,7 @@ function trace(id: string, mod: MapModule, seed: number) {
   for (let k = tick0 + 1; k <= PLAY_TICKS; k++) {
     const t = k * DT;
     const moving = t >= 0;
-    for (const p of pawns) {
-      p.body.clearEvents();
-      p.body.beforeWorldUpdate();
-    }
-    world.setTime(t);
-    for (const p of pawns) p.body.afterWorldUpdate();
-    const others: OtherBody[] = pawns
-      .filter((p) => !p.body.inPortal)
-      .map((p) => ({
-        id: p.id,
-        x: p.body.pos.x,
-        y: p.body.pos.y,
-        z: p.body.pos.z,
-        vx: p.body.vel.x,
-        vz: p.body.vel.z,
-        touching: false,
-        size: p.body.size,
-      }));
-    for (const p of pawns) {
-      const f = moving ? script(p.id, k) : { mx: 0, mz: 0, buttons: 0 };
-      const input = { mx: f.mx / 127, mz: f.mz / 127, jump: (f.buttons & BTN.jump) !== 0, dive: (f.buttons & BTN.dive) !== 0 };
-      p.body.step(
-        DT,
-        input,
-        world,
-        t,
-        others.filter((o) => o.id !== p.id),
-      );
-    }
+    tickBodies(world, t, pawns, (p) => (moving ? script(p.id, k) : { mx: 0, mz: 0, buttons: 0 }));
     if (t >= 0)
       bonuses.check(
         t,
@@ -124,23 +157,7 @@ function trace(id: string, mod: MapModule, seed: number) {
       const jitter = ((p.id * 7919) % 100) / 100 - 0.5;
       p.body.reset(new THREE.Vector3(to.x + jitter * 2, to.y + 0.5, to.z), faceYaw(to));
     }
-    const row = [k];
-    for (const p of pawns) {
-      const s = p.body;
-      row.push(
-        s.pos.x,
-        s.pos.y,
-        s.pos.z,
-        s.vel.x,
-        s.vel.y,
-        s.vel.z,
-        s.yaw,
-        s.tilt,
-        BODY_STATES.indexOf(s.state),
-        s.groundCol?.index ?? -1,
-      );
-    }
-    frames.push(row);
+    frames.push(bodyRow(pawns, k));
     if (k % 60 === 0) hashes.push([k, world.hash()]);
   }
   return {
@@ -157,6 +174,309 @@ function trace(id: string, mod: MapModule, seed: number) {
   };
 }
 
+/**
+ * Physics scenarios: small worlds for the branches of the bean's physics that jump-club does not touch
+ * (pushes, slopes, ice, conveyors, pads, sweeping arms, hammers, platforms, ledges, ladders, giants).
+ * The Rust side builds the same worlds (fb_arena/tests/scenarios.rs) and replays the inputs from here.
+ */
+interface ScenarioBody {
+  id: number;
+  at: [number, number, number];
+  power?: number;
+  /** Stick from tick k on: [k, mx, mz]. */
+  stick: [number, number, number][];
+  /** Buttons pressed on tick k only: [k, buttons]. */
+  press?: [number, number][];
+}
+interface Scenario {
+  name: string;
+  ticks: number;
+  build: (b: Builder) => void;
+  bodies: ScenarioBody[];
+}
+
+const J = BTN.jump;
+const D = BTN.dive;
+const floor = (b: Builder) => b.box(0, -1, 0, 40, 2, 40);
+const run = (k: number, mx: number, mz: number, stop: number): [number, number, number][] => [
+  [k, mx, mz],
+  [stop, 0, 0],
+];
+
+const SCENARIOS: Scenario[] = [
+  {
+    name: 'moves',
+    ticks: 720,
+    build: (b) => {
+      floor(b);
+      b.box(0, 2, 16, 40, 4, 1);
+    },
+    bodies: [
+      {
+        id: 1,
+        at: [0, 0.02, 0],
+        stick: run(1, 0, 127, 200),
+        press: [
+          [30, J],
+          [100, D],
+        ],
+      },
+      {
+        id: 2,
+        at: [-8, 0.02, 0],
+        power: POWER.jump,
+        stick: [[1, 0, 0]],
+        press: [
+          [20, J],
+          [200, J],
+          [400, J],
+        ],
+      },
+      {
+        id: 3,
+        at: [8, 0.02, -15],
+        power: POWER.speed,
+        stick: [
+          [1, 0, 127],
+          [100, 127, 0],
+          [150, 0, -127],
+          [250, -127, 0],
+          [350, 0, 0],
+        ],
+      },
+      {
+        id: 4,
+        at: [-14, 0.02, -15],
+        stick: run(1, 0, 127, 500),
+        press: [
+          [40, J],
+          [60, D],
+          [300, J],
+          [302, D],
+        ],
+      },
+    ],
+  },
+  {
+    name: 'push',
+    ticks: 420,
+    build: floor,
+    bodies: [
+      { id: 1, at: [0, 0.02, -3], stick: run(1, 0, 127, 180) },
+      { id: 2, at: [0, 0.02, 3], stick: run(1, 0, -127, 180) },
+      { id: 3, at: [6, 0.02, -4], power: POWER.giant, stick: run(1, 0, 127, 240) },
+      { id: 4, at: [6, 0.02, 1], stick: [[1, 0, 0]] },
+      { id: 5, at: [-6, 0.02, -3], stick: run(1, 0, 127, 200), press: [[30, D]] },
+      { id: 6, at: [-6, 0.02, 1], stick: [[1, 0, 0]] },
+    ],
+  },
+  {
+    name: 'slopes',
+    ticks: 480,
+    build: (b) => {
+      floor(b);
+      b.ramp(-6, 2, 0, 14, 4, 6);
+      b.ramp(6, 2, 0, 5, 4.5, 6);
+      b.ramp(-15, 5, 0, 15, 4, 6, PAL.white, 1, { slip: 0.9 });
+    },
+    bodies: [
+      {
+        id: 1,
+        at: [-6, 0.02, 0],
+        stick: [
+          [1, 0, 127],
+          [220, 0, 0],
+          [300, 0, -127],
+          [400, 0, 0],
+        ],
+      },
+      {
+        id: 2,
+        at: [6, 0.02, 0],
+        stick: run(1, 0, 127, 200),
+        press: [
+          [60, J],
+          [120, J],
+        ],
+      },
+      { id: 3, at: [7, 5, 3.5], stick: [[1, 0, 0]] },
+      { id: 4, at: [-15, 0.02, 3], stick: run(1, 0, 127, 150) },
+    ],
+  },
+  {
+    name: 'surfaces',
+    ticks: 480,
+    build: (b) => {
+      b.box(-6, -1, 0, 8, 2, 40, PAL.white, { slip: 0.9 });
+      b.box(0, -1, 0, 4, 2, 40);
+      b.box(6, -1, 0, 8, 2, 40, PAL.white, { conveyor: new THREE.Vector3(0, 0, -4) });
+    },
+    bodies: [
+      {
+        id: 1,
+        at: [-6, 0.02, -15],
+        stick: [
+          [1, 0, 127],
+          [90, 0, 0],
+          [200, 127, 0],
+          [240, 0, 0],
+        ],
+      },
+      {
+        id: 2,
+        at: [0, 0.02, -15],
+        stick: [
+          [1, 0, 127],
+          [90, 0, 0],
+          [200, 127, 0],
+          [240, 0, 0],
+        ],
+      },
+      { id: 3, at: [6, 0.02, 0], stick: run(120, 0, 127, 360) },
+    ],
+  },
+  {
+    name: 'rotor',
+    ticks: 720,
+    build: (b) => {
+      floor(b);
+      b.rotor(0, 0.6, 0, 8, 1, (t) => t * 1.2);
+    },
+    bodies: [
+      { id: 1, at: [0.5, 0.02, -5], stick: [[1, 0, 0]] },
+      { id: 2, at: [3, 0.02, 1.5], stick: run(1, 0, -127, 97) },
+      { id: 3, at: [5, 1, 0], stick: [[1, 0, 0]] },
+      { id: 4, at: [-5, 0.02, -3], stick: [[1, 0, 0]], press: Array.from({ length: 15 }, (_, i) => [10 + i * 45, J]) },
+    ],
+  },
+  {
+    name: 'hammer',
+    ticks: 600,
+    build: (b) => {
+      floor(b);
+      b.hammer(0, 7, 0, 2.2, Math.PI / 2);
+    },
+    bodies: [
+      { id: 1, at: [0, 0.02, -0.6], stick: [[1, 0, 0]] },
+      { id: 2, at: [0, 0.02, -8], stick: run(1, 0, 127, 300) },
+      { id: 3, at: [0, 0.02, 1.6], power: POWER.giant, stick: [[1, 0, 0]] },
+    ],
+  },
+  {
+    name: 'bounce',
+    ticks: 480,
+    build: (b) => {
+      floor(b);
+      b.bumper(0, 0, 5);
+      b.pad(6, 0, 5);
+      b.pad(-6, 0, 5, 1.4, 16, { x: 0, z: 8 });
+      b.trampoline(12, 0, 5);
+      b.mushroom(-12, 0, 5);
+    },
+    bodies: [
+      { id: 1, at: [0, 0.02, 0], stick: run(1, 0, 127, 90) },
+      { id: 2, at: [6, 0.02, 0], stick: run(1, 0, 127, 90) },
+      { id: 3, at: [-6, 0.02, 0], stick: run(1, 0, 127, 90) },
+      { id: 4, at: [12, 0.02, 0], stick: run(1, 0, 127, 90) },
+      { id: 5, at: [-12, 6, 5], stick: [[1, 0, 0]] },
+    ],
+  },
+  {
+    name: 'platforms',
+    ticks: 600,
+    build: (b) => {
+      floor(b);
+      const slider = b.box(-6, 1, 0, 4, 0.6, 4, PAL.blue, { dynamic: true });
+      b.move((t) => {
+        slider.obj.position.x = -6 + Math.sin(t * 1.5) * 3;
+      });
+      const disc = b.cyl(6, 1, 0, 3, 0.6, PAL.purple, { dynamic: true });
+      b.move((t) => {
+        disc.obj.rotation.y = t * 1.2;
+      });
+      const lift = b.box(0, 2, 8, 3, 0.6, 3, PAL.blue, { dynamic: true });
+      b.move((t) => {
+        lift.obj.position.y = 2 + Math.sin(t * 1.3) * 1.2;
+      });
+    },
+    bodies: [
+      { id: 1, at: [-6, 1.32, 0], stick: run(400, 0, 127, 460) },
+      { id: 2, at: [8, 1.32, 0], stick: [[1, 0, 0]], press: [[300, J]] },
+      { id: 3, at: [0, 2.32, 8], stick: [[450, 127, 0]] },
+    ],
+  },
+  {
+    name: 'climb',
+    ticks: 720,
+    build: (b) => {
+      floor(b);
+      b.box(0, 1.3, 7, 6, 2.6, 6);
+      b.box(8, 2.1, 7, 6, 4.2, 6);
+      b.box(-8, 2.5, 7, 6, 5, 6);
+      b.ladder(-8, 0, 4, 5, Math.PI);
+      b.box(-16, 2.5, 7, 6, 5, 6);
+      b.ladder(-16, 0, 4, 5, Math.PI);
+    },
+    bodies: [
+      { id: 1, at: [0, 0.02, 0], stick: run(1, 0, 127, 200), press: [[25, J]] },
+      { id: 2, at: [8, 0.02, 0], stick: run(1, 0, 127, 200), press: [[25, J]] },
+      { id: 3, at: [-8, 0.02, 0], stick: run(1, 0, 127, 330) },
+      {
+        id: 4,
+        at: [-16, 0.02, 0],
+        stick: [
+          [1, 0, 127],
+          [160, 0, -127],
+          [220, 0, 0],
+        ],
+        press: [[150, J]],
+      },
+    ],
+  },
+];
+
+function scenario(sc: Scenario) {
+  const b = new Builder(1, null);
+  sc.build(b);
+  const world = b.world;
+  world.finalize(0);
+  const staticHash = world.hash(true);
+  const colliders = colliderList(world);
+  const pawns = sc.bodies.map((d) => {
+    const body = new PlayerBody(d.id);
+    body.reset(new THREE.Vector3(...d.at));
+    if (d.power) body.givePower(d.power, 0);
+    return { id: d.id, body };
+  });
+  const frameOf = (d: ScenarioBody, k: number): Frame => {
+    let mx = 0;
+    let mz = 0;
+    for (const [from, x, z] of d.stick)
+      if (from <= k) {
+        mx = x;
+        mz = z;
+      }
+    const buttons = d.press?.find(([at]) => at === k)?.[1] ?? 0;
+    return { mx, mz, buttons };
+  };
+  const frames: number[][] = [];
+  const hashes: [number, string][] = [];
+  for (let k = 1; k <= sc.ticks; k++) {
+    tickBodies(world, k * DT, pawns, (p) => frameOf(sc.bodies.find((d) => d.id === p.id)!, k));
+    frames.push(bodyRow(pawns, k));
+    if (k % 60 === 0) hashes.push([k, world.hash()]);
+  }
+  return {
+    name: sc.name,
+    ticks: sc.ticks,
+    bodies: sc.bodies.map((d) => ({ ...d, power: d.power ?? 0, press: d.press ?? [] })),
+    staticHash,
+    colliders,
+    hashes,
+    frames,
+  };
+}
+
 const maps = process.argv.slice(2);
 const ids = maps.length ? maps : ['jump-club'];
 mkdirSync(OUT, { recursive: true });
@@ -167,4 +487,9 @@ for (const id of ids) {
   const file = `${OUT}/${id}.json`;
   writeFileSync(file, JSON.stringify({ runs }));
   console.log(`${file}: ${runs.length} seeds × ${runs[0]!.frames.length} ticks`);
+}
+if (!maps.length) {
+  const file = `${OUT}/scenarios.json`;
+  writeFileSync(file, JSON.stringify({ scenarios: SCENARIOS.map(scenario) }));
+  console.log(`${file}: ${SCENARIOS.map((s) => s.name).join(', ')}`);
 }

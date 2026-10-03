@@ -34,7 +34,7 @@ pub fn sqrt(x: f64) -> f64 {
     x.sqrt()
 }
 
-/// `Math.hypot` as V8 computes it (scaled, Kahan-summed), so results match the TS build.
+/// `Math.hypot` as V8 computes it (scaled, Kahan-summed); Bun takes two arguments to the platform libm.
 pub fn hypot_n(v: &[f64]) -> f64 {
     let mut max = 0.0f64;
     let mut nan = false;
