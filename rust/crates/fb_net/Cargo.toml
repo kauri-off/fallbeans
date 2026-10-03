@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 fb_shared.workspace = true
+fb_proto.workspace = true
 fb_sim.workspace = true
 bevy = { workspace = true, features = ["std", "bevy_log"] }
 bevy_replicon = { workspace = true, features = ["server"] }

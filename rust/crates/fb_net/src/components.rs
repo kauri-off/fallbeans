@@ -1,6 +1,7 @@
 //! Replicated components: the round, each bean's identity, its full state (owner) and its pose (others).
 use bevy::math::Curve;
 use bevy::prelude::*;
+use fb_shared::game::ArenaKind;
 use fb_sim::physics::Body;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -12,20 +13,28 @@ pub struct PlayerId(pub u32);
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BeanColor(pub u8);
 
-/// The round being played: clients build the same map from it. `zero_tick` is the tick of sim time 0.
+/// The arena of a room (its lobby, a round, the podium): clients build the same map from it. `zero_tick` is
+/// the tick of sim time 0; it moves only when a dev command warps or pauses the room's clock.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Round {
+    /// Changes with every new arena of the room (`fb_proto::ArenaInfo::id`).
+    pub arena: u32,
+    pub kind: ArenaKind,
     pub map: String,
     pub seed: u32,
-    pub zero_tick: u32,
-    pub number: u32,
+    pub zero_tick: i64,
     /// `World::hash(true)` of the server's build: clients compare theirs.
     pub static_hash: String,
 }
 
 impl Round {
     pub fn arena_tick(&self, tick: Tick) -> i64 {
-        tick.0 as i64 - self.zero_tick as i64
+        tick.0 as i64 - self.zero_tick
+    }
+
+    /// The same map (a new zero tick is the same arena, shifted).
+    pub fn same_arena(&self, o: &Round) -> bool {
+        self.arena == o.arena && self.map == o.map && self.seed == o.seed
     }
 }
 

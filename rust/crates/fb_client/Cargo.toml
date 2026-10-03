@@ -11,6 +11,7 @@ fb_sim.workspace = true
 fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
+fb_proto.workspace = true
 bevy = { workspace = true, features = ["3d", "ui", "jpeg"] }
 # GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
 bevy_render = { workspace = true, features = ["gles"] }

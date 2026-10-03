@@ -64,7 +64,7 @@ fn log_stats(
     let frame_max = core::mem::take(&mut hiccups.frame_max) * 1000.0;
     let shifts = core::mem::take(&mut hiccups.shifts);
     info!(
-        "stats: {} | rtt {rtt:.0} ms jitter {jitter:.0} ms | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out} B/s | round {} t {t:.1}{}",
+        "stats: {} | rtt {rtt:.0} ms jitter {jitter:.0} ms | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out} B/s | arena {} t {t:.1}{}",
         conn.map_or("not connected".into(), |c| format!(
             "{:?} {}",
             c.transport,
@@ -73,7 +73,7 @@ fn log_stats(
         stats.ticks,
         others.iter().count(),
         stats.map_events,
-        map.as_ref().map_or(0, |m| m.round.number),
+        map.as_ref().map_or(0, |m| m.round.arena),
         if stats.hash_mismatch {
             " | MAP HASH MISMATCH"
         } else {

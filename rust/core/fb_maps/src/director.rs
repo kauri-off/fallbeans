@@ -1,13 +1,14 @@
 //! The rounds of one game (port of `server/rooms/director.ts`).
 use fb_shared::game::{GameMeta, Genre};
 use fb_shared::rng::{Rng, shuffle};
+use serde::{Deserialize, Serialize};
 
 use crate::GAMES;
 
 /// Game lengths the host can pick.
 pub const ROUND_COUNTS: [u32; 3] = [3, 5, 7];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Mix,
     Races,
@@ -15,7 +16,7 @@ pub enum Mode {
     Custom,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Playlist {
     pub mode: Mode,
     pub games: Vec<String>,

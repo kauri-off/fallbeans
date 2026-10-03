@@ -6,7 +6,7 @@ use clap::Parser;
 use fb_net::{NetSim, UDP_PORT, WS_PORT};
 
 #[derive(Parser, Resource, Clone, Debug)]
-#[command(about = "Fall Beans server: one room playing rounds of one map over UDP and WebSocket")]
+#[command(about = "Fall Beans server: rooms of players and bots over UDP and WebSocket")]
 pub struct Opts {
     #[arg(long, default_value_t = UDP_PORT)]
     pub udp_port: u16,
@@ -15,14 +15,24 @@ pub struct Opts {
     /// Address the WebSocket listener binds (production: 127.0.0.1, behind nginx's wss on 443).
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub ws_addr: IpAddr,
-    /// Seed of every round (default: a new one per round).
+    /// Seed of the rooms' random choices (games, map seeds, spawn order; default: a new one per room).
     #[arg(long)]
     pub seed: Option<u32>,
     /// Seconds before a round starts.
-    #[arg(long, default_value_t = 3.0)]
+    #[arg(long, default_value_t = fb_shared::INTRO_S)]
     pub intro: f64,
-    #[arg(long, default_value = "jump-club")]
-    pub map: String,
+    /// Development: dev commands are accepted, and the room `dev` is always open.
+    #[arg(long)]
+    pub dev: bool,
+    /// A game may start with one player (otherwise two).
+    #[arg(long)]
+    pub solo: bool,
+    /// Rooms that stay open with nobody in them, by id (stress runs meet in them), e.g. `s1,s2`.
+    #[arg(long, value_delimiter = ',')]
+    pub open_rooms: Vec<String>,
+    /// While this file exists the game is being updated: everybody is told and disconnected.
+    #[arg(long)]
+    pub maintenance_file: Option<PathBuf>,
     #[command(flatten)]
     pub net: NetSim,
     /// Writes every pawn's input and position per tick here (`cargo xtask stress` compares it with clients').

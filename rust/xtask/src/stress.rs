@@ -15,6 +15,9 @@ use crate::{Shared, root};
 pub struct StressArgs {
     #[arg(long, default_value_t = 8)]
     clients: u32,
+    /// Rooms the clients are spread over (round robin), each playing its own game.
+    #[arg(long, default_value_t = 1)]
+    rooms: u32,
     /// Seconds the clients play (a round of jump-club is 3 s intro + 75 s + 8 s results).
     #[arg(long, default_value_t = 60)]
     secs: u64,
@@ -63,15 +66,23 @@ pub fn stress(a: &StressArgs) -> bool {
     if !a.shared.build() {
         return false;
     }
+    // The build leaves hundreds of MB of dirty pages: flushed in the middle of the run they block the
+    // processes' log writes for seconds, and every connection times out (port/phases/2.md).
+    #[cfg(unix)]
+    let _ = Command::new("sync").status();
     let dir = root().join("target").join("stress");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("target/stress");
     let log = |name: &str| File::create(dir.join(name)).expect("log file");
+    let rooms: Vec<String> = (1..=a.rooms.max(1)).map(|i| format!("s{i}")).collect();
     let server_flags = |trace: &str| {
         let mut v = a.shared.server_args();
         let exit = (a.secs + 4).to_string();
+        let open = rooms.join(",");
         v.extend(
             [
+                "--open-rooms",
+                &open,
                 "--intro",
                 "2",
                 "--metrics-every",
@@ -125,14 +136,19 @@ pub fn stress(a: &StressArgs) -> bool {
     }
     let mut clients: Vec<Child> = Vec::new();
     for i in 0..a.clients {
+        let room = &rooms[i as usize % rooms.len()];
+        let in_room = (0..a.clients).filter(|j| *j as usize % rooms.len() == i as usize % rooms.len());
         let mut c = Command::new(a.shared.bin("fb_client"));
         c.args([
             "--headless",
             "--id",
             &(1000 + i).to_string(),
+            "--name",
+            &format!("stress {i}"),
             "--transport",
             &a.transport,
         ])
+        .args(a.shared.play_args(room, in_room.count() as u32))
         .args(["--exit-after", &a.secs.to_string()])
         .args(&client_net)
         .args(a.shared.net_args())
@@ -147,8 +163,9 @@ pub fn stress(a: &StressArgs) -> bool {
         }
     }
     eprintln!(
-        "stress: {} clients for {} s over {} at lag {} ms jitter {} ms loss {}{}; logs in {}",
+        "stress: {} clients in {} rooms for {} s over {} at lag {} ms jitter {} ms loss {}{}; logs in {}",
         a.clients,
+        rooms.len(),
         a.secs,
         a.transport,
         a.shared.lag,
@@ -253,7 +270,11 @@ struct Row {
     pos: [f64; 3],
 }
 
-fn parse_trace(path: &Path, tag: &str) -> Vec<(u32, u32, Row)> {
+/// A bean: its room and its player id there.
+type Bean = (String, u32);
+
+/// Lines `tag tick room id mx mz buttons x y z`.
+fn parse_trace(path: &Path, tag: &str) -> Vec<(u32, Bean, Row)> {
     let text = fs::read_to_string(path).unwrap_or_default();
     text.lines()
         .filter_map(|l| {
@@ -262,17 +283,17 @@ fn parse_trace(path: &Path, tag: &str) -> Vec<(u32, u32, Row)> {
                 return None;
             }
             let v: Vec<&str> = it.collect();
-            if v.len() != 8 {
+            if v.len() != 9 {
                 return None;
             }
             let i = |k: usize| v[k].parse::<i32>().ok();
             let f = |k: usize| v[k].parse::<f64>().ok();
             Some((
                 v[0].parse().ok()?,
-                v[1].parse().ok()?,
+                (v[1].to_string(), v[2].parse().ok()?),
                 Row {
-                    input: (i(2)?, i(3)?, i(4)?),
-                    pos: [f(5)?, f(6)?, f(7)?],
+                    input: (i(3)?, i(4)?, i(5)?),
+                    pos: [f(6)?, f(7)?, f(8)?],
                 },
             ))
         })
@@ -298,20 +319,22 @@ struct Divergence {
 /// mismatches is classified by its first tick: a respawn (the server teleported the bean), a late input,
 /// a push (another bean was within reach: the client sees it in the past) or something else.
 fn compare(
-    server: &HashMap<(u32, u32), Row>,
-    by_tick: &BTreeMap<u32, Vec<(u32, [f64; 3])>>,
-    teleports: &BTreeSet<(u32, u32)>,
-    client: &[(u32, u32, Row)],
+    server: &HashMap<(u32, Bean), Row>,
+    by_tick: &BTreeMap<u32, Vec<(Bean, [f64; 3])>>,
+    teleports: &BTreeSet<(Bean, u32)>,
+    client: &[(u32, Bean, Row)],
 ) -> Divergence {
-    let mut first: BTreeMap<u32, (u32, Row)> = BTreeMap::new();
-    for &(tick, id, row) in client {
-        first.entry(tick).or_insert((id, row));
+    let mut first: BTreeMap<u32, (&Bean, Row)> = BTreeMap::new();
+    for (tick, id, row) in client {
+        first.entry(*tick).or_insert((id, *row));
     }
     let mut d = Divergence::default();
     let mut prev_bad = false;
     let mut streaming = false;
     for (&tick, &(id, c)) in &first {
-        let Some(s) = server.get(&(tick, id)) else { continue };
+        let Some(s) = server.get(&(tick, id.clone())) else {
+            continue;
+        };
         let late = c.input != s.input;
         // Just after joining the server has nothing from the client yet (its pawn is there before the
         // client knows it is its own): compared from the first input the server got.
@@ -325,7 +348,7 @@ fn compare(
         }
         let bad = dist(&c.pos, &s.pos) > 1e-3;
         if bad && !prev_bad {
-            if (tick.saturating_sub(1)..=tick + 1).any(|t| teleports.contains(&(id, t))) {
+            if (tick.saturating_sub(1)..=tick + 1).any(|t| teleports.contains(&(id.clone(), t))) {
                 d.runs_respawn += 1;
             } else if late {
                 d.runs_late += 1;
@@ -343,13 +366,13 @@ fn compare(
     d
 }
 
-/// Another bean within reach (two bean widths) during the last 400 ms: the client draws, and pushes
-/// against, the others that far in the past (interpolation delay plus half the RTT).
-fn near_other(by_tick: &BTreeMap<u32, Vec<(u32, [f64; 3])>>, tick: u32, id: u32, pos: &[f64; 3]) -> bool {
+/// Another bean of the room within reach (two bean widths) during the last 400 ms: the client draws, and
+/// pushes against, the others that far in the past (interpolation delay plus half the RTT).
+fn near_other(by_tick: &BTreeMap<u32, Vec<(Bean, [f64; 3])>>, tick: u32, id: &Bean, pos: &[f64; 3]) -> bool {
     by_tick
         .range(tick.saturating_sub(48)..=tick)
         .flat_map(|(_, beans)| beans)
-        .any(|(o, p)| *o != id && dist(p, pos) < 2.5)
+        .any(|(o, p)| o.0 == id.0 && o.1 != id.1 && dist(p, pos) < 2.5)
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -395,9 +418,9 @@ fn num_before(line: &str, key: &str) -> Option<f64> {
 fn report(a: &StressArgs, dir: &Path) -> bool {
     let mut failures: Vec<String> = Vec::new();
     let server_rows = parse_trace(&dir.join("server.trace"), "S");
-    let mut by_id: BTreeMap<u32, Vec<(u32, Row)>> = BTreeMap::new();
-    for &(tick, id, row) in &server_rows {
-        by_id.entry(id).or_default().push((tick, row));
+    let mut by_id: BTreeMap<Bean, Vec<(u32, Row)>> = BTreeMap::new();
+    for (tick, id, row) in &server_rows {
+        by_id.entry(id.clone()).or_default().push((*tick, *row));
     }
     let mut teleports = BTreeSet::new();
     for (id, rows) in &by_id {
@@ -406,14 +429,14 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
             // to the new spawn however near (a respawn is a jump of more than 2 m).
             let gap = w[1].0 > w[0].0 + 1;
             if w[1].0 <= w[0].0 + 3 && (gap || dist(&w[0].1.pos, &w[1].1.pos) > 2.0) {
-                teleports.insert((*id, w[1].0));
+                teleports.insert((id.clone(), w[1].0));
             }
         }
     }
-    let server: HashMap<(u32, u32), Row> = server_rows.iter().map(|&(t, id, r)| ((t, id), r)).collect();
-    let mut by_tick: BTreeMap<u32, Vec<(u32, [f64; 3])>> = BTreeMap::new();
-    for &(t, id, r) in &server_rows {
-        by_tick.entry(t).or_default().push((id, r.pos));
+    let server: HashMap<(u32, Bean), Row> = server_rows.iter().map(|(t, id, r)| ((*t, id.clone()), *r)).collect();
+    let mut by_tick: BTreeMap<u32, Vec<(Bean, [f64; 3])>> = BTreeMap::new();
+    for (t, id, r) in &server_rows {
+        by_tick.entry(*t).or_default().push((id.clone(), r.pos));
     }
 
     println!(

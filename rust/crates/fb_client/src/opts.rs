@@ -36,6 +36,28 @@ pub struct Opts {
     /// Netcode client id (default: random). Phase 0 trusts it; the session endpoint will issue tokens.
     #[arg(long)]
     pub id: Option<u64>,
+    /// The player's name.
+    #[arg(long, default_value = "")]
+    pub name: String,
+    /// Identity token from an earlier session (the same player again).
+    #[arg(long)]
+    pub token: Option<String>,
+    /// Go straight into this room (its PIN for a private one).
+    #[arg(long)]
+    pub room: Option<String>,
+    #[arg(long)]
+    pub pin: Option<String>,
+    /// A practice round of this map with bots.
+    #[arg(long)]
+    pub practice: Option<String>,
+    /// Suit colour (index into the palette).
+    #[arg(long)]
+    pub color: Option<u8>,
+    /// As the room's host, start a game of this map (all rounds) once `--start-players` are in.
+    #[arg(long)]
+    pub start: Option<String>,
+    #[arg(long)]
+    pub start_players: Option<usize>,
     #[command(flatten)]
     pub net: NetSim,
     /// Ticks of input lead on top of Lightyear's jitter margin. Its default of 1 let about 0.4% of inputs

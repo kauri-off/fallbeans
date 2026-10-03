@@ -29,25 +29,32 @@ rust/
     fb_audit       аудиты карт и систем (порт src/audit), harness безголовых раундов; бинарник fb_audit; rayon
       tests/       quick.rs (быстрые аудиты: 0 ошибок и 0 предупреждений)
   crates/          всё на Bevy и Lightyear
-    fb_net         протокол Lightyear: компоненты, ввод, события, форматы передачи (wire.rs),
-                   фильтры видимости, NetSim (флаги имитации сети), NetStats (трафик)
-    fb_server      net (транспорты, вход), room (раунды, тик), metrics, opts
-    fb_client      net, game (карта, предсказание, ввод, автопилот), view, hud, stats, assets, opts
+    fb_proto       управляющие сообщения (ClientMsg/ServerMsg с проверкой границ), события карты; без Bevy
+    fb_net         протокол Lightyear: компоненты, ввод, каналы, форматы передачи (wire.rs),
+                   фильтры видимости (комната, владелец), NetSim (флаги имитации сети), NetStats (трафик)
+    fb_server      rooms/ (Hub, Room, GameClock, награды — обычный Rust, тесты без сети), auth,
+                   play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход), metrics, opts
+    fb_client      net, session (hello, комната, лобби; --start), game (карта, предсказание, ввод, автопилот),
+                   view, hud, stats, assets, opts
   xtask            cargo xtask <check|golden|audit|assets|dev|stress|deploy>
   deploy/          что ставится на хост: systemd-юнит, nginx (wss), установщик с откатом; README — сам хост
   vendor/          зависимости с нашими правками ([patch.crates-io] в Cargo.toml; см. «Известные проблемы»)
   assets/models    glb для Bevy (делаются из ../public/models: cargo xtask assets)
 ```
 
-Сервер строит карту от сида без сцены; клиент строит ту же карту со сценой (`SceneDesc`) и сверяет хэш коллайдеров
-(`Round.static_hash`). По сети идут только бобы (`BodyFull` владельцу, `RemotePose` остальным) и события карты с тиком.
+Игрок входит так: соединение → `Hello` → список комнат или сразу комната (`--room`, тренировка `--practice`). У
+каждой комнаты на сервере сущность `Round` (её текущая арена: лобби, раунд или подиум) и по сущности на боба в игре;
+ссылке игрока видны только сущности его комнаты (`RoomTag`/`InRoom`). Сервер строит карту от сида без сцены; клиент
+строит ту же карту со сценой (`SceneDesc`) и сверяет хэш коллайдеров (`Round.static_hash`). По сети идут только
+бобы (`BodyFull` владельцу, `RemotePose` остальным), события карты с тиком и управляющие сообщения.
 
 ## Команды
 
 ```sh
 cargo xtask check                 # fmt --check, clippy -D warnings, тесты — перед каждой сдачей работы
-cargo xtask dev --clients 2       # сервер и два окна; --autopilot, --lag/--jitter/--loss, --map, --seed, --release
+cargo xtask dev --clients 2       # сервер --dev и два окна в комнате dev, игра --map; --autopilot, --lag/--jitter/--loss, --seed, --release
 cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05
+cargo xtask stress --clients 32 --rooms 4 --secs 100 --lag 75 --jitter 15 --loss 0.05   # 4 комнаты по 8
 cargo xtask stress --transport ws --lag 75 --jitter 15   # по WebSocket (потери не задавать: TCP не теряет)
 cargo xtask stress --remote --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
 cargo xtask golden                # переснять следы из TS и сверить (после изменений в TS-физике или карте)
@@ -59,9 +66,13 @@ cargo xtask deploy                # выложить сервер на прод 
 
 Бинарники напрямую (`cargo run -p fb_server -- --help`, `cargo run -p fb_client -- --help`):
 
-- сервер: `--map`, `--seed`, `--intro`, `--udp-port`, `--ws-addr`, `--ws-port`, `--lag/--jitter/--loss`,
-  `--trace файл`, `--metrics-every с`, `--exit-after с`;
-- клиент: `--server`, `--transport auto|udp|ws`, `--ws-url`, `--id`, `--lag/--jitter/--loss`, `--input-margin`,
+- сервер: `--dev` (dev-команды, комната `dev`), `--solo` (игра с одним игроком), `--open-rooms a,b` (постоянные
+  комнаты), `--seed`, `--intro`, `--maintenance-file` (пока файл есть — «игра обновляется»), `--udp-port`,
+  `--ws-addr`, `--ws-port`, `--lag/--jitter/--loss`, `--trace файл`, `--metrics-every с`, `--exit-after с`;
+  `FB_SECRET` (64 hex) подписывает identity, без него — случайный на запуск;
+- клиент: `--server`, `--transport auto|udp|ws`, `--ws-url`, `--id`, `--name`, `--token`, `--room`, `--pin`,
+  `--practice карта`, `--color`, `--start карта --start-players n` (хостом стартует игру из раундов этой карты),
+  `--lag/--jitter/--loss`, `--input-margin`,
   `--backend vulkan|dx12|gl`, `--headless` (без окна и GPU, автопилот), `--fps`, `--autopilot`, `--trace файл`,
   `--screenshot файл --exit-after с`, `--check-assets`.
 
@@ -98,7 +109,7 @@ cargo xtask deploy                # выложить сервер на прод 
   `body_differs` откатывает на любое отличие, и округление при передаче давало бы лишние откаты.
 - Ввод: стик и захват — удерживаемые, прыжок и нырок — нажатия (один тик на нажатие; клиент защёлкивает их
   между тиками, `game::latch_presses`). Стик ужимается до длины 127 одинаково на клиенте и сервере
-  (`InputFrame::clamped`). Сервер читает `InputBuffer` сам (`room::frame_for`; перенос Lightyear в
+  (`InputFrame::clamped`). Сервер читает `InputBuffer` сам (`play::frame_for`; перенос Lightyear в
   `ActionState` выключен, он выбрасывает поздний ввод): без ввода держит стик и захват `INPUT_HOLD` тиков,
   нажатие, пришедшее до `LATE_TICKS` (250 мс) позже своего тика, выполняет на следующем.
 - Настройки ввода (`INPUT_SEND_INTERVAL`, `INPUT_REDUNDANCY` = `LATE_TICKS`) и `--input-margin` подобраны
@@ -109,7 +120,12 @@ cargo xtask deploy                # выложить сервер на прод 
 - Сервер однопоточный: все расписания на `SingleThreadedExecutor` (`fb_server/src/main.rs`), фича Bevy
   `multi_threaded` у `fb_server` не включается. На 1 vCPU многопоточный исполнитель тратил 15% ядра в простое на
   передачу систем пулу. Параллелить (комнаты по потокам) — только по замерам Фазы 3.
-- Видимость компонентов — фильтрами Replicon (`visibility.rs`); новые фильтры регистрирует `add_server_filters`.
+- Видимость — фильтрами Replicon (`visibility.rs`): комната (`RoomTag` против `InRoom` ссылки), владелец
+  (`OwnerOnly`, `OthersOnly`); новые фильтры регистрирует `add_server_filters`.
+- Сообщения клиентов сервер читает каждый кадр (`play::receive` в `PreUpdate`): Lightyear выбрасывает
+  непрочитанные за кадр, а тик идёт через кадр.
+- Логика комнат (`fb_server::rooms`) не знает о сети: на вход — соединения (`ConnId`), `ClientMsg` и ввод
+  (`Inputs`), на выход — `Out`. Новое правило комнаты — с тестом в `rooms/tests.rs`.
 
 **Остальное.** Зависимости — в `[workspace.dependencies]`; Bevy, Lightyear и всё, что с ними связано, пинится
 точно. Комментарии и вывод инструментов — по-английски, текст для игрока — по-русски. Переводы строк — LF.
@@ -163,12 +179,14 @@ WS 5891 за nginx) на время прогона; клиенты идут с �
 - Таймаут netcode — 3 с: остановка TCP-потока внутри VPN (VLESS xhttp) рвёт WS-соединение. На таких путях
   рывки джиттера вызывают серии сдвигов часов (`port/phases/0.md`, «Матрица VPN»); `fb_client --sync-max-error` —
   флаг для опытов с порогом.
-- Клиент не переподключается после обрыва на WS и с `--transport udp`; с `auto` обрыв UDP переводит на WS.
-  Переподключение даёт нового игрока (удержание места — Фаза 3).
-- Нет механизма «игра обновляется»: при деплое клиенты просто теряют соединение (Фаза 3 / 7).
+- Клиент не переподключается после обрыва на WS и с `--transport udp`; с `auto` обрыв UDP переводит на WS, и
+  клиент возвращается в свою комнату тем же игроком (identity из `Ready`, место держится 30 с).
+- «Игра обновляется»: сервер с `--maintenance-file` отключает всех, пока файл есть; деплой его ещё не создаёт.
+- Сервер не может разорвать одного клиента netcode: клиент, которому отказали, уходит сам; не ушедший
+  отваливается по таймауту (`Received UDP packet for unknown entity` в логе; `port/decisions.md`).
+- Сборка следующего раунда и сетки навигации ботов идёт внутри тика: до 6 мс на тике старта раунда.
 - На GL wgpu пишет ~70 ошибок `CubeArray` в секунду; безвредно. SSAO на GL отключён через лимит storage-текстур
   (`fb_client/src/main.rs`).
 - Респаун не предсказывается: каждое падение даёт 2–3 отката (как в TS).
-- `MAX_PLAYERS` не проверяется.
 - Аутентификация netcode — нулевой ключ и id от клиента, проверка адреса в токене выключена (только Фаза 0).
 - Золотые следы есть только для `jump-club`: лестницы, уступы, порталы, конвейеры, батуты, лёд с TS не сверены.

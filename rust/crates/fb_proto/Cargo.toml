@@ -1,5 +1,5 @@
 [package]
-name = "fb_maps"
+name = "fb_proto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 fb_shared.workspace = true
-fb_sim.workspace = true
+fb_maps.workspace = true
 serde.workspace = true
 
 [lints]

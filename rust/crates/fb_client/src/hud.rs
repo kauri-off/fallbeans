@@ -75,8 +75,8 @@ fn update(
         };
         (
             format!(
-                "{} seed {} round {} | map hash {} {ok}",
-                m.round.map, m.round.seed, m.round.number, m.static_hash
+                "{} seed {} arena {} | map hash {} {ok}",
+                m.round.map, m.round.seed, m.round.arena, m.static_hash
             ),
             m.time(timeline.tick().0 as f64),
         )

@@ -355,7 +355,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -2933,6 +2933,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -3197,6 +3198,7 @@ dependencies = [
  "fb_arena",
  "fb_maps",
  "fb_net",
+ "fb_proto",
  "fb_shared",
  "fb_sim",
  "lightyear",
@@ -3208,6 +3210,7 @@ version = "0.1.0"
 dependencies = [
  "fb_shared",
  "fb_sim",
+ "serde",
 ]
 
 [[package]]
@@ -3217,6 +3220,7 @@ dependencies = [
  "bevy",
  "bevy_replicon",
  "clap",
+ "fb_proto",
  "fb_shared",
  "fb_sim",
  "lightyear",
@@ -3224,17 +3228,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "fb_proto"
+version = "0.1.0"
+dependencies = [
+ "fb_maps",
+ "fb_shared",
+ "serde",
+]
+
+[[package]]
 name = "fb_server"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bevy",
  "clap",
  "fb_arena",
  "fb_maps",
  "fb_net",
+ "fb_proto",
  "fb_shared",
  "fb_sim",
+ "getrandom 0.3.4",
+ "hmac",
  "lightyear",
+ "sha2",
 ]
 
 [[package]]
@@ -3920,6 +3938,15 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "httlib-huffman"
@@ -5934,7 +5961,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6501,7 +6528,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

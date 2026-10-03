@@ -9,7 +9,7 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 use crate::opts::Opts;
-use crate::room::{InputState, Pawn, Room};
+use crate::play::{Rooms, conn_of};
 
 pub struct NetPlugin;
 
@@ -18,6 +18,7 @@ impl Plugin for NetPlugin {
         app.add_systems(Startup, start_server);
         app.add_observer(on_link);
         app.add_observer(on_connected);
+        app.add_observer(on_disconnected);
     }
 }
 
@@ -66,52 +67,26 @@ fn on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
         .insert((ReplicationSender, Name::new("client")));
 }
 
-/// A client is in: it gets a pawn (despawned by Lightyear when the client leaves) and the round's events so far.
+/// A client is in: the hub waits for its hello.
 fn on_connected(
     trigger: On<Add, Connected>,
-    links: Query<(&RemoteId, &LinkOf, Option<&PeerAddr>), With<ClientOf>>,
-    mut room: ResMut<Room>,
-    mut commands: Commands,
-    mut sender: ServerMultiMessageSender,
-    servers: Query<&Server>,
-    timeline: Res<LocalTimeline>,
+    links: Query<(&RemoteId, Option<&PeerAddr>), With<ClientOf>>,
+    rooms: Option<ResMut<Rooms>>,
 ) {
     let link = trigger.entity;
-    let Ok((remote, link_of, addr)) = links.get(link) else {
+    let (Ok((remote, addr)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };
-    let peer = remote.0;
-    let id = room.next_player_id();
-    let pawn = room.arena.add_pawn(id.0, false);
-    let full = BodyFull {
-        body: pawn.body.clone(),
-        teleports: pawn.teleports,
-    };
-    let color = BeanColor(((id.0 - 1) % fb_shared::BEAN_COLORS.len() as u32) as u8);
-    commands.spawn((
-        Pawn,
-        InputState::new(timeline.tick()),
-        id,
-        color,
-        RemotePose::of(&full),
-        full,
-        Replicate::to_clients(NetworkTarget::All),
-        PredictionTarget::to_clients(NetworkTarget::Single(peer)),
-        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
-        OwnerOnly(link),
-        OthersOnly(link),
-        ControlledBy {
-            owner: link,
-            lifetime: default(),
-        },
-    ));
-    if let Ok(server) = servers.get(link_of.server) {
-        for msg in &room.events {
-            let _ = sender.send::<_, MapEventsChannel>(msg, server, &NetworkTarget::Single(peer));
-        }
-    }
     // The address the link came from: a player's own, a VPN's exit, or nginx's (WebSocket: its access log
     // has the player's).
-    let from = addr.map_or_else(|| "?".to_string(), |a| a.0.to_string());
-    info!("player {} joined ({peer:?} from {from})", id.0);
+    let from = addr.map_or_else(|| "?".to_string(), |a| a.0.ip().to_string());
+    info!("connected: {:?} from {from}", remote.0);
+    rooms.hub.open(conn_of(link), from);
+}
+
+/// A client is gone (it left, timed out, or was let go of).
+fn on_disconnected(trigger: On<Remove, Connected>, rooms: Option<ResMut<Rooms>>) {
+    if let Some(mut rooms) = rooms {
+        rooms.hub.close(conn_of(trigger.entity));
+    }
 }

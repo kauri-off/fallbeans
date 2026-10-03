@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use fb_net::*;
-use fb_shared::BEAN_COLORS;
+use fb_shared::COLORS;
 use fb_sim::math::M4;
 use fb_sim::physics::power;
 use fb_sim::scene::{PrimKind, SceneItem};
@@ -228,7 +228,7 @@ fn spawn_beans(
 ) {
     for (e, color) in &beans {
         let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
-        let tint = hex(BEAN_COLORS[color.0 as usize % BEAN_COLORS.len()]);
+        let tint = hex(COLORS[color.0 as usize % COLORS.len()]);
         commands
             .entity(e)
             .insert((BeanView, Transform::default(), Visibility::default()))

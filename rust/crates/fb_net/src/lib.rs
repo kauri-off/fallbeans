@@ -17,9 +17,10 @@ mod wire;
 pub use components::*;
 pub use conditioner::NetSim;
 pub use events::*;
+pub use fb_proto::{ClientMsg, MapEventKind, MapEventMsg, ServerMsg};
 pub use input::FbInput;
 pub use stats::{NetStats, NetStatsPlugin};
-pub use visibility::{OthersOnly, OwnerOnly, add_server_filters};
+pub use visibility::{InRoom, OthersOnly, OwnerOnly, RoomTag, add_server_filters};
 
 pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
 /// Dev key for netcode's manual authentication (phase 0: no session endpoint yet).
@@ -55,11 +56,20 @@ impl Plugin for ProtocolPlugin {
         });
         app.register_message::<MapEventMsg>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerMsg>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ClientMsg>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.add_channel::<MapEventsChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
         })
         .add_direction(NetworkDirection::ServerToClient);
+        app.add_channel::<ControlChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
         app.component::<PlayerId>().replicate();
         app.component::<BeanColor>().replicate();
         app.component::<Round>().replicate();

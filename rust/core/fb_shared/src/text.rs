@@ -1,0 +1,79 @@
+//! Player-typed text as the server passes it on (port of the sanitizers in `shared/protocol.ts`).
+use crate::{CHAT_MAX, NAME_MAX, ROOM_TITLE_MAX};
+
+/// Unicode category C as far as it matters here: controls, format characters (zero-width, bidi
+/// overrides, tags) and private use. Unassigned code points pass (TS dropped them too).
+pub fn is_other(c: char) -> bool {
+    let u = c as u32;
+    c.is_control()
+        || matches!(
+            u,
+            0xad | 0x600..=0x605
+                | 0x61c
+                | 0x6dd
+                | 0x70f
+                | 0x890..=0x891
+                | 0x8e2
+                | 0x180e
+                | 0x200b..=0x200f
+                | 0x202a..=0x202e
+                | 0x2060..=0x2064
+                | 0x2066..=0x206f
+                | 0xfeff
+                | 0xfff9..=0xfffb
+                | 0x110bd
+                | 0x110cd
+                | 0x13430..=0x1343f
+                | 0x1bca0..=0x1bca3
+                | 0x1d173..=0x1d17a
+                | 0xe0001
+                | 0xe0020..=0xe007f
+                | 0xe000..=0xf8ff
+                | 0xf0000..=0x10ffff
+        )
+}
+
+fn collapse_spaces(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn sanitize_name(raw: &str) -> String {
+    let s: String = raw.chars().filter(|&c| !is_other(c) && c != '<' && c != '>').collect();
+    s.trim()
+        .chars()
+        .take(NAME_MAX)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+pub fn sanitize_title(raw: &str) -> String {
+    let s: String = raw.chars().filter(|&c| !is_other(c) && c != '<' && c != '>').collect();
+    collapse_spaces(&s)
+        .chars()
+        .take(ROOM_TITLE_MAX)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+/// One line, no control characters, at most CHAT_MAX characters.
+pub fn sanitize_chat(raw: &str) -> String {
+    let s: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    collapse_spaces(&s).chars().take(CHAT_MAX).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes() {
+        assert_eq!(sanitize_name("  <Аня>\u{200b}\u{7} "), "Аня");
+        assert_eq!(sanitize_name("Очень длинное имя игрока"), "Очень длинное им");
+        assert_eq!(sanitize_title(" Наша \n\t комната "), "Наша комната");
+        assert_eq!(sanitize_chat("привет\n\nвсем  \u{1}!"), "привет всем !");
+        assert_eq!(sanitize_chat(&"я".repeat(500)).chars().count(), CHAT_MAX);
+        assert_eq!(sanitize_chat("  \n "), "");
+    }
+}

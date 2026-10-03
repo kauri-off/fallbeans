@@ -1,8 +1,10 @@
-//! Authoritative server (phase 0): one room playing rounds of one map over UDP and WebSocket.
+//! Authoritative server: rooms of players and bots over UDP and WebSocket.
+mod auth;
 mod metrics;
 mod net;
 mod opts;
-mod room;
+mod play;
+mod rooms;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, SystemInformationDiagnosticsPlugin};
@@ -18,9 +20,8 @@ use crate::opts::Opts;
 
 fn main() -> AppExit {
     let opts = Opts::parse();
-    if fb_maps::by_id(&opts.map).is_none() {
-        let ids: Vec<_> = fb_maps::MAPS.iter().map(|m| m.meta().id).collect();
-        eprintln!("no map {:?}; maps: {}", opts.map, ids.join(", "));
+    if let Some(bad) = opts.open_rooms.iter().find(|r| !fb_proto::valid_room_id(r)) {
+        eprintln!("--open-rooms: {bad:?} is not a room id (2–8 of a-z, 0-9)");
         return AppExit::from_code(2);
     }
     let mut app = App::new();
@@ -40,7 +41,7 @@ fn main() -> AppExit {
     fb_net::add_server_filters(&mut app);
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(opts);
-    app.add_plugins((net::NetPlugin, room::RoomPlugin, metrics::MetricsPlugin));
+    app.add_plugins((net::NetPlugin, play::PlayPlugin, metrics::MetricsPlugin));
     // Every schedule on the main thread. The multi-threaded executor hands systems to the compute pool and
     // waits for them each frame: on the 1-vCPU host that cost 15% of the core and 9 000 context switches a
     // second with nobody playing, for a frame of a few dozen microseconds of work.

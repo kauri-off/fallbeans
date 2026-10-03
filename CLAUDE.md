@@ -63,7 +63,7 @@ Everything about the port's progress lives in `rust/port/`. Each file has one jo
 - Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--lag 75]`, or `fb_client --screenshot f.png
   --exit-after 15` against a running `fb_server`. No BRP probe yet (Phase 4); read `stats:`/`metrics:` logs.
 - Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
-- One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`room::frame_for`: late presses
+- One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`play::frame_for`: late presses
   happen on the next tick; Lightyear's copy into `ActionState` is off). Inputs go out at 60 Hz with 15 messages of
   redundancy, input margin 3 ticks: all chosen by stress measurements. The server runs every schedule
   single-threaded (`SingleThreadedExecutor`; the 1-vCPU host lost 15% of its core to the multi-threaded executor's

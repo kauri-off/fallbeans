@@ -1,5 +1,5 @@
 //! What stress runs measure on the server, logged as one `metrics:` line every `--metrics-every` s:
-//! room tick cost, the longest frame (a stalled server reads inputs late), ticks run without a player's
+//! the rooms' tick cost (all rooms), the longest frame (a stalled server reads inputs late), ticks run without a player's
 //! input in time, traffic out, process CPU and memory.
 use std::time::Instant;
 
@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use fb_net::NetStats;
 
 use crate::opts::Opts;
-use crate::room::{InputState, Pawn, RoomTick};
+use crate::play::{InputState, Pawn, RoomTick, Rooms};
 
 pub struct MetricsPlugin;
 
@@ -52,6 +52,7 @@ fn report(
     stats: Res<NetStats>,
     diag: Res<DiagnosticsStore>,
     mut pawns: Query<&mut InputState, With<Pawn>>,
+    rooms: Option<Res<Rooms>>,
 ) {
     let now = time.elapsed_secs_f64();
     let span = now - t.last_report;
@@ -70,7 +71,12 @@ fn report(
     let bytes = (stats.bytes_out - t.last_bytes) as f64 / span;
     let packets = (stats.packets_out - t.last_packets) as f64 / span;
     (t.last_bytes, t.last_packets) = (stats.bytes_out, stats.packets_out);
-    let players = pawns.iter().count();
+    let (mut players, mut bots, mut open) = (0, 0, 0);
+    for room in rooms.iter().flat_map(|r| r.hub.rooms.values()) {
+        open += 1;
+        players += room.players.iter().filter(|p| p.conn.is_some()).count();
+        bots += room.players.iter().filter(|p| p.bot).count();
+    }
     let (mut missed, mut missed_max) = (0, 0);
     for mut st in &mut pawns {
         missed += st.missed;
@@ -79,7 +85,7 @@ fn report(
     let frame_max = core::mem::take(&mut t.frame_max) * 1000.0;
     let value = |p| diag.get(p).and_then(|d| d.smoothed()).unwrap_or(f64::NAN);
     info!(
-        "metrics: players {players} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {:.1}% mem {:.0} MB",
+        "metrics: players {players} bots {bots} rooms {open} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {:.1}% mem {:.0} MB",
         pct(0.5),
         pct(0.99),
         us.last().copied().unwrap_or(0),

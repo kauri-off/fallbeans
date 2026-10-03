@@ -1,4 +1,5 @@
 //! What a game is (port of `shared/game.ts`): its description, genre, and how a round treats beans.
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Genre {
@@ -111,7 +112,7 @@ pub fn fall_behaviour(genre: Genre) -> FallBehaviour {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArenaKind {
     Lobby,
     Round,

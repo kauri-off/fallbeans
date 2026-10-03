@@ -5,7 +5,7 @@ use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use fb_arena::{Stepper, build_map, tick_bodies, touch_hook};
+use fb_arena::{ArenaKind, Stepper, build_map, can_move, tick_bodies, touch_hook};
 use fb_net::*;
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
@@ -21,6 +21,7 @@ use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::*;
 
 use crate::opts::Opts;
+use crate::session::Session;
 
 /// The map of the current round as this client built it.
 #[derive(Resource)]
@@ -94,9 +95,14 @@ fn open_trace(mut commands: Commands, opts: Res<Opts>) {
     }
 }
 
-fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<Res<Map>>, mut stats: ResMut<Stats>) {
+fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<ResMut<Map>>, mut stats: ResMut<Stats>) {
     let Some(round) = rounds.iter().next() else { return };
-    if map.as_ref().is_some_and(|m| m.round == *round) {
+    let mut map = map;
+    if let Some(m) = map.as_mut().filter(|m| m.round.same_arena(round)) {
+        // The same arena with its clock moved (a dev warp or pause): no new map.
+        if m.round != *round {
+            m.round = round.clone();
+        }
         return;
     }
     let Some(def) = fb_maps::by_id(&round.map) else {
@@ -105,7 +111,11 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<Res<Ma
     };
     let (mut b, spec) = build_map(def, round.seed, true, &[]);
     let meta = def.meta();
-    let bonuses = Bonuses::new(&b.bonus_spots, round.seed, spec.finish.is_none(), meta.duration);
+    let bonuses = if round.kind == ArenaKind::Round {
+        Bonuses::new(&b.bonus_spots, round.seed, spec.finish.is_none(), meta.duration)
+    } else {
+        Bonuses::default()
+    };
     b.world.finalize(-1e3);
     let static_hash = b.world.hash(true);
     if static_hash != round.static_hash {
@@ -114,8 +124,8 @@ fn build_round(mut commands: Commands, rounds: Query<&Round>, map: Option<Res<Ma
         stats.hash_mismatch = true;
     }
     info!(
-        "round {}: {} seed {} (static {static_hash})",
-        round.number, round.map, round.seed
+        "arena {}: {} seed {} (static {static_hash})",
+        round.arena, round.map, round.seed
     );
     let render = b.world.nodes.clone();
     commands.insert_resource(Map {
@@ -264,6 +274,7 @@ fn predict(
     >,
     others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     trace: Option<ResMut<Trace>>,
+    session: Res<Session>,
 ) {
     let Some(mut map) = map else { return };
     let Ok((id, mut full, state, mut ev, mut prev)) = own.single_mut() else {
@@ -272,7 +283,11 @@ fn predict(
     let k = map.round.arena_tick(timeline.tick());
     let t = k as f64 * DT;
     let frame = InputFrame::from(state.0);
-    let input: BodyInput = if t >= 0.0 { frame.into() } else { BodyInput::default() };
+    let input: BodyInput = if can_move(map.round.kind, t) {
+        frame.into()
+    } else {
+        BodyInput::default()
+    };
     let extra: Vec<OtherBody> = others
         .iter()
         .filter(|(_, p)| p.state != BodyState::Portal as u8)
@@ -305,8 +320,9 @@ fn predict(
         let b = &full.body;
         let _ = writeln!(
             trace.0,
-            "C {} {} {} {} {} {:.6} {:.6} {:.6}",
+            "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
             timeline.tick().0,
+            session.room.as_deref().unwrap_or("?"),
             id.0,
             frame.mx,
             frame.mz,
@@ -318,19 +334,25 @@ fn predict(
     }
 }
 
-/// Map events as they arrive. They may come before the round they belong to is replicated (the history
-/// sent on join, or a round that just started), so they wait here until that round's map is built.
+/// Map events as they arrive. They may come before the arena they belong to is replicated (the history
+/// sent on join, or a round that just started), so they wait here (a few seconds at most) until that
+/// arena's map is built.
 #[derive(Resource, Default)]
-struct Inbox(Vec<MapEventMsg>);
+struct Inbox(Vec<(MapEventMsg, f64)>);
+
+/// Seconds an event may wait for its arena.
+const INBOX_WAIT: f64 = 5.0;
 
 fn receive_map_events(
     mut receivers: Query<&mut MessageReceiver<MapEventMsg>>,
     mut inbox: ResMut<Inbox>,
     mut stats: ResMut<Stats>,
+    time: Res<Time<Real>>,
 ) {
+    let now = time.elapsed_secs_f64();
     for mut r in &mut receivers {
         for msg in r.receive() {
-            inbox.0.push(msg);
+            inbox.0.push((msg, now));
             stats.map_events += 1;
         }
     }
@@ -342,21 +364,27 @@ fn apply_map_events(
     mut inbox: ResMut<Inbox>,
     interp: Option<Res<InterpolationTimeline>>,
     own: Query<&PlayerId, With<Predicted>>,
+    time: Res<Time<Real>>,
 ) {
     let Some(mut map) = map else { return };
     let map = &mut *map;
-    let round = map.round.number;
-    // Older rounds' events are dropped, later rounds' wait for their map.
-    inbox.0.retain(|msg| {
-        if msg.round == round {
-            map.pending.push(*msg);
+    let arena = map.round.arena;
+    let now = time.elapsed_secs_f64();
+    // This arena's events go on; others wait a while for their map.
+    inbox.0.retain(|(msg, at)| {
+        if msg.arena == arena {
+            map.pending.push(msg.clone());
+            return false;
         }
-        msg.round > round
+        now - at < INBOX_WAIT
     });
     let me = own.single().ok().map(|p| p.0);
     let now = interp.map(|t| t.tick().0);
     map.pending.retain(|msg| {
-        let MapEventKind::Bonus { i, id, at } = msg.ev;
+        // Only bonuses so far; finishes, falls and the maps' own events wait for Phase 4.
+        let MapEventKind::Bonus { i, id, at } = msg.ev else {
+            return false;
+        };
         let due = Some(id) == me || now.is_none_or(|n| n >= msg.tick);
         if due {
             map.bonuses.on_event(BonusTaken { i, id, at });

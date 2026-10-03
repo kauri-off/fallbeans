@@ -1,10 +1,11 @@
-//! Native client (phase 0): connects, predicts its bean, interpolates the others, draws the map.
+//! Native client: connects, enters a room, predicts its bean, interpolates the others, draws the map.
 //! `--headless` runs the same game without a window or GPU (stress runs, CI).
 mod assets;
 mod game;
 mod hud;
 mod net;
 mod opts;
+mod session;
 mod stats;
 mod view;
 
@@ -114,7 +115,12 @@ fn main() -> AppExit {
     }
     app.add_plugins(ClientPlugins { tick_duration: TICK });
     app.add_plugins((ProtocolPlugin, NetStatsPlugin));
-    app.add_plugins((net::NetPlugin, game::GamePlugin, stats::StatsPlugin));
+    app.add_plugins((
+        net::NetPlugin,
+        session::SessionPlugin,
+        game::GamePlugin,
+        stats::StatsPlugin,
+    ));
     app.add_systems(Update, exit_after);
     app.insert_resource(opts);
     app.run()

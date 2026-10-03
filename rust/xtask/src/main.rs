@@ -44,6 +44,7 @@ pub struct Shared {
     pub jitter: u64,
     #[arg(long, default_value_t = 0.0)]
     pub loss: f32,
+    /// The map the clients play (the room's host starts a game of it).
     #[arg(long, default_value = "jump-club")]
     pub map: String,
     #[arg(long)]
@@ -67,11 +68,22 @@ impl Shared {
 
     pub fn server_args(&self) -> Vec<String> {
         let mut a = self.net_args();
-        a.extend(["--map".into(), self.map.clone()]);
         if let Some(s) = self.seed {
             a.extend(["--seed".into(), s.to_string()]);
         }
         a
+    }
+
+    /// A client goes into `room` and, as its host, starts a game of the map once `players` are in.
+    pub fn play_args(&self, room: &str, players: u32) -> Vec<String> {
+        vec![
+            "--room".into(),
+            room.into(),
+            "--start".into(),
+            self.map.clone(),
+            "--start-players".into(),
+            players.to_string(),
+        ]
     }
 
     pub fn bin(&self, name: &str) -> PathBuf {
@@ -176,6 +188,7 @@ fn dev(a: &DevArgs) -> bool {
     }
     let Ok(mut server) = Command::new(a.shared.bin("fb_server"))
         .args(a.shared.server_args())
+        .args(["--dev", "--solo"])
         .spawn()
     else {
         eprintln!("cannot start the server");
@@ -185,13 +198,17 @@ fn dev(a: &DevArgs) -> bool {
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = Command::new(a.shared.bin("fb_client"));
+            let profile = (b'a' + i as u8) as char;
             c.args([
                 "--id",
                 &(1000 + i).to_string(),
+                "--name",
+                &format!("Боб {profile}"),
                 "--title",
-                &format!("Fall Beans — {}", (b'a' + i as u8) as char),
+                &format!("Fall Beans — {profile}"),
             ])
-            .args(a.shared.net_args());
+            .args(a.shared.net_args())
+            .args(a.shared.play_args("dev", a.clients));
             if a.autopilot {
                 c.arg("--autopilot");
             }

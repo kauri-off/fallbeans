@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::game::Genre;
 use crate::m;
 use crate::rng::{Rng, shuffle};
+use serde::{Deserialize, Serialize};
 
 /// Placement points for first place; last place gets 0, the rest are spread evenly between.
 pub const TOP_POINTS: i64 = 10;
@@ -47,7 +48,7 @@ pub struct RoundView<'a> {
     pub bots: Option<&'a BTreeSet<u32>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RoundRow {
     pub id: u32,
     pub place: usize,
