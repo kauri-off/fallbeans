@@ -6,7 +6,10 @@ use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use fb_arena::{ArenaKind, Stepper, build_map, can_move, client_event, client_start, tick_bodies, touch_hook};
+use fb_arena::{
+    ArenaKind, FallBehaviour, Stepper, build_map, can_move, client_event, client_start, fell, reach_checkpoint,
+    respawn, respawn_point, tick_bodies, touch_hook,
+};
 use fb_net::*;
 use fb_proto::{ArenaInfo, Pid};
 use fb_shared::DT;
@@ -83,6 +86,36 @@ impl Map {
     }
 }
 
+/// Something that happened to a bean, for its face and the sounds. The own bean's moves come from
+/// predicted ticks (rollback replays say nothing again).
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub enum Cue {
+    Jumped,
+    Dived,
+    Bounced,
+    /// Stunned by a hit, knocked over, or pushed (how hard).
+    Hit,
+    Knocked,
+    Bumped(f32),
+    Landed(f32),
+    Finish(Pid),
+    Ko {
+        id: Pid,
+        out: bool,
+    },
+    Bonus(Pid),
+    Emote {
+        id: Pid,
+        e: u8,
+    },
+    /// A round's results are in.
+    Results,
+    /// Somebody rang the lobby's bell (climbed its tower).
+    Bell(Pid),
+    /// A sound the map asked for (`MapSfx`).
+    Sfx(&'static str),
+}
+
 /// Camera yaw (radians; forward is (sin, cos) on x/z) and pitch.
 #[derive(Resource)]
 pub struct CameraAngles {
@@ -121,11 +154,15 @@ impl Plugin for GamePlugin {
         app.init_resource::<Stats>();
         app.init_resource::<Inbox>();
         app.init_resource::<Presses>();
+        app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
         app.add_systems(PreUpdate, (build_round, latch_presses.after(bevy::input::InputSystems)));
         app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
         app.add_systems(FixedUpdate, predict);
-        app.add_systems(Update, (receive_map_events, apply_map_events).chain());
+        app.add_systems(
+            Update,
+            ((receive_map_events, apply_map_events, map_sounds).chain(), send_emotes),
+        );
         app.add_observer(on_controlled);
         app.add_observer(|_: On<Add, Connected>, trace: Option<ResMut<Trace>>| {
             if let Some(mut t) = trace {
@@ -259,9 +296,18 @@ struct Presses(u8);
 fn latch_presses(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    pads: Query<&Gamepad>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut presses: ResMut<Presses>,
 ) {
+    for pad in &pads {
+        if pad.just_pressed(GamepadButton::South) {
+            presses.0 |= BTN_JUMP;
+        }
+        if pad.any_just_pressed([GamepadButton::West, GamepadButton::East]) {
+            presses.0 |= BTN_DIVE;
+        }
+    }
     let (Some(keys), Some(mouse)) = (keys, mouse) else {
         return;
     };
@@ -273,6 +319,24 @@ fn latch_presses(
     if keys.any_just_pressed(DIVE_KEYS) || (captured && mouse.just_pressed(MouseButton::Left)) {
         presses.0 |= BTN_DIVE;
     }
+}
+
+/// Stick values within this of the centre count as none (worn sticks drift).
+const PAD_DEADZONE: f32 = 0.15;
+
+/// The gamepads' left stick (forward, right) once out of the dead zone, and their grab buttons (RB, RT).
+fn gamepad(pads: &Query<&Gamepad>) -> ((f64, f64), bool) {
+    let dz = |v: f32| if v.abs() < PAD_DEADZONE { 0.0 } else { f64::from(v) };
+    let mut stick = (0.0, 0.0);
+    let mut grab = false;
+    for pad in pads {
+        let s = pad.left_stick();
+        if stick == (0.0, 0.0) {
+            stick = (dz(s.y), dz(s.x));
+        }
+        grab |= pad.any_pressed([GamepadButton::RightTrigger, GamepadButton::RightTrigger2]);
+    }
+    (stick, grab)
 }
 
 /// The stick (forward, right) and the held buttons (grab).
@@ -292,6 +356,7 @@ fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> (f
 fn write_input(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    pads: Query<&Gamepad>,
     mut presses: ResMut<Presses>,
     cam: Res<CameraAngles>,
     opts: Res<Opts>,
@@ -317,11 +382,20 @@ fn write_input(
                 return;
             }
         }
-    } else if let (Some(keys), Some(mouse)) = (keys, mouse) {
-        let (f, r, held) = keyboard(&keys, &mouse);
-        (f, r, held | pressed)
     } else {
-        (0.0, 0.0, 0)
+        let (mut f, mut r, mut held) = match (keys, mouse) {
+            (Some(keys), Some(mouse)) => keyboard(&keys, &mouse),
+            _ => (0.0, 0.0, 0),
+        };
+        // The pad's stick wins over the keys while it is pushed (as in TS).
+        let (stick, grab) = gamepad(&pads);
+        if stick != (0.0, 0.0) {
+            (f, r) = stick;
+        }
+        if grab {
+            held |= BTN_GRAB;
+        }
+        (f, r, held | pressed)
     };
     let (fx, fz) = (cam.yaw.sin() as f64, cam.yaw.cos() as f64);
     let (mut mx, mut mz) = (f * fx - r * fz, f * fz + r * fx);
@@ -352,6 +426,8 @@ fn predict(
     trace: Option<ResMut<Trace>>,
     session: Res<Session>,
     link: Query<(), (With<Client>, With<Connected>)>,
+    rollback: Option<Res<Rollback>>,
+    mut cues: MessageWriter<Cue>,
 ) {
     let Some(mut map) = map else { return };
     let Ok((id, mut full, state, mut ev, mut prev)) = own.single_mut() else {
@@ -367,7 +443,7 @@ fn predict(
     };
     let extra: Vec<OtherBody> = others
         .iter()
-        .filter(|(_, p)| p.state != BodyState::Portal as u8)
+        .filter(|(_, p)| p.anim != Anim::Portal)
         .map(|(o, p)| OtherBody {
             id: o.0,
             x: p.pos.x as f64,
@@ -381,18 +457,44 @@ fn predict(
         .collect();
     let full = &mut *full;
     prev.0 = full.body.pos;
+    let (was_grounded, was_dive) = (full.body.grounded, full.body.state == BodyState::Dive);
     let mut steppers = [Stepper {
         id: id.0,
         body: &mut full.body,
         ev: &mut ev.0,
         input,
     }];
-    // Map logic predicted here (a portal, a pane that breaks); what it says (sounds) waits for Phase 4.
+    // Map logic predicted here (a portal, a pane that breaks), and the sounds it asks for.
     let map = &mut *map;
     let (mut scores, mut out) = (Default::default(), Vec::new());
     let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
     tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
+    drop(touch);
+    if rollback.is_none() {
+        cues.write_batch(out.iter().filter_map(|o| match o {
+            MapOut::Sfx(s) => Some(Cue::Sfx(s)),
+            _ => None,
+        }));
+    }
+    predict_respawn(map, id.0, full);
     stats.ticks += 1;
+    if rollback.is_none() {
+        let (b, e) = (&full.body, &ev.0);
+        let said = [
+            (e.jumped, Cue::Jumped),
+            (!was_dive && b.state == BodyState::Dive, Cue::Dived),
+            // (Into a portal: the same spring.)
+            (e.bounced || e.portal_in, Cue::Bounced),
+            (e.knocked, Cue::Knocked),
+            (e.stunned && !e.knocked, Cue::Hit),
+            (e.bumped > 5.0, Cue::Bumped(e.bumped as f32)),
+            (
+                !was_grounded && b.grounded && b.land_impact > 0.3,
+                Cue::Landed(b.land_impact as f32),
+            ),
+        ];
+        cues.write_batch(said.into_iter().filter(|(on, _)| *on).map(|(_, c)| c));
+    }
     if let Some(mut trace) = trace
         && !link.is_empty()
     {
@@ -413,6 +515,23 @@ fn predict(
             b.pos.y,
             b.pos.z
         );
+    }
+}
+
+/// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall
+/// puts it back (the server would say so only a round trip later, after a rollback or three). A fall that
+/// puts it out of a survival round, a shortcut and the lobby's free spawn stay the server's.
+fn predict_respawn(map: &Map, id: u32, full: &mut BodyFull) {
+    let (kind, fall) = (map.round.kind, map.round.fall);
+    let mut checkpoint = full.checkpoint.map(usize::from);
+    reach_checkpoint(&map.spec, &full.body, &mut checkpoint);
+    full.checkpoint = checkpoint.map(|c| c as u16);
+    if map.gone(id) || !fell(&map.spec, full.body.pos) || (kind == ArenaKind::Round && fall == FallBehaviour::Out) {
+        return;
+    }
+    if let Some(to) = respawn_point(&map.spec, kind, fall, checkpoint, full.spawn.into()) {
+        respawn(&map.spec, id, &mut full.body, to);
+        full.teleports += 1;
     }
 }
 
@@ -450,6 +569,7 @@ fn apply_map_events(
     own: Query<&PlayerId, With<Predicted>>,
     mut session: ResMut<Session>,
     time: Res<Time<Real>>,
+    mut cues: MessageWriter<Cue>,
 ) {
     let Some(mut map) = map else { return };
     let map = &mut *map;
@@ -477,6 +597,7 @@ fn apply_map_events(
                         id: *id,
                         at: *at,
                     });
+                    cues.write(Cue::Bonus(*id));
                 } else {
                     map.pending.push(msg);
                 }
@@ -485,6 +606,7 @@ fn apply_map_events(
                 info!("player {id} finished, place {place} in {time:.2} s");
                 if !map.info.finished.contains(id) {
                     map.info.finished.push(*id);
+                    cues.write(Cue::Finish(*id));
                 }
             }
             MapEventKind::Ko {
@@ -493,9 +615,12 @@ fn apply_map_events(
                 info!("player {id} is out ({cause})");
                 if !map.info.out.contains(id) {
                     map.info.out.push(*id);
+                    cues.write(Cue::Ko { id: *id, out: true });
                 }
             }
-            MapEventKind::Ko { .. } => {}
+            MapEventKind::Ko { id, .. } => {
+                cues.write(Cue::Ko { id: *id, out: false });
+            }
             MapEventKind::Map { name, data } => {
                 let Ok(data) = serde_json::from_str::<Value>(data) else {
                     warn!("map event {name}: bad data");
@@ -514,4 +639,47 @@ fn apply_map_events(
         }
     }
     map.take_out(out);
+}
+
+/// The sounds map events asked for.
+fn map_sounds(map: Option<ResMut<Map>>, mut cues: MessageWriter<Cue>) {
+    if let Some(mut map) = map
+        && !map.sfx.is_empty()
+    {
+        cues.write_batch(core::mem::take(&mut map.sfx).into_iter().map(Cue::Sfx));
+    }
+}
+
+const EMOTE_KEYS: [KeyCode; 5] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+];
+/// The pad's cross: emotes 1–4, as in TS.
+const EMOTE_PAD: [GamepadButton; 4] = [
+    GamepadButton::DPadUp,
+    GamepadButton::DPadLeft,
+    GamepadButton::DPadRight,
+    GamepadButton::DPadDown,
+];
+
+/// Keys 1–5 and the pad's cross: an emote, while the player has a bean.
+fn send_emotes(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    pads: Query<&Gamepad>,
+    own: Query<(), (With<Predicted>, With<PlayerId>)>,
+    mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
+) {
+    if own.is_empty() {
+        return;
+    }
+    let key = keys.and_then(|k| EMOTE_KEYS.iter().position(|c| k.just_pressed(*c)));
+    let pad = pads
+        .iter()
+        .find_map(|p| EMOTE_PAD.iter().position(|b| p.just_pressed(*b)));
+    if let Some(i) = key.or(pad) {
+        crate::session::send(&mut senders, ClientMsg::Emote(i as u8 + 1));
+    }
 }

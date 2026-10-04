@@ -80,5 +80,6 @@ impl Plugin for ProtocolPlugin {
             .predict()
             .with_rollback_condition(body_differs);
         app.component::<RemotePose>().replicate().add_linear_interpolation();
+        app.component::<Hold>().replicate();
     }
 }

@@ -4,11 +4,13 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_proto::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
+use crate::game::Cue;
 use crate::net::Conn;
 use crate::opts::Opts;
 
@@ -24,6 +26,8 @@ pub struct Session {
     pub scores: BTreeMap<Pid, f64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
+    /// The last game's standings (the podium's poses).
+    pub standings: Vec<Standing>,
     /// The host already asked to start the game in this lobby.
     started: bool,
 }
@@ -73,6 +77,7 @@ fn receive(
     mut session: ResMut<Session>,
     conn: Option<Res<Conn>>,
     mut commands: Commands,
+    mut cues: MessageWriter<Cue>,
 ) {
     for mut r in &mut receivers {
         for msg in r.receive() {
@@ -141,16 +146,35 @@ fn receive(
                 ServerMsg::RoundEnd { game, index, rows, .. } => {
                     let rows: Vec<String> = rows.iter().map(|r| format!("#{} {:+}", r.id, r.delta)).collect();
                     info!("round {index} ({game}) over: {}", rows.join(" "));
+                    cues.write(Cue::Results);
                 }
                 ServerMsg::GameEnd { standings, .. } => {
                     let s: Vec<String> = standings.iter().map(|s| format!("{} {}", s.name, s.total)).collect();
                     info!("game over: {}", s.join(", "));
+                    session.standings = standings;
                 }
                 ServerMsg::Chat { name, text, .. } => info!("chat {name}: {text}"),
                 ServerMsg::DevAck { ok, msg, .. } => info!("dev: {} {msg}", if ok { "ok" } else { "failed" }),
                 ServerMsg::Clock { rate } => info!("game time ×{rate}"),
-                ServerMsg::Scores(s) => session.scores.extend(s),
-                ServerMsg::Emote { .. } | ServerMsg::Left(_) => {}
+                ServerMsg::Scores(s) => {
+                    // In the lobby a score is the bell on the tower, rung once more (bots ring it silently).
+                    let lobby = session.arena.as_ref().is_some_and(|a| a.kind == ArenaKind::Lobby);
+                    for (id, v) in s {
+                        let was = session.scores.insert(id, v).unwrap_or(0.0);
+                        let bot = session
+                            .lobby
+                            .as_ref()
+                            .and_then(|l| l.players.iter().find(|p| p.id == id))
+                            .is_none_or(|p| p.bot);
+                        if lobby && v > was && !bot {
+                            cues.write(Cue::Bell(id));
+                        }
+                    }
+                }
+                ServerMsg::Emote { id, e } => {
+                    cues.write(Cue::Emote { id, e });
+                }
+                ServerMsg::Left(_) => {}
             }
         }
     }

@@ -18,6 +18,9 @@ struct HudText;
 #[derive(Component)]
 struct StatusText;
 
+#[derive(Component)]
+struct HintText;
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
@@ -26,7 +29,7 @@ impl Plugin for HudPlugin {
         app.add_systems(Startup, setup);
         app.add_systems(
             Update,
-            (update, status).run_if(on_timer(core::time::Duration::from_millis(250))),
+            (update, status, hint).run_if(on_timer(core::time::Duration::from_millis(250))),
         );
     }
 }
@@ -69,6 +72,36 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
             TextColor(Color::WHITE),
             TextShadow::default(),
         ));
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            bottom: px(18),
+            justify_content: JustifyContent::Center,
+            ..default()
+        })
+        .with_child((
+            HintText,
+            Text::new(""),
+            TextFont {
+                font: assets.load("fonts/Nunito-Bold.ttf").into(),
+                font_size: FontSize::Px(17.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::srgb(1.0, 0.93, 0.7)),
+            TextShadow::default(),
+        ));
+}
+
+fn hint(mut text: Query<&mut Text, With<HintText>>, conn: Option<Res<Conn>>, time: Res<Time<Real>>) {
+    let Ok(mut text) = text.single_mut() else { return };
+    let line = conn
+        .and_then(|c| crate::diag::vpn_hint(&c, time.elapsed_secs()))
+        .unwrap_or("");
+    if text.0 != line {
+        text.0 = line.into();
+    }
 }
 
 fn status(
@@ -107,7 +140,7 @@ fn status(
                 };
                 let lines: Vec<String> = mine
                     .into_iter()
-                    .chain([format!("{camera} · A / D — другой игрок")])
+                    .chain([format!("{camera} · A / D или крестовина — другой игрок")])
                     .collect();
                 lines.join("\n")
             }
@@ -130,21 +163,17 @@ fn update(
     timeline: Res<LocalTimeline>,
     own: Query<&BodyFull, With<Predicted>>,
     others: Query<(), With<Interpolated>>,
+    net: Res<crate::diag::NetDiag>,
+    time: Res<Time<Real>>,
 ) {
     let Ok(mut text) = text.single_mut() else { return };
     let fps = diag
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
-    let rtt = links.iter().next().map_or(0.0, |l| l.stats.rtt.as_secs_f32() * 1000.0);
     let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
-    let conn_s = conn.map_or("—".to_string(), |c| {
-        format!(
-            "{:?} {}",
-            c.transport,
-            if c.connected { "connected" } else { "connecting…" }
-        )
-    });
+    let link = conn.as_ref().and_then(|c| c.entity).and_then(|e| links.get(e).ok());
+    let net_s = crate::diag::summary(conn.as_deref(), link, &net, time.elapsed_secs());
     let (round_s, t) = map.as_ref().map_or(("no round".to_string(), 0.0), |m| {
         let ok = if m.static_hash == m.round.static_hash {
             "ok"
@@ -175,7 +204,7 @@ fn update(
             )
         });
     text.0 = format!(
-        "{conn_s} | rtt {rtt:.0} ms | {fps:.0} fps\n{round_s}\nt {t:.2} s | tick {} | others {}\n{body_s}\nrollbacks {rollbacks} ({rb_ticks} ticks) | map events {}",
+        "{net_s} | {fps:.0} fps\n{round_s}\nt {t:.2} s | tick {} | others {}\n{body_s}\nrollbacks {rollbacks} ({rb_ticks} ticks) | map events {}",
         timeline.tick().0,
         others.iter().count(),
         stats.map_events,

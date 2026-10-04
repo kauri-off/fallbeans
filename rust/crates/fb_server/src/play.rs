@@ -195,7 +195,12 @@ impl Inputs for LinkInputs<'_, '_, '_> {
     }
 }
 
-type Bodies = (&'static Pawn, &'static mut BodyFull, &'static mut RemotePose);
+type Bodies = (
+    &'static Pawn,
+    &'static mut BodyFull,
+    &'static mut RemotePose,
+    &'static mut Hold,
+);
 
 fn tick_rooms(
     timeline: Res<LocalTimeline>,
@@ -315,6 +320,7 @@ fn publish(
             map: room.arena.map.meta().id.into(),
             seed: room.arena.seed,
             zero_tick: room.zero_tick(),
+            fall: room.arena.fall,
             static_hash: room.arena.static_hash.clone(),
         };
         match rounds.get(&key).map(|e| round_q.get_mut(*e)) {
@@ -347,14 +353,23 @@ fn publish(
             let full = BodyFull {
                 body: p.body.clone(),
                 teleports: p.teleports,
+                checkpoint: p.checkpoint.map(|c| c as u16),
+                spawn: p.spawn_i as u16,
+            };
+            let hold = Hold {
+                target: p.grabbing,
+                reaching: p.reaching,
             };
             let entry = pawns.get(&(key, p.id));
             if let Some(pe) = entry.filter(|pe| pe.owner == owner) {
-                if let Ok((_, mut f, mut pose)) = bodies.get_mut(pe.entity)
-                    && *f != full
-                {
-                    *pose = RemotePose::of(&full);
-                    *f = full;
+                if let Ok((_, mut f, mut pose, mut h)) = bodies.get_mut(pe.entity) {
+                    if *f != full || *h != hold {
+                        *pose = RemotePose::of(&full, &hold);
+                    }
+                    if *f != full {
+                        *f = full;
+                    }
+                    h.set_if_neq(hold);
                 }
                 continue;
             }
@@ -368,8 +383,9 @@ fn publish(
                 PlayerId(p.id),
                 BeanColor(color),
                 InputState::new(tick),
-                RemotePose::of(&full),
+                RemotePose::of(&full, &hold),
                 full,
+                hold,
                 Replicate::to_clients(NetworkTarget::All),
             ));
             match owner.and_then(|c| Some((link_of(c), remotes.get(link_of(c)).ok()?.0))) {

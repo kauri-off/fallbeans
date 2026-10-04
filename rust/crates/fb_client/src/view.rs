@@ -1,20 +1,19 @@
 //! Drawing: the map from its `SceneDesc` (primitives, glTF models and specials), beans, bonuses, camera.
 use std::collections::HashMap;
 
-use bevy::gltf::GltfMaterialName;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
+use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
-use fb_shared::COLORS;
 use fb_sim::math::M4;
 use fb_sim::physics::power;
 use fb_sim::scene::{PrimKind, SceneItem};
 use lightyear::prelude::*;
 
-use crate::game::{CameraAngles, Map, PrevPos};
+use crate::beans::{self, BeanView};
+use crate::game::{CameraAngles, Map};
 use crate::specials::{MapPrim, SpecialCache, SpecialRoot, cyl_mesh, pose_specials};
 
 pub struct ViewPlugin;
@@ -29,8 +28,10 @@ impl Plugin for ViewPlugin {
                 spawn_map,
                 pose_map,
                 pose_specials,
-                spawn_beans,
-                place_beans,
+                beans::spawn_beans,
+                beans::place_beans,
+                beans::dress_beans,
+                beans::animate_beans,
                 place_bonuses,
                 follow_camera,
             )
@@ -40,7 +41,6 @@ impl Plugin for ViewPlugin {
         app.init_resource::<Spectate>();
         app.init_resource::<SpecialCache>();
         app.add_systems(Update, (spectate, mouse_look).chain());
-        app.add_observer(tint_bean);
     }
 }
 
@@ -55,13 +55,6 @@ struct MapRoot(u32);
 
 #[derive(Component)]
 struct BonusView(u32);
-
-#[derive(Component)]
-pub struct BeanView;
-
-/// Colour of the bean model to paint once its scene is in.
-#[derive(Component)]
-struct BeanTint(Color);
 
 #[derive(Component)]
 pub struct MainCamera;
@@ -236,104 +229,6 @@ fn pose_map(
     }
 }
 
-fn spawn_beans(
-    mut commands: Commands,
-    beans: Query<
-        (Entity, &BeanColor),
-        (
-            With<PlayerId>,
-            Without<BeanView>,
-            Or<(With<Predicted>, With<Interpolated>)>,
-        ),
-    >,
-    assets: Res<AssetServer>,
-) {
-    for (e, color) in &beans {
-        let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
-        let tint = hex(COLORS[color.0 as usize % COLORS.len()]);
-        commands
-            .entity(e)
-            .insert((BeanView, Transform::default(), Visibility::default()))
-            .with_child((WorldAssetRoot(scene), BeanTint(tint)));
-    }
-}
-
-/// Paints the bean model's body in the player's colour.
-fn tint_bean(
-    trigger: On<WorldInstanceReady>,
-    tints: Query<&BeanTint>,
-    children: Query<&Children>,
-    mut parts: Query<(&GltfMaterialName, &mut MeshMaterial3d<StandardMaterial>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let Ok(tint) = tints.get(trigger.entity) else { return };
-    let mut body = None;
-    for e in children.iter_descendants(trigger.entity) {
-        if let Ok((name, mut mat)) = parts.get_mut(e)
-            && name.0 == "Body"
-        {
-            let h = body.get_or_insert_with(|| {
-                let mut m = materials.get(&mat.0).cloned().unwrap_or_default();
-                m.base_color = tint.0;
-                materials.add(m)
-            });
-            mat.0 = h.clone();
-        }
-    }
-}
-
-fn bean_transform(pos: Vec3, yaw: f32, tilt: f32, tilt_dir: f32, size: f32) -> Transform {
-    let pivot = Vec3::Y * 0.5 * size;
-    let axis = Vec3::new(tilt_dir.cos(), 0.0, -tilt_dir.sin());
-    let tip = if tilt.abs() > 1e-4 {
-        Quat::from_axis_angle(axis, tilt)
-    } else {
-        Quat::IDENTITY
-    };
-    let rot = tip * Quat::from_rotation_y(yaw);
-    Transform {
-        translation: pos + pivot - tip * pivot,
-        rotation: rot,
-        scale: Vec3::splat(size),
-    }
-}
-
-type OtherBeans<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static PlayerId,
-        &'static RemotePose,
-        &'static mut Transform,
-        &'static mut Visibility,
-    ),
-    (With<Interpolated>, With<BeanView>, Without<Predicted>),
->;
-
-fn place_beans(
-    fixed: Res<Time<Fixed>>,
-    map: Option<Res<Map>>,
-    own: Query<(&BodyFull, &PrevPos, &mut Transform), (With<Predicted>, With<BeanView>)>,
-    mut others: OtherBeans,
-) {
-    let a = fixed.overstep_fraction();
-    for (full, prev, mut tf) in own {
-        let b = &full.body;
-        let pos = prev.0.as_vec3().lerp(b.pos.as_vec3(), a);
-        *tf = bean_transform(pos, b.yaw as f32, b.tilt as f32, b.tilt_dir as f32, b.size as f32);
-    }
-    for (id, p, mut tf, mut vis) in &mut others {
-        *tf = bean_transform(p.pos, p.yaw, p.tilt, p.tilt_dir, p.size);
-        // Finished or out: gone at once (the last snapshots may still carry the bean).
-        let gone = map.as_ref().is_some_and(|m| m.gone(id.0));
-        vis.set_if_neq(if gone {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        });
-    }
-}
-
 fn place_bonuses(
     map: Option<Res<Map>>,
     timeline: Res<LocalTimeline>,
@@ -393,6 +288,7 @@ fn spectate(
     beans: Query<&PlayerId, (With<Interpolated>, Without<Predicted>)>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    pads: Query<&Gamepad>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut spec: ResMut<Spectate>,
 ) {
@@ -415,9 +311,16 @@ fn spectate(
     }
     // (Checked before `mouse_look`: the click that captures the mouse does not switch.)
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    let dir = if keys.any_just_pressed(PREV_KEYS) || (captured && mouse.just_pressed(MouseButton::Right)) {
+    let pad = |b: [GamepadButton; 2]| pads.iter().any(|p| p.any_just_pressed(b));
+    let dir = if keys.any_just_pressed(PREV_KEYS)
+        || (captured && mouse.just_pressed(MouseButton::Right))
+        || pad([GamepadButton::DPadLeft, GamepadButton::LeftTrigger])
+    {
         -1
-    } else if keys.any_just_pressed(NEXT_KEYS) || (captured && mouse.just_pressed(MouseButton::Left)) {
+    } else if keys.any_just_pressed(NEXT_KEYS)
+        || (captured && mouse.just_pressed(MouseButton::Left))
+        || pad([GamepadButton::DPadRight, GamepadButton::RightTrigger])
+    {
         1
     } else {
         0
@@ -432,13 +335,26 @@ fn spectate(
     }
 }
 
+/// The pad's right stick turns the camera (radians a second at full tilt, as in TS).
+const PAD_YAW: f32 = 3.2;
+const PAD_PITCH: f32 = 2.2;
+
 fn mouse_look(
     mut motion: MessageReader<MouseMotion>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
+    time: Res<Time<Real>>,
     mut cam: ResMut<CameraAngles>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
+    let dt = time.delta_secs().min(0.1);
+    for pad in &pads {
+        let dz = |v: f32| if v.abs() < 0.15 { 0.0 } else { v };
+        let s = pad.right_stick();
+        cam.yaw -= dz(s.x) * PAD_YAW * dt;
+        cam.pitch = (cam.pitch - dz(s.y) * PAD_PITCH * dt).clamp(-0.2, 1.2);
+    }
     let Ok(mut cursor) = cursor.single_mut() else { return };
     if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
         // Locked (pointer constraints) where the platform has it; Windows only confines.

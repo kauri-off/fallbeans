@@ -49,37 +49,37 @@ pub struct Conn {
     udp_works: bool,
     /// The link is being closed to come back over UDP.
     moving: bool,
+    /// Why `auto` went over WebSocket, and when (None while on UDP or with WebSocket asked for).
+    pub fallback: Option<(Fallback, f32)>,
+    /// The last UDP check on WebSocket: when, and whether UDP worked.
+    pub udp_check: Option<(f32, bool)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fallback {
+    /// No answer over UDP within `UDP_TRY_S` of connecting.
+    Silent,
+    /// The UDP connection went down mid-game.
+    Lost,
 }
 
 pub struct NetPlugin;
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_input_delay, connect_first).chain());
+        app.add_systems(Startup, (setup_prediction, connect_first).chain());
         app.add_systems(
             Update,
-            (receive_session, watch_link, fallback_to_ws, back_to_udp).chain(),
+            (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
         );
     }
 }
 
-fn setup_input_delay(mut commands: Commands, opts: Res<Opts>) {
+fn setup_prediction(mut commands: Commands) {
     let mut manager = PredictionManager::default();
     // A second, as the TS client keeps: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
     manager.rollback_policy.max_rollback_ticks = 120;
     commands.insert_resource(manager);
-    let mut sync = SyncConfig {
-        jitter_margin: opts.input_margin,
-        ..default()
-    };
-    if let Some(m) = opts.sync_max_error {
-        sync.max_error_margin = m;
-    }
-    commands.insert_resource(
-        InputTimelineConfig::default()
-            .with_sync_config(sync)
-            .with_input_delay(InputDelayConfig::no_input_delay()),
-    );
 }
 
 fn http_url(opts: &Opts) -> String {
@@ -114,12 +114,55 @@ pub fn token_of(reply: &SessionReply) -> Option<ConnectToken> {
     ConnectToken::try_from_bytes(&bytes).ok()
 }
 
-/// What a link over `transport` receives through: `--udp-blocked` drops everything UDP brings for a while.
+/// What a link over `transport` receives through: `--udp-blocked` drops everything UDP brings for a while,
+/// `--spike` adds latency in bursts.
 fn conditioner(opts: &Opts, transport: Transport, now: f32) -> Option<LinkConditionerConfig> {
     if transport != Transport::Ws && now < opts.udp_blocked {
         return Some(LinkConditionerConfig::default().with_fixed_loss(1.0));
     }
-    opts.net.config()
+    let base = opts.net.config();
+    if opts.spike == 0 {
+        return base;
+    }
+    let base = base.unwrap_or_default();
+    let extra = if in_spike(opts, now) { opts.spike } else { 0 };
+    let lag = base.incoming_latency + Duration::from_millis(extra);
+    Some(base.with_incoming_latency(lag))
+}
+
+/// How long a `--spike` lasts.
+const SPIKE_S: f32 = 1.5;
+
+fn in_spike(opts: &Opts, now: f32) -> bool {
+    opts.spike > 0 && now.rem_euclid(opts.spike_every) >= opts.spike_every - SPIKE_S
+}
+
+/// `--spike`: swaps the link's conditioner as a burst starts and ends (packets already delayed keep their time).
+fn spike_link(
+    opts: Res<Opts>,
+    time: Res<Time>,
+    conn: Option<Res<Conn>>,
+    mut links: Query<&mut Link>,
+    mut was: Local<bool>,
+) {
+    let now = time.elapsed_secs();
+    let on = in_spike(&opts, now);
+    if on == *was {
+        return;
+    }
+    *was = on;
+    let Some(conn) = conn else { return };
+    let Some(mut link) = conn.entity.and_then(|e| links.get_mut(e).ok()) else {
+        return;
+    };
+    let Some(config) = conditioner(&opts, conn.transport, now) else {
+        return;
+    };
+    let mut next = RecvLinkConditioner::new(config);
+    if let Some(old) = link.recv.conditioner.take() {
+        next.time_queue = old.time_queue;
+    }
+    link.recv.conditioner = Some(next);
 }
 
 /// Asks the HTTP API for a connect token on a thread of its own.
@@ -193,6 +236,8 @@ fn connect_first(mut commands: Commands, opts: Res<Opts>, time: Res<Time>) {
         next_probe: None,
         udp_works: false,
         moving: false,
+        fallback: None,
+        udp_check: None,
     };
     ask(&mut conn, &opts, time.elapsed_secs());
     commands.insert_resource(conn);
@@ -286,6 +331,7 @@ fn watch_link(
     if core::mem::take(&mut conn.moving) {
         info!("UDP works again: moving back to it");
         conn.transport = Transport::Udp;
+        conn.fallback = None;
         ask(&mut conn, &opts, now);
         return;
     }
@@ -296,6 +342,7 @@ fn watch_link(
     }
     if opts.transport == Transport::Auto && conn.transport == Transport::Udp {
         conn.transport = Transport::Ws;
+        conn.fallback = Some((if was { Fallback::Lost } else { Fallback::Silent }, now));
         ask(&mut conn, &opts, now);
     } else {
         conn.next_try = Some(now + if was { 0.0 } else { RETRY_S });
@@ -316,6 +363,7 @@ fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time>, conn
     commands.entity(entity).despawn();
     conn.entity = None;
     conn.transport = Transport::Ws;
+    conn.fallback = Some((Fallback::Silent, now));
     ask(&mut conn, &opts, now);
 }
 
@@ -342,6 +390,7 @@ fn back_to_udp(
             Ok(works) => {
                 conn.probe = None;
                 conn.udp_works = works;
+                conn.udp_check = Some((now, works));
                 if !works {
                     info!("UDP still does not work: staying on WebSocket");
                     conn.next_probe = Some(now + PROBE_EVERY_S);

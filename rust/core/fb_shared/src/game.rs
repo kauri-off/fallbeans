@@ -97,7 +97,7 @@ impl GameMeta {
 }
 
 /// What happens when a bean falls off: back to the last checkpoint, back to its spawn, or out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FallBehaviour {
     Checkpoint,
     Spawn,

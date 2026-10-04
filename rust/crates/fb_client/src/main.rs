@@ -1,14 +1,21 @@
 //! Native client: connects, enters a room, predicts its bean, interpolates the others, draws the map.
 //! `--headless` runs the same game without a window or GPU (stress runs, CI).
 mod assets;
+mod audio;
+mod bean;
+mod beans;
 #[cfg(feature = "brp")]
 mod brp;
+mod clock;
+mod diag;
 mod game;
 mod hud;
 mod net;
 mod opts;
+mod outfit;
 mod probe;
 mod session;
+mod shapes;
 mod specials;
 mod stats;
 mod view;
@@ -114,13 +121,15 @@ fn main() -> AppExit {
             app.add_plugins(assets::CheckAssetsPlugin);
             return app.run();
         }
-        app.add_plugins((view::ViewPlugin, hud::HudPlugin));
+        app.add_plugins((view::ViewPlugin, beans::BeansPlugin, hud::HudPlugin, audio::AudioPlugin));
         app.add_systems(Update, screenshot);
     }
     app.add_plugins(ClientPlugins { tick_duration: TICK });
     app.add_plugins((ProtocolPlugin, NetStatsPlugin));
     app.add_plugins((
         net::NetPlugin,
+        clock::ClockPlugin,
+        diag::DiagPlugin,
         session::SessionPlugin,
         game::GamePlugin,
         stats::StatsPlugin,

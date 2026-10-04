@@ -1,8 +1,8 @@
 //! Replicated components: the round, each bean's identity, its full state (owner) and its pose (others).
 use bevy::math::Curve;
 use bevy::prelude::*;
-use fb_shared::game::ArenaKind;
-use fb_sim::physics::Body;
+use fb_shared::game::{ArenaKind, FallBehaviour};
+use fb_sim::physics::{Body, BodyState};
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,8 @@ pub struct Round {
     pub map: String,
     pub seed: u32,
     pub zero_tick: i64,
+    /// What a fall does here (a server run with `--respawn` keeps survival rounds respawning).
+    pub fall: FallBehaviour,
     /// `World::hash(true)` of the server's build: clients compare theirs.
     pub static_hash: String,
 }
@@ -46,6 +48,9 @@ pub struct BodyFull {
     pub body: Body,
     /// Bumped on every respawn: views snap instead of smoothing.
     pub teleports: u32,
+    /// The checkpoint reached and the spawn: the client predicts where a fall puts the bean back.
+    pub checkpoint: Option<u16>,
+    pub spawn: u16,
 }
 
 /// Rolls back on any difference in what the physics step reads. Server and client run the same code on
@@ -57,6 +62,7 @@ pub struct BodyFull {
 pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
     let (x, y) = (&a.body, &b.body);
     a.teleports != b.teleports
+        || a.checkpoint != b.checkpoint
         || x.actor != y.actor
         || x.pos != y.pos
         || x.vel != y.vel
@@ -76,6 +82,71 @@ pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
         || x.climb_to != y.climb_to
 }
 
+/// What a bean is doing, for its animation (TS `ANIM`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Anim {
+    #[default]
+    Idle,
+    Air,
+    Dive,
+    Stun,
+    Grab,
+    Slide,
+    Tumble,
+    Getup,
+    Reach,
+    Climb,
+    ClimbOver,
+    /// Inside a portal: not drawn.
+    Portal,
+    Ladder,
+}
+
+impl Anim {
+    pub const ALL: [Anim; 13] = [
+        Anim::Idle,
+        Anim::Air,
+        Anim::Dive,
+        Anim::Stun,
+        Anim::Grab,
+        Anim::Slide,
+        Anim::Tumble,
+        Anim::Getup,
+        Anim::Reach,
+        Anim::Climb,
+        Anim::ClimbOver,
+        Anim::Portal,
+        Anim::Ladder,
+    ];
+
+    /// As TS `animFor`: the body's state first, then in the air, then what the hands do.
+    pub fn of(b: &Body, grabbing: bool, reaching: bool) -> Anim {
+        match b.state {
+            BodyState::Portal => Anim::Portal,
+            BodyState::Ladder => Anim::Ladder,
+            BodyState::Tumble => Anim::Tumble,
+            BodyState::Getup => Anim::Getup,
+            BodyState::Stun => Anim::Stun,
+            BodyState::Dive => Anim::Dive,
+            BodyState::Slide => Anim::Slide,
+            BodyState::Climb if b.climbing_over() => Anim::ClimbOver,
+            BodyState::Climb => Anim::Climb,
+            _ if !b.grounded => Anim::Air,
+            _ if grabbing => Anim::Grab,
+            _ if reaching => Anim::Reach,
+            _ => Anim::Idle,
+        }
+    }
+}
+
+/// Whom a bean holds and whether it reaches out with nobody in hand (decided by the server only): the
+/// arms of every bean, the own one's included.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Hold {
+    pub target: Option<u32>,
+    pub reaching: bool,
+}
+
 /// What everybody else sees of a bean (interpolated). On the wire about 20 bytes (TS:
 /// `REMOTE_BYTES` = 22): position and velocity in centimetres, angles in u16/u8.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
@@ -85,7 +156,7 @@ pub struct RemotePose {
     pub yaw: f32,
     pub tilt: f32,
     pub tilt_dir: f32,
-    pub state: u8,
+    pub anim: Anim,
     pub power: u8,
     pub size: f32,
     pub vel: Vec2,
@@ -93,14 +164,14 @@ pub struct RemotePose {
 }
 
 impl RemotePose {
-    pub fn of(b: &BodyFull) -> Self {
+    pub fn of(b: &BodyFull, hold: &Hold) -> Self {
         let body = &b.body;
         Self {
             pos: body.pos.as_vec3(),
             yaw: body.yaw as f32,
             tilt: body.tilt as f32,
             tilt_dir: body.tilt_dir as f32,
-            state: body.state as u8,
+            anim: Anim::of(body, hold.target.is_some(), hold.reaching),
             power: body.power,
             size: body.size as f32,
             vel: Vec2::new(body.vel.x as f32, body.vel.z as f32),

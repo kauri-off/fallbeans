@@ -94,7 +94,7 @@ fn state(
     });
     let mut others: Vec<Value> = others
         .iter()
-        .map(|(id, p)| json!({ "id": id.0, "pos": [p.pos.x, p.pos.y, p.pos.z], "state": p.state }))
+        .map(|(id, p)| json!({ "id": id.0, "pos": [p.pos.x, p.pos.y, p.pos.z], "anim": format!("{:?}", p.anim) }))
         .collect();
     others.sort_by_key(|o| o["id"].as_u64());
     let status = match (&map, &own) {

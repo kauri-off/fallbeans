@@ -85,6 +85,8 @@ pub struct Pawn {
     /// turns a dive the other way round, as in TS).
     pub input: BodyInput,
     pub spawn: V3,
+    /// Index of `spawn` in the map's spawns.
+    pub spawn_i: usize,
     /// Index into the map's checkpoints.
     pub checkpoint: Option<usize>,
     pub progress: f64,
@@ -387,6 +389,52 @@ pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[O
     others.clear();
 }
 
+/// Which way a bean placed at `p` faces.
+pub fn face_yaw(spec: &MapSpec, p: V3) -> f64 {
+    if spec.face_center { m::atan2(-p.x, -p.z) } else { 0.0 }
+}
+
+/// Moves a standing bean's checkpoint on to the farthest one its progress has passed.
+pub fn reach_checkpoint(spec: &MapSpec, body: &Body, checkpoint: &mut Option<usize>) {
+    if !body.grounded {
+        return;
+    }
+    let prog = spec.progress.as_ref().map_or(body.pos.z, |f| f(body.pos));
+    for (ci, cp) in spec.checkpoints.iter().enumerate() {
+        if prog >= cp.z && checkpoint.is_none_or(|c| cp.z > spec.checkpoints[c].z) {
+            *checkpoint = Some(ci);
+        }
+    }
+}
+
+/// Below the kill line, or where the map says a bean is off the course.
+pub fn fell(spec: &MapSpec, pos: V3) -> bool {
+    pos.y < spec.kill_y || spec.is_out.as_ref().is_some_and(|f| f(pos))
+}
+
+/// Where a bean that fell (or took a shortcut) comes back: its checkpoint (races) or its spawn; None in the
+/// lobby (a free spawn, which depends on where everybody stands).
+pub fn respawn_point(
+    spec: &MapSpec,
+    kind: ArenaKind,
+    fall: FallBehaviour,
+    checkpoint: Option<usize>,
+    spawn_i: usize,
+) -> Option<V3> {
+    match checkpoint {
+        Some(c) if fall == FallBehaviour::Checkpoint => Some(spec.checkpoints[c].p),
+        _ if kind == ArenaKind::Lobby => None,
+        _ => spec.spawns.get(spawn_i).copied(),
+    }
+}
+
+/// Puts a bean that fell back at `to`, a little aside by its id (beans respawning together do not stack).
+pub fn respawn(spec: &MapSpec, id: u32, body: &mut Body, to: V3) {
+    // In u64, as the f64 product of JS: client ids use all 32 bits.
+    let jitter = ((id as u64 * 7919) % 100) as f64 / 100.0 - 0.5;
+    body.reset(V3::new(to.x + jitter * 2.0, to.y + 0.5, to.z), face_yaw(spec, to));
+}
+
 pub fn other_of(id: u32, b: &Body) -> OtherBody {
     OtherBody {
         id,
@@ -485,11 +533,7 @@ impl Arena {
     }
 
     fn face_yaw(&self, p: V3) -> f64 {
-        if self.spec.face_center {
-            m::atan2(-p.x, -p.z)
-        } else {
-            0.0
-        }
+        face_yaw(&self.spec, p)
     }
 
     fn index(&self, id: u32) -> Option<usize> {
@@ -528,7 +572,8 @@ impl Arena {
             r.pawns.push((id, bot, Some(i), tick));
         }
         let spawns = &self.spec.spawns;
-        let spawn = spawns[i % spawns.len()];
+        let spawn_i = i % spawns.len();
+        let spawn = spawns[spawn_i];
         let mut body = Body::new(id as i32);
         body.reset(spawn, self.face_yaw(spawn));
         // By slot in the round, not id: the same seed plays out the same whoever joined when.
@@ -552,6 +597,7 @@ impl Arena {
             frame: InputFrame::IDLE,
             input: BodyInput::default(),
             spawn,
+            spawn_i,
             checkpoint: None,
             progress: spawn.z,
             grabbing: None,
@@ -1161,13 +1207,7 @@ impl Arena {
             }
             return;
         }
-        if p.body.grounded {
-            for (ci, cp) in spec.checkpoints.iter().enumerate() {
-                if prog >= cp.z && p.checkpoint.is_none_or(|c| cp.z > spec.checkpoints[c].z) {
-                    p.checkpoint = Some(ci);
-                }
-            }
-        }
+        reach_checkpoint(spec, &p.body, &mut p.checkpoint);
         // Standing where the course does not go (on frames, behind walls): back to the checkpoint,
         // fined. Only while standing there: being knocked off over a rail is a fall, not a shortcut.
         if p.body.grounded {
@@ -1178,7 +1218,7 @@ impl Arena {
             };
         }
         let shortcut = p.forbidden_for > FORBIDDEN_GRACE;
-        let fell = shortcut || pos.y < spec.kill_y || spec.is_out.as_ref().is_some_and(|f| f(pos));
+        let fell = shortcut || fell(spec, pos);
         if !fell {
             return;
         }
@@ -1240,19 +1280,16 @@ impl Arena {
             });
             self.flush(events);
         }
-        let to = match self.pawns[i].checkpoint {
-            Some(c) if self.fall == FallBehaviour::Checkpoint => self.spec.checkpoints[c].p,
-            _ if self.kind == ArenaKind::Lobby => {
+        let p = &self.pawns[i];
+        let to = match respawn_point(&self.spec, self.kind, self.fall, p.checkpoint, p.spawn_i) {
+            Some(to) => to,
+            None => {
                 let s = self.free_spawn();
                 self.spec.spawns[s]
             }
-            _ => self.pawns[i].spawn,
         };
-        let yaw = self.face_yaw(to);
         let p = &mut self.pawns[i];
-        // In u64, as the f64 product of JS: client ids use all 32 bits.
-        let jitter = ((p.id as u64 * 7919) % 100) as f64 / 100.0 - 0.5;
-        p.body.reset(V3::new(to.x + jitter * 2.0, to.y + 0.5, to.z), yaw);
+        respawn(&self.spec, p.id, &mut p.body, to);
         p.teleports += 1;
     }
 

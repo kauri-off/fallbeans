@@ -53,6 +53,8 @@ fn log_stats(
     others: Query<(), With<Interpolated>>,
     mut hiccups: ResMut<Hiccups>,
     mut last_bytes: Local<u64>,
+    diag: Res<crate::diag::NetDiag>,
+    lead: Res<crate::clock::Lead>,
 ) {
     let link = links.iter().next();
     let rtt = link.map_or(0.0, |l| l.stats.rtt.as_secs_f64() * 1000.0);
@@ -64,12 +66,18 @@ fn log_stats(
     let frame_max = core::mem::take(&mut hiccups.frame_max) * 1000.0;
     let shifts = core::mem::take(&mut hiccups.shifts);
     info!(
-        "stats: {} | rtt {rtt:.0} ms jitter {jitter:.0} ms | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out} B/s | arena {} t {t:.1}{}",
+        "stats: {} | rtt {rtt:.0} ms jitter {jitter:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out} B/s | arena {} t {t:.1}{}",
         conn.map_or("not connected".into(), |c| format!(
-            "{:?} {}",
+            "{:?} {}{}",
             c.transport,
-            if c.connected { "connected" } else { "connecting" }
+            if c.connected { "connected" } else { "connecting" },
+            match c.fallback {
+                Some((f, _)) => format!(" (fallback: {f:?})"),
+                None => String::new(),
+            }
         )),
+        diag.loss().map_or("—".into(), |l| format!("{:.1}%", l * 100.0)),
+        lead.held.map_or("—".into(), |_| format!("{:.1}", lead.margin)),
         stats.ticks,
         others.iter().count(),
         stats.map_events,

@@ -12,7 +12,7 @@ fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
 fb_proto.workspace = true
-bevy = { workspace = true, features = ["3d", "ui", "jpeg"] }
+bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav"] }
 # GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
 bevy_render = { workspace = true, features = ["gles"] }
 aeronet_websocket = { workspace = true, features = ["client"] }
@@ -22,6 +22,8 @@ serde_json.workspace = true
 clap.workspace = true
 ureq.workspace = true
 lightyear_udp.workspace = true
+lightyear_sync.workspace = true
+lightyear_transport.workspace = true
 lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
 
 [features]
