@@ -32,7 +32,7 @@ pub struct EasuUniform {
 }
 
 impl SyncComponent for Fsr {
-    type Target = EasuUniform;
+    type Target = (EasuUniform, MainPassResolutionOverride);
 }
 
 impl ExtractComponent for Fsr {
@@ -42,15 +42,19 @@ impl ExtractComponent for Fsr {
         Option<&'static MainPassResolutionOverride>,
     );
     type QueryFilter = ();
-    type Out = EasuUniform;
+    type Out = (EasuUniform, MainPassResolutionOverride);
 
+    // (Bevy extracts the override only for DLSS: the main passes see it only if it is carried over here.)
     fn extract_component((_, camera, low): QueryItem<Self::QueryData>) -> Option<Self::Out> {
         let out = camera.physical_viewport_size()?;
         let low = low?;
-        Some(EasuUniform {
-            in_size: low.0.as_vec2(),
-            out_size: out.as_vec2(),
-        })
+        Some((
+            EasuUniform {
+                in_size: low.0.as_vec2(),
+                out_size: out.as_vec2(),
+            },
+            MainPassResolutionOverride(low.0),
+        ))
     }
 }
 
