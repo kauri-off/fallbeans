@@ -10,6 +10,7 @@ use fb_sim::scene::{Finish, Form, LookOut, Part, SceneItem, Tint};
 use lightyear::prelude::*;
 
 use crate::game::Map;
+use crate::render::surface::{Spec, SurfaceMaterial, Surfaces};
 use crate::view::{frame_tick, hex};
 
 /// Tone and opacity are drawn in steps of 1/STEPS (one material per step).
@@ -25,16 +26,17 @@ pub struct SpecialRoot {
 #[derive(Component)]
 pub struct SpecialPiece;
 
-/// A map primitive, with its colour (specials may tint it).
+/// A map primitive, with what it is painted with (specials may tint it).
 #[derive(Component)]
-pub struct MapPrim(pub &'static str);
+pub struct MapPrim(pub Spec);
 
 #[derive(Resource, Default)]
 pub struct SpecialCache {
     generation: u32,
     meshes: HashMap<(usize, usize), Handle<Mesh>>,
     mats: HashMap<(usize, usize, i8, i8), Handle<StandardMaterial>>,
-    tints: HashMap<(&'static str, &'static str, i8), Handle<StandardMaterial>>,
+    pictures: HashMap<(usize, usize), Handle<Image>>,
+    tints: HashMap<(String, &'static str, i8), Handle<SurfaceMaterial>>,
     out: LookOut,
 }
 
@@ -61,15 +63,24 @@ fn form_mesh(form: Form) -> Option<Mesh> {
         .build()
         .rotated_by(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
         Form::Ring(inner, outer) => Annulus::new(f(inner), f(outer)).mesh().resolution(32).build(),
-        Form::Disc(r) => Circle::new(f(r)).mesh().resolution(48).build(),
-        // (The label's text is not drawn yet: only its board.)
+        Form::Disc(r) | Form::Swirl(r) | Form::Rings(r) => Circle::new(f(r)).mesh().resolution(48).build(),
+        Form::Arrow => crate::render::portal::arrow(),
         Form::Plane(w, h) | Form::Label(w, h, _) => Rectangle::new(f(w), f(h)).into(),
         Form::Model(_) => return None,
     })
 }
 
 fn flat(form: Form) -> bool {
-    matches!(form, Form::Ring(..) | Form::Disc(_) | Form::Plane(..) | Form::Label(..))
+    matches!(
+        form,
+        Form::Ring(..)
+            | Form::Disc(_)
+            | Form::Swirl(_)
+            | Form::Rings(_)
+            | Form::Arrow
+            | Form::Plane(..)
+            | Form::Label(..)
+    )
 }
 
 fn step(v: f64) -> i8 {
@@ -109,6 +120,10 @@ fn part_material(part: &Part, tone: i8, alpha: i8) -> StandardMaterial {
         }
         Finish::Glow => m.emissive = c * 1.5,
         Finish::Flat => m.unlit = true,
+        Finish::Light => {
+            m.unlit = true;
+            m.alpha_mode = AlphaMode::Add;
+        }
     }
     if flat(part.form) || part.finish == Finish::Flat {
         m.cull_mode = None::<Face>;
@@ -140,7 +155,11 @@ pub fn pose_specials(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut roots: Query<(Entity, &mut SpecialRoot)>,
     mut pieces: Pieces,
-    mut prims: Query<(&crate::view::MapPiece, &MapPrim, &mut MeshMaterial3d<StandardMaterial>), Without<SpecialPiece>>,
+    prims: Query<(&crate::view::MapPiece, &MapPrim, &Children), Without<SpecialPiece>>,
+    mut levels: Query<&mut MeshMaterial3d<SurfaceMaterial>, With<crate::view::PrimLevel>>,
+    mut surfaces: ResMut<Surfaces>,
+    mut images: ResMut<Assets<Image>>,
+    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
 ) {
     let Some(map) = map else { return };
     let cache = &mut *cache;
@@ -148,6 +167,7 @@ pub fn pose_specials(
         cache.generation = map.generation;
         cache.meshes.clear();
         cache.mats.clear();
+        cache.pictures.clear();
         cache.tints.clear();
     }
     let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
@@ -195,7 +215,37 @@ pub fn pose_specials(
                         cache
                             .mats
                             .entry(key)
-                            .or_insert_with(|| materials.add(part_material(part, key.2, key.3)))
+                            .or_insert_with(|| {
+                                let mut m = part_material(part, key.2, key.3);
+                                let a = m.base_color.alpha();
+                                match part.form {
+                                    // A board with its emoji drawn on (the board's colour in the picture).
+                                    Form::Label(_, _, text) if !text.is_empty() => {
+                                        m.base_color_texture =
+                                            Some(images.add(crate::render::emoji::board(text, m.base_color)));
+                                        m.base_color = Color::WHITE.with_alpha(a);
+                                    }
+                                    // A portal's picture; its tone brightens it (the flash of a trip).
+                                    Form::Swirl(_) | Form::Rings(_) => {
+                                        let tex = cache
+                                            .pictures
+                                            .entry((root.item, pi))
+                                            .or_insert_with(|| {
+                                                let c = hex(part.colors[0]);
+                                                images.add(match part.form {
+                                                    Form::Swirl(_) => crate::render::portal::swirl(c),
+                                                    _ => crate::render::portal::rings(c),
+                                                })
+                                            })
+                                            .clone();
+                                        m.base_color_texture = Some(tex);
+                                        let k = 1.0 + 1.5 * key.2.max(0) as f32 / STEPS;
+                                        m.base_color = LinearRgba::new(k, k, k, a).into();
+                                    }
+                                    _ => {}
+                                }
+                                materials.add(m)
+                            })
                             .clone(),
                     )
                 }
@@ -229,7 +279,7 @@ pub fn pose_specials(
                         .or_insert_with(|| meshes.add(form_mesh(form).unwrap_or_else(|| Cuboid::default().into())))
                         .clone();
                     e.insert((Mesh3d(mesh), MeshMaterial3d(mat)));
-                    if part.finish == Finish::Flat {
+                    if matches!(part.finish, Finish::Flat | Finish::Light) {
                         e.insert(NotShadowCaster);
                     }
                 }
@@ -249,23 +299,32 @@ pub fn pose_specials(
     if tints.is_empty() {
         return;
     }
-    for (piece, prim, mut mat) in &mut prims {
+    for (piece, prim, children) in &prims {
         let Some(tint) = tints.get(&piece.node) else { continue };
         let k = step(tint.k);
         let h = cache
             .tints
-            .entry((prim.0, tint.to, k))
+            .entry((format!("{:?}", prim.0), tint.to, k))
             .or_insert_with(|| {
-                let c = LinearRgba::from(hex(prim.0)).mix(&LinearRgba::from(hex(tint.to)), k as f32 / STEPS);
-                materials.add(StandardMaterial {
-                    base_color: c.into(),
-                    perceptual_roughness: 0.6,
-                    ..default()
-                })
+                let to = LinearRgba::from(hex(tint.to));
+                let f = k as f32 / STEPS;
+                let mut spec = prim.0.clone();
+                match &mut spec.paint {
+                    Some(p) => {
+                        p.c1 = p.c1.mix(&to, f);
+                        p.c2 = p.c2.mix(&to, f);
+                    }
+                    None => spec.color = spec.color.mix(&to, f),
+                }
+                surfaces.material(&spec, &mut images, &mut surface_mats)
             })
             .clone();
-        if mat.0 != h {
-            mat.0 = h;
+        for c in children {
+            if let Ok(mut mat) = levels.get_mut(*c)
+                && mat.0 != h
+            {
+                mat.0 = h.clone();
+            }
         }
     }
 }

@@ -1,25 +1,16 @@
-//! A debug overlay (RTT, rollbacks, transport, map hash, fps) and, until the HUD of Phase 5, one line of
-//! the player's status in the round.
+//! The debug overlay (F3): RTT, rollbacks, transport, map hash, fps.
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
-use fb_arena::{ArenaKind, client_hud};
 use fb_net::*;
 use lightyear::prelude::*;
 
 use crate::game::{Map, Stats};
 use crate::net::Conn;
-use crate::session::Session;
-use crate::view::Spectate;
+use crate::ui::Ui;
 
 #[derive(Component)]
 struct HudText;
-
-#[derive(Component)]
-struct StatusText;
-
-#[derive(Component)]
-struct HintText;
 
 pub struct HudPlugin;
 
@@ -29,130 +20,51 @@ impl Plugin for HudPlugin {
         app.add_systems(Startup, setup);
         app.add_systems(
             Update,
-            (update, status, hint).run_if(on_timer(core::time::Duration::from_millis(250))),
+            (toggle, update.run_if(on_timer(core::time::Duration::from_millis(250)))),
         );
     }
 }
 
-fn setup(mut commands: Commands, assets: Res<AssetServer>) {
+fn setup(mut commands: Commands) {
     commands.spawn((
         HudText,
         Text::new(""),
         TextFont {
-            font_size: FontSize::Px(15.0),
+            font_size: FontSize::Px(13.0),
             ..default()
         },
         TextColor(Color::WHITE),
         TextShadow::default(),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
         Node {
             position_type: PositionType::Absolute,
             left: px(10),
-            top: px(8),
+            bottom: px(8),
+            padding: UiRect::all(px(6)),
             ..default()
         },
+        GlobalZIndex(100),
+        Visibility::Hidden,
+        Pickable::IGNORE,
     ));
-    commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            top: px(16),
-            justify_content: JustifyContent::Center,
-            ..default()
-        })
-        .with_child((
-            StatusText,
-            Text::new(""),
-            TextFont {
-                // The game's font (Latin and Cyrillic): Bevy's built-in one has no Cyrillic.
-                font: assets.load("fonts/Nunito-Black.ttf").into(),
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
-            TextLayout::justify(Justify::Center),
-            TextColor(Color::WHITE),
-            TextShadow::default(),
-        ));
-    commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            bottom: px(18),
-            justify_content: JustifyContent::Center,
-            ..default()
-        })
-        .with_child((
-            HintText,
-            Text::new(""),
-            TextFont {
-                font: assets.load("fonts/Nunito-Bold.ttf").into(),
-                font_size: FontSize::Px(17.0),
-                ..default()
-            },
-            TextLayout::justify(Justify::Center),
-            TextColor(Color::srgb(1.0, 0.93, 0.7)),
-            TextShadow::default(),
-        ));
 }
 
-fn hint(mut text: Query<&mut Text, With<HintText>>, conn: Option<Res<Conn>>, time: Res<Time<Real>>) {
-    let Ok(mut text) = text.single_mut() else { return };
-    let line = conn
-        .and_then(|c| crate::diag::vpn_hint(&c, time.elapsed_secs()))
-        .unwrap_or("");
-    if text.0 != line {
-        text.0 = line.into();
+/// F3 shows the overlay or hides it.
+fn toggle(keys: Res<ButtonInput<KeyCode>>, mut ui: ResMut<Ui>, mut q: Query<&mut Visibility, With<HudText>>) {
+    if keys.just_pressed(KeyCode::F3) {
+        ui.debug ^= true;
     }
-}
-
-fn status(
-    mut text: Query<&mut Text, With<StatusText>>,
-    map: Option<ResMut<Map>>,
-    session: Res<Session>,
-    spectate: Option<Res<Spectate>>,
-    own: Query<(), (With<Predicted>, With<PlayerId>)>,
-) {
-    let Ok(mut text) = text.single_mut() else { return };
-    let line = match map {
-        Some(mut map) if map.round.kind == ArenaKind::Round => {
-            let map = &mut *map;
-            let me = session.me;
-            let name = |id: u32| {
-                session
-                    .lobby
-                    .as_ref()
-                    .and_then(|l| l.players.iter().find(|p| p.id == id))
-                    .map_or_else(|| format!("#{id}"), |p| p.name.clone())
-            };
-            if !own.is_empty() {
-                let mut scores = session.scores.clone();
-                client_hud(&mut map.world, &map.spec, &mut scores, me).unwrap_or_default()
-            } else {
-                let mine = me.and_then(|me| {
-                    let place = map.info.finished.iter().position(|id| *id == me);
-                    match place {
-                        Some(i) => Some(format!("Финиш! Место: {}", i + 1)),
-                        None => map.info.out.contains(&me).then(|| "Вы выбыли".to_string()),
-                    }
-                });
-                let camera = match spectate.and_then(|s| s.target) {
-                    Some(id) => format!("Камера: {}", name(id)),
-                    None => "Камера: обзор арены".to_string(),
-                };
-                let lines: Vec<String> = mine
-                    .into_iter()
-                    .chain([format!("{camera} · A / D или крестовина — другой игрок")])
-                    .collect();
-                lines.join("\n")
-            }
-        }
-        _ => String::new(),
-    };
-    if text.0 != line {
-        text.0 = line;
+    for mut v in &mut q {
+        v.set_if_neq(if ui.debug {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 
 fn update(
+    ui: Res<Ui>,
     mut text: Query<&mut Text, With<HudText>>,
     conn: Option<Res<Conn>>,
     map: Option<Res<Map>>,
@@ -167,6 +79,9 @@ fn update(
     time: Res<Time<Real>>,
 ) {
     let Ok(mut text) = text.single_mut() else { return };
+    if !ui.debug {
+        return;
+    }
     let fps = diag
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())

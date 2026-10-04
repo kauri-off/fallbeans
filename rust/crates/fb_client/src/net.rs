@@ -19,6 +19,7 @@ use lightyear::websocket::client::WebSocketTarget;
 
 use crate::opts::{Opts, Transport};
 use crate::session::Session;
+use crate::settings::{Me, Player};
 
 /// How long UDP gets to answer before `auto` goes over WebSocket.
 pub const UDP_TRY_S: f32 = 2.0;
@@ -49,6 +50,10 @@ pub struct Conn {
     udp_works: bool,
     /// The link is being closed to come back over UDP.
     moving: bool,
+    /// The link is being closed to say hello again (into practice and back): reconnect at once, same transport.
+    pub restart: bool,
+    /// The link was up at least once (a drop after that is a reconnect).
+    pub ever: bool,
     /// Why `auto` went over WebSocket, and when (None while on UDP or with WebSocket asked for).
     pub fallback: Option<(Fallback, f32)>,
     /// The last UDP check on WebSocket: when, and whether UDP worked.
@@ -165,6 +170,14 @@ fn spike_link(
     link.recv.conditioner = Some(next);
 }
 
+/// Closes the link to connect again right away (the hello goes out anew).
+pub fn restart(commands: &mut Commands, conn: &mut Conn) {
+    if let Some(entity) = conn.entity {
+        conn.restart = true;
+        commands.trigger(Disconnect { entity });
+    }
+}
+
 /// Asks the HTTP API for a connect token on a thread of its own.
 fn ask(conn: &mut Conn, opts: &Opts, now: f32) {
     let (tx, rx) = channel();
@@ -218,7 +231,8 @@ fn spawn_client(commands: &mut Commands, opts: &Opts, token: ConnectToken, trans
     entity
 }
 
-fn connect_first(mut commands: Commands, opts: Res<Opts>, time: Res<Time>) {
+fn connect_first(mut commands: Commands, me: Me, time: Res<Time>) {
+    let opts = &me.opts;
     let transport = if opts.transport == Transport::Ws {
         Transport::Ws
     } else {
@@ -229,17 +243,19 @@ fn connect_first(mut commands: Commands, opts: Res<Opts>, time: Res<Time>) {
         entity: None,
         started: 0.0,
         connected: false,
-        identity: opts.token.clone(),
+        identity: me.identity(),
         asking: None,
         next_try: None,
         probe: None,
         next_probe: None,
         udp_works: false,
         moving: false,
+        restart: false,
+        ever: false,
         fallback: None,
         udp_check: None,
     };
-    ask(&mut conn, &opts, time.elapsed_secs());
+    ask(&mut conn, opts, time.elapsed_secs());
     commands.insert_resource(conn);
 }
 
@@ -250,6 +266,7 @@ fn receive_session(
     time: Res<Time>,
     mut session: ResMut<Session>,
     conn: Option<ResMut<Conn>>,
+    mut player: ResMut<Player>,
 ) {
     let Some(mut conn) = conn else { return };
     let now = time.elapsed_secs();
@@ -273,6 +290,10 @@ fn receive_session(
         }
     };
     conn.identity = Some(reply.identity.clone());
+    if opts.token.is_none() && player.identity != reply.identity {
+        player.identity = reply.identity.clone();
+        crate::settings::save_now(&mut commands);
+    }
     if reply.protocol != PROTOCOL_VERSION {
         error!(
             "this client is out of date: the server speaks protocol {} (build {}), this one {PROTOCOL_VERSION}",
@@ -312,6 +333,7 @@ fn watch_link(
     };
     if connected && !conn.connected {
         conn.connected = true;
+        conn.ever = true;
         info!("connected over {:?}", conn.transport);
         if opts.transport == Transport::Auto && conn.transport == Transport::Ws {
             conn.next_probe = Some(now + PROBE_EVERY_S);
@@ -326,6 +348,10 @@ fn watch_link(
     conn.entity = None;
     (conn.probe, conn.next_probe, conn.udp_works) = (None, None, false);
     if session.refused {
+        return;
+    }
+    if core::mem::take(&mut conn.restart) {
+        ask(&mut conn, &opts, now);
         return;
     }
     if core::mem::take(&mut conn.moving) {

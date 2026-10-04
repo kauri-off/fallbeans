@@ -91,22 +91,13 @@ pub fn summary(conn: Option<&Conn>, link: Option<&Link>, diag: &NetDiag, now: f3
 
 /// For the player, after `auto` went over WebSocket: what that means and how to let UDP through a VPN.
 pub fn vpn_hint(conn: &Conn, now: f32) -> Option<&'static str> {
+    use crate::ui::text;
     let (why, at) = conn.fallback?;
     if now - at > HINT_S {
-        return Some("Игра идёт через WebSocket: UDP до сервера не доходит");
+        return Some(text::VPN_SHORT);
     }
     Some(match why {
-        Fallback::Silent => {
-            "Игра идёт через WebSocket: UDP до сервера не доходит, задержка может быть больше.\n\
-             Если включён VPN, пустите адрес сервера мимо него (direct):\n\
-             v2rayN — правило «IP сервера: direct» выше правила, блокирующего udp443;\n\
-             sing-box, Hiddify, NekoBox — правило ip_cidr или domain сервера.\n\
-             Для игры лучше протокол с родным UDP: Hysteria2 или TUIC."
-        }
-        Fallback::Lost => {
-            "UDP пропал посреди игры (переподключился VPN или поменялись его правила): игра идёт через WebSocket.\n\
-             Раз в минуту игра проверяет UDP и вернётся на него между раундами.\n\
-             Чтобы UDP не пропадал, пустите адрес сервера мимо VPN (direct)."
-        }
+        Fallback::Silent => text::VPN_SILENT,
+        Fallback::Lost => text::VPN_LOST,
     })
 }

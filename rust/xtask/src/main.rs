@@ -203,6 +203,8 @@ fn dev(a: &DevArgs) -> bool {
             let mut c = Command::new(a.shared.bin("fb_client"));
             let profile = (b'a' + i as u8) as char;
             c.args([
+                "--profile",
+                &format!("dev-{profile}"),
                 "--name",
                 &format!("Боб {profile}"),
                 "--title",

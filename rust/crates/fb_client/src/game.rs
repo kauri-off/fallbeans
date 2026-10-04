@@ -25,7 +25,21 @@ use lightyear::input::native::prelude::{ActionState, InputMarker};
 use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::*;
 
+use crate::keys::Bind;
 use crate::opts::Opts;
+use crate::settings::Bindings;
+
+/// The game takes the player's keys, mouse and pad (no menu, chat line or text field has them).
+#[derive(Resource)]
+pub struct Gate {
+    pub play: bool,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self { play: true }
+    }
+}
 
 /// Input a tool holds for a while (`fb/input` over BRP).
 #[derive(Resource)]
@@ -33,7 +47,7 @@ pub struct ProbeInput {
     pub frame: InputFrame,
     pub until: f64,
 }
-use crate::session::Session;
+use crate::session::{Feed, Session};
 
 /// The map of the current round as this client built it.
 #[derive(Resource)]
@@ -55,6 +69,8 @@ pub struct Map {
     pub deco: BTreeMap<Pid, BeanDeco>,
     /// Sounds the map asked for, for the audio to take.
     pub sfx: Vec<&'static str>,
+    /// How this round looks (`fb_sim::looks`): palettes, sky, light, fog, scenery.
+    pub look: fb_sim::looks::ResolvedLook,
 }
 
 impl Map {
@@ -150,10 +166,11 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(CameraAngles { yaw: 0.0, pitch: 0.38 });
+        app.insert_resource(CameraAngles { yaw: 0.0, pitch: 0.32 });
         app.init_resource::<Stats>();
         app.init_resource::<Inbox>();
         app.init_resource::<Presses>();
+        app.init_resource::<Gate>();
         app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
         app.add_systems(PreUpdate, (build_round, latch_presses.after(bevy::input::InputSystems)));
@@ -242,6 +259,7 @@ fn build_round(
         info,
         deco: BTreeMap::new(),
         sfx: Vec::new(),
+        look: fb_sim::looks::look_for(def.looks(), round.seed),
     };
     next.take_out(out);
     commands.insert_resource(next);
@@ -280,14 +298,6 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> 
     Ok((1.0, turn, buttons))
 }
 
-const JUMP_KEYS: [KeyCode; 1] = [KeyCode::Space];
-const DIVE_KEYS: [KeyCode; 4] = [
-    KeyCode::KeyE,
-    KeyCode::ShiftLeft,
-    KeyCode::ShiftRight,
-    KeyCode::ControlLeft,
-];
-
 /// Jump and dive fire once per press (a held key does not repeat them, nor does the server: see
 /// `room::frame_for`). Presses made between two ticks wait here for the next one.
 #[derive(Resource, Default)]
@@ -299,7 +309,12 @@ fn latch_presses(
     pads: Query<&Gamepad>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut presses: ResMut<Presses>,
+    gate: Res<Gate>,
+    binds: Res<Bindings>,
 ) {
+    if !gate.play {
+        return;
+    }
     for pad in &pads {
         if pad.just_pressed(GamepadButton::South) {
             presses.0 |= BTN_JUMP;
@@ -311,12 +326,12 @@ fn latch_presses(
     let (Some(keys), Some(mouse)) = (keys, mouse) else {
         return;
     };
-    if keys.any_just_pressed(JUMP_KEYS) {
+    if keys.any_just_pressed(binds.keys(Bind::Jump)) {
         presses.0 |= BTN_JUMP;
     }
     // The click that captures the mouse is not a dive.
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    if keys.any_just_pressed(DIVE_KEYS) || (captured && mouse.just_pressed(MouseButton::Left)) {
+    if keys.any_just_pressed(binds.keys(Bind::Dive)) || (captured && mouse.just_pressed(MouseButton::Left)) {
         presses.0 |= BTN_DIVE;
     }
 }
@@ -340,15 +355,12 @@ fn gamepad(pads: &Query<&Gamepad>) -> ((f64, f64), bool) {
 }
 
 /// The stick (forward, right) and the held buttons (grab).
-fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> (f64, f64, u8) {
-    let held = |k: &[KeyCode]| k.iter().any(|k| keys.pressed(*k));
-    let axis = |pos: &[KeyCode], neg: &[KeyCode]| f64::from(i8::from(held(pos)) - i8::from(held(neg)));
-    let f = axis(&[KeyCode::KeyW, KeyCode::ArrowUp], &[KeyCode::KeyS, KeyCode::ArrowDown]);
-    let r = axis(
-        &[KeyCode::KeyD, KeyCode::ArrowRight],
-        &[KeyCode::KeyA, KeyCode::ArrowLeft],
-    );
-    let grab = held(&[KeyCode::KeyQ]) || mouse.pressed(MouseButton::Right);
+fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, binds: &Bindings) -> (f64, f64, u8) {
+    let held = |b: Bind| binds.keys(b).iter().any(|k| keys.pressed(*k));
+    let axis = |pos: Bind, neg: Bind| f64::from(i8::from(held(pos)) - i8::from(held(neg)));
+    let f = axis(Bind::Forward, Bind::Back);
+    let r = axis(Bind::Right, Bind::Left);
+    let grab = held(Bind::Grab) || mouse.pressed(MouseButton::Right);
     (f, r, if grab { BTN_GRAB } else { 0 })
 }
 
@@ -365,6 +377,8 @@ fn write_input(
     mut probe: Option<ResMut<ProbeInput>>,
     time: Res<Time<Real>>,
     mut q: Query<(&mut ActionState<FbInput>, Option<(&PlayerId, &BodyFull)>), With<InputMarker<FbInput>>>,
+    gate: Res<Gate>,
+    binds: Res<Bindings>,
 ) {
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
     let pressed = core::mem::take(&mut presses.0);
@@ -382,9 +396,11 @@ fn write_input(
                 return;
             }
         }
+    } else if !gate.play {
+        (0.0, 0.0, 0)
     } else {
         let (mut f, mut r, mut held) = match (keys, mouse) {
-            (Some(keys), Some(mouse)) => keyboard(&keys, &mouse),
+            (Some(keys), Some(mouse)) => keyboard(&keys, &mouse, &binds),
             _ => (0.0, 0.0, 0),
         };
         // The pad's stick wins over the keys while it is pushed (as in TS).
@@ -575,6 +591,7 @@ fn apply_map_events(
     let map = &mut *map;
     let arena = map.round.arena;
     let now = time.elapsed_secs_f64();
+    let real = time.elapsed_secs();
     // This arena's events go on; others wait a while for their map.
     inbox.0.retain(|(msg, at)| {
         if msg.arena == arena {
@@ -598,6 +615,15 @@ fn apply_map_events(
                         at: *at,
                     });
                     cues.write(Cue::Bonus(*id));
+                    if let Some(b) = map.bonuses.list.get(*i as usize) {
+                        let (icon, title) = crate::ui::text::bonus(b.kind);
+                        let who = if Some(*id) == session.me {
+                            "Вы".to_string()
+                        } else {
+                            session.name_of(*id)
+                        };
+                        session.note(real, format!("{icon} {who}: {title}!"));
+                    }
                 } else {
                     map.pending.push(msg);
                 }
@@ -607,19 +633,35 @@ fn apply_map_events(
                 if !map.info.finished.contains(id) {
                     map.info.finished.push(*id);
                     cues.write(Cue::Finish(*id));
+                    let line = crate::ui::text::finish_note(&session.name_of(*id), *place as usize, *time);
+                    session.note(real, line);
                 }
             }
             MapEventKind::Ko {
-                id, out: true, cause, ..
+                id,
+                out,
+                by,
+                cause,
+                shortcut,
             } => {
-                info!("player {id} is out ({cause})");
-                if !map.info.out.contains(id) {
+                if *out {
+                    info!("player {id} is out ({cause})");
+                    if map.info.out.contains(id) {
+                        continue;
+                    }
                     map.info.out.push(*id);
-                    cues.write(Cue::Ko { id: *id, out: true });
                 }
-            }
-            MapEventKind::Ko { id, .. } => {
-                cues.write(Cue::Ko { id: *id, out: false });
+                cues.write(Cue::Ko { id: *id, out: *out });
+                if map.round.kind == ArenaKind::Round {
+                    let what = Feed::Ko {
+                        victim: *id,
+                        by: *by,
+                        cause: cause.clone(),
+                        out: *out,
+                        shortcut: *shortcut,
+                    };
+                    session.push_feed(real, what);
+                }
             }
             MapEventKind::Map { name, data } => {
                 let Ok(data) = serde_json::from_str::<Value>(data) else {
@@ -671,8 +713,9 @@ fn send_emotes(
     pads: Query<&Gamepad>,
     own: Query<(), (With<Predicted>, With<PlayerId>)>,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
+    gate: Res<Gate>,
 ) {
-    if own.is_empty() {
+    if own.is_empty() || !gate.play {
         return;
     }
     let key = keys.and_then(|k| EMOTE_KEYS.iter().position(|c| k.just_pressed(*c)));

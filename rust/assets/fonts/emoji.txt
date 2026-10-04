@@ -1,0 +1,2 @@
+# The emoji kept in NotoColorEmoji-subset.ttf (port/decisions.md: how to make it again).
+↗⌨⏩⏱⏸▶◀⚔⚙⚠⚡⛔⛸✅✊✏✔✖✨❄❌➕➖➡⬅⬆⬇⭐🌀🌈🌐🌟🌸🍀🍌🎁🎈🎉🎖🎨🎩🎮🎯🎲🎳🏁🏃🏅🏆🏠🐰🐱👀👁👋👏👑👓👤👥👽💃💕💡💥💨💫💬💯📋📌📶🔄🔇🔈🔉🔊🔑🔒🔓🔔🔗🔥🔨🔴🔶🔼🔽🕳🕶🕹🖥🖱🗑😂😇😈😎😢😱🙂🙈🚀🚁🚪🚫🛠🛡🟡🟢🤖🤝🤠🤲🤸🥁🥇🥈🥉🥳🥽🦊🧊🧐🧗🧢🧱🧶🧹🪂🍄🦘

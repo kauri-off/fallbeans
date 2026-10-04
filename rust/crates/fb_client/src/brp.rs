@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::game::{Map, ProbeInput, Stats};
 use crate::net::Conn;
 use crate::session::{Session, send};
+use crate::ui::{HomeTab, MenuTab, Ui};
 
 pub struct BrpPlugin {
     pub port: u16,
@@ -24,7 +25,10 @@ impl Plugin for BrpPlugin {
                 .with_method_main("fb/state", state)
                 .with_method_main("fb/send", send_msg)
                 .with_method_main("fb/dev", dev)
-                .with_method_main("fb/input", input),
+                .with_method_main("fb/input", input)
+                .with_method_main("fb/shot", shot)
+                .with_method_main("fb/ui", ui_state)
+                .with_method_main("fb/camera", camera),
             RemoteHttpPlugin::default().with_port(self.port),
         ));
         info!("BRP on 127.0.0.1:{}", self.port);
@@ -175,5 +179,86 @@ fn input(In(params): In<Option<Value>>, mut commands: Commands, time: Res<Time<R
         frame: InputFrame::from_stick(p.mx, p.mz, buttons),
         until: time.elapsed_secs_f64() + p.secs,
     });
+    Ok(Value::Null)
+}
+
+#[derive(Deserialize)]
+struct ShotParams {
+    path: String,
+}
+
+/// A screenshot of the window to a file (written a frame or two later).
+fn shot(In(params): In<Option<Value>>, mut commands: Commands, offscreen: Option<Res<crate::Offscreen>>) -> BrpResult {
+    let p: ShotParams = parse(params)?;
+    commands
+        .spawn(crate::shot_of(offscreen.as_deref()))
+        .observe(bevy::render::view::screenshot::save_to_disk(p.path));
+    Ok(Value::Null)
+}
+
+#[derive(Deserialize)]
+struct UiParams {
+    menu: Option<bool>,
+    /// "game", "settings" or "dev" (the menu's tabs); "rooms" or "home-settings" at the room list.
+    tab: Option<String>,
+    /// Opens or folds a folded part ("practice", "outfit", "keys", "dev-maps").
+    fold: Option<String>,
+    debug: Option<bool>,
+}
+
+/// Drives the interface the way the player's clicks would (menu, tabs, folded parts, F3).
+fn ui_state(In(params): In<Option<Value>>, ui: Option<ResMut<Ui>>) -> BrpResult {
+    let p: UiParams = parse(params)?;
+    let Some(mut ui) = ui else {
+        return Err(bad("no interface (headless)"));
+    };
+    if let Some(m) = p.menu {
+        ui.menu = m;
+    }
+    match p.tab.as_deref() {
+        Some("game") => ui.menu_tab = MenuTab::Game,
+        Some("settings") => ui.menu_tab = MenuTab::Settings,
+        Some("dev") => ui.menu_tab = MenuTab::Dev,
+        Some("rooms") => ui.home_tab = HomeTab::Rooms,
+        Some("home-settings") => ui.home_tab = HomeTab::Settings,
+        Some(t) => return Err(bad(format!("no tab {t}"))),
+        None => {}
+    }
+    if let Some(k) = p.fold {
+        let k: &'static str = match k.as_str() {
+            "practice" => "practice",
+            "outfit" => "outfit",
+            "dev-maps" => "dev-maps",
+            "keys" => "keys",
+            _ => return Err(bad("fold: practice, outfit, keys or dev-maps")),
+        };
+        if !ui.open.remove(k) {
+            ui.open.insert(k);
+        }
+    }
+    if let Some(d) = p.debug {
+        ui.debug = d;
+    }
+    Ok(json!({ "menu": ui.menu, "chat": ui.chat, "need_click": ui.need_click }))
+}
+
+#[derive(Deserialize)]
+struct CameraParams {
+    eye: [f32; 3],
+    look: [f32; 3],
+}
+
+/// A fixed camera (`{"eye":[x,y,z],"look":[x,y,z]}`), or back to the game's (no params).
+fn camera(In(params): In<Option<Value>>, mut commands: Commands) -> BrpResult {
+    match params {
+        None | Some(Value::Null) => commands.remove_resource::<crate::camera::CameraOverride>(),
+        p => {
+            let p: CameraParams = parse(p)?;
+            commands.insert_resource(crate::camera::CameraOverride {
+                eye: Vec3::from(p.eye),
+                look: Vec3::from(p.look),
+            });
+        }
+    }
     Ok(Value::Null)
 }

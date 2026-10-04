@@ -79,7 +79,7 @@ pub const TINTS: [&str; 12] = [
     "#9ea3b0", "#2b2b33",
 ];
 
-const TINT_LIST: [Tint; 12] = [
+pub const TINT_LIST: [Tint; 12] = [
     Tint::White,
     Tint::Yellow,
     Tint::Orange,

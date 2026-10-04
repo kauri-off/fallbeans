@@ -4,6 +4,7 @@ pub mod bots;
 pub mod builder;
 pub mod collider;
 pub mod course;
+pub mod looks;
 pub mod map;
 pub mod math;
 pub mod nav;

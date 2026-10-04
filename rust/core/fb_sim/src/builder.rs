@@ -219,7 +219,7 @@ impl Builder {
                 kind,
                 dims,
                 pal: p,
-                freq: o.freq.or(freq).unwrap_or(1.0),
+                freq: o.freq.or(freq),
                 surface: o.surface,
                 pattern: o.pattern,
             });
@@ -793,10 +793,15 @@ impl Builder {
     ) {
         let parts = [
             Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy),
-            Part::toned(Form::Disc(1.2), color, "#ffffff", Finish::Flat),
+            Part::new(
+                if exit_only { Form::Rings(1.2) } else { Form::Swirl(1.2) },
+                color,
+                Finish::Flat,
+            ),
             Part::new(Form::Disc(1.22), color, Finish::Metal),
-            Part::new(Form::Sphere(1.0), "#fff6d0", Finish::Flat),
-            Part::new(Form::Torus(1.35, 0.1), color, Finish::Flat),
+            Part::new(Form::Sphere(1.0), "#fff6d0", Finish::Light),
+            Part::new(Form::Torus(1.35, 0.1), color, Finish::Light),
+            Part::new(Form::Arrow, color, Finish::Flat),
         ];
         let kind = if exit_only { "portal-exit" } else { "portal" };
         let spin = if i == 1 { -2.2 } else { 2.2 };
@@ -824,9 +829,14 @@ impl Builder {
             let disc = Piece::at(1, 0.0, 1.4, 0.0)
                 .rot(0.0, 0.0, t * spin)
                 .scale(pulse * (1.0 - shut * 0.6))
-                .tone(if f >= 0.0 { 0.6 * (1.0 - f) } else { 0.0 })
+                .tone(if f >= 0.0 { 1.0 - f } else { 0.0 })
                 .alpha(0.85);
             out.pieces.push(disc);
+            if exit_only {
+                // An arrow on the ground: the way out (nobody goes in here).
+                out.pieces
+                    .push(Piece::at(5, 0.0, 0.06, 1.3).rot(-m::PI / 2.0, 0.0, 0.0).alpha(0.85));
+            }
             if shut > 0.001 {
                 for z in [-0.03, 0.03] {
                     out.pieces.push(Piece::at(2, 0.0, 1.4, z).scale(shut));

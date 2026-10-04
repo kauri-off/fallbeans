@@ -49,10 +49,17 @@ struct Parts {
 #[derive(Component)]
 pub struct Rig {
     pivot: Entity,
-    model: Entity,
+    pub model: Entity,
     aura: Entity,
     tears: [Entity; 4],
     parts: Option<Parts>,
+}
+
+impl Rig {
+    /// The model's scene is in and its parts are found.
+    pub fn ready(&self) -> bool {
+        self.parts.is_some()
+    }
 }
 
 /// What the bean wears now, and the entities of it.
@@ -138,7 +145,8 @@ pub fn spawn_beans(
                     materials.add(StandardMaterial {
                         base_color: hex(c).with_alpha(0.7),
                         unlit: true,
-                        alpha_mode: AlphaMode::Blend,
+                        // Light added, as TS (additive, not tone mapped against the scene).
+                        alpha_mode: AlphaMode::Add,
                         double_sided: true,
                         cull_mode: None,
                         ..default()
@@ -330,9 +338,12 @@ pub fn dress_beans(
 
         let suit = tint_of(color.0);
         let template = materials.get(&parts.body_mat).cloned().unwrap_or_default();
+        // Soft plastic with a faint clearcoat (TS also had a sheen, which Bevy's material lacks).
         let body = paints.get(format!("body {suit}"), &mut materials, || StandardMaterial {
             base_color: suit_base(suit),
             perceptual_roughness: 0.5,
+            clearcoat: 0.3,
+            clearcoat_perceptual_roughness: 0.35,
             ..template
         });
         let belly_template = materials.get(&parts.belly_mat).cloned().unwrap_or_default();
@@ -478,9 +489,27 @@ pub fn place_beans(
     mut others: OtherBeans,
 ) {
     let a = fixed.overstep_fraction();
+    // A bean drawn between ticks (or tipped over) may poke into a wall or the floor: out of it, as the
+    // simulation would put it (TS `pushOut`).
+    let out = |p: Vec3, tilt: f32, dir: f32, size: f32| match map.as_ref() {
+        Some(m) => fb_sim::physics::push_out(
+            &m.world,
+            fb_sim::math::V3::new(p.x as f64, p.y as f64, p.z as f64),
+            tilt as f64,
+            dir as f64,
+            size as f64,
+        )
+        .as_vec3(),
+        None => p,
+    };
     for (full, prev, mut tf, mut vis) in own {
         let b = &full.body;
-        tf.translation = prev.0.as_vec3().lerp(b.pos.as_vec3(), a);
+        let p = prev.0.as_vec3().lerp(b.pos.as_vec3(), a);
+        tf.translation = if b.state == BodyState::Portal {
+            p
+        } else {
+            out(p, b.tilt as f32, b.tilt_dir as f32, b.size as f32)
+        };
         tf.rotation = Quat::from_rotation_y(b.yaw as f32);
         // Inside a portal: out of sight, gliding to the other end.
         vis.set_if_neq(if b.state == BodyState::Portal {
@@ -490,7 +519,11 @@ pub fn place_beans(
         });
     }
     for (id, p, mut tf, mut vis) in &mut others {
-        tf.translation = p.pos;
+        tf.translation = if p.anim == Anim::Portal {
+            p.pos
+        } else {
+            out(p.pos, p.tilt, p.tilt_dir, p.size)
+        };
         tf.rotation = Quat::from_rotation_y(p.yaw);
         // Finished or out: gone at once (the last snapshots may still carry the bean).
         let gone = map.as_ref().is_some_and(|m| m.gone(id.0)) || p.anim == Anim::Portal;

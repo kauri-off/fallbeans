@@ -45,7 +45,7 @@ impl Spring {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Expr {
     #[default]
     Smile,
@@ -53,6 +53,7 @@ pub enum Expr {
     Laugh,
     Surprised,
     Scared,
+    Sad,
     Cry,
     Dizzy,
     Strain,
@@ -68,10 +69,29 @@ impl Expr {
             Expr::Laugh => (0.22, 1.0),
             Expr::Surprised => (1.06, 0.8),
             Expr::Scared => (1.06, 0.72),
+            Expr::Sad => (0.72, 1.05),
             Expr::Cry => (0.35, 1.0),
             Expr::Dizzy => (0.9, 0.85),
             Expr::Strain => (0.5, 1.0),
             Expr::Determined => (0.7, 1.0),
+        }
+    }
+}
+
+impl Expr {
+    /// Brows: lift (m) and tilt (rad; above 0 raises the inner ends: worried, below lowers them: cross).
+    fn brows(self) -> (f32, f32) {
+        match self {
+            Expr::Smile => (0.0, 0.0),
+            Expr::Grin => (0.006, 0.05),
+            Expr::Laugh => (0.01, 0.1),
+            Expr::Surprised => (0.012, 0.12),
+            Expr::Scared => (0.008, 0.36),
+            Expr::Sad => (0.0, 0.34),
+            Expr::Cry => (0.0, 0.42),
+            Expr::Dizzy => (0.004, 0.16),
+            Expr::Strain => (-0.004, -0.32),
+            Expr::Determined => (-0.003, -0.26),
         }
     }
 }
@@ -165,6 +185,11 @@ pub struct Out {
     pub grow: f32,
     pub eye_open: f32,
     pub pupil: f32,
+    /// The face: expression, eye opening without blinks (the brows follow it), brow lift and tilt.
+    pub expr: Expr,
+    pub wide: f32,
+    pub brow_lift: f32,
+    pub brow_tilt: f32,
     /// Pupils rolling (dizzy), offsets of the left and right one.
     pub pupil_roll: [Vec2; 2],
     pub crying: bool,
@@ -455,6 +480,11 @@ impl BeanAnim {
         self.pupil += (pupil - self.pupil) * k;
         self.out.eye_open = self.open;
         self.out.pupil = self.pupil;
+        self.out.expr = self.expr;
+        self.out.wide += (open * squeeze - self.out.wide) * k;
+        let (lift, tilt) = self.expr.brows();
+        self.out.brow_lift += (lift - self.out.brow_lift) * k;
+        self.out.brow_tilt += (tilt - self.out.brow_tilt) * k;
         self.out.pupil_roll = if self.expr == Expr::Dizzy {
             // Eyes rolling in circles (in opposite directions).
             [1.0f32, -1.0].map(|s| {

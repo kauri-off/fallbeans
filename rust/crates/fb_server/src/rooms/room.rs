@@ -589,7 +589,7 @@ impl Room {
             DevCmd::Teleport { id, p, yaw } => {
                 let id = target(&self.arena, *id)?;
                 self.arena.dev_teleport(id, V3::from_array(*p), *yaw);
-                Ok(format!("#{id} → {:.1} {:.1} {:.1}", p[0], p[1], p[2]))
+                Ok(format!("#{id} -> {:.1} {:.1} {:.1}", p[0], p[1], p[2]))
             }
             DevCmd::Goto { id, to } => {
                 let id = target(&self.arena, *id)?;
@@ -605,7 +605,7 @@ impl Room {
                     });
                 };
                 self.arena.dev_teleport(id, at, None);
-                Ok(format!("#{id} → {to:?}"))
+                Ok(format!("#{id} -> {to:?}"))
             }
             DevCmd::Bot { n, near } => {
                 let me = self.arena.pawn(by).map(|p| p.body.pos);

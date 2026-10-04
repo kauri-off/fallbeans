@@ -12,16 +12,24 @@ use fb_sim::physics::power;
 use fb_sim::scene::{PrimKind, SceneItem};
 use lightyear::prelude::*;
 
-use crate::beans::{self, BeanView};
-use crate::game::{CameraAngles, Map};
-use crate::specials::{MapPrim, SpecialCache, SpecialRoot, cyl_mesh, pose_specials};
+use crate::beans;
+use crate::camera::{PITCH_MAX, PITCH_MIN};
+use crate::game::{CameraAngles, Gate, Map};
+use crate::render::meshes;
+use crate::render::props::Prop;
+use crate::render::quality::Quality;
+use crate::render::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
+use crate::settings::Controls;
+use crate::specials::{MapPrim, SpecialCache, SpecialRoot, pose_specials};
+use fb_sim::looks::{Pattern, ResolvedLook};
+use fb_sim::scene::{Palette, pal};
 
 pub struct ViewPlugin;
 
 impl Plugin for ViewPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(Color::srgb(0.53, 0.78, 0.98)));
-        app.add_systems(Startup, setup);
+        app.insert_resource(ClearColor(Color::srgb(1.0, 0.85, 0.95)));
+        app.add_systems(Startup, setup_camera);
         app.add_systems(
             PostUpdate,
             (
@@ -33,7 +41,6 @@ impl Plugin for ViewPlugin {
                 beans::dress_beans,
                 beans::animate_beans,
                 place_bonuses,
-                follow_camera,
             )
                 .chain()
                 .before(TransformSystems::Propagate),
@@ -44,6 +51,10 @@ impl Plugin for ViewPlugin {
     }
 }
 
+/// A primitive's mesh at one level of detail (a child of its `MapPrim`).
+#[derive(Component)]
+pub struct PrimLevel;
+
 /// Entities of the drawn map (despawned with it), each following one node.
 #[derive(Component)]
 pub struct MapPiece {
@@ -51,7 +62,7 @@ pub struct MapPiece {
 }
 
 #[derive(Component)]
-struct MapRoot(u32);
+pub struct MapRoot(pub u32);
 
 #[derive(Component)]
 struct BonusView(u32);
@@ -69,33 +80,17 @@ pub struct Spectate {
     generation: u32,
 }
 
-fn setup(mut commands: Commands) {
-    commands.spawn((
+pub fn setup_camera(mut commands: Commands, offscreen: Option<Res<crate::Offscreen>>) {
+    let mut cam = commands.spawn((
         Camera3d::default(),
         MainCamera,
+        // (Other beans' sounds are placed against it: `audio.rs`.)
+        SpatialListener::new(4.0),
         Transform::from_xyz(0.0, 14.0, 22.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
-        DistanceFog {
-            color: Color::srgb(0.62, 0.8, 0.98),
-            falloff: FogFalloff::Linear {
-                start: 60.0,
-                end: 220.0,
-            },
-            ..default()
-        },
     ));
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 9000.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(20.0, 40.0, 14.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.85, 0.9, 1.0),
-        brightness: 600.0,
-        ..default()
-    });
+    if let Some(o) = offscreen {
+        cam.insert((bevy::camera::RenderTarget::Image(o.0.clone().into()), IsDefaultUiCamera));
+    }
 }
 
 pub fn hex(c: &str) -> Color {
@@ -115,6 +110,11 @@ fn spawn_map(
     assets: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut surfaces: ResMut<Surfaces>,
+    mut images: ResMut<Assets<Image>>,
+    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
+    quality: Option<Res<Quality>>,
+    display: Res<crate::settings::Display>,
 ) {
     let Some(map) = map else { return };
     if roots.iter().any(|(_, r)| r.0 == map.generation) {
@@ -126,42 +126,59 @@ fn spawn_map(
     let root = commands
         .spawn((MapRoot(map.generation), Transform::default(), Visibility::default()))
         .id();
-    // Shared handles: identical primitives and colours batch into one draw.
-    let mut mats: HashMap<&str, Handle<StandardMaterial>> = HashMap::new();
-    let mut prims: HashMap<(PrimKind, [u64; 3]), Handle<Mesh>> = HashMap::new();
+    // Shared handles: identical primitives and materials batch into one draw.
+    let mut prims: HashMap<(PrimKind, [u64; 3], u32, u32), Handle<Mesh>> = HashMap::new();
+    let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
+    let mut lift = 0u32;
     for (i, item) in map.scene.items.iter().enumerate() {
         let (node, child) = match item {
             SceneItem::Prim {
-                node, kind, dims, pal, ..
+                node,
+                kind,
+                dims,
+                pal,
+                freq,
+                surface,
+                pattern,
             } => {
-                let mesh = prims
-                    .entry((*kind, dims.map(f64::to_bits)))
-                    .or_insert_with(|| match kind {
-                        PrimKind::Box => meshes.add(Cuboid::new(dims[0] as f32, dims[1] as f32, dims[2] as f32)),
-                        PrimKind::Cyl => meshes.add(cyl_mesh(dims[0] as f32, dims[1] as f32, dims[2] as u32)),
-                        PrimKind::Sphere => meshes.add(Sphere::new(dims[0] as f32).mesh().uv(32, 18)),
-                    })
-                    .clone();
-                let mat = mats
-                    .entry(pal[0])
-                    .or_insert_with(|| {
-                        materials.add(StandardMaterial {
-                            base_color: hex(pal[0]),
-                            perceptual_roughness: 0.6,
-                            ..default()
-                        })
-                    })
-                    .clone();
-                (
-                    *node,
-                    commands
-                        .spawn((Mesh3d(mesh), MeshMaterial3d(mat), MapPrim(pal[0])))
-                        .id(),
-                )
+                lift += 1;
+                let l = 1 + lift % meshes::LIFTS;
+                let spec = prim_spec(&map.look, *kind, *dims, *pal, *freq, *surface, *pattern);
+                let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
+                let piece = commands.spawn(MapPrim(spec)).id();
+                // Each level of detail a child, shown by the camera's distance (cross-faded).
+                let ranges = meshes::level_ranges(*kind, *dims, lod_k);
+                let single = ranges.len() == 1;
+                for (level, range) in ranges {
+                    let mesh = prims
+                        .entry((*kind, dims.map(f64::to_bits), l, meshes::level_id(*kind, *dims, level)))
+                        .or_insert_with(|| meshes.add(meshes::prim(*kind, *dims, level, l)))
+                        .clone();
+                    let mut child = commands.spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat.clone()),
+                        PrimLevel,
+                        Transform::default(),
+                        ChildOf(piece),
+                    ));
+                    if !single {
+                        child.insert(range);
+                    }
+                }
+                (*node, piece)
             }
-            SceneItem::Model { node, name, .. } => {
+            SceneItem::Model { node, name, tint } => {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
-                (*node, commands.spawn(WorldAssetRoot(scene)).id())
+                let n = map.render.get(*node);
+                let piece = commands.spawn_empty().id();
+                commands.spawn((
+                    WorldAssetRoot(scene),
+                    Prop::new(name, *tint, n.pos.x, n.pos.z),
+                    Transform::default(),
+                    Visibility::default(),
+                    ChildOf(piece),
+                ));
+                (*node, piece)
             }
             SceneItem::Special { node, .. } => {
                 let root = SpecialRoot {
@@ -197,6 +214,63 @@ fn spawn_map(
             Visibility::Hidden,
             ChildOf(root),
         ));
+    }
+}
+
+/// The classic palettes (`scene::pal`) in the order of the looks' palettes.
+const PALETTES: [Palette; 9] = [
+    pal::BLUE,
+    pal::PURPLE,
+    pal::PINK,
+    pal::YELLOW,
+    pal::GREEN,
+    pal::WHITE,
+    pal::ORANGE,
+    pal::RED,
+    pal::TEAL,
+];
+
+/// What a primitive is painted with (`builder.ts` prim and `view.ts` material): the palette as the
+/// round's look repaints it with the look's pattern, or a plain colour; and its surface (padded for big
+/// floors, rubber for balls, plastic otherwise).
+pub fn prim_spec(
+    look: &ResolvedLook,
+    kind: PrimKind,
+    dims: [f64; 3],
+    pal: Palette,
+    freq: Option<f64>,
+    surface: Option<&'static str>,
+    pattern: Option<&'static str>,
+) -> Spec {
+    let [a, b, c] = dims;
+    let big = match kind {
+        PrimKind::Box => a * c >= 30.0 && a.min(c) >= 3.0 && b <= 3.0,
+        PrimKind::Cyl => a >= 4.0 && b <= 3.0,
+        PrimKind::Sphere => false,
+    };
+    let fallback = match kind {
+        PrimKind::Sphere => Kind::Rubber,
+        _ if big => Kind::Padded,
+        _ => Kind::Plastic,
+    };
+    let kind = surface.and_then(Kind::of).unwrap_or(fallback);
+    if pal[0] == pal[1] {
+        return Spec::plain(hex(pal[0]).to_linear(), Some(kind));
+    }
+    let tones: [String; 2] = match PALETTES.iter().position(|p| *p == pal) {
+        Some(i) if look.look.id != "classic" => look.palette[i].clone(),
+        _ => [pal[0].to_string(), pal[1].to_string()],
+    };
+    Spec {
+        paint: Some(Paint {
+            c1: hex(&tones[0]).to_linear(),
+            c2: hex(&tones[1]).to_linear(),
+            freq: freq.unwrap_or(0.25) as f32,
+            dir: Vec2::ONE,
+            speed: 0.0,
+            kind: pattern.and_then(Pattern::of).unwrap_or(look.pattern),
+        }),
+        ..Spec::plain(LinearRgba::WHITE, Some(kind))
     }
 }
 
@@ -252,31 +326,6 @@ fn place_bonuses(
     }
 }
 
-fn follow_camera(
-    cam: Res<CameraAngles>,
-    map: Option<Res<Map>>,
-    spectate: Res<Spectate>,
-    own: Query<&Transform, (With<Predicted>, With<BeanView>, Without<MainCamera>)>,
-    others: Query<(&PlayerId, &Transform), (With<Interpolated>, With<BeanView>, Without<MainCamera>)>,
-    mut camera: Query<&mut Transform, With<MainCamera>>,
-) {
-    let Ok(mut tf) = camera.single_mut() else { return };
-    let followed = own.single().ok().or_else(|| {
-        let id = spectate.target?;
-        others.iter().find(|(p, _)| p.0 == id).map(|(_, t)| t)
-    });
-    let target = match followed {
-        Some(t) => t.translation + Vec3::Y * 1.3,
-        None => map
-            .and_then(|m| m.spec.view)
-            .map_or(Vec3::new(0.0, 2.0, 0.0), |v| v.as_vec3()),
-    };
-    let fwd = Vec3::new(cam.yaw.sin(), 0.0, cam.yaw.cos());
-    let dist = 10.0;
-    let eye = target - fwd * dist * cam.pitch.cos() + Vec3::Y * dist * cam.pitch.sin();
-    *tf = Transform::from_translation(eye).looking_at(target, Vec3::Y);
-}
-
 const PREV_KEYS: [KeyCode; 3] = [KeyCode::ArrowLeft, KeyCode::KeyA, KeyCode::KeyQ];
 const NEXT_KEYS: [KeyCode; 3] = [KeyCode::ArrowRight, KeyCode::KeyD, KeyCode::KeyE];
 
@@ -291,6 +340,7 @@ fn spectate(
     pads: Query<&Gamepad>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut spec: ResMut<Spectate>,
+    gate: Res<Gate>,
 ) {
     let Some(map) = map else { return };
     if spec.generation != map.generation {
@@ -312,7 +362,9 @@ fn spectate(
     // (Checked before `mouse_look`: the click that captures the mouse does not switch.)
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
     let pad = |b: [GamepadButton; 2]| pads.iter().any(|p| p.any_just_pressed(b));
-    let dir = if keys.any_just_pressed(PREV_KEYS)
+    let dir = if !gate.play {
+        0
+    } else if keys.any_just_pressed(PREV_KEYS)
         || (captured && mouse.just_pressed(MouseButton::Right))
         || pad([GamepadButton::DPadLeft, GamepadButton::LeftTrigger])
     {
@@ -341,40 +393,33 @@ const PAD_PITCH: f32 = 2.2;
 
 fn mouse_look(
     mut motion: MessageReader<MouseMotion>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     time: Res<Time<Real>>,
     mut cam: ResMut<CameraAngles>,
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    controls: Res<Controls>,
+    gate: Res<Gate>,
 ) {
     let dt = time.delta_secs().min(0.1);
-    for pad in &pads {
-        let dz = |v: f32| if v.abs() < 0.15 { 0.0 } else { v };
-        let s = pad.right_stick();
-        cam.yaw -= dz(s.x) * PAD_YAW * dt;
-        cam.pitch = (cam.pitch - dz(s.y) * PAD_PITCH * dt).clamp(-0.2, 1.2);
+    if gate.play {
+        let k = controls.stick_sensitivity;
+        let inv = if controls.invert_stick_y { -1.0 } else { 1.0 };
+        for pad in &pads {
+            let dz = |v: f32| if v.abs() < 0.15 { 0.0 } else { v };
+            let s = pad.right_stick();
+            cam.yaw -= dz(s.x) * PAD_YAW * k * dt;
+            cam.pitch = (cam.pitch - dz(s.y) * PAD_PITCH * k * inv * dt).clamp(PITCH_MIN, PITCH_MAX);
+        }
     }
-    let Ok(mut cursor) = cursor.single_mut() else { return };
-    if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
-        // Locked (pointer constraints) where the platform has it; Windows only confines.
-        cursor.grab_mode = if cfg!(target_os = "windows") {
-            CursorGrabMode::Confined
-        } else {
-            CursorGrabMode::Locked
-        };
-        cursor.visible = false;
-    }
-    if keys.just_pressed(KeyCode::Escape) {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-    }
-    if cursor.grab_mode == CursorGrabMode::None {
+    let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
+    if !captured {
         motion.clear();
         return;
     }
+    let k = controls.mouse_sensitivity;
+    let inv = if controls.invert_mouse_y { -1.0 } else { 1.0 };
     for m in motion.read() {
-        cam.yaw -= m.delta.x * 0.004;
-        cam.pitch = (cam.pitch + m.delta.y * 0.003).clamp(-0.2, 1.2);
+        cam.yaw -= m.delta.x * 0.004 * k;
+        cam.pitch = (cam.pitch + m.delta.y * 0.003 * k * inv).clamp(PITCH_MIN, PITCH_MAX);
     }
 }

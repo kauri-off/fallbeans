@@ -1,6 +1,7 @@
 //! Sound effects (port of `client/game/audio.ts`): each one synthesized into a PCM buffer at start as the
 //! TS client's oscillators made it (frequency and gain sliding exponentially), played on what happens
-//! with a little variation in pitch. No music.
+//! with a little variation in pitch. Other beans' sounds come from where they are (panned, fainter
+//! with distance); the volume is the player's setting. No music.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -14,8 +15,8 @@ use crate::game::{Cue, Map};
 use crate::session::Session;
 
 const RATE: u32 = 44_100;
-/// The TS client's master volume.
-const MASTER: f32 = 0.8;
+/// Metres to the units of the spatial mix: a sound at full volume up to this far, a quarter at twice that.
+const HEARD_FULL_M: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sfx {
@@ -31,10 +32,11 @@ pub enum Sfx {
     Out,
     Win,
     Pickup,
+    Click,
 }
 
 impl Sfx {
-    const ALL: [Sfx; 12] = [
+    const ALL: [Sfx; 13] = [
         Sfx::Jump,
         Sfx::Dive,
         Sfx::Hit,
@@ -47,6 +49,7 @@ impl Sfx {
         Sfx::Out,
         Sfx::Win,
         Sfx::Pickup,
+        Sfx::Click,
     ];
 
     /// What a map asks for (`MapSfx`), by name.
@@ -63,6 +66,7 @@ impl Sfx {
             "out" => Sfx::Out,
             "win" => Sfx::Win,
             "grab" => Sfx::Grab,
+            "click" => Sfx::Click,
             _ => return None,
         })
     }
@@ -113,6 +117,7 @@ fn tones(s: Sfx) -> Vec<Tone> {
             Tone(1319.0, 1319.0, 0.16, Triangle, 0.1, 0.07),
         ],
         Sfx::Count => vec![t(520.0, 520.0, 0.18, Square, 0.07)],
+        Sfx::Click => vec![t(700.0, 900.0, 0.05, Triangle, 0.05)],
         Sfx::Go => vec![t(880.0, 880.0, 0.45, Square, 0.08)],
         Sfx::Qualify => [523.0, 659.0, 784.0, 1046.0]
             .iter()
@@ -195,8 +200,11 @@ impl Plugin for AudioPlugin {
             rng: 0x9e37_79b9,
             ..default()
         });
+        app.insert_resource(bevy::audio::DefaultSpatialScale(bevy::audio::SpatialScale::new(
+            1.0 / HEARD_FULL_M,
+        )));
         app.add_systems(Startup, make_sounds);
-        app.add_systems(Update, (on_cues, countdown, own_grab));
+        app.add_systems(Update, (volume, on_cues, countdown, own_grab));
     }
 }
 
@@ -211,19 +219,37 @@ fn make_sounds(mut commands: Commands, mut sources: ResMut<Assets<AudioSource>>)
     commands.insert_resource(Sounds(map));
 }
 
+/// The player's volume over every sound.
+fn volume(sound: Res<crate::settings::Sound>, mut global: ResMut<GlobalVolume>) {
+    let v = Volume::Linear(sound.volume.clamp(0.0, 1.0));
+    if global.volume != v {
+        global.volume = v;
+    }
+}
+
 fn play(commands: &mut Commands, sounds: &Sounds, heard: &mut Heard, s: Sfx, gain: f32) {
+    play_at(commands, sounds, heard, s, gain, None);
+}
+
+/// A sound, from a place in the world (`at`) or from everywhere.
+fn play_at(commands: &mut Commands, sounds: &Sounds, heard: &mut Heard, s: Sfx, gain: f32, at: Option<Vec3>) {
     let Some(h) = sounds.0.get(&s) else { return };
     heard.rng ^= heard.rng << 13;
     heard.rng ^= heard.rng >> 17;
     heard.rng ^= heard.rng << 5;
     // A little variation in pitch: the same sound many times over does not drone.
     let pitch = 1.0 + ((heard.rng >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.08;
-    commands.spawn((
-        AudioPlayer(h.clone()),
-        PlaybackSettings::DESPAWN
-            .with_speed(pitch)
-            .with_volume(Volume::Linear(gain * MASTER)),
-    ));
+    let settings = PlaybackSettings::DESPAWN
+        .with_speed(pitch)
+        .with_volume(Volume::Linear(gain));
+    match at {
+        Some(p) => commands.spawn((
+            AudioPlayer(h.clone()),
+            settings.with_spatial(true),
+            Transform::from_translation(p),
+        )),
+        None => commands.spawn((AudioPlayer(h.clone()), settings)),
+    };
 }
 
 fn on_cues(
@@ -232,13 +258,23 @@ fn on_cues(
     mut heard: ResMut<Heard>,
     session: Res<Session>,
     mut cues: MessageReader<Cue>,
+    beans: Query<(&PlayerId, &GlobalTransform), With<crate::beans::BeanView>>,
 ) {
     let Some(sounds) = sounds else {
         cues.clear();
         return;
     };
     let me = session.me;
+    let at = |id: u32| {
+        (Some(id) != me)
+            .then(|| beans.iter().find(|(p, _)| p.0 == id).map(|(_, t)| t.translation()))
+            .flatten()
+    };
     for c in cues.read() {
+        let from = match *c {
+            Cue::Bonus(id) | Cue::Bell(id) => at(id),
+            _ => None,
+        };
         let (s, gain) = match *c {
             Cue::Jumped => (Sfx::Jump, 1.0),
             Cue::Dived => (Sfx::Dive, 1.0),
@@ -261,7 +297,7 @@ fn on_cues(
             },
             _ => continue,
         };
-        play(&mut commands, &sounds, &mut heard, s, gain);
+        play_at(&mut commands, &sounds, &mut heard, s, gain, from);
     }
 }
 

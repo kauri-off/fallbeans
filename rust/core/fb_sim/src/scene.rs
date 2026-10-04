@@ -40,7 +40,8 @@ pub enum SceneItem {
         /// box: sx, sy, sz · cyl: r, h, segments · sphere: r.
         dims: [f64; 3],
         pal: Palette,
-        freq: f64,
+        /// Pattern frequency (None: the default, 0.25 per metre).
+        freq: Option<f64>,
         /// Surface finish and pattern (None: the default for the shape and the map's style).
         surface: Option<&'static str>,
         pattern: Option<&'static str>,
@@ -74,6 +75,12 @@ pub enum Form {
     /// Inner and outer radius.
     Ring(f64, f64),
     Disc(f64),
+    /// A portal's disc: a spiral in its colour (the way in).
+    Swirl(f64),
+    /// A one-way exit's disc: rings flowing out in its colour.
+    Rings(f64),
+    /// An arrow pointing +y (laid on the ground with its piece's rotation).
+    Arrow,
     Plane(f64, f64),
     /// A board with a text (an emoji) on its colour: w, h, text.
     Label(f64, f64, &'static str),
@@ -88,8 +95,10 @@ pub enum Finish {
     Glass,
     /// Lit from within (lamps).
     Glow,
-    /// Unlit, both sides (confetti, portal discs, flashes).
+    /// Unlit, both sides (confetti, portal discs).
     Flat,
+    /// Unlit and added to what is behind, like light (flashes).
+    Light,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -40,12 +40,15 @@ pub struct Opts {
     pub ws_url: Option<String>,
     #[arg(long, value_enum, default_value_t = Transport::Auto)]
     pub transport: Transport,
-    /// The player's name.
+    /// The player's name for this run (the saved one otherwise).
     #[arg(long, default_value = "")]
     pub name: String,
-    /// Identity from an earlier session (the same player again).
+    /// Identity from an earlier session for this run (the saved one otherwise).
     #[arg(long)]
     pub token: Option<String>,
+    /// A settings file of its own (identity, name, look, options): another player on this machine.
+    #[arg(long)]
+    pub profile: Option<String>,
     /// Go straight into this room (its PIN for a private one).
     #[arg(long)]
     pub room: Option<String>,
@@ -54,7 +57,7 @@ pub struct Opts {
     /// A practice round of this map with bots.
     #[arg(long)]
     pub practice: Option<String>,
-    /// Suit colour (index into the palette).
+    /// Suit colour for this run (index into the palette).
     #[arg(long)]
     pub color: Option<u8>,
     /// Map id: if this client hosts the room, it starts a game where every round is this map.
@@ -93,6 +96,10 @@ pub struct Opts {
     /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs, CI).
     #[arg(long)]
     pub headless: bool,
+    /// Drawn to an image instead of a window (`--screenshot`, `fb/shot`): checks of the graphics that put
+    /// nothing on the screen.
+    #[arg(long)]
+    pub offscreen: bool,
     /// Frames a second without a window (a player's client runs at the display's rate).
     #[arg(long, default_value_t = 60.0)]
     pub fps: f64,

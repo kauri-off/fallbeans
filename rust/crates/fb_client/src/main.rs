@@ -6,18 +6,24 @@ mod bean;
 mod beans;
 #[cfg(feature = "brp")]
 mod brp;
+mod camera;
 mod clock;
 mod diag;
+mod face;
 mod game;
 mod hud;
+mod keys;
 mod net;
 mod opts;
 mod outfit;
 mod probe;
+mod render;
 mod session;
+mod settings;
 mod shapes;
 mod specials;
 mod stats;
+mod ui;
 mod view;
 
 use core::time::Duration;
@@ -30,7 +36,7 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, InstanceFlags, RenderCreation, WgpuLimits, WgpuSettings};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use bevy::window::PresentMode;
+use bevy::window::{ExitCondition, PresentMode};
 use bevy::winit::WinitSettings;
 use clap::Parser;
 use fb_net::{NetStatsPlugin, ProtocolPlugin, TICK};
@@ -81,6 +87,11 @@ fn wgpu_settings(backend: Option<Backend>) -> WgpuSettings {
 fn main() -> AppExit {
     let opts = Opts::parse();
     let mut app = App::new();
+    // (First: the graphics API may come from the settings.)
+    app.add_plugins(settings::ClientSettingsPlugin {
+        profile: opts.profile.clone(),
+        stored: !opts.headless,
+    });
     if opts.headless {
         app.add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps))),
@@ -91,37 +102,74 @@ fn main() -> AppExit {
             bevy::state::app::StatesPlugin,
         ));
     } else {
-        app.add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: asset_dir(),
-                    meta_check: AssetMetaCheck::Never,
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: opts.title.clone(),
-                        resolution: (1280, 720).into(),
-                        present_mode: PresentMode::AutoVsync,
-                        ..default()
-                    }),
-                    ..default()
-                })
-                .set(RenderPlugin {
-                    render_creation: RenderCreation::Automatic(Box::new(wgpu_settings(opts.backend))),
-                    ..default()
-                })
-                .set(LogPlugin {
-                    filter: LOG_FILTER.into(),
-                    ..default()
-                }),
-        );
-        app.insert_resource(WinitSettings::continuous());
+        let backend = opts
+            .backend
+            .or_else(|| match app.world().resource::<settings::Graphics>().backend.as_str() {
+                "vulkan" => Some(Backend::Vulkan),
+                "dx12" => Some(Backend::Dx12),
+                "gl" => Some(Backend::Gl),
+                _ => None,
+            });
+        let window = if opts.offscreen {
+            None
+        } else {
+            Some(Window {
+                title: opts.title.clone(),
+                resolution: (1280, 720).into(),
+                present_mode: PresentMode::AutoVsync,
+                ..default()
+            })
+        };
+        let plugins = DefaultPlugins
+            .set(AssetPlugin {
+                file_path: asset_dir(),
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: window,
+                exit_condition: if opts.offscreen {
+                    ExitCondition::DontExit
+                } else {
+                    ExitCondition::OnPrimaryClosed
+                },
+                ..default()
+            })
+            .set(RenderPlugin {
+                render_creation: RenderCreation::Automatic(Box::new(wgpu_settings(backend))),
+                ..default()
+            })
+            .set(LogPlugin {
+                filter: LOG_FILTER.into(),
+                ..default()
+            });
+        if opts.offscreen {
+            // No window at all: the frames go to an image (`--screenshot`, `fb/shot`).
+            app.add_plugins((
+                plugins.disable::<bevy::winit::WinitPlugin>(),
+                ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / 60.0)),
+            ));
+            app.add_systems(PreStartup, offscreen_target);
+        } else {
+            app.add_plugins(plugins);
+            app.insert_resource(WinitSettings::continuous());
+        }
         if opts.check_assets {
             app.add_plugins(assets::CheckAssetsPlugin);
             return app.run();
         }
-        app.add_plugins((view::ViewPlugin, beans::BeansPlugin, hud::HudPlugin, audio::AudioPlugin));
+        app.add_plugins((
+            view::ViewPlugin,
+            beans::BeansPlugin,
+            hud::HudPlugin,
+            ui::UiPlugin,
+            camera::CameraPlugin,
+            render::GfxPlugin,
+            face::FacePlugin,
+        ));
+        if !opts.offscreen {
+            app.add_plugins(audio::AudioPlugin);
+        }
         app.add_systems(Update, screenshot);
     }
     app.add_plugins(ClientPlugins { tick_duration: TICK });
@@ -150,14 +198,41 @@ fn exit_after(opts: Res<Opts>, time: Res<Time<Real>>, mut exit: MessageWriter<Ap
 }
 
 /// `--screenshot`: a picture of the game a second before `--exit-after` (smoke tests).
-fn screenshot(mut commands: Commands, opts: Res<Opts>, time: Res<Time<Real>>, mut done: Local<bool>) {
+fn screenshot(
+    mut commands: Commands,
+    opts: Res<Opts>,
+    time: Res<Time<Real>>,
+    offscreen: Option<Res<Offscreen>>,
+    mut done: Local<bool>,
+) {
     let (Some(path), Some(after)) = (&opts.screenshot, opts.exit_after) else {
         return;
     };
     if !*done && time.elapsed_secs() >= after - 1.0 {
         *done = true;
         commands
-            .spawn(Screenshot::primary_window())
+            .spawn(shot_of(offscreen.as_deref()))
             .observe(save_to_disk(path.clone()));
+    }
+}
+
+/// `--offscreen`: the image the game is drawn to instead of a window.
+#[derive(Resource)]
+pub struct Offscreen(pub Handle<Image>);
+
+const OFFSCREEN_SIZE: (u32, u32) = (1600, 900);
+
+fn offscreen_target(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    use bevy::render::render_resource::{TextureFormat, TextureUsages};
+    let mut image = Image::new_target_texture(OFFSCREEN_SIZE.0, OFFSCREEN_SIZE.1, TextureFormat::Rgba8UnormSrgb, None);
+    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    commands.insert_resource(Offscreen(images.add(image)));
+}
+
+/// A screenshot of what the game shows (the window, or the offscreen image).
+pub fn shot_of(offscreen: Option<&Offscreen>) -> Screenshot {
+    match offscreen {
+        Some(o) => Screenshot::image(o.0.clone()),
+        None => Screenshot::primary_window(),
     }
 }
