@@ -5,19 +5,22 @@ Exports every model of blender/fallguys_assets.blend to glTF binaries, headless:
 
 Each collection named A_<model> becomes <out dir>/<model>.glb (A_bean -> bean.glb), with the
 collection's objects, their names and hierarchy (the game animates bean parts by node name),
-modifiers applied, +Y up, no cameras, lights or animations. Run through `bun run assets --export`,
-which then validates and checks the files before they replace public/models.
+modifiers applied, +Y up, no cameras, lights or animations. Run through `cargo xtask assets --export`,
+which then loads every file in the client.
 
 Ambient occlusion is baked for every model (Cycles, the model alone: what its own parts hide from
-the sky) into <out dir>/<model>_ao.png, over a UV layout made for it (smart projection of the whole
-model into one atlas, the only UV map exported: TEXCOORD_0). `bun run assets` compresses it and
-wires it as the occlusion texture of all the model's materials. The .blend is never saved: the
-modifiers are applied and the UVs replaced on this session's copy only.
+the sky) over a UV layout made for it (smart projection of the whole model into one atlas, the only
+UV map exported: TEXCOORD_0) and embedded as a grey PNG, the occlusion texture of all the model's
+materials. The .blend is never saved: the modifiers are applied and the UVs replaced on this
+session's copy only.
 """
 
+import json
 import math
 import os
+import struct
 import sys
+import zlib
 
 import bpy
 
@@ -151,12 +154,59 @@ def bake_ao(name, meshes, res):
         m.node_tree.nodes.remove(node)
     for o, h in hidden.items():
         o.hide_render = h
-    path = os.path.join(out_dir, f"{name}_ao.png")
-    img.filepath_raw = path
-    img.file_format = "PNG"
-    img.save()
+    png = gray_png(img)
     bpy.data.images.remove(img)
-    return path
+    return png
+
+
+def gray_png(img):
+    """The bake's first channel as an 8-bit grey PNG (rows top to bottom)."""
+    import numpy as np
+
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    g = (np.clip(px[0::4], 0.0, 1.0) * 255 + 0.5).astype(np.uint8).reshape(h, w)[::-1]
+    raw = b"".join(b"\x00" + row.tobytes() for row in g)
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def attach_ao(path, png):
+    """The AO PNG as the only texture of the .glb, the occlusion texture (UV set 0) of every material."""
+    with open(path, "rb") as f:
+        data = f.read()
+    json_len = struct.unpack_from("<I", data, 12)[0]
+    doc = json.loads(data[20 : 20 + json_len])
+    at = 20 + json_len
+    bin_len = struct.unpack_from("<I", data, at)[0] if at < len(data) else 0
+    body = bytearray(data[at + 8 : at + 8 + bin_len])
+    body += b"\x00" * (-len(body) % 4)
+    views = doc.setdefault("bufferViews", [])
+    views.append({"buffer": 0, "byteOffset": len(body), "byteLength": len(png)})
+    body += png + b"\x00" * (-len(png) % 4)
+    doc.setdefault("buffers", [{}])[0]["byteLength"] = len(body)
+    doc["images"] = [{"name": "AO", "mimeType": "image/png", "bufferView": len(views) - 1}]
+    doc["textures"] = [{"source": 0}]
+    doc.pop("samplers", None)
+    for m in doc.get("materials", []):
+        pbr = m.get("pbrMetallicRoughness", {})
+        for k in [k for k in pbr if k.endswith("Texture")]:
+            del pbr[k]
+        for k in [k for k in m if k.endswith("Texture")]:
+            del m[k]
+        m["occlusionTexture"] = {"index": 0}
+    text = json.dumps(doc, separators=(",", ":")).encode()
+    text += b" " * (-len(text) % 4)
+    out = struct.pack("<III", 0x46546C67, 2, 12 + 8 + len(text) + 8 + len(body))
+    out += struct.pack("<II", len(text), 0x4E4F534A) + text
+    out += struct.pack("<II", len(body), 0x004E4942) + bytes(body)
+    with open(path, "wb") as f:
+        f.write(out)
 
 
 exported = []
@@ -169,6 +219,7 @@ for coll in bpy.data.collections:
         print(f"[export] {name}: empty collection, skipped")
         continue
     meshes = [o for o in objs if o.type == "MESH"]
+    ao = None
     if meshes:
         apply_modifiers(meshes)
         area = world_area(meshes)
@@ -176,7 +227,7 @@ for coll in bpy.data.collections:
         res = max(AO_MIN, min(AO_MAX, res))
         unwrap(meshes, res)
         ao = bake_ao(name, meshes, res)
-        print(f"[export] {name}: AO {res}x{res}, reach {scene.world.light_settings.distance:.2f} -> {ao}")
+        print(f"[export] {name}: AO {res}x{res}, reach {scene.world.light_settings.distance:.2f}, {len(ao) // 1024} KB")
     select_only(objs)
     path = os.path.join(out_dir, f"{name}.glb")
     bpy.ops.export_scene.gltf(
@@ -194,6 +245,8 @@ for coll in bpy.data.collections:
         export_normals=True,
         export_materials="EXPORT",
     )
+    if ao is not None:
+        attach_ao(path, ao)
     exported.append(name)
     print(f"[export] {name}: {len(objs)} objects -> {path}")
 

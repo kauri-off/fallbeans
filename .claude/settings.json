@@ -3,7 +3,7 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{ "type": "command", "command": "bun scripts/hooks/format-edited.ts", "timeout": 30 }]
+        "hooks": [{ "type": "command", "command": "cargo xtask format-hook", "timeout": 60 }]
       }
     ]
   }

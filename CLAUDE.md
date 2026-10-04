@@ -1,99 +1,80 @@
 # Fall Beans — notes for Claude
 
-Fall Beans is a party game (up to 8 beans, races / survival / points rounds, 120 Hz authoritative server) being
-**rewritten from a browser game into a native Rust + Bevy 0.19 + Lightyear 0.30 client and server** (workspace
-`rust/`, branch `rogue/port-to-rust`). There is no production server: the game is tested over the local network,
-with the server on the author's machine. The TS version (Bun server, three.js + Preact client) is frozen and kept
-on `master` as the porting source — a
-prototype, not a reference: where it behaves badly, the Rust version does better. Player-facing text and the
-port's docs are Russian; code, comments and tool output are English.
+Fall Beans is a party game (up to 8 beans, races / survival / points rounds, 120 Hz authoritative server): a native
+Rust + Bevy 0.19 + Lightyear 0.30 client and server (branch `rogue/port-to-rust`). It started as a browser game in
+TypeScript; that version is gone from this branch (it stays on `master` and in git history) — its golden traces in
+`core/fb_arena/tests/golden/` are frozen fixtures that can no longer be re-recorded. Version: `0.1.0-alpha`. There is
+no production server: players run their own (`.deb`/`.rpm` from the releases, or a build) and add it to the
+client's server list. Player-facing text and the docs are Russian; code, comments and tool output are English.
 
-Game rules to keep: open to everyone, no site PIN. Players meet in rooms: the client opens at the room list, anyone
-may create one room (they are its host whenever they are in it; a stand-in hosts while they are away) and be in one
-room at a time; private rooms ask for a 4-digit PIN only their host sees. A player is an identity token (`fb_id`).
+Game rules to keep: open to everyone, no site PIN. Players meet in rooms: the client opens at the server list, then
+the room list; anyone may create one room (they are its host whenever they are in it; a stand-in hosts while they
+are away) and be in one room at a time; private rooms ask for a 4-digit PIN only their host sees. A player is an
+identity token (`fb_id`).
 
-## Port state: read it first, save it before you stop
+## State: read it first, save it before you stop
 
-Everything about the port's progress lives in `rust/port/`. Each file has one job:
-
-| File | Holds | Changes |
-| --- | --- | --- |
-| `state.md` | the handoff: date, branch, last commit (nothing about what is or is not committed); one line per phase; **where to start** (1–3 concrete next steps, with enough context to begin cold); work started and not finished; what is broken; what is left of the current phase's gate; leftovers of earlier phases | rewritten whole, never appended |
-| `plan.md` | the spec: goals, stack, architecture, requirements, phases with their gates | only when the spec itself changes (with a `decisions.md` entry saying why); no progress marks |
-| `decisions.md` | everything decided or found **outside the plan**: deviations, workarounds, temporary hacks (with "Пересмотреть (Фаза N)"), rejected options, TS bugs found | entries appended at the bottom, never rewritten; a dropped decision gets "→ отменено: date" |
-| `phases/N.md` | one per phase: measurements worth keeping while it runs; at close, the gate verdict with evidence and what moved to other phases | measurements as taken; verdict at close |
-
-- **Start of a thread:** read `rust/port/state.md`, then what it points to (plan sections, decisions, `rust/README.md`).
-- **Before a thread ends** (the task is done, the user stops, or the context is getting long) — without being asked:
-  rewrite `state.md` so a fresh thread knows where to start, and add a `decisions.md` entry for anything new that
-  the plan does not say.
-- **When a phase closes:** write the verdict and the moved items in `phases/N.md`, put the moved items into the
-  target phases in `plan.md`, and rewrite `state.md` for the next phase.
-- **Do not track completion.** No "done" lists or ✓ marks anywhere: the code, tests and git show what is done.
-  Record only what they do not show — where to start, what is half-done, why something is the way it is.
-- `rust/README.md` describes the code as it is (layout, commands, rules, known issues); `rust/deploy/README.md` —
+- `docs/state.md` — the handoff: date, branch, last commit; **where to start** (1–3 concrete next steps); work
+  started and not finished; what is broken. Rewritten whole, never appended.
+- `docs/decisions.md` — everything decided or found that the code does not explain: deviations, workarounds,
+  temporary hacks (with "Пересмотреть"), rejected options. Entries appended at the bottom, never rewritten; a
+  dropped decision gets "→ отменено: date".
+- **Start of a thread:** read `docs/state.md`, then what it points to (`README.md`, decisions).
+- **Before a thread ends** (task done, the user stops, or the context is getting long) — without being asked:
+  rewrite `docs/state.md` and add a `docs/decisions.md` entry for anything new.
+- **Do not track completion.** No "done" lists or ✓ marks: the code, tests and git show what is done. There are no
+  phases any more.
+- `README.md` describes the code as it is (layout, commands, rules, releases, known issues); `deploy/README.md` —
   what a server host needs for `cargo xtask deploy`.
 
 ## Rules
 
-- Git: the repo is on GitHub (kauri-off/fallbeans, `master`). Do not commit, push or open PRs unless asked.
-- Line endings are LF (`.gitattributes`). rustfmt (`.rs`) and Biome (TS/JSON/CSS) format on every edit (hook in
-  `.claude/settings.json` → `scripts/hooks/format-edited.ts`); files changed by scripts need `cargo fmt --all`.
-- Deploy only when asked, and only to a host the author names: `cd rust && cargo xtask deploy --host … --domain …`
-  (`rust/README.md`, "Деплой"); there are no default hosts. Local network play: `rust/README.md`, "Игра по
-  локальной сети". The repository is public: no private hosts, addresses or keys in committed files.
-- The simulation must stay deterministic: `rust/core/` uses no wall clock, no unseeded randomness, no `HashMap`,
-  maths only through `fb_shared::m` (`rust/core/clippy.toml` enforces it). The same rule held in TS (`b.rng`, the
-  seed, sim time).
+- Git: the repo is on GitHub (kauri-off/fallbeans). Do not commit, push, open PRs or run the `release` workflow
+  unless asked.
+- Line endings are LF (`.gitattributes`). rustfmt formats every edited `.rs` (hook in `.claude/settings.json` →
+  `cargo xtask format-hook`); files changed by scripts need `cargo fmt --all`.
+- Deploy only when asked, and only to a host the author names: `cargo xtask deploy --host … --domain …`
+  (`README.md`, "Деплой"); there are no default hosts. The repository is public: no private hosts, addresses or
+  keys in committed files.
+- The simulation must stay deterministic: `core/` uses no wall clock, no unseeded randomness, no `HashMap`, maths
+  only through `fb_shared::m` (`core/clippy.toml` enforces it).
 
 ## Rust: essentials
 
-- `rust/core/` (fb_shared, fb_sim, fb_maps, fb_arena, fb_audit) is the deterministic simulation and its tools: no
-  Bevy, f64, operation order as three.js. `rust/crates/` (fb_net, fb_server, fb_client) is Bevy/Lightyear code.
-- Verify with `cd rust && cargo xtask check` (fmt, clippy -D warnings, tests: golden traces against TS, recorded
-  determinism hashes, rollback replay, the quick audits with 0 errors and 0 warnings).
-- Audits: `cargo xtask audit [map…] [--quick] [--only a,b] [--metrics]`; `cargo xtask audit --vs-ts` runs the TS
-  audits with the same libm and requires identical results (bot balance included) apart from wall times.
-- Porting from TS: port line by line and cover it with a golden trace (`scripts/golden.ts` →
-  `rust/core/fb_arena/tests/golden/`; `cargo xtask golden [map…]` re-exports with bun, TS computing with
-  `fb_shared::m` built to WebAssembly). A new map goes into `fb_maps::GAMES`/`MAPS` (order of `src/games/index.ts`)
-  and `golden!` in `tests/golden.rs`; check that every section of its pools lands in at least one traced seed.
+- `core/` (fb_shared, fb_sim, fb_maps, fb_arena, fb_audit) is the deterministic simulation and its tools: no Bevy,
+  f64, operation order as three.js (the golden traces depend on it). `crates/` (fb_proto, fb_net, fb_server,
+  fb_client) is Bevy/Lightyear code.
+- Verify with `cargo xtask check` (fmt, clippy -D warnings, tests: golden traces, recorded determinism hashes,
+  rollback replay, the quick audits with 0 errors and 0 warnings). A change that intentionally alters the
+  simulation re-blesses `determinism.txt` and, if it breaks a golden trace on purpose, narrows that trace with a
+  `docs/decisions.md` entry and a Rust-side test instead.
+- Audits: `cargo xtask audit [map…] [--quick] [--only a,b] [--metrics]`. Models: `cargo xtask assets [--export]`
+  (`--export` needs Blender; never in CI — the glb in `assets/models` are committed).
+- A new map goes into `fb_maps::GAMES`/`MAPS` and gets audits and Rust tests.
 - Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` (server + headless
   clients, predictions compared with the server tick by tick); over the real network: `cargo xtask stress --remote
-  --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto` (a probe server on that host).
-- Look at a running build: `cargo xtask dev --clients 2 [--autopilot] [--fill] [--lag 75]`, or `fb_client --screenshot f.png
-  --exit-after 15` against a running `fb_server`; drive a client with `--brp` (`fb/state`, `fb/send`, `fb/dev`,
-  `fb/input`: `rust/README.md`, «Отладка»); read `stats:`/`metrics:` logs.
-- Changing a replicated component or message: bump `PROTOCOL_VERSION` (`rust/core/fb_shared/src/consts.rs`).
+  --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto`.
+- Look at a running build without a window: `fb_client --offscreen` (`README.md`, «Отладка»); drive a client with
+  `--brp` (`fb/state`, `fb/send`, `fb/dev`, `fb/input`, `fb/ui`); read `stats:`/`metrics:` logs.
+- Changing a replicated component or message: bump `PROTOCOL_VERSION` (`core/fb_shared/src/consts.rs`).
+- Servers: the client keeps a list (`servers.rs`); a player types a domain, IP or `host:port`, the client finds
+  the HTTP API (5887, or https on 443 for a domain) and the server tells the rest: UDP address in the connect
+  token, WebSocket URL in the session reply (`--public-ws-url`, else from `Host`/`X-Forwarded-Proto`).
 - One Lightyear `Server` listens on UDP and WebSocket. The room reads inputs itself (`play::frame_for`: late presses
   happen on the next tick; Lightyear's copy into `ActionState` is off). Inputs go out at 60 Hz with 15 messages of
   redundancy, input margin 3 ticks: all chosen by stress measurements. The server runs every schedule
   single-threaded (`SingleThreadedExecutor`; a 1-vCPU VPS lost 15% of its core to the multi-threaded executor's
-  hand-offs). `rust/vendor/aeronet_websocket` patches the WebSocket server (`TCP_NODELAY`); keep it until aeronet
-  has it, carry it over on aeronet updates.
+  hand-offs). `vendor/aeronet_websocket` patches the WebSocket server (`TCP_NODELAY`); keep it until aeronet has
+  it, carry it over on aeronet updates.
 - No traffic budget anywhere (decided by the author): traffic is measured and reported only. Server target: up to 4
-  rooms of 8 players in one core (1 vCPU / ~1 GB). Minimum client: 2 cores / 2 GB RAM. Many players
-  sit behind VPNs that drop UDP/443 (`rust/port/plan.md` §5): the game's UDP must stay off port 443 and not look
-  like QUIC; WebSocket on 443 is the fallback.
+  rooms of 8 players in one core (1 vCPU / ~1 GB). Minimum client: 2 cores / 2 GB RAM / OpenGL 3.3. Many players
+  sit behind VPNs that drop UDP/443: the game's UDP must stay off port 443 and not look like QUIC; WebSocket on
+  443 is the fallback.
 
-## The TS version (porting source)
+## Releases
 
-Bun ≥ 1.4. Run it to compare behaviour or numbers with the port:
-
-```sh
-bun run check          # tsc + biome + vitest (includes the quick audits)
-bun run audit          # all audits incl. multi-seed bot balance; --quick, --only a,b, map ids, --metrics
-bun run bench          # server cost per map vs bench/baseline.json (saved on Windows)
-bun run dev            # server + Vite, permanent room `dev`: http://localhost:5173/fallbeans/?room=dev
-```
-
-- Browser: always the Playwright MCP (`mcp__playwright__*`), driving `window.__fallbeans` (probe:
-  `src/client/debug/probe.ts`; dev commands: `DevCmdSchema` in `src/shared/protocol.ts`, server `--dev` only).
-  Server state without a browser: `curl "http://127.0.0.1:7777/fallbeans/api/debug/state?format=text"` (also
-  `logs`, `trace`, `replay`, `audit`). Rounds headless: `bun run trace <map>`, `bun run replay`.
-- Where things are: `src/shared` protocol, codec, rules · `src/sim` physics, world, builder, course, props, bots,
-  nav, looks · `src/games/*` maps (`meta.ts`, `map.ts`; registry `index.ts`) · `src/server/rooms` hub, room,
-  arena, director, awards, replay · `src/server` auth, debugApi · `src/client` game, net, `ui/`, `hud/`, `menu/`,
-  rendering in `src/client/game/` (`renderer.ts`, `postfx.ts`, `xegtao.ts`, `fsr.ts`, `lod.ts`, `materials.ts`,
-  `scenery.ts`, `decor.ts`, `environment.ts`) · `src/audit` audits · `scripts/` CLI tools (`golden.ts`,
-  `golden-math.ts` for the port) · `blender/` source models + `export.py` (`bun run assets --export`).
+- `release.yml` (workflow_dispatch only) builds in parallel: `check`, NSIS, AppImage, Flatpak, server `.deb` and
+  `.rpm`, then creates GitHub release `v<version>` with `SHA256SUMS`. Packaging logic lives in
+  `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` (files in `packaging/`), so every package builds locally too.
+- No signing. The client updates itself from `releases/latest` (`update.rs`): NSIS and AppImage download, check
+  the sum, install and restart; Flatpak links to the release page. New release = raise `version` in `Cargo.toml`.

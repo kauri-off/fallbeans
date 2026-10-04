@@ -1,0 +1,44 @@
+[package]
+name = "fb_client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fb_shared.workspace = true
+fb_sim.workspace = true
+fb_maps.workspace = true
+fb_arena.workspace = true
+fb_net.workspace = true
+fb_proto.workspace = true
+bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav", "bevy_settings", "system_clipboard"] }
+# GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
+bevy_render = { workspace = true, features = ["gles"] }
+wgpu-types.workspace = true
+aeronet_websocket = { workspace = true, features = ["client"] }
+bevy_replicon = { workspace = true, features = ["client"] }
+base64.workspace = true
+meshopt.workspace = true
+swash.workspace = true
+semver.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+ureq.workspace = true
+lightyear_udp.workspace = true
+lightyear_sync.workspace = true
+lightyear_transport.workspace = true
+lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[features]
+default = ["brp"]
+# The Bevy Remote Protocol probe (`--brp`): off in distributed builds.
+brp = ["bevy/bevy_remote"]
+
+[lints]
+workspace = true

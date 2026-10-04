@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.kauri_off.fallbeans</id>
+  <name>Fall Beans</name>
+  <summary>Party game for up to 8 beans</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <description>
+    <p>Races, survival and points rounds on a server of your own.</p>
+  </description>
+  <launchable type="desktop-id">io.github.kauri_off.fallbeans.desktop</launchable>
+  <url type="homepage">https://github.com/kauri-off/fallbeans</url>
+  <content_rating type="oars-1.1"/>
+</component>

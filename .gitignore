@@ -1,19 +1,14 @@
-# Dependencies and build output
-node_modules/
-dist/
-.build/
+/target
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+rustc-ice-*.txt
+/dist/
+.reports/
 
-# Local dev: self-signed certs, Claude Code session files
-.dev/
+# Claude Code session files
 .claude/*
 !.claude/settings.json
-!.claude/launch.json
-
-# Tests
-.reports/
-.bench/
-.playwright-mcp/
-coverage/
 
 # Secrets and logs
 .env
@@ -29,11 +24,9 @@ coverage/
 .DS_Store
 Thumbs.db
 
-ffmpeg-master-latest-win64-gpl/
-
-# Rust (rust/.gitignore has the build output). Never bare `debug`/`target`: src/client/debug/ is code.
-/rust/target/
-**/*.rs.bk
-*.pdb
-**/mutants.out*/
-rustc-ice-*.txt
+# Leftovers of the TS version on old checkouts
+node_modules/
+.build/
+.bench/
+.dev/
+.playwright-mcp/

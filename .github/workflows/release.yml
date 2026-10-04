@@ -1,0 +1,153 @@
+# Release v<Cargo.toml version>: packages built in parallel, then one GitHub release with SHA256SUMS.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release
+
+env:
+  CARGO_TERM_COLOR: always
+  LINUX_PACKAGES: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            echo "::error::v$v is already released: raise the version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+      - run: cargo xtask check
+
+  nsis:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: choco install nsis --no-progress -y
+      - run: cargo xtask dist nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsis
+          path: dist/*.exe
+          if-no-files-found: error
+
+  appimage:
+    needs: version
+    # The oldest supported Ubuntu: its glibc is what the AppImage needs at least.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+      - name: appimagetool
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+      - run: cargo xtask dist appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  flatpak:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES flatpak flatpak-builder
+      # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: cargo xtask dist flatpak
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist/*.flatpak
+          if-no-files-found: error
+
+  deb:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
+      - run: cargo install --locked cargo-deb
+      - run: cargo xtask dist deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  rpm:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
+      - run: cargo install --locked cargo-generate-rpm
+      - run: cargo xtask dist rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  release:
+    needs: [version, check, nsis, appimage, flatpak, deb, rpm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          title="Fall Beans $(echo "$VERSION" | sed -E 's/-(.*)$/ \U\1/')"
+          sed "s/@VERSION@/$VERSION/g" ../packaging/release-notes.md > notes.md
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md \
+            ./*.exe ./*.AppImage ./*.flatpak ./*.deb ./*.rpm SHA256SUMS
