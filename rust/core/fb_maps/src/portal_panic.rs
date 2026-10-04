@@ -14,7 +14,7 @@ use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::arm_contact_eta;
-use fb_sim::scene::pal;
+use fb_sim::scene::{Piece, lamp_part, pal};
 
 use crate::util::o;
 
@@ -145,7 +145,11 @@ fn blinking_portals() -> Segment {
             // A lamp over each: green while it is open.
             if !s.b.server() {
                 let lamp = s.b.anchor(x, y + 3.35, ez, ROOT);
-                s.b.special(lamp, "portal-lamp", "#4fdc6a");
+                let open = open.clone();
+                s.b.special_look(lamp, "portal-lamp", &[lamp_part(0.26)], move |_, t, out| {
+                    out.pieces
+                        .push(Piece::at(0, 0.0, 0.0, 0.0).tone(if open(t) { 1.0 } else { 0.0 }));
+                });
             }
             routes.push(vec![
                 Waypoint::w(x, ez - 3.2, 0.0),

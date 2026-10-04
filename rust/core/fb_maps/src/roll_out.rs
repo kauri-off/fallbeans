@@ -9,7 +9,7 @@ use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
-use fb_sim::scene::pal;
+use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 
 use crate::util::deco;
 
@@ -93,7 +93,13 @@ impl MapDef for RollOut {
                 );
             }
             if !b.server() {
-                b.special(group, "drum-rims", "#5a3fb8");
+                let rim = [Part::new(Form::Torus(R, 0.25), "#5a3fb8", Finish::Matte)];
+                b.special(
+                    group,
+                    "drum-rims",
+                    &rim,
+                    vec![Piece::at(0, 0.0, 0.0, -4.1), Piece::at(0, 0.0, 0.0, 4.1)],
+                );
             }
             let ring = Ring {
                 z,

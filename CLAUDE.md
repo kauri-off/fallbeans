@@ -18,7 +18,7 @@ Everything about the port's progress lives in `rust/port/`. Each file has one jo
 
 | File | Holds | Changes |
 | --- | --- | --- |
-| `state.md` | the handoff: date, branch, last commit, what is uncommitted; one line per phase; **where to start** (1–3 concrete next steps, with enough context to begin cold); work started and not finished; what is broken; what is left of the current phase's gate; leftovers of earlier phases | rewritten whole, never appended |
+| `state.md` | the handoff: date, branch, last commit (nothing about what is or is not committed); one line per phase; **where to start** (1–3 concrete next steps, with enough context to begin cold); work started and not finished; what is broken; what is left of the current phase's gate; leftovers of earlier phases | rewritten whole, never appended |
 | `plan.md` | the spec: goals, stack, architecture, requirements, phases with their gates | only when the spec itself changes (with a `decisions.md` entry saying why); no progress marks |
 | `decisions.md` | everything decided or found **outside the plan**: deviations, workarounds, temporary hacks (with "Пересмотреть (Фаза N)"), rejected options, TS bugs found | entries appended at the bottom, never rewritten; a dropped decision gets "→ отменено: date" |
 | `phases/N.md` | one per phase: measurements worth keeping while it runs; at close, the gate verdict with evidence and what moved to other phases | measurements as taken; verdict at close |

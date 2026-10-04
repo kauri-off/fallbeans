@@ -11,7 +11,7 @@ use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::props::{SpinUp, arm_contact_eta};
-use fb_sim::scene::{Palette, pal};
+use fb_sim::scene::{Palette, Tint, pal};
 
 use crate::util::{dynamic, o};
 
@@ -142,7 +142,19 @@ impl MapDef for PlateDrop {
             }
         });
         if !b.server() {
-            b.special(ROOT, "plate-tint", "#ff4a3a");
+            // A steady one-way tint toward red instead of blinking (photosensitivity: no flashes).
+            let ps = plates.clone();
+            b.special_look(ROOT, "plate-tint", &[], move |_, t, out| {
+                for p in ps.iter() {
+                    let u = m::clamp(1.0 - (p.fall_at - t) / WARN, 0.0, 1.0);
+                    let k = 0.8 * u * u * (3.0 - 2.0 * u);
+                    out.tints.push(Tint {
+                        node: p.node,
+                        to: "#ff4a3a",
+                        k,
+                    });
+                }
+            });
         }
         b.clouds(0.0, 0.0, 55.0);
 

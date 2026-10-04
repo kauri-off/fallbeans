@@ -10,6 +10,7 @@ use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
+use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 use fb_sim::world::St;
 
 pub struct HexAGone;
@@ -31,6 +32,8 @@ const RINGS: i64 = 8;
 const THICK: f64 = 0.5;
 const FLOORS: [f64; 3] = [0.0, -10.0, -20.0];
 const FALL_DELAY: f64 = 0.42;
+/// Floor colours, top to bottom.
+const FLOOR_COLORS: [&str; 3] = [pal::PINK[0], pal::BLUE[0], pal::YELLOW[0]];
 
 /// When each tile drops (None: still there), by tile index.
 type Falls = Vec<Option<f64>>;
@@ -89,6 +92,7 @@ impl MapDef for HexAGone {
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
         let sq3 = m::sqrt(3.0);
         let falls: St<Falls> = b.state(Vec::new());
+        let mut spots: Vec<(u8, f64, f64, f64)> = Vec::new();
         let mut tiles = Tiles {
             cols: Vec::new(),
             index: BTreeMap::new(),
@@ -102,6 +106,7 @@ impl MapDef for HexAGone {
                     let x = SIZE * sq3 * (q as f64 + r as f64 / 2.0);
                     let z = SIZE * 1.5 * r as f64;
                     let i = tiles.cols.len();
+                    spots.push((floor as u8, x, y, z));
                     let at = b.anchor(x, y - THICK / 2.0, z, ROOT);
                     let col = b.collider(
                         at,
@@ -147,7 +152,31 @@ impl MapDef for HexAGone {
             }
         }
         if !b.server() {
-            b.special(ROOT, "hex-tiles", "#ffffff");
+            let parts =
+                FLOOR_COLORS.map(|c| Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), c, "#ffffff", Finish::Glossy));
+            let spots = Arc::new(spots);
+            b.special_look(ROOT, "hex-tiles", &parts, move |w, t, out| {
+                let falls = w.st(falls);
+                for (i, &(floor, x, y, z)) in spots.iter().enumerate() {
+                    let mut y = y - THICK / 2.0;
+                    let mut p = Piece::at(floor, x, y, z);
+                    if let Some(at) = falls[i] {
+                        let left = at - t;
+                        if left > 0.0 {
+                            p.tone = 1.0 - left / FALL_DELAY;
+                            y -= p.tone * 0.08;
+                        } else {
+                            y -= 14.0 * left * left;
+                            p.tone = -0.3;
+                            if -left > 1.2 {
+                                p.scale = 0.0;
+                            }
+                        }
+                    }
+                    p.pos.y = y;
+                    out.pieces.push(p);
+                }
+            });
         }
         b.clouds_with(0.0, 0.0, 55.0, 30, -45.0, -26.0);
 

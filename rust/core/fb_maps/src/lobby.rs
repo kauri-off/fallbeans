@@ -13,7 +13,7 @@ use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
-use fb_sim::scene::{Palette, pal};
+use fb_sim::scene::{Finish, Form, Palette, Part, Piece, pal};
 
 use crate::util::{deco, o};
 
@@ -130,7 +130,7 @@ fn solid(b: &mut Builder, name: &'static str, x: f64, y: f64, z: f64, o: PropOpt
 }
 
 /// A signpost with a board showing what the zone is for (solid, both).
-fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str) {
+fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: &'static str) {
     // Turned to the plaza, where people come from.
     let yaw = m::atan2(-x, -z);
     let wood = pal::hex("#8a6a4f");
@@ -144,7 +144,12 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str) {
         ..post
     };
     let node = b.box_(x, 3.05, z, 1.5, 1.5, 0.1, wood, board).node;
-    b.special(node, "sign", emoji);
+    let face = [Part::new(Form::Label(1.4, 1.4, emoji), bg, Finish::Matte)];
+    let sides = vec![
+        Piece::at(0, 0.0, 0.0, 0.06),
+        Piece::at(0, 0.0, 0.0, -0.06).rot(0.0, m::PI, 0.0),
+    ];
+    b.special(node, "sign", &face, sides);
 }
 
 impl MapDef for Lobby {
@@ -232,7 +237,19 @@ impl MapDef for Lobby {
         b.collider(at, Shape::Cyl { r: 0.75, hh: 0.8 }, still);
         if !b.server() {
             let bell = b.anchor(tx, top + BELL_HANG, tz, ROOT);
-            b.special(bell, "bell", "#ffcf3f");
+            let parts = [
+                Part::new(Form::Cyl([0.75, 1.0, 32.0]), "#ffcf3f", Finish::Metal),
+                Part::new(Form::Sphere(0.5), "#ffcf3f", Finish::Metal),
+                Part::new(Form::Sphere(0.18), "#8a6a4f", Finish::Matte),
+            ];
+            b.special_look(bell, "bell", &parts, |_, t, out| {
+                // Swinging a little round where it hangs.
+                let a = m::sin(t * 1.7) * 0.12;
+                for (part, y) in [(0, -0.75), (1, -0.3), (2, -1.35)] {
+                    let p = Piece::at(part, 0.0, y * m::cos(a), y * m::sin(a));
+                    out.pieces.push(p.rot(a, 0.0, 0.0));
+                }
+            });
         }
         // The way down: an icy slide from the top to the east.
         slide(b, tx + half, top, tx + 11.5, 0.0, tz, 3.2);
@@ -356,12 +373,12 @@ impl MapDef for Lobby {
         path(b, -7.5, 0.0, -8.5, 0.0, pal::PINK);
         path(b, 5.3, -5.3, 7.3, -8.2, pal::WHITE);
         path(b, -5.3, -5.3, -8.8, -8.8, pal::GREEN);
-        sign(b, 2.6, 9.6, "🔔");
-        sign(b, 9.6, 2.6, "🤸");
-        sign(b, -7.6, 3.0, "🌀");
-        sign(b, 5.0, -7.6, "⛸️");
-        sign(b, -8.6, -13.8, "🧗");
-        sign(b, padx + 2.2, padz - 1.4, "🚀");
+        sign(b, 2.6, 9.6, "🔔", "#a98bff");
+        sign(b, 9.6, 2.6, "🤸", "#ff9f4a");
+        sign(b, -7.6, 3.0, "🌀", "#ff8cc8");
+        sign(b, 5.0, -7.6, "⛸️", "#9bdcff");
+        sign(b, -8.6, -13.8, "🧗", "#6fe08a");
+        sign(b, padx + 2.2, padz - 1.4, "🚀", "#39e0d0");
 
         // ---------------------------------------------------------------- planters round the edge
         let flora = ["tree", "pine", "tree", "mushroom", "pine"];

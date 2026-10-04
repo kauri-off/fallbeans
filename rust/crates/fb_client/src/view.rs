@@ -1,4 +1,4 @@
-//! Drawing: the map from its `SceneDesc` (primitives and glTF models), beans, bonuses, camera.
+//! Drawing: the map from its `SceneDesc` (primitives, glTF models and specials), beans, bonuses, camera.
 use std::collections::HashMap;
 
 use bevy::gltf::GltfMaterialName;
@@ -15,6 +15,7 @@ use fb_sim::scene::{PrimKind, SceneItem};
 use lightyear::prelude::*;
 
 use crate::game::{CameraAngles, Map, PrevPos};
+use crate::specials::{MapPrim, SpecialCache, SpecialRoot, cyl_mesh, pose_specials};
 
 pub struct ViewPlugin;
 
@@ -27,6 +28,7 @@ impl Plugin for ViewPlugin {
             (
                 spawn_map,
                 pose_map,
+                pose_specials,
                 spawn_beans,
                 place_beans,
                 place_bonuses,
@@ -36,6 +38,7 @@ impl Plugin for ViewPlugin {
                 .before(TransformSystems::Propagate),
         );
         app.init_resource::<Spectate>();
+        app.init_resource::<SpecialCache>();
         app.add_systems(Update, (spectate, mouse_look).chain());
         app.add_observer(tint_bean);
     }
@@ -43,8 +46,8 @@ impl Plugin for ViewPlugin {
 
 /// Entities of the drawn map (despawned with it), each following one node.
 #[derive(Component)]
-struct MapPiece {
-    node: u32,
+pub struct MapPiece {
+    pub node: u32,
 }
 
 #[derive(Component)]
@@ -133,7 +136,7 @@ fn spawn_map(
     // Shared handles: identical primitives and colours batch into one draw.
     let mut mats: HashMap<&str, Handle<StandardMaterial>> = HashMap::new();
     let mut prims: HashMap<(PrimKind, [u64; 3]), Handle<Mesh>> = HashMap::new();
-    for item in &map.scene.items {
+    for (i, item) in map.scene.items.iter().enumerate() {
         let (node, child) = match item {
             SceneItem::Prim {
                 node, kind, dims, pal, ..
@@ -142,11 +145,7 @@ fn spawn_map(
                     .entry((*kind, dims.map(f64::to_bits)))
                     .or_insert_with(|| match kind {
                         PrimKind::Box => meshes.add(Cuboid::new(dims[0] as f32, dims[1] as f32, dims[2] as f32)),
-                        PrimKind::Cyl => meshes.add(
-                            Cylinder::new(dims[0] as f32, dims[1] as f32)
-                                .mesh()
-                                .resolution(dims[2] as u32),
-                        ),
+                        PrimKind::Cyl => meshes.add(cyl_mesh(dims[0] as f32, dims[1] as f32, dims[2] as u32)),
                         PrimKind::Sphere => meshes.add(Sphere::new(dims[0] as f32).mesh().uv(32, 18)),
                     })
                     .clone();
@@ -160,13 +159,24 @@ fn spawn_map(
                         })
                     })
                     .clone();
-                (*node, commands.spawn((Mesh3d(mesh), MeshMaterial3d(mat))).id())
+                (
+                    *node,
+                    commands
+                        .spawn((Mesh3d(mesh), MeshMaterial3d(mat), MapPrim(pal[0])))
+                        .id(),
+                )
             }
             SceneItem::Model { node, name, .. } => {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
                 (*node, commands.spawn(WorldAssetRoot(scene)).id())
             }
-            SceneItem::Special { .. } => continue,
+            SceneItem::Special { node, .. } => {
+                let root = SpecialRoot {
+                    item: i,
+                    slots: Vec::new(),
+                };
+                (*node, commands.spawn(root).id())
+            }
         };
         commands.entity(child).insert((
             MapPiece { node },

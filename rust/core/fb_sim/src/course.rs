@@ -13,7 +13,7 @@ use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapSpec, OnTick, PosTest, Value
 use crate::math::V3;
 use crate::nodes::ROOT;
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
-use crate::scene::{Palette, pal};
+use crate::scene::{Palette, Piece, lamp_part, pal};
 use fb_shared::rng::{Rng, shuffle};
 
 pub type SegHandler = Box<dyn FnMut(&mut Cx, &Value) + Send + Sync>;
@@ -623,7 +623,11 @@ pub fn coop_gate(w: f64) -> Segment {
         }
         if !s.b.server() {
             let lamp = s.b.anchor(0.0, y + 4.6, wz, ROOT);
-            s.b.special(lamp, "gate-lamp", "#4fdc6a");
+            s.b.special_look(lamp, "gate-lamp", &[lamp_part(0.35)], move |w, t, out| {
+                let on = w.st(gate).open(t) > 0.5;
+                out.pieces
+                    .push(Piece::at(0, 0.0, 0.0, 0.0).tone(if on { 1.0 } else { 0.0 }));
+            });
         }
         // Server: somebody standing on a button holds the gate open.
         let btn = s.event("btn");

@@ -1,10 +1,11 @@
 //! Not a game: the stage at the end of a game, players standing on podiums by final place.
+use fb_shared::rng::Rng;
 use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
-use fb_sim::scene::pal;
+use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 
 use crate::util::{deco, o};
 
@@ -60,17 +61,14 @@ impl MapDef for Podium {
             .collect();
         if !b.server() {
             // Medals on the podium fronts, and confetti over them.
-            let medals = [
-                ("medal-gold", "#ffd84a"),
-                ("medal-silver", "#f4f1ff"),
-                ("medal-bronze", "#ff9f4a"),
-            ];
+            let medals = [("🥇", "#ffd84a"), ("🥈", "#f4f1ff"), ("🥉", "#ff9f4a")];
             for (i, (medal, color)) in medals.into_iter().enumerate() {
                 let (x, h) = PODIUM_SLOTS[i];
                 let at = b.anchor(x, h / 2.0, 1.32, ROOT);
-                b.special(at, medal, color);
+                let face = [Part::new(Form::Label(1.4, 1.4, medal), color, Finish::Matte)];
+                b.special(at, "medal", &face, vec![Piece::at(0, 0.0, 0.0, 0.0)]);
             }
-            b.special(ROOT, "confetti", "#ffffff");
+            confetti(b);
         }
         // Stage dressing behind the podiums: fans, flags and stars.
         for sx in [-1.0, 1.0] {
@@ -105,4 +103,32 @@ impl MapDef for Podium {
             ..Default::default()
         }
     }
+}
+
+/// Small tumbling pieces falling on a loop over the podiums (looks only: a fixed seed of its own).
+fn confetti(b: &mut Builder) {
+    const COLORS: [&str; 7] = [
+        "#ff5fa2", "#3fa9ff", "#ffd23f", "#4fdc6a", "#a66bff", "#ff8a3d", "#ffffff",
+    ];
+    let parts = COLORS.map(|c| Part::new(Form::Plane(0.16, 0.26), c, Finish::Flat));
+    let mut rng = Rng::new(7);
+    let seeds: Vec<[f64; 5]> = (0..260)
+        .map(|_| {
+            let x = (rng.next() - 0.5) * 22.0;
+            let z = (rng.next() - 0.5) * 10.0;
+            [x, z, 1.2 + rng.next() * 1.4, rng.next() * 20.0, 2.0 + rng.next() * 6.0]
+        })
+        .collect();
+    b.special_look(ROOT, "confetti", &parts, move |_, t, out| {
+        for (i, &[x, z, speed, phase, spin]) in seeds.iter().enumerate() {
+            let y = 14.0 - ((t * speed + phase) % 16.0);
+            let p = Piece::at(
+                (i % COLORS.len()) as u8,
+                x + m::sin(t * 1.3 + phase) * 0.6,
+                y,
+                z + m::cos(t + phase) * 0.4,
+            );
+            out.pieces.push(p.rot(t * spin, t * spin * 0.7, phase));
+        }
+    });
 }

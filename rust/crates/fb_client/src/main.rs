@@ -9,6 +9,7 @@ mod net;
 mod opts;
 mod probe;
 mod session;
+mod specials;
 mod stats;
 mod view;
 

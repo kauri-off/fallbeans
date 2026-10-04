@@ -18,7 +18,7 @@ use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::BodyState;
 use fb_sim::props::{SpinUp, arm_contact_eta};
-use fb_sim::scene::pal;
+use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 use fb_sim::world::St;
 
 use crate::util::{deco, freq};
@@ -288,8 +288,42 @@ impl MapDef for StarFall {
             immune: BTreeMap::new(),
             flash: None,
         });
+        // Stars on the course (client): one per spot, falling in, bobbing, taken with a pop.
         if !b.server() {
-            b.special(ROOT, "stars", "#ffd23f");
+            let parts = [
+                Part::new(Form::Model("star"), "#ffd23f", Finish::Glossy),
+                Part::new(Form::Ring(0.55, 0.8), "#ffd23f8c", Finish::Flat),
+                Part::new(Form::Ring(0.55, 0.8), "#ff9f4a8c", Finish::Flat),
+            ];
+            let sky = sky.clone();
+            b.special_look(ROOT, "stars", &parts, move |w, t, out| {
+                let taken = &w.st(st).taken;
+                for (i, sp) in sky.spots.iter().enumerate() {
+                    let got_at = |k: usize| taken.get(&k).map(|&(_, at)| at);
+                    let Some(s) = sky.by_spot[i]
+                        .iter()
+                        .map(|&k| &sky.stars[k])
+                        .find(|x| t >= x.at - 0.5 && t < x.until && got_at(x.k).unwrap_or(1e9) + 0.3 > t)
+                    else {
+                        continue;
+                    };
+                    let got = got_at(s.k);
+                    let fall = (s.at - t).max(0.0) / 0.5;
+                    let pop = got.map_or(0.0, |at| ((t - at) / 0.3).min(1.0));
+                    let fade = ((s.until - t) / 1.5).min(1.0);
+                    let size = if sp.value > 1.0 { 1.0 + sp.value * 0.25 } else { 1.1 };
+                    let fi = i as f64;
+                    let y = sp.y + 0.35 + fall * fall * 9.0 + m::sin(t * 2.6 + fi) * 0.12;
+                    let star = Piece::at(0, sp.x, y, sp.z).rot(0.0, t * 2.0 + fi, 0.0);
+                    out.pieces
+                        .push(star.scale(size * (fade * (1.0 + pop * 0.8) * (1.0 - pop)).max(0.01)));
+                    if fall <= 0.0 && got.is_none() {
+                        let ring = Piece::at(if sp.value > 1.0 { 2 } else { 1 }, sp.x, sp.y + 0.05, sp.z);
+                        let ring = ring.rot(-m::PI / 2.0, 0.0, 0.0);
+                        out.pieces.push(ring.scale(1.0 + m::sin(t * 3.0 + fi) * 0.08));
+                    }
+                }
+            });
         }
 
         // Bots.

@@ -14,7 +14,7 @@ use fb_sim::map::{Cx, GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{Glove, GloveOpts, glove_puncher};
-use fb_sim::scene::pal;
+use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 use fb_sim::world::St;
 
 use crate::util::{deco, o};
@@ -32,6 +32,7 @@ static META: GameMeta = GameMeta::new(
 
 const PANE: f64 = 2.6;
 const THICK: f64 = 0.3;
+const SHARDS: usize = 9;
 
 /// A pane as built.
 #[derive(Clone, Copy, Debug)]
@@ -197,8 +198,52 @@ fn glass_bridge(id: usize, rows: usize, cols: usize, glove_rows: &'static [usize
             })
             .collect();
         if !s.b.server() {
-            let at = s.b.anchor(0.0, y, z0, ROOT);
-            s.b.special(at, "glass-bridge", "#bfe9ff");
+            let parts = [
+                Part::toned(Form::Box([PANE, THICK, PANE]), "#bfe9ffa6", "#8ceaa2c0", Finish::Glass),
+                Part::new(Form::Box([PANE, 0.14, 0.12]), "#9aa3c7", Finish::Metal),
+                Part::new(Form::Box([0.12, 0.14, PANE]), "#9aa3c7", Finish::Metal),
+                Part::new(Form::Box([0.7, 0.12, 0.7]), "#d9f3ffb0", Finish::Glass),
+            ];
+            let panes: Vec<(f64, f64)> = tiles.iter().map(|t| (t.x, t.z)).collect();
+            // Shards fly apart in a fixed pattern per pane.
+            let spread: Vec<[f64; 4]> = (0..SHARDS)
+                .map(|k| {
+                    let ox = ((k % 3) as f64 - 1.0) * 0.8;
+                    let oz = ((k / 3) as f64 - 1.0) * 0.8;
+                    [ox, oz, 3.0 + ((k * 7) % 5) as f64, 1.0 + ((k * 3) % 4) as f64 * 0.6]
+                })
+                .collect();
+            s.b.special_look(ROOT, "glass-bridge", &parts, move |w, t, out| {
+                let state = w.st(st);
+                let py = y - THICK / 2.0;
+                let e = PANE / 2.0 - 0.06;
+                let bar = THICK / 2.0 + 0.02;
+                for (&(x, z), pane) in panes.iter().zip(state) {
+                    let fell = pane.fall_at.filter(|&at| t >= at);
+                    if fell.is_none() {
+                        out.pieces
+                            .push(Piece::at(0, x, py, z).tone(if pane.trusted { 1.0 } else { 0.0 }));
+                        out.pieces.push(Piece::at(1, x, py + bar, z + e));
+                        out.pieces.push(Piece::at(1, x, py + bar, z - e));
+                        out.pieces.push(Piece::at(2, x + e, py + bar, z));
+                        out.pieces.push(Piece::at(2, x - e, py + bar, z));
+                        continue;
+                    }
+                    let f = t - fell.unwrap_or(t);
+                    if f > 2.5 {
+                        continue;
+                    }
+                    for &[ox, oz, spin, up] in &spread {
+                        let p = Piece::at(
+                            3,
+                            x + ox * (1.0 + f * 1.5),
+                            py + up * f - 14.0 * f * f,
+                            z + oz * (1.0 + f * 1.5),
+                        );
+                        out.pieces.push(p.rot(f * spin, f * spin * 0.7, f * spin * 0.3));
+                    }
+                }
+            });
             // Girders along both sides (scenery, well outside the panes).
             for sx in [-1.0, 1.0] {
                 let l = end - z0 + PANE + 1.2;

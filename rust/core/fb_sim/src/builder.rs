@@ -7,8 +7,10 @@ use crate::m;
 use crate::map::{Cx, MapOut, Touches, json};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
-use crate::physics::{Body, StepEvents, Touch};
-use crate::scene::{Palette, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal};
+use crate::physics::{Body, PORTAL_T, StepEvents, Touch};
+use crate::scene::{
+    Finish, Form, Look, LookOut, Palette, Part, Piece, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal,
+};
 use crate::world::{MoveCtx, PORTAL_CLOSED, PortalPair, St, World};
 use fb_shared::rng::Rng;
 
@@ -135,10 +137,35 @@ impl Builder {
         node
     }
 
-    /// Something only the client draws (portal rings, glass panes…), at a node.
-    pub fn special(&mut self, node: NodeId, kind: &'static str, color: &'static str) {
+    /// Something only the client draws, still: pieces of its parts at a node.
+    pub fn special(&mut self, node: NodeId, kind: &'static str, parts: &[Part], pieces: Vec<Piece>) {
         if let Some(s) = &mut self.scene {
-            s.items.push(SceneItem::Special { node, kind, color });
+            s.items.push(SceneItem::Special {
+                node,
+                kind,
+                parts: parts.to_vec(),
+                pieces,
+                look: None,
+            });
+        }
+    }
+
+    /// Something only the client draws, moving: `look` places its pieces every frame.
+    pub fn special_look(
+        &mut self,
+        node: NodeId,
+        kind: &'static str,
+        parts: &[Part],
+        look: impl Fn(&World, f64, &mut LookOut) + Send + Sync + 'static,
+    ) {
+        if let Some(s) = &mut self.scene {
+            s.items.push(SceneItem::Special {
+                node,
+                kind,
+                parts: parts.to_vec(),
+                pieces: Vec::new(),
+                look: Some(Look(Arc::new(look))),
+            });
         }
     }
 
@@ -733,7 +760,7 @@ impl Builder {
             if self.server() {
                 continue;
             }
-            self.special(ring, if exit_only { "portal-exit" } else { "portal" }, color);
+            self.portal_look(ring, k, i as u32, exit_only, color, o.open.clone());
             for sx in [-1.0, 1.0] {
                 let deco = PrimOpts {
                     no_collide: true,
@@ -752,6 +779,73 @@ impl Builder {
             }
         }
         k
+    }
+
+    /// A portal end as drawn: frame, swirling disc, sashes while shut, a flash at each trip.
+    fn portal_look(
+        &mut self,
+        ring: NodeId,
+        k: usize,
+        i: u32,
+        exit_only: bool,
+        color: &'static str,
+        open: Option<OpenFn>,
+    ) {
+        let parts = [
+            Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy),
+            Part::toned(Form::Disc(1.2), color, "#ffffff", Finish::Flat),
+            Part::new(Form::Disc(1.22), color, Finish::Metal),
+            Part::new(Form::Sphere(1.0), "#fff6d0", Finish::Flat),
+            Part::new(Form::Torus(1.35, 0.1), color, Finish::Flat),
+        ];
+        let kind = if exit_only { "portal-exit" } else { "portal" };
+        let spin = if i == 1 { -2.2 } else { 2.2 };
+        self.special_look(ring, kind, &parts, move |w, t, out| {
+            let pair = &w.portals[k];
+            let used = if t < pair.at || t >= pair.closed_until {
+                0.0
+            } else {
+                ((t - pair.at) / 0.15).min((pair.closed_until - t) / 0.2).min(1.0)
+            };
+            let shut = if exit_only {
+                0.0
+            } else if open.as_ref().is_some_and(|o| !o(t)) {
+                1.0
+            } else {
+                used
+            };
+            // How long ago somebody went in here, or came out here.
+            let into = pair.from == i;
+            let age = if into { t - pair.at } else { t - pair.at - PORTAL_T };
+            let span = if into { 0.4 } else { 0.6 };
+            let f = if age >= 0.0 && age < span { age / span } else { -1.0 };
+            out.pieces.push(Piece::at(0, 0.0, 1.4, 0.0));
+            let pulse = 1.0 + m::sin(t * 4.0 + i as f64) * 0.03;
+            let disc = Piece::at(1, 0.0, 1.4, 0.0)
+                .rot(0.0, 0.0, t * spin)
+                .scale(pulse * (1.0 - shut * 0.6))
+                .tone(if f >= 0.0 { 0.6 * (1.0 - f) } else { 0.0 })
+                .alpha(0.85);
+            out.pieces.push(disc);
+            if shut > 0.001 {
+                for z in [-0.03, 0.03] {
+                    out.pieces.push(Piece::at(2, 0.0, 1.4, z).scale(shut));
+                }
+            }
+            if f >= 0.0 {
+                let burst = 1.0 - (1.0 - f) * (1.0 - f) * (1.0 - f);
+                let (scale, alpha) = if into {
+                    (0.2 + 2.4 * (1.0 - f), 0.95 * (1.0 - f * f))
+                } else {
+                    (0.3 + 3.2 * burst, 1.0 - f)
+                };
+                out.pieces.push(Piece::at(3, 0.0, 1.4, 0.0).scale(scale).alpha(alpha));
+                if !into {
+                    out.pieces
+                        .push(Piece::at(4, 0.0, 1.4, 0.0).scale(1.0 + 1.4 * burst).alpha(1.0 - f));
+                }
+            }
+        });
     }
 
     pub fn ring_spawns(&self, n: u32, radius: f64, y: f64, offset: f64) -> Vec<V3> {
