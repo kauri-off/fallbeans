@@ -147,7 +147,7 @@ fn dress(
                 {
                     base.metallic = 0.0;
                 }
-                surfaces.material_from(base, kind, None, None, &mut images, &mut materials)
+                surfaces.material_from(base, kind, None, mat_name == "Glint", None, &mut images, &mut materials)
             })
             .clone();
         commands

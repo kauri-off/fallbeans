@@ -74,7 +74,8 @@ pub enum Form {
     Torus(f64, f64),
     /// Inner and outer radius.
     Ring(f64, f64),
-    Disc(f64),
+    /// A portal's sash: a half disc of radius r, round side at the origin (the rim), flat side at x = r.
+    Sash(f64),
     /// A portal's disc: a spiral in its colour (the way in).
     Swirl(f64),
     /// A one-way exit's disc: rings flowing out in its colour.
@@ -107,6 +108,8 @@ pub struct Part {
     /// The colours at tone 0 and tone 1 (`#rrggbb` or `#rrggbbaa`).
     pub colors: [&'static str; 2],
     pub finish: Finish,
+    /// Surface of a lit finish (None: plastic), as a primitive's.
+    pub surface: Option<&'static str>,
 }
 
 impl Part {
@@ -115,6 +118,7 @@ impl Part {
             form,
             colors: [color, color],
             finish,
+            surface: None,
         }
     }
 
@@ -123,6 +127,14 @@ impl Part {
             form,
             colors: [from, to],
             finish,
+            surface: None,
+        }
+    }
+
+    pub const fn on(self, surface: &'static str) -> Self {
+        Self {
+            surface: Some(surface),
+            ..self
         }
     }
 }
@@ -141,6 +153,8 @@ pub struct Piece {
     pub rot: V3,
     /// 0 or less: hidden.
     pub scale: f64,
+    /// Times the scale along each axis.
+    pub axes: V3,
     /// 0…1: from the part's first colour to its second; below 0: darker.
     pub tone: f64,
     /// Times the colour's own opacity.
@@ -154,6 +168,7 @@ impl Piece {
             pos: V3::new(x, y, z),
             rot: V3::ZERO,
             scale: 1.0,
+            axes: V3::ONE,
             tone: 0.0,
             alpha: 1.0,
         }
@@ -168,6 +183,13 @@ impl Piece {
 
     pub const fn scale(self, scale: f64) -> Self {
         Self { scale, ..self }
+    }
+
+    pub const fn axes(self, x: f64, y: f64, z: f64) -> Self {
+        Self {
+            axes: V3::new(x, y, z),
+            ..self
+        }
     }
 
     pub const fn tone(self, tone: f64) -> Self {

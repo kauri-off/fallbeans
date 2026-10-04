@@ -238,9 +238,9 @@ impl MapDef for Lobby {
         if !b.server() {
             let bell = b.anchor(tx, top + BELL_HANG, tz, ROOT);
             let parts = [
-                Part::new(Form::Cyl([0.75, 1.0, 32.0]), "#ffcf3f", Finish::Metal),
-                Part::new(Form::Sphere(0.5), "#ffcf3f", Finish::Metal),
-                Part::new(Form::Sphere(0.18), "#8a6a4f", Finish::Matte),
+                Part::new(Form::Cyl([0.75, 1.0, 32.0]), "#ffcf3f", Finish::Metal).on("gold"),
+                Part::new(Form::Sphere(0.5), "#ffcf3f", Finish::Metal).on("gold"),
+                Part::new(Form::Sphere(0.18), "#8a6a4f", Finish::Matte).on("rubber"),
             ];
             b.special_look(bell, "bell", &parts, |_, t, out| {
                 // Swinging a little round where it hangs.

@@ -560,12 +560,15 @@ impl Surfaces {
             .clone()
     }
 
-    /// A material with a base standard material to start from (a model's own).
+    /// A material with a base standard material to start from (a model's own); the kind's roughness
+    /// replaces the base's unless `keep_roughness`.
+    #[allow(clippy::too_many_arguments)]
     pub fn material_from(
         &mut self,
         base: StandardMaterial,
         kind: Option<Kind>,
         paint: Option<Paint>,
+        keep_roughness: bool,
         key: Option<String>,
         images: &mut Assets<Image>,
         materials: &mut Assets<SurfaceMaterial>,
@@ -588,6 +591,11 @@ impl Surfaces {
         if let Some(d) = &d {
             u.detail = Vec4::new(d.scale, d.normal, d.rough_var, d.cavity);
             u.extra.y = d.frost;
+            if let Some(r) = d.roughness
+                && !keep_roughness
+            {
+                base.perceptual_roughness = r;
+            }
             if let Some(m) = d.metalness {
                 base.metallic = m;
             }
@@ -633,7 +641,7 @@ impl Surfaces {
             emissive: spec.emissive,
             ..default()
         };
-        self.material_from(base, spec.kind, spec.paint, Some(key), images, materials)
+        self.material_from(base, spec.kind, spec.paint, true, Some(key), images, materials)
     }
 }
 

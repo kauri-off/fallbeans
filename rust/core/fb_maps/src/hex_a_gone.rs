@@ -152,8 +152,8 @@ impl MapDef for HexAGone {
             }
         }
         if !b.server() {
-            let parts =
-                FLOOR_COLORS.map(|c| Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), c, "#ffffff", Finish::Glossy));
+            let parts = FLOOR_COLORS
+                .map(|c| Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), c, "#ffffff", Finish::Glossy).on("tile"));
             let spots = Arc::new(spots);
             b.special_look(ROOT, "hex-tiles", &parts, move |w, t, out| {
                 let falls = w.st(falls);

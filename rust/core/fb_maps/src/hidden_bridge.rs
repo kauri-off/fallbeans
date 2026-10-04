@@ -199,10 +199,10 @@ fn glass_bridge(id: usize, rows: usize, cols: usize, glove_rows: &'static [usize
             .collect();
         if !s.b.server() {
             let parts = [
-                Part::toned(Form::Box([PANE, THICK, PANE]), "#bfe9ffa6", "#8ceaa2c0", Finish::Glass),
-                Part::new(Form::Box([PANE, 0.14, 0.12]), "#9aa3c7", Finish::Metal),
-                Part::new(Form::Box([0.12, 0.14, PANE]), "#9aa3c7", Finish::Metal),
-                Part::new(Form::Box([0.7, 0.12, 0.7]), "#d9f3ffb0", Finish::Glass),
+                Part::toned(Form::Box([PANE, THICK, PANE]), "#bfe9ffa6", "#8ceaa2c0", Finish::Glass).on("glass"),
+                Part::new(Form::Box([PANE, 0.14, 0.12]), "#9aa3c7", Finish::Metal).on("metal"),
+                Part::new(Form::Box([0.12, 0.14, PANE]), "#9aa3c7", Finish::Metal).on("metal"),
+                Part::new(Form::Box([0.7, 0.12, 0.7]), "#d9f3ffb0", Finish::Glass).on("glass"),
             ];
             let panes: Vec<(f64, f64)> = tiles.iter().map(|t| (t.x, t.z)).collect();
             // Shards fly apart in a fixed pattern per pane.

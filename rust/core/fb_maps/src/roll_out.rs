@@ -93,7 +93,7 @@ impl MapDef for RollOut {
                 );
             }
             if !b.server() {
-                let rim = [Part::new(Form::Torus(R, 0.25), "#5a3fb8", Finish::Matte)];
+                let rim = [Part::new(Form::Torus(R, 0.25), "#5a3fb8", Finish::Matte).on("rubber")];
                 b.special(
                     group,
                     "drum-rims",

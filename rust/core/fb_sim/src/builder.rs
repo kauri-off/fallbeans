@@ -792,13 +792,13 @@ impl Builder {
         open: Option<OpenFn>,
     ) {
         let parts = [
-            Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy),
+            Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy).on("glossy"),
             Part::new(
                 if exit_only { Form::Rings(1.2) } else { Form::Swirl(1.2) },
                 color,
                 Finish::Flat,
             ),
-            Part::new(Form::Disc(1.22), color, Finish::Metal),
+            Part::new(Form::Sash(1.22), color, Finish::Metal).on("metal"),
             Part::new(Form::Sphere(1.0), "#fff6d0", Finish::Light),
             Part::new(Form::Torus(1.35, 0.1), color, Finish::Light),
             Part::new(Form::Arrow, color, Finish::Flat),
@@ -837,9 +837,13 @@ impl Builder {
                 out.pieces
                     .push(Piece::at(5, 0.0, 0.06, 1.3).rot(-m::PI / 2.0, 0.0, 0.0).alpha(0.85));
             }
+            // Two half-disc sashes hinged at the rim, sliding shut towards the middle.
             if shut > 0.001 {
-                for z in [-0.03, 0.03] {
-                    out.pieces.push(Piece::at(2, 0.0, 1.4, z).scale(shut));
+                for (x, yaw) in [(-1.22, 0.0), (1.22, m::PI)] {
+                    for z in [-0.03, 0.03] {
+                        out.pieces
+                            .push(Piece::at(2, x, 1.4, z).rot(0.0, yaw, 0.0).axes(shut, 1.0, 1.0));
+                    }
                 }
             }
             if f >= 0.0 {

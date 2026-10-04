@@ -1,5 +1,5 @@
 //! Drawing the specials of a map (portal rings, hex tiles, glass panes…): the pieces their looks place
-//! every frame, and the map's primitives they tint.
+//! every frame, and the map's primitives they tint. Lit pieces are drawn on surfaces, as the map.
 use std::collections::{BTreeMap, HashMap};
 
 use bevy::light::NotShadowCaster;
@@ -10,7 +10,7 @@ use fb_sim::scene::{Finish, Form, LookOut, Part, SceneItem, Tint};
 use lightyear::prelude::*;
 
 use crate::game::Map;
-use crate::render::surface::{Spec, SurfaceMaterial, Surfaces};
+use crate::render::surface::{Kind, Spec, SurfaceMaterial, Surfaces};
 use crate::view::{frame_tick, hex};
 
 /// Tone and opacity are drawn in steps of 1/STEPS (one material per step).
@@ -34,10 +34,16 @@ pub struct MapPrim(pub Spec);
 pub struct SpecialCache {
     generation: u32,
     meshes: HashMap<(usize, usize), Handle<Mesh>>,
-    mats: HashMap<(usize, usize, i8, i8), Handle<StandardMaterial>>,
+    mats: HashMap<(usize, usize, i8, i8), PieceMat>,
     pictures: HashMap<(usize, usize), Handle<Image>>,
     tints: HashMap<(String, &'static str, i8), Handle<SurfaceMaterial>>,
     out: LookOut,
+}
+
+#[derive(Clone, PartialEq)]
+enum PieceMat {
+    Plain(Handle<StandardMaterial>),
+    Surface(Handle<SurfaceMaterial>),
 }
 
 /// A cylinder as three.js builds it (the first segment faces +z): hexagonal tiles line up.
@@ -63,7 +69,13 @@ fn form_mesh(form: Form) -> Option<Mesh> {
         .build()
         .rotated_by(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
         Form::Ring(inner, outer) => Annulus::new(f(inner), f(outer)).mesh().resolution(32).build(),
-        Form::Disc(r) | Form::Swirl(r) | Form::Rings(r) => Circle::new(f(r)).mesh().resolution(48).build(),
+        Form::Sash(r) => CircularSector::new(f(r), core::f32::consts::FRAC_PI_2)
+            .mesh()
+            .resolution(32)
+            .build()
+            .rotated_by(Quat::from_rotation_z(core::f32::consts::FRAC_PI_2))
+            .translated_by(Vec3::X * f(r)),
+        Form::Swirl(r) | Form::Rings(r) => Circle::new(f(r)).mesh().resolution(48).build(),
         Form::Arrow => crate::render::portal::arrow(),
         Form::Plane(w, h) | Form::Label(w, h, _) => Rectangle::new(f(w), f(h)).into(),
         Form::Model(_) => return None,
@@ -74,13 +86,18 @@ fn flat(form: Form) -> bool {
     matches!(
         form,
         Form::Ring(..)
-            | Form::Disc(_)
+            | Form::Sash(_)
             | Form::Swirl(_)
             | Form::Rings(_)
             | Form::Arrow
             | Form::Plane(..)
             | Form::Label(..)
     )
+}
+
+/// Whether a part is lit and drawn on a surface (portal pictures, flat colours and light are not).
+fn lit(part: &Part) -> bool {
+    !matches!(part.finish, Finish::Flat | Finish::Light) && !matches!(part.form, Form::Swirl(_) | Form::Rings(_))
 }
 
 fn step(v: f64) -> i8 {
@@ -139,6 +156,7 @@ type Pieces<'w, 's> = Query<
         &'static mut Transform,
         &'static mut Visibility,
         Option<&'static mut MeshMaterial3d<StandardMaterial>>,
+        Option<&'static mut MeshMaterial3d<SurfaceMaterial>>,
     ),
     (With<SpecialPiece>, Without<SpecialRoot>),
 >;
@@ -200,7 +218,7 @@ pub fn pose_specials(
             let tf = Transform {
                 translation: p.pos.as_vec3(),
                 rotation: Quat::from_euler(EulerRot::XYZ, p.rot.x as f32, p.rot.y as f32, p.rot.z as f32),
-                scale: Vec3::splat(p.scale.max(0.0) as f32),
+                scale: p.scale.max(0.0) as f32 * p.axes.as_vec3(),
             };
             let vis = if p.scale > 0.0 {
                 Visibility::Inherited
@@ -244,7 +262,20 @@ pub fn pose_specials(
                                     }
                                     _ => {}
                                 }
-                                materials.add(m)
+                                if lit(part) {
+                                    let kind = Some(part.surface.and_then(Kind::of).unwrap_or(Kind::Plastic));
+                                    PieceMat::Surface(surfaces.material_from(
+                                        m,
+                                        kind,
+                                        None,
+                                        false,
+                                        None,
+                                        &mut images,
+                                        &mut surface_mats,
+                                    ))
+                                } else {
+                                    PieceMat::Plain(materials.add(m))
+                                }
                             })
                             .clone(),
                     )
@@ -253,15 +284,15 @@ pub fn pose_specials(
             let n = used[pi];
             used[pi] += 1;
             if let Some(&e) = root.slots[pi].get(n) {
-                if let Ok((mut cur, mut v, m)) = pieces.get_mut(e) {
+                if let Ok((mut cur, mut v, plain, surface)) = pieces.get_mut(e) {
                     if *cur != tf {
                         *cur = tf;
                     }
                     v.set_if_neq(vis);
-                    if let (Some(mut m), Some(mat)) = (m, mat)
-                        && m.0 != mat
-                    {
-                        m.0 = mat;
+                    match (mat, plain, surface) {
+                        (Some(PieceMat::Plain(h)), Some(mut m), _) if m.0 != h => m.0 = h,
+                        (Some(PieceMat::Surface(h)), _, Some(mut m)) if m.0 != h => m.0 = h,
+                        _ => {}
                     }
                 }
                 continue;
@@ -278,7 +309,10 @@ pub fn pose_specials(
                         .entry((root.item, pi))
                         .or_insert_with(|| meshes.add(form_mesh(form).unwrap_or_else(|| Cuboid::default().into())))
                         .clone();
-                    e.insert((Mesh3d(mesh), MeshMaterial3d(mat)));
+                    match mat {
+                        PieceMat::Plain(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
+                        PieceMat::Surface(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
+                    };
                     if matches!(part.finish, Finish::Flat | Finish::Light) {
                         e.insert(NotShadowCaster);
                     }
@@ -290,7 +324,7 @@ pub fn pose_specials(
         // Pieces not placed this frame are hidden.
         for (pi, slots) in root.slots.iter().enumerate() {
             for &e in &slots[used[pi]..] {
-                if let Ok((_, mut v, _)) = pieces.get_mut(e) {
+                if let Ok((_, mut v, _, _)) = pieces.get_mut(e) {
                     v.set_if_neq(Visibility::Hidden);
                 }
             }
