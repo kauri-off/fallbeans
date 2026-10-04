@@ -10,7 +10,7 @@ use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
-use fb_sim::scene::{Finish, Form, Part, Piece, pal};
+use fb_sim::scene::{Finish, Form, Palette, Part, Piece, pal};
 use fb_sim::world::St;
 
 pub struct HexAGone;
@@ -32,8 +32,8 @@ const RINGS: i64 = 8;
 const THICK: f64 = 0.5;
 const FLOORS: [f64; 3] = [0.0, -10.0, -20.0];
 const FALL_DELAY: f64 = 0.42;
-/// Floor colours, top to bottom.
-const FLOOR_COLORS: [&str; 3] = [pal::PINK[0], pal::BLUE[0], pal::YELLOW[0]];
+/// Floor colours, top to bottom (repainted by the round's look).
+const FLOOR_PALS: [Palette; 3] = [pal::PINK, pal::BLUE, pal::YELLOW];
 
 /// When each tile drops (None: still there), by tile index.
 type Falls = Vec<Option<f64>>;
@@ -152,8 +152,11 @@ impl MapDef for HexAGone {
             }
         }
         if !b.server() {
-            let parts = FLOOR_COLORS
-                .map(|c| Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), c, "#ffffff", Finish::Glossy).on("tile"));
+            let parts = FLOOR_PALS.map(|p| {
+                Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), p[0], "#ffffff", Finish::Glossy)
+                    .on("tile")
+                    .painted(p)
+            });
             let spots = Arc::new(spots);
             b.special_look(ROOT, "hex-tiles", &parts, move |w, t, out| {
                 let falls = w.st(falls);

@@ -11,7 +11,8 @@ use lightyear::prelude::*;
 
 use crate::game::Map;
 use crate::render::surface::{Kind, Spec, SurfaceMaterial, Surfaces};
-use crate::view::{frame_tick, hex};
+use crate::view::{PALETTES, frame_tick, hex};
+use fb_sim::looks::ResolvedLook;
 
 /// Tone and opacity are drawn in steps of 1/STEPS (one material per step).
 const STEPS: f32 = 16.0;
@@ -104,8 +105,13 @@ fn step(v: f64) -> i8 {
     (v as f32 * STEPS).round().clamp(-STEPS, STEPS) as i8
 }
 
-fn part_material(part: &Part, tone: i8, alpha: i8) -> StandardMaterial {
-    let [a, b] = part.colors.map(|c| LinearRgba::from(hex(c)));
+fn part_material(part: &Part, look: &ResolvedLook, tone: i8, alpha: i8) -> StandardMaterial {
+    let [mut a, b] = part.colors.map(|c| LinearRgba::from(hex(c)));
+    if let Some(i) = part.pal.and_then(|p| PALETTES.iter().position(|q| *q == p))
+        && look.look.id != "classic"
+    {
+        a = LinearRgba::from(hex(&look.palette[i][0]));
+    }
     let k = tone as f32 / STEPS;
     let mut c = if k >= 0.0 {
         a.mix(&b, k)
@@ -174,7 +180,7 @@ pub fn pose_specials(
     mut roots: Query<(Entity, &mut SpecialRoot)>,
     mut pieces: Pieces,
     prims: Query<(&crate::view::MapPiece, &MapPrim, &Children), Without<SpecialPiece>>,
-    mut levels: Query<&mut MeshMaterial3d<SurfaceMaterial>, With<crate::view::PrimLevel>>,
+    mut levels: Query<&mut MeshMaterial3d<SurfaceMaterial>, (With<crate::view::PrimLevel>, Without<SpecialPiece>)>,
     mut surfaces: ResMut<Surfaces>,
     mut images: ResMut<Assets<Image>>,
     mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
@@ -234,7 +240,7 @@ pub fn pose_specials(
                             .mats
                             .entry(key)
                             .or_insert_with(|| {
-                                let mut m = part_material(part, key.2, key.3);
+                                let mut m = part_material(part, &map.look, key.2, key.3);
                                 let a = m.base_color.alpha();
                                 match part.form {
                                     // A board with its emoji drawn on (the board's colour in the picture).
@@ -301,7 +307,7 @@ pub fn pose_specials(
             match (part.form, mat) {
                 (Form::Model(name), _) => {
                     let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
-                    e.insert(WorldAssetRoot(scene));
+                    e.insert((WorldAssetRoot(scene), crate::render::props::Prop::special(name)));
                 }
                 (form, Some(mat)) => {
                     let mesh = cache

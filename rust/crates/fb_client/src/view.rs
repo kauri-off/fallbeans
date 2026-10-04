@@ -1,5 +1,6 @@
 //! Drawing: the map from its `SceneDesc` (primitives, glTF models and specials), beans, bonuses, camera.
 use std::collections::HashMap;
+use std::f32::consts::FRAC_PI_2;
 
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
@@ -66,6 +67,13 @@ pub struct MapRoot(pub u32);
 
 #[derive(Component)]
 struct BonusView(u32);
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum BonusPart {
+    Bubble,
+    Card,
+    Ring,
+}
 
 #[derive(Component)]
 pub struct MainCamera;
@@ -196,29 +204,67 @@ fn spawn_map(
         ));
     }
     for b in &map.bonuses.list {
-        let color = match b.kind {
+        let color = hex(match b.kind {
             power::GIANT => "#ff6f91",
             power::JUMP => "#58d68d",
             _ => "#ffd23f",
-        };
-        commands.spawn((
-            BonusView(b.i),
-            Mesh3d(meshes.add(Sphere::new(0.62).mesh().uv(32, 18))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: hex(color).with_alpha(0.55),
-                emissive: hex(color).to_linear() * 0.6,
-                alpha_mode: AlphaMode::Blend,
-                ..default()
-            })),
-            Transform::from_translation(b.pos.as_vec3() + Vec3::Y * 1.05),
-            Visibility::Hidden,
-            ChildOf(root),
-        ));
+        });
+        let (icon, _) = crate::ui::text::bonus(b.kind);
+        let bubble = MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: color.with_alpha(0.45),
+            emissive: color.to_linear() * 0.45,
+            perceptual_roughness: 0.15,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }));
+        let card = MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: Some(images.add(crate::render::emoji::board(icon, color))),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            ..default()
+        }));
+        let ring = MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: color.with_alpha(0.6),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode: None,
+            double_sided: true,
+            ..default()
+        }));
+        commands
+            .spawn((
+                BonusView(b.i),
+                Transform::from_translation(b.pos.as_vec3()),
+                Visibility::Hidden,
+                ChildOf(root),
+            ))
+            .with_children(|g| {
+                g.spawn((
+                    BonusPart::Bubble,
+                    Mesh3d(meshes.add(Sphere::new(0.62).mesh().uv(32, 20))),
+                    bubble,
+                    Transform::from_xyz(0.0, 1.05, 0.0),
+                ));
+                g.spawn((
+                    BonusPart::Card,
+                    Mesh3d(meshes.add(Circle::new(0.42).mesh().resolution(32))),
+                    card,
+                    Transform::from_xyz(0.0, 1.05, 0.0),
+                ));
+                g.spawn((
+                    BonusPart::Ring,
+                    Mesh3d(meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40))),
+                    ring,
+                    Transform::from_xyz(0.0, 0.04, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+                    bevy::light::NotShadowCaster,
+                ));
+            });
     }
 }
 
 /// The classic palettes (`scene::pal`) in the order of the looks' palettes.
-const PALETTES: [Palette; 9] = [
+pub const PALETTES: [Palette; 9] = [
     pal::BLUE,
     pal::PURPLE,
     pal::PINK,
@@ -303,26 +349,53 @@ fn pose_map(
     }
 }
 
+/// Pops in, bobs and turns; taken: swells and vanishes (`bonus.ts`).
 fn place_bonuses(
     map: Option<Res<Map>>,
     timeline: Res<LocalTimeline>,
     fixed: Res<Time<Fixed>>,
-    time: Res<Time>,
-    mut views: Query<(&BonusView, &mut Transform, &mut Visibility)>,
+    mut views: Query<(&BonusView, &Children, &mut Visibility)>,
+    mut parts: Query<(&BonusPart, &mut Transform)>,
 ) {
     let Some(map) = map else { return };
     let t = map.time(frame_tick(&timeline, &fixed));
-    for (v, mut tf, mut vis) in &mut views {
+    for (v, children, mut vis) in &mut views {
         let Some(b) = map.bonuses.list.get(v.0 as usize) else {
             continue;
         };
-        let shown = t >= b.appear_at && b.taken_by.is_none();
+        let shown = t >= b.appear_at && b.taken_by.is_none_or(|_| t < b.taken_at + 0.35);
         vis.set_if_neq(if shown {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         });
-        tf.translation.y = b.pos.y as f32 + 1.05 + (time.elapsed_secs() * 2.4 + v.0 as f32).sin() * 0.15;
+        if !shown {
+            continue;
+        }
+        let grow = ((t - b.appear_at) / 0.5 + if b.appear_at <= 0.0 { 1.0 } else { 0.0 }).min(1.0);
+        let gone = if b.taken_by.is_none() {
+            0.0
+        } else {
+            (t - b.taken_at) / 0.35
+        };
+        let s = (grow * (1.0 + gone * 0.8) * (1.0 - gone)).max(0.01) as f32;
+        let i = v.0 as f64;
+        let bob = ((t * 2.4 + i).sin() * 0.15) as f32;
+        for &c in children {
+            let Ok((part, mut tf)) = parts.get_mut(c) else {
+                continue;
+            };
+            match part {
+                BonusPart::Ring => tf.scale = Vec3::splat(1.0 + ((t * 3.0 + i).sin() * 0.08) as f32),
+                BonusPart::Bubble | BonusPart::Card => {
+                    tf.scale = Vec3::splat(s);
+                    tf.translation.y = 1.05 + bob;
+                    if *part == BonusPart::Card {
+                        tf.rotation = Quat::from_rotation_y((t * 1.8) as f32);
+                    }
+                }
+            }
+        }
     }
 }
 

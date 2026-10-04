@@ -11,7 +11,7 @@ use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::m;
 use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapSpec, OnTick, PosTest, Value, json};
 use crate::math::V3;
-use crate::nodes::ROOT;
+use crate::nodes::{NodeId, ROOT};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
 use crate::scene::{Palette, Piece, lamp_part, pal};
 use fb_shared::rng::{Rng, shuffle};
@@ -691,6 +691,9 @@ pub fn coop_gate(w: f64) -> Segment {
 struct Door {
     breakable: bool,
     broken: bool,
+    /// Sim time it broke: it tips over backwards and is gone 1.4 s later.
+    broken_at: f64,
+    obj: NodeId,
     col: ColId,
     x: f64,
     row: u32,
@@ -745,6 +748,8 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 doors.push(Door {
                     breakable,
                     broken: false,
+                    broken_at: 0.0,
+                    obj,
                     col,
                     x,
                     row: r,
@@ -761,10 +766,23 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 return;
             }
             d.broken = true;
+            d.broken_at = cx.t;
             let col = d.col;
             cx.world.colliders[col as usize].enabled = false;
             cx.sfx("break");
         };
+        s.b.mover(move |t, ctx| {
+            for i in 0..ctx.st(st).len() {
+                let d = &ctx.st(st)[i];
+                if !d.broken {
+                    continue;
+                }
+                let (obj, dt) = (d.obj, (t - d.broken_at).max(0.0));
+                let n = ctx.node(obj);
+                n.rot.x = (dt * dt * 7.0).min(m::PI / 2.0);
+                n.visible = dt <= 1.4;
+            }
+        });
         let key = s.event("door");
         for (col, id) in breakable_cols {
             let key = key.clone();

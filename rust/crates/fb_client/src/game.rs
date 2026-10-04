@@ -472,6 +472,10 @@ fn predict(
         })
         .collect();
     let full = &mut *full;
+    // A body from the previous arena may stand on a collider this world does not have.
+    if full.body.ground_col >= map.world.colliders.len() as i32 {
+        full.body.ground_col = -1;
+    }
     prev.0 = full.body.pos;
     let (was_grounded, was_dive) = (full.body.grounded, full.body.state == BodyState::Dive);
     let mut steppers = [Stepper {
@@ -539,7 +543,10 @@ fn predict(
 /// puts it out of a survival round, a shortcut and the lobby's free spawn stay the server's.
 fn predict_respawn(map: &Map, id: u32, full: &mut BodyFull) {
     let (kind, fall) = (map.round.kind, map.round.fall);
-    let mut checkpoint = full.checkpoint.map(usize::from);
+    let mut checkpoint = full
+        .checkpoint
+        .map(usize::from)
+        .filter(|&c| c < map.spec.checkpoints.len());
     reach_checkpoint(&map.spec, &full.body, &mut checkpoint);
     full.checkpoint = checkpoint.map(|c| c as u16);
     if map.gone(id) || !fell(&map.spec, full.body.pos) || (kind == ArenaKind::Round && fall == FallBehaviour::Out) {

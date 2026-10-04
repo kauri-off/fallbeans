@@ -110,6 +110,8 @@ pub struct Part {
     pub finish: Finish,
     /// Surface of a lit finish (None: plastic), as a primitive's.
     pub surface: Option<&'static str>,
+    /// The palette whose first tone is the first colour, repainted by the round's look (`b.pal` in TS).
+    pub pal: Option<Palette>,
 }
 
 impl Part {
@@ -119,6 +121,7 @@ impl Part {
             colors: [color, color],
             finish,
             surface: None,
+            pal: None,
         }
     }
 
@@ -128,12 +131,22 @@ impl Part {
             colors: [from, to],
             finish,
             surface: None,
+            pal: None,
         }
     }
 
     pub const fn on(self, surface: &'static str) -> Self {
         Self {
             surface: Some(surface),
+            ..self
+        }
+    }
+
+    /// Tone 0 is the palette's first colour as the round's look paints it.
+    pub const fn painted(self, pal: Palette) -> Self {
+        Self {
+            colors: [pal[0], self.colors[1]],
+            pal: Some(pal),
             ..self
         }
     }

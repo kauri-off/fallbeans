@@ -19,6 +19,8 @@ pub struct Prop {
     pub phase: f32,
     /// Materials repainted by name: colour, and how much of it glows (clouds of a tinted sky).
     pub paint: Vec<(&'static str, String, f32)>,
+    /// A special's piece: its special moves it, and it gets no level-of-detail copies.
+    pub special: bool,
 }
 
 impl Prop {
@@ -34,6 +36,14 @@ impl Prop {
             tint,
             phase,
             paint: Vec::new(),
+            special: false,
+        }
+    }
+
+    pub fn special(name: &'static str) -> Self {
+        Self {
+            special: true,
+            ..Self::painted(name, Vec::new())
         }
     }
 
@@ -44,6 +54,7 @@ impl Prop {
             tint: None,
             phase: 0.0,
             paint,
+            special: false,
         }
     }
 }
@@ -155,7 +166,7 @@ fn dress(
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert((MeshMaterial3d(h.clone()), Dressed));
         // Levels of detail for what stands still (moving parts would leave their copies behind).
-        let moving = part.starts_with("Pennant") || part.starts_with("FanBlades");
+        let moving = part.starts_with("Pennant") || part.starts_with("FanBlades") || prop.is_some_and(|p| p.special);
         if !moving && let Ok((mesh, tf, parent)) = shapes.get(e) {
             add_levels(
                 &mut commands,
@@ -200,6 +211,9 @@ fn animate(
     let Some(map) = map else { return };
     let t = map.time(frame_tick(&timeline, &fixed)) as f32;
     for (p, mut tf) in &mut props {
+        if p.special {
+            continue;
+        }
         let ph = p.phase;
         match p.name {
             "star" => {
