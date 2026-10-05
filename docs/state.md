@@ -18,6 +18,15 @@ Install file in the AppImage container
   check, nsis, flatpak, deb and rpm passed)
 ```
 
+Отдельно (отдельным коммитом), `crates/fb_client/src/audio.rs`:
+
+```
+Play the finish jingle once when the finish ends the round
+
+- the own Finish and RoundEnd come in one server tick, and both played Qualify (each at its own pitch);
+  a jingle (Qualify, Out, Win) asked for again within a second is skipped
+```
+
 ## Начать с
 
 1. Закоммитить правку и перезапустить `release` (по просьбе автора): первый прогон упал только на AppImage, релиз

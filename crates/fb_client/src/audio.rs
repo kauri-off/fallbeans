@@ -17,6 +17,8 @@ use crate::session::Session;
 const RATE: u32 = 44_100;
 /// Metres to the units of the spatial mix: a sound at full volume up to this far, a quarter at twice that.
 const HEARD_FULL_M: f32 = 12.0;
+/// A jingle asked for again within this many seconds (the own finish and the round's end in one tick) plays once.
+const JINGLE_GAP: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sfx {
@@ -184,11 +186,12 @@ fn wav(samples: &[f32]) -> Vec<u8> {
 #[derive(Resource)]
 struct Sounds(HashMap<Sfx, Handle<AudioSource>>);
 
-/// What the sounds follow between frames: the countdown's last number, the own bean's grab.
+/// What the sounds follow between frames: the countdown's last number, the own bean's grab, the last jingle.
 #[derive(Resource, Default)]
 struct Heard {
     count: Option<i64>,
     holding: Option<u32>,
+    jingle: Option<(Sfx, f32)>,
     rng: u32,
 }
 
@@ -259,6 +262,7 @@ fn on_cues(
     session: Res<Session>,
     mut cues: MessageReader<Cue>,
     beans: Query<(&PlayerId, &GlobalTransform), With<crate::beans::BeanView>>,
+    time: Res<Time<Real>>,
 ) {
     let Some(sounds) = sounds else {
         cues.clear();
@@ -297,6 +301,13 @@ fn on_cues(
             },
             _ => continue,
         };
+        if matches!(s, Sfx::Qualify | Sfx::Out | Sfx::Win) {
+            let now = time.elapsed_secs();
+            if heard.jingle.is_some_and(|(j, at)| j == s && now - at < JINGLE_GAP) {
+                continue;
+            }
+            heard.jingle = Some((s, now));
+        }
         play_at(&mut commands, &sounds, &mut heard, s, gain, from);
     }
 }
