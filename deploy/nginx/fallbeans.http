@@ -1,5 +1,8 @@
-# Fall Beans: http-level directives. Installed as /etc/nginx/apps.d/fallbeans.http by scripts/deploy.ts
-# (the shared site includes /etc/nginx/apps.d/*.http at http level).
-# fb_auth: guessing the debug key; fb_api: everything else under /fallbeans/api/.
-limit_req_zone $binary_remote_addr zone=fb_auth:1m rate=10r/m;
-limit_req_zone $binary_remote_addr zone=fb_api:1m rate=5r/s;
+# Fall Beans: a request to the game server's HTTP API (included by fallbeans.conf). The server trusts
+# X-Real-IP only from loopback, that is from here.
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_read_timeout 30s;
+client_max_body_size 16k;

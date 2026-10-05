@@ -1,0 +1,2 @@
+# The emoji kept in NotoColorEmoji-subset.ttf. Rebuild: pyftsubset NotoColorEmoji.ttf --unicodes-file=<these + U+FE0F> --layout-features='*' --output-file=NotoColorEmoji-subset.ttf
+↗⌨⏩⏱⏸▶◀⚔⚙⚠⚡⛔⛸✅✊✏✔✖✨❄❌➕➖➡⬅⬆⬇⭐🌀🌈🌐🌟🌸🍀🍌🎁🎈🎉🎖🎨🎩🎮🎯🎲🎳🏁🏃🏅🏆🏠🐰🐱👀👁👋👏👑👓👤👥👽💃💕💡💥💨💫💬💯📋📌📶🔄🔇🔈🔉🔊🔑🔒🔓🔔🔗🔥🔨🔴🔶🔼🔽🕳🕶🕹🖥🖱🗑😂😇😈😎😢😱🙂🙈🚀🚁🚪🚫🛠🛡🟡🟢🤖🤝🤠🤲🤸🥁🥇🥈🥉🥳🥽🦊🧊🧐🧗🧢🧱🧶🧹🪂🍄🦘

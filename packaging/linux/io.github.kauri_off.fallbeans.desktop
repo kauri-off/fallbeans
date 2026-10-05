@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Fall Beans
+Comment=Party game: races, survival and points rounds for up to 8 beans
+Comment[ru]=Командная игра: гонки, выживание и раунды на очки до 8 бобов
+Exec=fb_client
+Icon=io.github.kauri_off.fallbeans
+Terminal=false
+Categories=Game;ActionGame;
+StartupWMClass=io.github.kauri_off.fallbeans

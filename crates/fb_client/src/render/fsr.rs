@@ -1,0 +1,237 @@
+//! FSR 1 upscaling (port of `fsr.ts`): the main pass draws at a lower resolution
+//! (`MainPassResolutionOverride`), EASU brings it to the full one before the post-processing, and Bevy's
+//! robust contrast-adaptive sharpening (RCAS, the second half of FSR 1) restores the detail.
+use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
+use bevy::asset::{embedded_asset, load_embedded_asset};
+use bevy::camera::MainPassResolutionOverride;
+use bevy::core_pipeline::FullscreenShader;
+use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
+use bevy::ecs::query::QueryItem;
+use bevy::prelude::*;
+use bevy::render::extract_component::{
+    ComponentUniforms, DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin,
+};
+use bevy::render::render_resource::binding_types::{texture_2d, uniform_buffer};
+use bevy::render::render_resource::*;
+use bevy::render::renderer::{RenderContext, ViewQuery};
+use bevy::render::sync_component::SyncComponent;
+use bevy::render::view::{ExtractedView, ViewTarget};
+use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
+
+use crate::settings::Graphics;
+use crate::view::MainCamera;
+
+/// The camera upscales its main pass (to `MainPassResolutionOverride`).
+#[derive(Component, Clone, Copy)]
+pub struct Fsr;
+
+#[derive(Component, ShaderType, Clone, Copy)]
+pub struct EasuUniform {
+    in_size: Vec2,
+    out_size: Vec2,
+}
+
+impl SyncComponent for Fsr {
+    type Target = (EasuUniform, MainPassResolutionOverride);
+}
+
+impl ExtractComponent for Fsr {
+    type QueryData = (
+        &'static Fsr,
+        &'static Camera,
+        Option<&'static MainPassResolutionOverride>,
+    );
+    type QueryFilter = ();
+    type Out = (EasuUniform, MainPassResolutionOverride);
+
+    // (Bevy extracts the override only for DLSS: the main passes see it only if it is carried over here.)
+    fn extract_component((_, camera, low): QueryItem<Self::QueryData>) -> Option<Self::Out> {
+        let out = camera.physical_viewport_size()?;
+        let low = low?;
+        Some((
+            EasuUniform {
+                in_size: low.0.as_vec2(),
+                out_size: out.as_vec2(),
+            },
+            MainPassResolutionOverride(low.0),
+        ))
+    }
+}
+
+pub struct FsrPlugin;
+
+impl Plugin for FsrPlugin {
+    fn build(&self, app: &mut App) {
+        embedded_asset!(app, "easu.wgsl");
+        app.add_plugins((
+            ExtractComponentPlugin::<Fsr>::default(),
+            UniformComponentPlugin::<EasuUniform>::default(),
+        ));
+        app.add_systems(PostUpdate, resolution);
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+        render_app
+            .add_systems(RenderStartup, init_pipeline)
+            .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
+            .add_systems(Core3d, easu.in_set(Core3dSystems::EarlyPostProcess));
+    }
+}
+
+/// The main pass's resolution and the sharpening, as the setting asks.
+fn resolution(
+    mut commands: Commands,
+    g: Res<Graphics>,
+    cams: Query<(Entity, &Camera, Option<&MainPassResolutionOverride>), With<MainCamera>>,
+) {
+    let scale = super::quality::Quality::scale(&g.upscale);
+    for (e, cam, now) in &cams {
+        if scale >= 1.0 {
+            if now.is_some() {
+                commands
+                    .entity(e)
+                    .remove::<(MainPassResolutionOverride, Fsr, ContrastAdaptiveSharpening)>();
+            }
+            continue;
+        }
+        let Some(size) = cam.physical_viewport_size() else {
+            continue;
+        };
+        let low = (size.as_vec2() * scale).round().as_uvec2().max(UVec2::ONE);
+        if now.map(|n| n.0) != Some(low) {
+            commands.entity(e).insert((
+                MainPassResolutionOverride(low),
+                Fsr,
+                ContrastAdaptiveSharpening {
+                    enabled: true,
+                    sharpening_strength: 0.6,
+                    denoise: false,
+                },
+            ));
+        }
+    }
+}
+
+#[derive(Resource)]
+struct EasuPipeline {
+    layout: BindGroupLayoutDescriptor,
+    variants: Variants<RenderPipeline, EasuSpecializer>,
+}
+
+fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, assets: Res<AssetServer>) {
+    let layout = BindGroupLayoutDescriptor::new(
+        "easu_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::FRAGMENT,
+            (
+                texture_2d(TextureSampleType::Float { filterable: false }),
+                uniform_buffer::<EasuUniform>(true),
+            ),
+        ),
+    );
+    let shader = load_embedded_asset!(assets.as_ref(), "easu.wgsl");
+    let variants = Variants::new(
+        EasuSpecializer,
+        RenderPipelineDescriptor {
+            label: Some("easu".into()),
+            layout: vec![layout.clone()],
+            vertex: fullscreen.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    commands.insert_resource(EasuPipeline { layout, variants });
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, SpecializerKey)]
+struct EasuKey {
+    format: TextureFormat,
+}
+
+struct EasuSpecializer;
+
+impl Specializer<RenderPipeline> for EasuSpecializer {
+    type Key = EasuKey;
+
+    fn specialize(
+        &self,
+        key: Self::Key,
+        descriptor: &mut <RenderPipeline as Specializable>::Descriptor,
+    ) -> Result<Canonical<Self::Key>, BevyError> {
+        descriptor.fragment_mut()?.set_target(
+            0,
+            ColorTargetState {
+                format: key.format,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            },
+        );
+        Ok(key)
+    }
+}
+
+#[derive(Component)]
+struct ViewEasuPipeline(CachedRenderPipelineId);
+
+fn prepare_pipelines(
+    mut commands: Commands,
+    cache: Res<PipelineCache>,
+    mut pipeline: ResMut<EasuPipeline>,
+    views: Query<(Entity, &ExtractedView), Added<EasuUniform>>,
+    mut removed: RemovedComponents<EasuUniform>,
+) -> Result<(), BevyError> {
+    for e in removed.read() {
+        if let Ok(mut e) = commands.get_entity(e) {
+            e.remove::<ViewEasuPipeline>();
+        }
+    }
+    for (e, view) in &views {
+        let id = pipeline.variants.specialize(
+            &cache,
+            EasuKey {
+                format: view.target_format,
+            },
+        )?;
+        commands.entity(e).insert(ViewEasuPipeline(id));
+    }
+    Ok(())
+}
+
+fn easu(
+    view: ViewQuery<(&ViewTarget, &ViewEasuPipeline, &DynamicUniformIndex<EasuUniform>), With<ExtractedView>>,
+    pipeline: Res<EasuPipeline>,
+    cache: Res<PipelineCache>,
+    uniforms: Res<ComponentUniforms<EasuUniform>>,
+    mut ctx: RenderContext,
+) {
+    let (target, id, index) = view.into_inner();
+    let Some(binding) = uniforms.binding() else { return };
+    let Some(p) = cache.get_render_pipeline(id.0) else {
+        return;
+    };
+    let post = target.post_process_write();
+    let bind_group = ctx.render_device().create_bind_group(
+        "easu_bind_group",
+        &cache.get_bind_group_layout(&pipeline.layout),
+        &BindGroupEntries::sequential((post.source, binding)),
+    );
+    let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
+        label: Some("easu"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: post.destination,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations::default(),
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(p);
+    pass.set_bind_group(0, &bind_group, &[index.index()]);
+    pass.draw(0..3, 0..1);
+}

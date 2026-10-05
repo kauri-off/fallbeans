@@ -1,11 +1,14 @@
-# Keep LF everywhere: Biome expects it, and deploy/remote-install.sh runs on Linux.
+# Keep LF everywhere: rustfmt writes it, and the shell scripts and units run on Linux.
 * text=auto eol=lf
 *.ps1 text eol=crlf
 
 *.glb binary
 *.blend binary
 *.woff2 binary
+*.ttf binary
 *.png binary
+*.ico binary
+*.gz binary
 *.jpg binary
 *.ogg binary
 *.mp3 binary
