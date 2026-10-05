@@ -6,6 +6,7 @@ use std::sync::Arc;
 use fb_sim::bots::{HumanOpts, humanize, init_bot, steer};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::{ColId, ColliderOpts};
+use fb_sim::m::MinMaxJs;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
@@ -130,7 +131,7 @@ impl MapDef for WallRush {
                 pieces[0].kind = Kind::Gap;
             }
             // Three times the old pace: from 11 m/s up to about 19.
-            let speed = 11.0 + 8f64.min(k as f64 * 0.22) + b.rng.next() * 1.5;
+            let speed = 11.0 + 8f64.min_js(k as f64 * 0.22) + b.rng.next() * 1.5;
             let group = b.anchor(0.0, 0.0, START_Z, ROOT);
             b.world.nodes.get_mut(group).visible = false;
             let p = pals[k % pals.len()];
@@ -170,7 +171,7 @@ impl MapDef for WallRush {
                 group,
                 cols,
             });
-            at += 1.5f64.max(3.4 - k as f64 * 0.07) + b.rng.next() * 0.6;
+            at += 1.5f64.max_js(3.4 - k as f64 * 0.07) + b.rng.next() * 0.6;
             k += 1;
         }
         let walls = Arc::new(walls);
@@ -232,9 +233,9 @@ impl MapDef for WallRush {
                 }
                 let seg = bot.mem.get("seg").unwrap_or(0.0) as usize;
                 let pc = next.pieces.get(seg).unwrap_or(&next.pieces[0]);
-                let tx = (pc.x0 + 0.7).max((pc.x1 - 0.7).min((pc.x0 + pc.x1) / 2.0));
+                let tx = (pc.x0 + 0.7).max_js((pc.x1 - 0.7).min_js((pc.x0 + pc.x1) / 2.0));
                 let eta = (p.z - next.z(t)) / next.speed;
-                steer(bot, tx, (-5f64).max(5f64.min(home)), out, 1.0);
+                steer(bot, tx, (-5f64).max_js(5f64.min_js(home)), out, 1.0);
                 // Over a low wall or through a window: jump just before it arrives.
                 let inside = p.x > pc.x0 + 0.4 && p.x < pc.x1 - 0.4;
                 if matches!(pc.kind, Kind::Low | Kind::Window)

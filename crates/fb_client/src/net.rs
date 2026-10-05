@@ -1,6 +1,6 @@
 //! Connecting: a connect token from the HTTP API, then UDP (WebSocket if UDP is silent for 2 s); after a drop, again.
 //! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
-use core::net::{Ipv4Addr, SocketAddr};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::time::Duration;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -81,6 +81,18 @@ impl Plugin for NetPlugin {
             Update,
             (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
         );
+        app.add_systems(Last, despawn_closed);
+    }
+}
+
+/// A link left for good: it lives until its disconnect packets went out (`PostUpdate`), so that the server
+/// lets the player go at once instead of keeping them in the room until the connection times out.
+#[derive(Component)]
+struct Closing;
+
+fn despawn_closed(mut commands: Commands, closing: Query<Entity, With<Closing>>) {
+    for e in &closing {
+        commands.entity(e).despawn();
     }
 }
 
@@ -200,16 +212,35 @@ fn ask(conn: &mut Conn, now: f32) {
     conn.started = now;
 }
 
-fn spawn_client(commands: &mut Commands, opts: &Opts, conn: &Conn, token: ConnectToken, now: f32) -> Entity {
+/// A socket of the server address's family on any port (an IPv4 socket cannot send to an IPv6 address,
+/// and on Windows an IPv6 one does not take IPv4).
+pub fn local_addr_for(server: SocketAddr) -> LocalAddr {
+    let any: IpAddr = if server.is_ipv6() {
+        Ipv6Addr::UNSPECIFIED.into()
+    } else {
+        Ipv4Addr::UNSPECIFIED.into()
+    };
+    LocalAddr(SocketAddr::new(any, 0))
+}
+
+fn spawn_client(
+    commands: &mut Commands,
+    opts: &Opts,
+    conn: &Conn,
+    token: ConnectToken,
+    now: f32,
+) -> Result<Entity, String> {
     let transport = conn.transport;
-    let netcode = NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()).expect("netcode client");
+    let netcode = NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default())
+        .map_err(|e| format!("netcode client: {e:?}"))?;
     // The server address comes from the token (`PeerAddr` set by `NetcodeClient`).
+    let local = local_addr_for(netcode.inner.server_addr());
     let mut e = commands.spawn((
         Name::new("client"),
         Client,
         ReplicationReceiver,
         Link::default().with_conditioner(conditioner(opts, transport, now).map(RecvLinkConditioner::new)),
-        LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
+        local,
         netcode,
     ));
     let target = if transport == Transport::Ws {
@@ -239,7 +270,7 @@ fn spawn_client(commands: &mut Commands, opts: &Opts, conn: &Conn, token: Connec
     let entity = e.id();
     commands.trigger(Connect { entity });
     info!("connecting to {target} over {transport:?}");
-    entity
+    Ok(entity)
 }
 
 fn connect_first(mut commands: Commands, me: Me, target: Res<Target>, time: Res<Time>) {
@@ -282,7 +313,7 @@ pub fn open(commands: &mut Commands, opts: &Opts, identity: Option<String>, http
 pub fn close(commands: &mut Commands, conn: &Conn) {
     if let Some(entity) = conn.entity {
         commands.trigger(Disconnect { entity });
-        commands.entity(entity).despawn();
+        commands.entity(entity).insert(Closing);
     }
     commands.remove_resource::<Conn>();
     commands.queue(|world: &mut World| {
@@ -348,8 +379,17 @@ fn receive_session(
         conn.next_try = Some(now + if reply.updating { UPDATING_RETRY_S } else { RETRY_S });
         return;
     };
-    conn.entity = Some(spawn_client(&mut commands, &opts, &conn, token, now));
-    conn.started = now;
+    match spawn_client(&mut commands, &opts, &conn, token, now) {
+        Ok(entity) => {
+            conn.entity = Some(entity);
+            conn.started = now;
+        }
+        // (A token netcode does not take: ask for another one, as after any failed request.)
+        Err(e) => {
+            warn!("session: {e}");
+            conn.next_try = Some(now + RETRY_S);
+        }
+    }
 }
 
 /// Connected, or the link went down: then again from the HTTP API (`auto` moves from UDP to WebSocket).
@@ -486,6 +526,14 @@ fn back_to_udp(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn socket_of_the_servers_family() {
+        let l = |a: &str| super::local_addr_for(a.parse().unwrap()).0;
+        assert!(l("192.168.1.10:5888").is_ipv4());
+        assert!(l("[::1]:5888").is_ipv6());
+        assert_eq!(l("[::1]:5888").port(), 0);
+    }
+
     #[test]
     fn default_ws() {
         let w = |h: &str| super::default_ws(h, 5889);

@@ -5,6 +5,7 @@
 //!   debug cookie   access to the production debug API, earned with the debug key.
 //! It also rate limits guessing (PINs of private rooms, the debug key). A new secret resets all of them.
 use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv6Addr};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
@@ -116,13 +117,65 @@ pub struct Limiter {
     global: Vec<u64>,
 }
 
+/// Who a guess is counted against: the address, or for IPv6 its /64 (one subscriber's network has
+/// billions of addresses).
+fn guesser(ip: &str) -> String {
+    match ip.parse::<Ipv6Addr>() {
+        Ok(v6) if v6.to_ipv4_mapped().is_none() => {
+            let s = v6.segments();
+            format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+        }
+        _ => ip.to_string(),
+    }
+}
+
+/// Who a limit per address counts against (`guesser`); None for this machine and unknown addresses, which
+/// no such limit applies to (dev servers, stress runs: every client is 127.0.0.1).
+pub fn address_key(ip: &str) -> Option<String> {
+    let parsed: IpAddr = ip.parse().ok()?;
+    let parsed = parsed.to_canonical();
+    (!parsed.is_loopback() && !parsed.is_unspecified()).then(|| guesser(ip))
+}
+
+/// So many requests a minute per address (`address_key`).
+pub struct Budget {
+    per_minute: usize,
+    per_ip: BTreeMap<String, Vec<u64>>,
+}
+
+impl Budget {
+    pub fn new(per_minute: usize) -> Self {
+        Self {
+            per_minute,
+            per_ip: BTreeMap::new(),
+        }
+    }
+
+    /// `now` in milliseconds (any monotonic origin).
+    pub fn allow(&mut self, ip: &str, now: u64) -> bool {
+        let Some(key) = address_key(ip) else { return true };
+        // (Within the last minute: `t > now - 60 s` would drop what came at 0 during the first minute.)
+        let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
+        let mine = self.per_ip.entry(key).or_default();
+        mine.retain(fresh);
+        if mine.len() >= self.per_minute {
+            return false;
+        }
+        mine.push(now);
+        if self.per_ip.len() > 10_000 {
+            self.per_ip.retain(|_, v| v.last().is_some_and(fresh));
+        }
+        true
+    }
+}
+
 impl Limiter {
     /// `now` in milliseconds (any monotonic origin).
     pub fn allow(&mut self, ip: &str, now: u64) -> bool {
-        let cut = now.saturating_sub(60_000);
-        let mine = self.per_ip.entry(ip.to_string()).or_default();
-        mine.retain(|&t| t > cut);
-        self.global.retain(|&t| t > cut);
+        let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
+        let mine = self.per_ip.entry(guesser(ip)).or_default();
+        mine.retain(fresh);
+        self.global.retain(fresh);
         if mine.len() >= 5 || self.global.len() >= 30 {
             return false;
         }
@@ -146,17 +199,28 @@ pub fn same_key(given: &str, want: &str) -> bool {
     digest(given) == digest(want)
 }
 
-/// A player id into a connect token's user data, and back (empty when there is none).
-pub fn uid_to_user_data(uid: &str) -> [u8; 256] {
+/// A player id and the address their client asked for the token from (behind nginx: `X-Real-IP`) into a
+/// connect token's user data: `uid`, NUL, the address. The token is sealed with the server's key, so the
+/// address can be trusted where the link's own cannot (a WebSocket through nginx comes from 127.0.0.1).
+pub fn to_user_data(uid: &str, ip: Option<IpAddr>) -> [u8; 256] {
     let mut data = [0u8; 256];
-    let n = uid.len().min(data.len());
-    data[..n].copy_from_slice(&uid.as_bytes()[..n]);
+    let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();
+    let bytes = uid.bytes().chain((!ip.is_empty()).then_some(0)).chain(ip.bytes());
+    for (d, b) in data.iter_mut().zip(bytes) {
+        *d = b;
+    }
     data
 }
 
-pub fn uid_from_user_data(data: &[u8]) -> String {
-    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
-    String::from_utf8_lossy(&data[..end]).into_owned()
+/// The player id (empty when there is none) and the address of `to_user_data`.
+pub fn from_user_data(data: &[u8]) -> (String, Option<IpAddr>) {
+    let mut parts = data.split(|&b| b == 0);
+    let uid = String::from_utf8_lossy(parts.next().unwrap_or_default()).into_owned();
+    let ip = parts
+        .next()
+        .and_then(|b| core::str::from_utf8(b).ok())
+        .and_then(|s| s.parse().ok());
+    (uid, ip)
 }
 
 pub fn read_cookie<'a>(header: Option<&'a str>, name: &str) -> Option<&'a str> {
@@ -181,6 +245,31 @@ mod tests {
         assert!(l.allow("b", now));
         now += 61_000;
         assert!(l.allow("a", now));
+        // One IPv6 network is one guesser, whichever of its addresses it uses.
+        for i in 0..5 {
+            assert!(l.allow(&format!("2001:db8:1:2::{i}"), now));
+        }
+        assert!(!l.allow("2001:db8:1:2:ffff::9", now));
+        assert!(l.allow("2001:db8:1:3::1", now));
+        assert_eq!(guesser("::ffff:10.0.0.1"), "::ffff:10.0.0.1");
+    }
+
+    #[test]
+    fn budgets_per_address_spare_this_machine() {
+        let mut b = Budget::new(3);
+        for _ in 0..3 {
+            assert!(b.allow("203.0.113.5", 0));
+        }
+        assert!(!b.allow("203.0.113.5", 1));
+        assert!(b.allow("203.0.113.6", 1));
+        assert!(b.allow("203.0.113.5", 61_000));
+        for _ in 0..10 {
+            assert!(b.allow("127.0.0.1", 2));
+            assert!(b.allow("::1", 2));
+            assert!(b.allow("?", 2));
+        }
+        assert_eq!(address_key("2001:db8:1:2::7").as_deref(), Some("2001:db8:1:2::/64"));
+        assert_eq!(address_key("::ffff:127.0.0.1"), None);
     }
 
     #[test]
@@ -206,8 +295,10 @@ mod tests {
     fn compares_keys_and_reads_cookies() {
         assert!(same_key("1234", "1234"));
         assert!(!same_key("1234", "1235"));
-        assert_eq!(uid_from_user_data(&uid_to_user_data("abc")), "abc");
-        assert_eq!(uid_from_user_data(&[0; 256]), "");
+        assert_eq!(from_user_data(&to_user_data("abc", None)), ("abc".into(), None));
+        let ip: IpAddr = "2001:db8::7".parse().unwrap();
+        assert_eq!(from_user_data(&to_user_data("abc", Some(ip))), ("abc".into(), Some(ip)));
+        assert_eq!(from_user_data(&[0; 256]), (String::new(), None));
         assert_ne!(Auth::new(&[1; 32]).netcode_key(), Auth::new(&[2; 32]).netcode_key());
         assert_eq!(
             read_cookie(Some("a=1; fb_debug=x.y.z; b=2"), DEBUG_COOKIE),

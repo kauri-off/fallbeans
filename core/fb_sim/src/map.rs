@@ -233,7 +233,10 @@ pub fn spec_problems(spec: &MapSpec) -> Vec<&'static str> {
     if spec.checkpoints.iter().any(|c| !c.p.is_finite() || !c.z.is_finite()) {
         out.push("a checkpoint is not finite");
     }
-    if spec.finish.is_some_and(|f| !(f.z + f.y).is_finite()) {
+    if spec
+        .finish
+        .is_some_and(|f| !(f.z + f.y).is_finite() || f.half_width.is_some_and(|w| !w.is_finite()))
+    {
         out.push("the finish is not finite");
     }
     out

@@ -1,6 +1,6 @@
 //! The client's copy of the round: the same map built from the seed, own-bean prediction, map events,
 //! and the input it sends.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -62,6 +62,9 @@ pub struct Map {
     pub static_hash: String,
     /// Map events waiting for their tick on the interpolated timeline.
     pub pending: Vec<MapEventMsg>,
+    /// Map events applied to this arena (tick, digest): the history the room sends again after a reconnect
+    /// is not applied a second time.
+    pub seen: BTreeSet<(u32, u64)>,
     pub generation: u32,
     /// Who plays this arena, and who of them finished (in order) or is out.
     pub info: ArenaInfo,
@@ -207,6 +210,7 @@ fn build_round(
     map: Option<ResMut<Map>>,
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
+    mut unknown: Local<Option<u32>>,
 ) {
     let Some(round) = rounds.iter().next() else { return };
     let mut map = map;
@@ -221,7 +225,10 @@ fn build_round(
         return;
     };
     let Some(def) = fb_maps::by_id(&round.map) else {
-        error!("unknown map {}", round.map);
+        // (Once per arena: this runs every frame.)
+        if unknown.replace(round.arena) != Some(round.arena) {
+            error!("unknown map {}", round.map);
+        }
         return;
     };
     let (mut b, mut spec) = build_map(def, round.seed, true, &info.participants);
@@ -255,6 +262,7 @@ fn build_round(
         render,
         static_hash,
         pending: Vec::new(),
+        seen: BTreeSet::new(),
         generation: map.map_or(0, |m| m.generation + 1),
         info,
         deco: BTreeMap::new(),
@@ -613,16 +621,23 @@ fn apply_map_events(
     let mut out = Vec::new();
     let pending = core::mem::take(&mut map.pending);
     for msg in pending {
+        let key = (msg.tick, crate::ui::key_of(&msg.ev));
+        if map.seen.contains(&key) {
+            continue;
+        }
+        // (History: an event from before the player came in. It changes the world, but makes no sound.)
+        let loud = !msg.history;
         match &msg.ev {
             MapEventKind::Bonus { i, id, at } => {
                 if Some(*id) == me || now.is_none_or(|n| n >= msg.tick) {
-                    map.bonuses.on_event(BonusTaken {
+                    // (Taken already: the history sent again after a reconnect says nothing new.)
+                    let taken = map.bonuses.on_event(BonusTaken {
                         i: *i,
                         id: *id,
                         at: *at,
                     });
-                    cues.write(Cue::Bonus(*id));
-                    if let Some(b) = map.bonuses.list.get(*i as usize) {
+                    if let Some(b) = taken.filter(|_| loud) {
+                        cues.write(Cue::Bonus(*id));
                         let (icon, title) = crate::ui::text::bonus(b.kind);
                         let who = if Some(*id) == session.me {
                             "Вы".to_string()
@@ -633,15 +648,18 @@ fn apply_map_events(
                     }
                 } else {
                     map.pending.push(msg);
+                    continue;
                 }
             }
             MapEventKind::Finish { id, place, time } => {
                 info!("player {id} finished, place {place} in {time:.2} s");
                 if !map.info.finished.contains(id) {
                     map.info.finished.push(*id);
-                    cues.write(Cue::Finish(*id));
-                    let line = crate::ui::text::finish_note(&session.name_of(*id), *place as usize, *time);
-                    session.note(real, line);
+                    if loud {
+                        cues.write(Cue::Finish(*id));
+                        let line = crate::ui::text::finish_note(&session.name_of(*id), *place as usize, *time);
+                        session.note(real, line);
+                    }
                 }
             }
             MapEventKind::Ko {
@@ -654,27 +672,32 @@ fn apply_map_events(
                 if *out {
                     info!("player {id} is out ({cause})");
                     if map.info.out.contains(id) {
+                        map.seen.insert(key);
                         continue;
                     }
                     map.info.out.push(*id);
                 }
-                cues.write(Cue::Ko { id: *id, out: *out });
-                if map.round.kind == ArenaKind::Round {
-                    let what = Feed::Ko {
-                        victim: *id,
-                        by: *by,
-                        cause: cause.clone(),
-                        out: *out,
-                        shortcut: *shortcut,
-                    };
-                    session.push_feed(real, what);
+                if loud {
+                    cues.write(Cue::Ko { id: *id, out: *out });
+                    if map.round.kind == ArenaKind::Round {
+                        let what = Feed::Ko {
+                            victim: *id,
+                            by: *by,
+                            cause: cause.clone(),
+                            out: *out,
+                            shortcut: *shortcut,
+                        };
+                        session.push_feed(real, what);
+                    }
                 }
             }
             MapEventKind::Map { name, data } => {
                 let Ok(data) = serde_json::from_str::<Value>(data) else {
                     warn!("map event {name}: bad data");
+                    map.seen.insert(key);
                     continue;
                 };
+                let mut said = Vec::new();
                 client_event(
                     &mut map.world,
                     &mut map.spec,
@@ -682,10 +705,15 @@ fn apply_map_events(
                     session.me,
                     name,
                     &data,
-                    &mut out,
+                    &mut said,
                 );
+                if !loud {
+                    said.retain(|o| !matches!(o, MapOut::Sfx(_)));
+                }
+                out.extend(said);
             }
         }
+        map.seen.insert(key);
     }
     map.take_out(out);
 }

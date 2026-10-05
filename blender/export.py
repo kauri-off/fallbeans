@@ -25,7 +25,7 @@ import zlib
 import bpy
 
 argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
-out_dir = os.path.abspath(argv[0] if argv else os.path.join(os.path.dirname(bpy.data.filepath), "..", ".build", "models"))
+out_dir = os.path.abspath(argv[0] if argv else os.path.join(os.path.dirname(bpy.data.filepath), "..", "assets", "models"))
 os.makedirs(out_dir, exist_ok=True)
 
 # AO: how far occluders count (Blender units, at most AO_REACH of the model's size), rays per texel,

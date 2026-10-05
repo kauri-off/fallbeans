@@ -2,6 +2,8 @@
 resolver = "3"
 # core/: the deterministic simulation (no Bevy, its own clippy.toml); crates/: networking, server, client.
 members = ["core/*", "crates/*", "xtask"]
+# Patched upstream crates ([patch.crates-io] below): not members, but cargo run inside them must not look up here.
+exclude = ["vendor/*"]
 
 [workspace.package]
 version = "0.1.0-alpha"

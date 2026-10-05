@@ -27,9 +27,9 @@ pub struct SpecialRoot {
 #[derive(Component)]
 pub struct SpecialPiece;
 
-/// A map primitive, with what it is painted with (specials may tint it).
+/// A map primitive, with what it is painted with and its untinted material (specials may tint it).
 #[derive(Component)]
-pub struct MapPrim(pub Spec);
+pub struct MapPrim(pub Spec, pub Handle<SurfaceMaterial>);
 
 #[derive(Resource, Default)]
 pub struct SpecialCache {
@@ -37,7 +37,8 @@ pub struct SpecialCache {
     meshes: HashMap<(usize, usize), Handle<Mesh>>,
     mats: HashMap<(usize, usize, i8, i8), PieceMat>,
     pictures: HashMap<(usize, usize), Handle<Image>>,
-    tints: HashMap<(String, &'static str, i8), Handle<SurfaceMaterial>>,
+    /// Tinted materials by the primitive's own material (identical primitives share it), colour, step.
+    tints: HashMap<(AssetId<SurfaceMaterial>, &'static str, i8), Handle<SurfaceMaterial>>,
     out: LookOut,
 }
 
@@ -344,7 +345,7 @@ pub fn pose_specials(
         let k = step(tint.k);
         let h = cache
             .tints
-            .entry((format!("{:?}", prim.0), tint.to, k))
+            .entry((prim.1.id(), tint.to, k))
             .or_insert_with(|| {
                 let to = LinearRgba::from(hex(tint.to));
                 let f = k as f32 / STEPS;

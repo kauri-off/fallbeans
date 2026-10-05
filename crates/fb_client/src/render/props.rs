@@ -21,6 +21,9 @@ pub struct Prop {
     pub paint: Vec<(&'static str, String, f32)>,
     /// A special's piece: its special moves it, and it gets no level-of-detail copies.
     pub special: bool,
+    /// Scenery or a special's piece: its own transform is left alone (stars and mushrooms of the map
+    /// bob and squash; the scenery's are placed and scaled by `decor.rs`).
+    still: bool,
 }
 
 impl Prop {
@@ -37,6 +40,7 @@ impl Prop {
             phase,
             paint: Vec::new(),
             special: false,
+            still: false,
         }
     }
 
@@ -55,6 +59,7 @@ impl Prop {
             phase: 0.0,
             paint,
             special: false,
+            still: true,
         }
     }
 }
@@ -116,9 +121,14 @@ fn dress(
         Option<Res<super::quality::Quality>>,
     ),
     shapes: Query<(&Mesh3d, &Transform, &ChildOf)>,
+    transforms: Query<&Transform>,
 ) {
     let (mut lods, mut mesh_assets, display, quality) = lod;
     let k = super::meshes::lod_k(display.fov, quality.map(|q| q.preset));
+    if !meshes.is_empty() {
+        // (Materials of a model unloaded between maps come back under new ids: forget the old ones.)
+        done.retain(|(id, _), _| standard.contains(*id));
+    }
     for (e, mat, mat_name, name) in &meshes {
         let Some(p) = prop_of(e, &parents, &props) else {
             continue;
@@ -168,6 +178,16 @@ fn dress(
         // Levels of detail for what stands still (moving parts would leave their copies behind).
         let moving = part.starts_with("Pennant") || part.starts_with("FanBlades") || prop.is_some_and(|p| p.special);
         if !moving && let Ok((mesh, tf, parent)) = shapes.get(e) {
+            // (The levels switch by the size on screen: the scales of the mesh and all above it count.
+            // The global transform is not propagated yet for a scene just spawned.)
+            let mut scale = tf.scale.abs().max_element();
+            let mut up = Some(parent.parent());
+            while let Some(a) = up {
+                if let Ok(t) = transforms.get(a) {
+                    scale *= t.scale.abs().max_element();
+                }
+                up = parents.get(a).ok().map(ChildOf::parent);
+            }
             add_levels(
                 &mut commands,
                 e,
@@ -175,7 +195,7 @@ fn dress(
                 &h,
                 *tf,
                 parent.parent(),
-                1.0,
+                scale,
                 &mut lods,
                 &mut mesh_assets,
                 k,
@@ -211,7 +231,7 @@ fn animate(
     let Some(map) = map else { return };
     let t = map.time(frame_tick(&timeline, &fixed)) as f32;
     for (p, mut tf) in &mut props {
-        if p.special {
+        if p.still {
             continue;
         }
         let ph = p.phase;

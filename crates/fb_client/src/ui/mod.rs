@@ -242,8 +242,16 @@ pub struct Section {
 }
 
 pub fn key_of(v: &impl core::fmt::Debug) -> u64 {
+    // (Sections ask every frame: the Debug text goes straight into the hasher, without a String.)
+    struct Feed<'a>(&'a mut std::hash::DefaultHasher);
+    impl core::fmt::Write for Feed<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
     let mut h = std::hash::DefaultHasher::new();
-    format!("{v:?}").hash(&mut h);
+    let _ = core::fmt::Write::write_fmt(&mut Feed(&mut h), format_args!("{v:?}"));
     h.finish()
 }
 
@@ -1248,14 +1256,27 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     chips(p, text::BACKEND, &backends);
 }
 
-/// Rebinding: the next key pressed becomes the action's (Esc lets it be).
+/// Rebinding: the next key pressed becomes the action's (Esc lets it be). It ends when the keys are no
+/// longer on screen (the menu closed as a round started, another tab): a key pressed in play is not a pick.
 pub fn rebind(
     keys: Res<ButtonInput<KeyCode>>,
     mut ui: ResMut<Ui>,
     mut binds: ResMut<crate::settings::Bindings>,
+    session: Res<crate::session::Session>,
     mut commands: Commands,
 ) {
     let Some(b) = ui.rebinding else { return };
+    let in_room = session.room.is_some() && session.arena.is_some();
+    let shown = ui.open.contains("keys")
+        && if in_room {
+            ui.menu && ui.menu_tab == MenuTab::Settings
+        } else {
+            ui.home_tab == HomeTab::Settings
+        };
+    if !shown {
+        ui.rebinding = None;
+        return;
+    }
     for k in keys.get_just_pressed() {
         if *k == KeyCode::Escape {
             ui.rebinding = None;

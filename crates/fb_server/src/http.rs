@@ -1,12 +1,15 @@
 //! The HTTP API on its own thread (axum, port of `server/net/http.ts` and `server/debugApi.ts`): sessions, health, debug.
 use std::collections::{BTreeMap, VecDeque};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
 
-use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -19,9 +22,14 @@ use fb_proto::{SessionReply, SessionRequest};
 use fb_shared::PROTOCOL_VERSION;
 use lightyear::netcode::ConnectToken;
 use serde_json::{Value, json};
-use tokio::net::TcpListener as TokioListener;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener as TokioListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::Sleep;
 
-use crate::auth::{Auth, DEBUG_COOKIE, DEBUG_TTL_S, Limiter, random_bytes, read_cookie, same_key, uid_to_user_data};
+use crate::auth::{
+    Auth, Budget, DEBUG_COOKIE, DEBUG_TTL_S, Limiter, random_bytes, read_cookie, same_key, to_user_data,
+};
 use crate::logbook;
 use crate::opts::Opts;
 use crate::play::Rooms;
@@ -36,16 +44,39 @@ const UDP_TIMEOUT_S: i32 = 3;
 const WS_TIMEOUT_S: i32 = 10;
 /// Metric samples kept for `/api/debug/health`.
 const SAMPLES: usize = 240;
+/// The main loop is taken for stuck when it has not answered for this long.
+const MAIN_LOOP_PATIENCE: Duration = Duration::from_secs(2);
+/// Session requests a minute per address (IPv6: per /64; this machine is exempt). A client asks once per
+/// connection attempt, every 2 s at most while it retries; a script must not mint identities without end.
+const SESSIONS_PER_MINUTE: usize = 60;
+/// Largest request body (the session request is a few hundred bytes).
+const BODY_MAX: usize = 16 * 1024;
+/// Open HTTP connections at most: beyond it the listener waits (each is a task and a file descriptor).
+const MAX_CONNECTIONS: usize = 512;
+/// A connection that sends nothing and takes nothing for this long is closed. axum's server has no header
+/// or keep-alive timeout of its own (hyper's needs a timer it is not given): a client could hold a
+/// connection forever.
+const IDLE: Duration = Duration::from_secs(20);
 
 /// The server's secret: netcode keys, identities, the debug cookie.
 #[derive(Resource, Clone)]
 pub struct Keys(pub Arc<Auth>);
+
+/// The counts `/health` shows, as the main loop last published them.
+#[derive(Clone, Copy, Debug)]
+struct Counts {
+    at: Instant,
+    rooms: usize,
+    practice: usize,
+    players: usize,
+}
 
 /// What the main loop tells the HTTP API without being asked.
 #[derive(Default)]
 pub struct Shared {
     pub updating: AtomicBool,
     samples: Mutex<VecDeque<Value>>,
+    counts: Mutex<Option<Counts>>,
 }
 
 impl Shared {
@@ -77,7 +108,7 @@ pub struct HttpPlugin;
 impl Plugin for HttpPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start);
-        app.add_systems(Update, run_jobs);
+        app.add_systems(Update, (run_jobs, publish_counts));
     }
 }
 
@@ -94,6 +125,7 @@ struct Api {
     udp_port: u16,
     ws_port: u16,
     guesses: Arc<Mutex<Limiter>>,
+    sessions: Arc<Mutex<Budget>>,
     started: Instant,
     build: Arc<str>,
 }
@@ -116,6 +148,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<H
         udp_port: opts.udp_port,
         ws_port: opts.ws_port,
         guesses: Arc::default(),
+        sessions: Arc::new(Mutex::new(Budget::new(SESSIONS_PER_MINUTE))),
         started: Instant::now(),
         build: fb_net::build().into(),
     };
@@ -133,16 +166,135 @@ fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<H
 }
 
 async fn serve(listener: TcpListener, api: Api) {
-    let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+    let listener = Guarded {
+        inner: TokioListener::from_std(listener).expect("tokio listener"),
+        slots: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+    };
     let app = Router::new()
         .route(&format!("{BASE}/health"), get(health))
         .route(&format!("{BASE}/api/session"), post(session))
         .route(&format!("{BASE}/api/debug/{{what}}"), get(debug))
+        .layer(DefaultBodyLimit::max(BODY_MAX))
         .with_state(api);
     let service = app.into_make_service_with_connect_info::<Peer>();
     if let Err(e) = axum::serve(listener, service).await {
         error!("http: {e}");
     }
+}
+
+/// The HTTP listener with a cap on open connections and an idle timeout on each.
+struct Guarded {
+    inner: TokioListener,
+    slots: Arc<Semaphore>,
+}
+
+impl axum::serve::Listener for Guarded {
+    type Io = GuardedConn;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (GuardedConn, SocketAddr) {
+        let slot = self
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the semaphore is never closed");
+        let (io, addr) = axum::serve::Listener::accept(&mut self.inner).await;
+        (GuardedConn::new(io, slot, IDLE), addr)
+    }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+}
+
+/// A connection that fails with `TimedOut` once it has been idle for `limit` (hyper then drops it).
+struct GuardedConn {
+    io: TcpStream,
+    limit: Duration,
+    idle: Pin<Box<Sleep>>,
+    _slot: OwnedSemaphorePermit,
+}
+
+impl GuardedConn {
+    fn new(io: TcpStream, slot: OwnedSemaphorePermit, limit: Duration) -> Self {
+        Self {
+            io,
+            limit,
+            idle: Box::pin(tokio::time::sleep(limit)),
+            _slot: slot,
+        }
+    }
+
+    /// What a read or write gave: activity restarts the idle clock, waiting past it is an error.
+    fn watch<T>(&mut self, cx: &mut Context<'_>, r: Poll<io::Result<T>>) -> Poll<io::Result<T>> {
+        match r {
+            Poll::Ready(r) => {
+                self.idle.as_mut().reset(tokio::time::Instant::now() + self.limit);
+                Poll::Ready(r)
+            }
+            Poll::Pending if self.idle.as_mut().poll(cx).is_ready() => Poll::Ready(Err(io::ErrorKind::TimedOut.into())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl AsyncRead for GuardedConn {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let r = Pin::new(&mut this.io).poll_read(cx, buf);
+        this.watch(cx, r)
+    }
+}
+
+impl AsyncWrite for GuardedConn {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let r = Pin::new(&mut this.io).poll_write(cx, buf);
+        this.watch(cx, r)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let r = Pin::new(&mut this.io).poll_flush(cx);
+        this.watch(cx, r)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let r = Pin::new(&mut this.io).poll_write_vectored(cx, bufs);
+        this.watch(cx, r)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.io.is_write_vectored()
+    }
+}
+
+/// The counts for `/health`, every frame: the health check needs no work from the main loop.
+fn publish_counts(rooms: Option<Res<Rooms>>, shared: Res<HttpShared>) {
+    let Some(rooms) = rooms else { return };
+    let listed = rooms.hub.listed().count();
+    let players = rooms
+        .hub
+        .rooms
+        .values()
+        .map(|room| room.players.iter().filter(|p| !p.bot).count())
+        .sum();
+    *shared.0.counts.lock().unwrap_or_else(|e| e.into_inner()) = Some(Counts {
+        at: Instant::now(),
+        rooms: listed,
+        practice: rooms.hub.rooms.len() - listed,
+        players,
+    });
 }
 
 fn run_jobs(jobs: Res<Jobs>, rooms: Option<Res<Rooms>>) {
@@ -164,7 +316,7 @@ impl Api {
             let _ = tx.send(f(r));
         });
         self.jobs.send(job).ok()?;
-        tokio::time::timeout(Duration::from_secs(2), rx).await.ok()?.ok()
+        tokio::time::timeout(MAIN_LOOP_PATIENCE, rx).await.ok()?.ok()
     }
 
     fn debug_allowed(&self, ip: IpAddr, headers: &HeaderMap) -> bool {
@@ -199,11 +351,11 @@ struct Peer {
     local: Option<SocketAddr>,
 }
 
-impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, TokioListener>> for Peer {
-    fn connect_info(stream: axum::serve::IncomingStream<'_, TokioListener>) -> Self {
+impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, Guarded>> for Peer {
+    fn connect_info(stream: axum::serve::IncomingStream<'_, Guarded>) -> Self {
         Self {
             remote: *stream.remote_addr(),
-            local: stream.io().local_addr().ok(),
+            local: stream.io().io.local_addr().ok(),
         }
     }
 }
@@ -294,20 +446,11 @@ pub fn to_text(v: &Value, indent: &str) -> String {
 }
 
 /// Up, its version, and how busy (200 while updating too: the deploy waits for it to know the new server is up).
+/// Anyone may ask, so it reads what the main loop published instead of queueing work for it; a main loop
+/// that stopped publishing is a 503.
 async fn health(State(api): State<Api>) -> Response {
-    let counts = api
-        .ask(|r| {
-            let listed = r.hub.listed().count();
-            let players: usize = r
-                .hub
-                .rooms
-                .values()
-                .map(|room| room.players.iter().filter(|p| !p.bot).count())
-                .sum();
-            (listed, r.hub.rooms.len() - listed, players)
-        })
-        .await;
-    let Some((rooms, practice, players)) = counts else {
+    let counts = *api.shared.counts.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(c) = counts.filter(|c| c.at.elapsed() <= MAIN_LOOP_PATIENCE) else {
         return respond(json!({ "ok": false }), false, StatusCode::SERVICE_UNAVAILABLE);
     };
     let v = json!({
@@ -316,9 +459,9 @@ async fn health(State(api): State<Api>) -> Response {
         "version": PROTOCOL_VERSION,
         "build": &*api.build,
         "updating": api.shared.updating.load(Ordering::Relaxed),
-        "rooms": rooms,
-        "players": players,
-        "practice": practice,
+        "rooms": c.rooms,
+        "players": c.players,
+        "practice": c.practice,
     });
     respond(v, false, StatusCode::OK)
 }
@@ -330,6 +473,17 @@ async fn session(
     headers: HeaderMap,
     Json(req): Json<SessionRequest>,
 ) -> Response {
+    let (ip, _) = client_ip(peer.remote, &headers);
+    let now_ms = api.started.elapsed().as_millis() as u64;
+    let allowed = api
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .allow(&ip.to_string(), now_ms);
+    if !allowed {
+        // (The client takes any error for a failed attempt and asks again in a few seconds.)
+        return (StatusCode::TOO_MANY_REQUESTS, "too many sessions").into_response();
+    }
     let known = req
         .identity
         .as_deref()
@@ -364,7 +518,7 @@ async fn session(
         )
         .expire_seconds(TOKEN_EXPIRE_S)
         .timeout_seconds(timeout)
-        .user_data(uid_to_user_data(&uid))
+        .user_data(to_user_data(&uid, Some(ip)))
         .generate();
         match token.map(|t| t.try_into_bytes()) {
             Ok(Ok(bytes)) => reply.token = Some(B64.encode(bytes)),
@@ -551,5 +705,37 @@ mod tests {
         assert_eq!(host_ip(&h), Some("::1".parse().unwrap()));
         h.insert(header::HOST, HeaderValue::from_static("example.org"));
         assert_eq!(host_ip(&h), None);
+    }
+
+    #[test]
+    fn closes_idle_connections_and_keeps_busy_ones() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let listener = TokioListener::bind("127.0.0.1:0").await.unwrap();
+            let client = TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+            let (io, _) = listener.accept().await.unwrap();
+            let slot = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
+            let mut conn = GuardedConn::new(io, slot, Duration::from_millis(300));
+            async fn read(conn: &mut GuardedConn) -> (Result<(), io::ErrorKind>, Duration) {
+                let mut bytes = [0u8; 8];
+                let started = Instant::now();
+                let r =
+                    std::future::poll_fn(|cx| Pin::new(&mut *conn).poll_read(cx, &mut ReadBuf::new(&mut bytes))).await;
+                (r.map_err(|e| e.kind()), started.elapsed())
+            }
+            // A byte every 200 ms keeps it open past its 300 ms limit.
+            for _ in 0..3 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                client.writable().await.unwrap();
+                client.try_write(b"x").unwrap();
+                assert_eq!(read(&mut conn).await.0, Ok(()));
+            }
+            let (r, waited) = read(&mut conn).await;
+            assert_eq!(r, Err(io::ErrorKind::TimedOut));
+            assert!(waited >= Duration::from_millis(250), "{waited:?}");
+        });
     }
 }

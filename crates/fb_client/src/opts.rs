@@ -8,6 +8,22 @@ fn map_ids() -> clap::builder::PossibleValuesParser {
     fb_maps::GAMES.iter().map(|m| m.meta().id).collect::<Vec<_>>().into()
 }
 
+/// `--profile`: a name for the settings folder, never a path (`../x` would write outside it).
+fn profile_name(s: &str) -> Result<String, String> {
+    let ok = !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then(|| s.to_string())
+        .ok_or_else(|| "letters, digits, - and _ only".to_string())
+}
+
+/// `--fps`: a rate the headless loop can sleep by (0 or less would make its frame infinitely long).
+fn fps(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    (1.0..=1000.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "between 1 and 1000".into())
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
     /// UDP, then WebSocket if UDP gets no answer within 2 s.
@@ -37,7 +53,7 @@ pub struct Opts {
     pub http_port: u16,
     #[arg(long, default_value_t = WS_PORT)]
     pub ws_port: u16,
-    /// WebSocket URL (default ws://<server>:<ws-port>; wss:// behind a proxy).
+    /// WebSocket URL (default: the one the server's session reply names, else ws://<server>:<ws-port>).
     #[arg(long)]
     pub ws_url: Option<String>,
     #[arg(long, value_enum, default_value_t = Transport::Auto)]
@@ -49,7 +65,8 @@ pub struct Opts {
     #[arg(long)]
     pub token: Option<String>,
     /// A settings file of its own (identity, name, look, options): another player on this machine.
-    #[arg(long)]
+    /// Letters, digits, `-` and `_` (it becomes part of a path).
+    #[arg(long, value_parser = profile_name)]
     pub profile: Option<String>,
     /// Go straight into this room (its PIN for a private one).
     #[arg(long)]
@@ -103,7 +120,7 @@ pub struct Opts {
     #[arg(long)]
     pub offscreen: bool,
     /// Frames a second without a window (a player's client runs at the display's rate).
-    #[arg(long, default_value_t = 60.0)]
+    #[arg(long, default_value_t = 60.0, value_parser = fps)]
     pub fps: f64,
     /// Plays by itself: circles, hops, runs for bonuses.
     #[arg(long)]
@@ -149,7 +166,33 @@ impl Opts {
             || self.start.is_some();
         direct.then(|| {
             let host = self.server.as_deref().unwrap_or("127.0.0.1");
+            // (An IPv6 address goes in brackets in a URL.)
+            let host = match host.parse::<core::net::Ipv6Addr>() {
+                Ok(v6) => format!("[{v6}]"),
+                Err(_) => host.to_string(),
+            };
             format!("http://{host}:{}/fallbeans", self.http_port)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_server_urls() {
+        let d = |args: &[&str]| Opts::parse_from([&["fb_client"], args].concat()).direct();
+        assert_eq!(d(&[]), None);
+        assert_eq!(
+            d(&["--room", "dev"]).as_deref(),
+            Some("http://127.0.0.1:5887/fallbeans")
+        );
+        assert_eq!(d(&["--server", "::1"]).as_deref(), Some("http://[::1]:5887/fallbeans"));
+        assert_eq!(
+            d(&["--server", "192.168.1.10", "--http-port", "7000"]).as_deref(),
+            Some("http://192.168.1.10:7000/fallbeans")
+        );
+        assert!(Opts::try_parse_from(["fb_client", "--fps", "0"]).is_err());
     }
 }

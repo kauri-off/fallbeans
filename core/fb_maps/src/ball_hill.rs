@@ -9,7 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, pick_sections, pistons, race_course, sliding_gates, tipping_bridge,
     with_rests,
 };
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -175,7 +175,7 @@ fn ice_slope() -> Segment {
             }
             stops.sort_by(|a, c| a.0.partial_cmp(&c.0).unwrap_or(core::cmp::Ordering::Equal));
             for (f, clear) in stops {
-                let before = 0f64.max(f - 2.4 / seg_len);
+                let before = 0f64.max_js(f - 2.4 / seg_len);
                 path.push(Waypoint::w(x0 + (x1 - x0) * before, z0 + (z1 - z0) * before, 0.2));
                 path.push(Waypoint::w(x0 + (x1 - x0) * f, z0 + (z1 - z0) * f, 0.2).wait(move |bot| clear(bot.t)));
             }
@@ -244,11 +244,16 @@ fn ball_ramp(rise: f64) -> Segment {
             let lx = (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;
             pts.push(Waypoint::w(0.0, zb - 2.3, 0.0));
             let balls = balls.clone();
-            pts.push(
-                Waypoint::w(lx, zb - 0.8, 0.0).wait(move |bot| {
-                    !balls.danger(lx.min(0.0) - 0.3, lx.max(0.0) + 0.3, zb - 2.5, zb + 2.5, bot.t, 0.9)
-                }),
-            );
+            pts.push(Waypoint::w(lx, zb - 0.8, 0.0).wait(move |bot| {
+                !balls.danger(
+                    lx.min_js(0.0) - 0.3,
+                    lx.max_js(0.0) + 0.3,
+                    zb - 2.5,
+                    zb + 2.5,
+                    bot.t,
+                    0.9,
+                )
+            }));
             pts.push(Waypoint::w(lx, zb + 0.9, 0.0));
             pts.push(Waypoint::w(0.0, zb + 2.3, 0.0));
         }

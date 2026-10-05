@@ -26,6 +26,8 @@ disallowed-methods = [
   { path = "f64::cbrt", reason = "platform libm: add a libm wrapper to fb_shared::m" },
   # Same name, other semantics than the JS the maps were written in.
   { path = "f64::round", reason = "ties away from zero (JS Math.round: towards +∞): use fb_shared::m::round_js" },
+  { path = "f64::max", reason = "±0 tie is unspecified: use fb_shared::m::max/min (JS-exact)" },
+  { path = "f64::min", reason = "±0 tie is unspecified: use fb_shared::m::max/min (JS-exact)" },
   { path = "f64::signum", reason = "signum(0) is 1 (JS Math.sign(0) is 0): use fb_shared::m::sign" },
   # glam does these in another order than three.js (the last bits differ): use fb_sim::math.
   { path = "glam::DVec3::length", reason = "use fb_sim::math::len" },

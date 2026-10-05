@@ -1,7 +1,7 @@
 //! The bean's procedural animation (port of `client/game/bean.ts`): damped springs on the limbs and the
 //! body, poses by what the bean is doing, emotes, podium poses, arms reaching for whom it holds, the
 //! tumble's spin, squash and stretch, and the eyes (blinking, opening by expression). The mouth and brows
-//! of `face.ts` are Phase 6.
+//! (`face.rs`) follow the expression and eye opening set here.
 use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
@@ -603,7 +603,8 @@ impl BeanAnim {
             }
             Anim::Ladder => {
                 // Hand over hand up the rungs (the rhythm follows the climb), feet stepping after them.
-                self.phase += vy.abs() * dt * PI / 0.76;
+                // (Kept within a turn: an f32 phase growing for hours would step the cycle.)
+                self.phase = (self.phase + vy.abs() * dt * PI / 0.76).rem_euclid(TAU);
                 let s = self.phase.sin();
                 tg.k = 220.0;
                 tg.c = 18.0;
@@ -665,7 +666,7 @@ impl BeanAnim {
         }
         // Ground: run cycle scaled by speed, grab or idle on top.
         let run = smooth(speed, 0.4, 7.0);
-        self.phase += speed * dt / STRIDE * TAU;
+        self.phase = (self.phase + speed * dt / STRIDE * TAU).rem_euclid(TAU);
         let (s, c) = self.phase.sin_cos();
         self.step_side = s > 0.0;
         let back = if fwd < -0.5 { -1.0 } else { 1.0 };

@@ -2,7 +2,7 @@
 //! patterns on them, the sky, sun, fog and ambient light, the land far below and the scenery around it.
 //! Each map has a few looks (the first is its signature); a round picks one by its seed and shifts the
 //! colours a little. Visual only: nothing here touches colliders or the map's layout.
-use fb_shared::m;
+use fb_shared::m::{self, MinMaxJs};
 use fb_shared::rng::Rng;
 
 /// The palettes maps paint with, in the order of `scene::pal`.
@@ -877,8 +877,8 @@ fn to_hex(c: [f64; 3]) -> String {
 /// three.js `Color.getHSL` (in its linear working space).
 fn hsl(c: [f64; 3]) -> [f64; 3] {
     let [r, g, b] = c;
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
+    let max = r.max_js(g).max_js(b);
+    let min = r.min_js(g).min_js(b);
     let l = (min + max) / 2.0;
     if min == max {
         return [0.0, 0.0, l];

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::bots::{BOT_DT, BotBrain, BotView, SharedTest, Waypoint, init_bot, path_step};
 use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use crate::collider::{ColId, ColliderOpts, Shape};
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapSpec, OnTick, PosTest, Value, json};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
@@ -156,13 +156,13 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         }
         zz = out.z;
         y = out.y;
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
+        min_y = min_y.min_js(y);
+        max_y = max_y.max_js(y);
     }
     let finish = if let Some(fw) = o.finish_with {
         let (finish, route) = fw(b, zz, y);
         routes.push(vec![route]);
-        max_y = max_y.max(finish.y + 1.0);
+        max_y = max_y.max_js(finish.y + 1.0);
         finish
     } else {
         let len = o.finish_len.unwrap_or(16.0);
@@ -182,7 +182,7 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     b.clouds_with(
         0.0,
         zz / 2.0,
-        60f64.max(zz * 0.45),
+        60f64.max_js(zz * 0.45),
         o.clouds.unwrap_or(40),
         min_y - 30.0,
         max_y + 6.0,
@@ -312,7 +312,7 @@ pub fn rotor_decks(n: u32) -> Segment {
                 } else {
                     0.0
                 };
-                if d - vin.max(0.0) * eta.max(0.0) > r + 1.2 {
+                if d - vin.max_js(0.0) * eta.max_js(0.0) > r + 1.2 {
                     return false;
                 }
                 eta > 0.1 && eta < 0.24 && (!high || arm_contact_eta(p, high_ang(bot.t), hsp, 1, 0.0, c, 0.36) > 0.8)
@@ -435,7 +435,7 @@ pub fn cycle_open(t: f64, period: f64, phase: f64, share: f64) -> f64 {
     let f = (((t + phase) % period) + period) % period / period;
     let ramp = 0.08;
     if f < share {
-        return 1f64.min(f / ramp).min((share - f) / ramp);
+        return 1f64.min_js(f / ramp).min_js((share - f) / ramp);
     }
     0.0
 }
@@ -540,14 +540,14 @@ const GATE_RATE: f64 = 2.2;
 impl Gate {
     fn held(&self, t: f64) -> f64 {
         if self.pressed {
-            1f64.min(self.level0 + (t - self.at) * GATE_RATE)
+            1f64.min_js(self.level0 + (t - self.at) * GATE_RATE)
         } else {
-            0f64.max(self.level0 - 0f64.max(t - self.at) * GATE_RATE)
+            0f64.max_js(self.level0 - 0f64.max_js(t - self.at) * GATE_RATE)
         }
     }
 
     fn open(&self, t: f64) -> f64 {
-        cycle_open(t, self.period, self.phase, 0.22).max(self.held(t))
+        cycle_open(t, self.period, self.phase, 0.22).max_js(self.held(t))
     }
 
     fn set_pressed(&mut self, on: bool, t: f64) {
@@ -777,9 +777,9 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 if !d.broken {
                     continue;
                 }
-                let (obj, dt) = (d.obj, (t - d.broken_at).max(0.0));
+                let (obj, dt) = (d.obj, (t - d.broken_at).max_js(0.0));
                 let n = ctx.node(obj);
-                n.rot.x = (dt * dt * 7.0).min(m::PI / 2.0);
+                n.rot.x = (dt * dt * 7.0).min_js(m::PI / 2.0);
                 n.visible = dt <= 1.4;
             }
         });
@@ -1012,7 +1012,7 @@ pub fn conveyor(len: f64) -> Segment {
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
             let w = 1.4 + s.rng() * 0.6;
             let ph = s.rng() * 6.0;
-            let px = move |t: f64| side * (5.6 - 3.2 * 0f64.max(m::sin(t * w + ph)));
+            let px = move |t: f64| side * (5.6 - 3.2 * 0f64.max_js(m::sin(t * w + ph)));
             let o = PrimOpts {
                 dynamic: true,
                 col: ColliderOpts {

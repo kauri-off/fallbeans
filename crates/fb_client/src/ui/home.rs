@@ -308,7 +308,12 @@ fn update_box(
 ) {
     let Ok((e, mut sec)) = q.single_mut() else { return };
     let state = update.as_ref().map_or(UpdateState::Idle, |u| u.state.clone());
-    if !sec.stale(key_of(&state)) {
+    // (A download is redrawn when its percentage changes, not with every chunk that comes in.)
+    let key = match &state {
+        UpdateState::Downloading(got, total) => key_of(&("downloading", (got * 100).checked_div(*total))),
+        s => key_of(s),
+    };
+    if !sec.stale(key) {
         return;
     }
     let f = &*f;
@@ -426,7 +431,8 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
             Action::Connect(addr.to_string()),
             can,
         );
-        button(row_, f, "✕", Look::TinyDanger, Action::RemoveServer(addr.to_string()));
+        // ("×": "✕" is in neither of the game's fonts.)
+        button(row_, f, "×", Look::TinyDanger, Action::RemoveServer(addr.to_string()));
     });
 }
 
@@ -768,12 +774,13 @@ fn banner(
             if let Some(m) = more {
                 label(card, f, &m);
             }
-            if quit {
-                row(card, false, |r| {
-                    button(r, f, text::TO_SERVERS, Look::Plain, Action::LeaveServer);
+            // (Always a way back: a server being updated may take long or not come back.)
+            row(card, false, |r| {
+                button(r, f, text::TO_SERVERS, Look::Plain, Action::LeaveServer);
+                if quit {
                     button(r, f, text::QUIT, Look::Primary, Action::Quit);
-                });
-            }
+                }
+            });
         }),
     });
 }

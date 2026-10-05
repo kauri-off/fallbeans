@@ -9,7 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, moving_platforms, pick_sections, portal_fork, race_course,
     sliding_gates, timed_doors, tipping_bridge, trampoline_gap, with_rests,
 };
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -104,8 +104,8 @@ fn climb_fork(rise: f64) -> Segment {
                 let balls = balls.clone();
                 pts.push(Waypoint::w(lx, zb - 0.8, 0.0).wait(move |bot| {
                     !balls.danger(
-                        (-5f64).min(lx) - 0.3,
-                        (-5f64).max(lx) + 0.3,
+                        (-5f64).min_js(lx) - 0.3,
+                        (-5f64).max_js(lx) + 0.3,
                         zb - 2.5,
                         zb + 2.5,
                         bot.t,

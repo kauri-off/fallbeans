@@ -13,7 +13,8 @@ use fb_proto::Pid;
 use fb_shared::INPUT_HOLD;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use lightyear::connection::client::Disconnecting;
-use lightyear::input::native::prelude::ActionState;
+use lightyear::input::native::prelude::{ActionState, NativeStateSequence};
+use lightyear::input::server::{InputValidationAppExt, authorize_controlled_targets};
 use lightyear::prelude::input::InputBuffer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
@@ -64,6 +65,10 @@ impl Plugin for PlayPlugin {
             FixedPreUpdate,
             lightyear::input::server::InputSystems::UpdateActionState.run_if(|| false),
         );
+        // A client's input goes only into the pawn it controls (`ControlledBy`): Lightyear writes an input
+        // message into whatever entity it names, so a modified client could drive another player's bean
+        // (or hang input buffers on any entity). The check is opt-in in Lightyear 0.30.
+        app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<FbInput>>);
         app.add_systems(FixedUpdate, tick_rooms.in_set(RoomTick));
         // Every frame: Lightyear drops the messages nobody read in the frame they came in, and half the
         // frames run no tick.
@@ -156,7 +161,7 @@ fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> Inpu
         }
     }
     let input = buffer.and_then(|b| b.get(tick));
-    st.missed += u32::from(input.is_none() && buffer.is_some());
+    st.missed = st.missed.saturating_add(u32::from(input.is_none() && buffer.is_some()));
     let frame = match input {
         Some(s) => {
             st.ack = k;

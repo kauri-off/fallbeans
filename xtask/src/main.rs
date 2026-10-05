@@ -161,6 +161,11 @@ fn dev(a: &DevArgs) -> bool {
         return false;
     };
     std::thread::sleep(std::time::Duration::from_millis(500));
+    // Gone already (its ports held by a server left running): the windows would join that one instead.
+    if let Ok(Some(status)) = server.try_wait() {
+        eprintln!("the server exited at once ({status})");
+        return false;
+    }
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = Command::new(a.shared.bin("fb_client"));

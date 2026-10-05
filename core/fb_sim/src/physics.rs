@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::collider::{ColId, Collider, Contact};
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::{V3, add_scaled, dot, len, len_sq, lerp};
 use crate::world::World;
 
@@ -303,7 +303,7 @@ impl Body {
             if !force {
                 self.vel.x += vx;
                 self.vel.z += vz;
-                self.vel.y = self.vel.y.max(vy);
+                self.vel.y = self.vel.y.max_js(vy);
                 self.stun(0.35);
                 return;
             }
@@ -315,7 +315,7 @@ impl Body {
             self.vel.x += vx;
             self.vel.z += vz;
         }
-        self.vel.y = self.vel.y.max(vy);
+        self.vel.y = self.vel.y.max_js(vy);
         self.grounded = false;
         if m::hypot(vx, vz) > 0.1 {
             self.tilt_dir = m::atan2(vx, vz);
@@ -325,7 +325,7 @@ impl Body {
             ev.knocked = true;
         }
         self.state = BodyState::Tumble;
-        self.state_t = (if was { self.state_t } else { 0.0 }).max(t);
+        self.state_t = (if was { self.state_t } else { 0.0 }).max_js(t);
     }
 
     pub fn sphere(&self, i: usize) -> V3 {
@@ -337,9 +337,13 @@ impl Body {
         if self.state == BodyState::Portal {
             return;
         }
-        let sp = min_speed.max(m::hypot(self.vel.x, self.vel.z));
+        let sp = min_speed.max_js(m::hypot(self.vel.x, self.vel.z));
         self.climb_to = p;
-        self.vel = V3::new(m::sin(yaw) * sp, lift.unwrap_or(self.vel.y.max(3.0)), m::cos(yaw) * sp);
+        self.vel = V3::new(
+            m::sin(yaw) * sp,
+            lift.unwrap_or(self.vel.y.max_js(3.0)),
+            m::cos(yaw) * sp,
+        );
         self.yaw = yaw;
         self.state = BodyState::Portal;
         self.state_t = PORTAL_T;
@@ -446,11 +450,11 @@ impl Body {
         } else {
             0.0
         };
-        self.coyote = if g { 0.12 } else { (self.coyote - dt).max(0.0) };
+        self.coyote = if g { 0.12 } else { (self.coyote - dt).max_js(0.0) };
         self.jump_buf = if input.jump {
             0.12
         } else {
-            (self.jump_buf - dt).max(0.0)
+            (self.jump_buf - dt).max_js(0.0)
         };
         self.state_t -= dt;
         let state_before = self.state;
@@ -464,7 +468,7 @@ impl Body {
                     self.vel.x *= f;
                     self.vel.z *= f;
                 }
-                self.tilt += (LIE - self.tilt) * (9.0 * dt).min(1.0);
+                self.tilt += (LIE - self.tilt) * (9.0 * dt).min_js(1.0);
                 let settled = g && m::hypot(self.vel.x, self.vel.z) < 3.0;
                 if (self.state_t <= 0.0 && settled) || self.state_t < -2.5 {
                     self.state = BodyState::Getup;
@@ -516,7 +520,7 @@ impl Body {
                 if m::hypot(input.mx, input.mz) > 0.1 {
                     let mut d = m::atan2(input.mx, input.mz) - self.yaw;
                     d = m::atan2(m::sin(d), m::cos(d));
-                    self.yaw += d * (14.0 * dt).min(1.0);
+                    self.yaw += d * (14.0 * dt).min_js(1.0);
                 }
                 if self.jump_buf > 0.0 && self.coyote > 0.0 {
                     self.vel.y = JUMP_V
@@ -529,7 +533,7 @@ impl Body {
                     if g {
                         self.vel.x += plat_v.x;
                         self.vel.z += plat_v.z;
-                        self.vel.y += plat_v.y.max(0.0);
+                        self.vel.y += plat_v.y.max_js(0.0);
                     }
                 }
                 if input.dive {
@@ -543,14 +547,14 @@ impl Body {
                         fz = input.mz / l;
                         self.yaw = m::atan2(fx, fz);
                     }
-                    let along = (self.vel.x * fx + self.vel.z * fz).max(0.0);
-                    let sp = (DIVE_SPEED * slow).max(along.min(DIVE_SPEED * 1.25));
+                    let along = (self.vel.x * fx + self.vel.z * fz).max_js(0.0);
+                    let sp = (DIVE_SPEED * slow).max_js(along.min_js(DIVE_SPEED * 1.25));
                     self.vel.x = fx * sp + if g { plat_v.x } else { 0.0 };
                     self.vel.z = fz * sp + if g { plat_v.z } else { 0.0 };
                     self.vel.y = if g {
-                        6.0 + plat_v.y.max(0.0)
+                        6.0 + plat_v.y.max_js(0.0)
                     } else {
-                        self.vel.y.max(3.0)
+                        self.vel.y.max_js(3.0)
                     };
                     self.grounded = false;
                 }
@@ -559,11 +563,11 @@ impl Body {
         if self.state == BodyState::Dive || self.state == BodyState::Slide {
             let along = self.vel.x * m::sin(self.yaw) + self.vel.z * m::cos(self.yaw);
             let want = if self.state == BodyState::Dive {
-                m::clamp(m::atan2(along.max(2.0), self.vel.y), DIVE_TILT_MIN, DIVE_TILT_MAX)
+                m::clamp(m::atan2(along.max_js(2.0), self.vel.y), DIVE_TILT_MIN, DIVE_TILT_MAX)
             } else {
                 SLIDE_TILT
             };
-            self.tilt += (want - self.tilt) * (12.0 * dt).min(1.0);
+            self.tilt += (want - self.tilt) * (12.0 * dt).min_js(1.0);
             self.tilt_dir = self.yaw;
         } else if !self.down() {
             self.tilt = if self.tilt > 0.02 {
@@ -577,10 +581,10 @@ impl Body {
         let on_ladder = self.state == BodyState::Ladder;
         let still = climbing || on_ladder;
         if !still {
-            self.vel.y = (self.vel.y - GRAVITY * dt).max(-32.0);
+            self.vel.y = (self.vel.y - GRAVITY * dt).max_js(-32.0);
         }
         let travel = if still { 0.0 } else { len(self.vel) * dt };
-        let substeps = MAX_SUBSTEPS.min(1f64.max((travel / (r * SUBSTEP_REACH)).ceil())) as usize;
+        let substeps = MAX_SUBSTEPS.min_js(1f64.max_js((travel / (r * SUBSTEP_REACH)).ceil())) as usize;
 
         let vy_before = self.vel.y;
         self.grounded = false;
@@ -637,9 +641,9 @@ impl Body {
                         let vn = dot(self.vel, n);
                         if col.bounce != 0.0 && !hit_done.contains(&ci) {
                             hit_done.push(ci);
-                            let push = col.bounce.max(-vn * 0.8);
+                            let push = col.bounce.max_js(-vn * 0.8);
                             self.vel = add_scaled(self.vel, n, push - vn);
-                            self.vel.y = self.vel.y.max(4.0);
+                            self.vel.y = self.vel.y.max_js(4.0);
                             if n.y < 0.5 {
                                 if -vn > 11.0 && self.state != BodyState::Tumble {
                                     self.knock(ev, n.x * 2.0, n.z * 2.0, 5.0, 0.7, false);
@@ -668,14 +672,14 @@ impl Body {
                                     self.vel.y = SCOOP_V;
                                     ev.hit_something = true;
                                 }
-                                self.state_t = self.state_t.max(0.6);
+                                self.state_t = self.state_t.max_js(0.6);
                             } else if !behind && sp > 1.0 {
-                                let k = (11.0 / sp).min(1.0) * 1.5 * col.hit;
+                                let k = (11.0 / sp).min_js(1.0) * 1.5 * col.hit;
                                 self.knock(
                                     ev,
                                     sv.x * k + n.x * 1.5,
                                     sv.z * k + n.z * 1.5,
-                                    5.0 + (sp * 0.15).min(2.0),
+                                    5.0 + (sp * 0.15).min_js(2.0),
                                     1.1,
                                     true,
                                 );
@@ -684,23 +688,23 @@ impl Body {
                         } else if col.hit != 0.0 && !col.sweep && !hit_done.contains(&ci) && fresh {
                             hit_done.push(ci);
                             let sv = col.surface_velocity(hit.local, dt);
-                            let sp = dot(sv, n).max(0.0) * 0.6 + len(sv) * 0.4;
+                            let sp = dot(sv, n).max_js(0.0) * 0.6 + len(sv) * 0.4;
                             if sp > 2.2 {
                                 let k = col.hit;
-                                let away = (sp * 0.2).min(2.5);
+                                let away = (sp * 0.2).min_js(2.5);
                                 if sp * k > 4.2 {
                                     self.knock(
                                         ev,
                                         sv.x * k + n.x * away,
                                         sv.z * k + n.z * away,
                                         4.5 + sp * 0.3,
-                                        0.8 + (sp * 0.06).min(0.8),
+                                        0.8 + (sp * 0.06).min_js(0.8),
                                         false,
                                     );
                                 } else {
                                     self.vel.x += sv.x * k + n.x * away * 0.5;
                                     self.vel.z += sv.z * k + n.z * away * 0.5;
-                                    self.vel.y = self.vel.y.max(3.5);
+                                    self.vel.y = self.vel.y.max_js(3.5);
                                     self.stun(0.6);
                                 }
                                 ev.hit_something = true;
@@ -813,9 +817,9 @@ impl Body {
                         self.vel.x += nx * j;
                         self.vel.z += nz * j;
                         if -vrel > 6.0 && self.grounded {
-                            self.vel.y = self.vel.y.max((-vrel * 0.3).min(4.0));
+                            self.vel.y = self.vel.y.max_js((-vrel * 0.3).min_js(4.0));
                         }
-                        ev.bumped = ev.bumped.max(-vrel);
+                        ev.bumped = ev.bumped.max_js(-vrel);
                     }
                 }
                 o.touching = true;
@@ -828,27 +832,28 @@ impl Body {
         if rel_old && !self.grounded {
             self.vel.x += plat_v.x;
             self.vel.z += plat_v.z;
-            self.vel.y += plat_v.y.max(0.0);
+            self.vel.y += plat_v.y.max_js(0.0);
         } else if self.grounded && self.ground_col != old_ground {
             let gv = self.ground_velocity(world, dt);
             self.vel.x += (if rel_old { plat_v.x } else { 0.0 }) - gv.x;
             self.vel.z += (if rel_old { plat_v.z } else { 0.0 }) - gv.z;
         }
         if self.grounded {
-            self.vel.y = self.vel.y.max(0.0);
+            self.vel.y = self.vel.y.max_js(0.0);
             let ng = new_ground.map(|c| world.col(c));
             if let Some(cv) = ng.and_then(|c| c.conveyor) {
                 self.pos = add_scaled(self.pos, cv, dt);
             }
             if rides(ng) && ground_n.y < STEEP_FROM && ground_n.y > 0.0 {
-                let k = ((STEEP_FROM - ground_n.y) / (STEEP_FROM - 0.55)).min(1.0);
+                let k = ((STEEP_FROM - ground_n.y) / (STEEP_FROM - 0.55)).min_js(1.0);
                 let s = m::sqrt(1.0 - ground_n.y * ground_n.y);
                 let d = (STEEP_SLIP * k * dt) / s;
                 self.pos.x += ground_n.x * ground_n.y * d;
                 self.pos.y += (ground_n.y * ground_n.y - 1.0) * d;
                 self.pos.z += ground_n.z * ground_n.y * d;
             }
-            let slide = (ng.map_or(0.0, |c| c.slip) * 1.3).max(if self.state == BodyState::Tumble { 0.6 } else { 0.0 });
+            let slide =
+                (ng.map_or(0.0, |c| c.slip) * 1.3).max_js(if self.state == BodyState::Tumble { 0.6 } else { 0.0 });
             if slide > 0.0 && ground_n.y > 0.0 {
                 self.vel.x += GRAVITY * ground_n.x * ground_n.y * slide * dt;
                 self.vel.z += GRAVITY * ground_n.z * ground_n.y * slide * dt;
@@ -870,7 +875,7 @@ impl Body {
                 self.ground_col = -1;
                 ev.bounced = true;
             } else if !g {
-                self.land_impact = (-vy_before / 20.0).min(1.0);
+                self.land_impact = (-vy_before / 20.0).min_js(1.0);
             }
         }
         if state_before != BodyState::Stun && self.state == BodyState::Stun {
@@ -889,7 +894,7 @@ impl Body {
 
     /// Ground within a short drop below the feet: the body is set down on it; returns it and its normal.
     fn snap_down(&mut self, world: &World, r: f64, dt: f64) -> Option<(ColId, V3)> {
-        let reach = (0.05 + m::hypot(self.vel.x, self.vel.z) * dt * 1.5).min(0.3) * self.size;
+        let reach = (0.05 + m::hypot(self.vel.x, self.vel.z) * dt * 1.5).min_js(0.3) * self.size;
         let y0 = self.pos.y;
         self.pos.y -= reach;
         let c = self.sphere(0);
@@ -916,8 +921,8 @@ impl Body {
             self.pos.y = y0;
             return None;
         }
-        self.pos.y = y0.min(self.pos.y + lift);
-        self.vel.y = self.vel.y.max(0.0);
+        self.pos.y = y0.min_js(self.pos.y + lift);
+        self.vel.y = self.vel.y.max_js(0.0);
         best
     }
 
@@ -1014,7 +1019,7 @@ impl Body {
         let (x0, y0, z0) = (self.pos.x, self.pos.y, self.pos.z);
         if self.state_t > CLIMB_T - CLIMB_HANG {
         } else if rising {
-            self.pos.y = to.y.min(self.pos.y + CLIMB_UP * self.size * dt);
+            self.pos.y = to.y.min_js(self.pos.y + CLIMB_UP * self.size * dt);
         } else {
             let step = CLIMB_OVER * self.size * dt;
             if d <= step {
@@ -1088,7 +1093,7 @@ impl Body {
             self.state = BodyState::Normal;
             return;
         }
-        let pull = d.min(5.0 * dt);
+        let pull = d.min_js(5.0 * dt);
         if d > 1e-4 {
             self.pos.x += (dx / d) * pull;
             self.pos.z += (dz / d) * pull;
@@ -1099,7 +1104,7 @@ impl Body {
         } else {
             0.0
         };
-        self.pos.y = (self.pos.y + climb * dt).min(to.y - 0.85);
+        self.pos.y = (self.pos.y + climb * dt).min_js(to.y - 0.85);
         if climb > 0.0 && self.pos.y >= to.y - 0.85 - 1e-6 {
             let ox = to.x + fx * 1.05;
             let oz = to.z + fz * 1.05;

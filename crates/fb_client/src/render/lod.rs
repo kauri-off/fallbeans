@@ -65,6 +65,8 @@ impl ModelLods {
         if let Some(l) = self.levels.get(&mesh.id()) {
             return l.clone();
         }
+        // (A model unloaded between maps comes back as new meshes: the levels of the old ones go.)
+        self.levels.retain(|id, _| meshes.contains(*id));
         let made = meshes
             .get(mesh)
             .and_then(simplify)

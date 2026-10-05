@@ -7,10 +7,12 @@ use core::time::Duration;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::anti_alias::taa::TemporalAntiAliasing;
+use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
+use bevy::render::camera::{MipBias, TemporalJitter};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::ColorGrading;
 use bevy::window::{PresentMode, PrimaryWindow};
@@ -80,6 +82,7 @@ pub struct QualityPlugin;
 
 impl Plugin for QualityPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<Slept>();
         app.add_systems(Startup, detect);
         app.add_systems(Update, (watch_frames, apply).chain());
         app.add_systems(Last, limit_fps);
@@ -132,7 +135,9 @@ fn preset_for(g: &Graphics, q: &Quality) -> Preset {
     }
 }
 
-/// "auto": a frame time over 24 ms (smoothed) for 6 s lowers the preset a step.
+/// "auto": a frame time over 24 ms (smoothed) for 6 s lowers the preset a step. The frame limit's sleep
+/// is not the frame's work, and a window in the background may be held back by the compositor: neither
+/// counts.
 fn watch_frames(
     time: Res<Time<Real>>,
     g: Res<Graphics>,
@@ -140,9 +145,15 @@ fn watch_frames(
     mut smooth: Local<f32>,
     mut slow: Local<f32>,
     mut session: ResMut<crate::session::Session>,
+    slept: Res<Slept>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Some(q) = q.as_mut() else { return };
-    let dt = time.delta_secs().min(1.0);
+    if windows.single().is_ok_and(|w| !w.focused) {
+        *slow = 0.0;
+        return;
+    }
+    let dt = (time.delta_secs() - slept.0).clamp(0.0, 1.0);
     *smooth += (dt * 1000.0 - *smooth) * 0.05;
     if g.preset != "auto" || preset_for(&g, q) == Preset::Low {
         *slow = 0.0;
@@ -197,6 +208,15 @@ fn apply(
     let Ok(cam) = camera.single() else { return };
     let mut e = commands.entity(cam);
     e.remove::<(TemporalAntiAliasing, Smaa, Fxaa, ScreenSpaceAmbientOcclusion, Vignette)>();
+    // (And what TAA and SSAO brought along: left behind, the prepasses would keep running and TAA's
+    // texture LOD bias of −1 would make every texture shimmer. Inserting them again brings them back.)
+    e.remove::<(
+        MipBias,
+        TemporalJitter,
+        DepthPrepass,
+        NormalPrepass,
+        MotionVectorPrepass,
+    )>();
     e.insert(Msaa::Off);
     // (Upscaling replaces the temporal anti-aliasing and the AO, which want the full resolution.)
     let upscaling = Quality::scale(&g.upscale) < 1.0;
@@ -260,9 +280,14 @@ fn apply(
     info!("graphics: preset {preset:?}, {:?}", *g);
 }
 
+/// How long the frame limit slept at the end of the last frame (s).
+#[derive(Resource, Default)]
+struct Slept(f32);
+
 /// The frame rate limit: the rest of the frame's time is slept away.
-fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>) {
+fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>, mut slept: ResMut<Slept>) {
     let now = std::time::Instant::now();
+    let mut nap = Duration::ZERO;
     if g.fps_limit > 0
         && let Some(prev) = *last
     {
@@ -270,7 +295,9 @@ fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>) {
         let spent = now - prev;
         if spent < want {
             std::thread::sleep(want - spent);
+            nap = now.elapsed();
         }
     }
+    slept.0 = nap.as_secs_f32();
     *last = Some(std::time::Instant::now());
 }

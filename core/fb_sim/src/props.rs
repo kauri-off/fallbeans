@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::builder::{Builder, PrimOpts};
 use crate::collider::{ColliderOpts, Shape};
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::V3;
 use crate::nodes::ROOT;
 use crate::scene::{Palette, pal};
@@ -39,7 +39,7 @@ impl SpinUp {
             0.2
         } else {
             let e = t + self.ease;
-            (0.2f64).max((self.w * t * (t + 2.0 * self.ease)) / (e * e) + 2.0 * self.acc * t)
+            (0.2f64).max_js((self.w * t * (t + 2.0 * self.ease)) / (e * e) + 2.0 * self.acc * t)
         }
     }
 }
@@ -57,7 +57,7 @@ pub fn sweep_eta(x: f64, z: f64, angle: f64, omega: f64, arms: u32, cx: f64, cz:
 
 /// Seconds until a rotor arm (half thickness `half`) first touches a bean at `pos`; negative while touching.
 pub fn arm_contact_eta(pos: V3, angle: f64, omega: f64, arms: u32, cx: f64, cz: f64, half: f64) -> f64 {
-    let r = m::hypot(pos.x - cx, pos.z - cz).max(0.5);
+    let r = m::hypot(pos.x - cx, pos.z - cz).max_js(0.5);
     let margin = (half + 0.55) / r / omega.abs();
     let eta = sweep_eta(pos.x, pos.z, angle, omega, arms, cx, cz);
     let period = (m::PI * 2.0) / arms as f64 / omega.abs();
@@ -100,7 +100,7 @@ pub struct BallLanes {
 
 impl BallLanes {
     fn ball_z(&self, phase: f64, t: f64) -> Option<f64> {
-        let tt = t.max(0.0) + phase;
+        let tt = t.max_js(0.0) + phase;
         let s = tt - (tt / self.period).floor() * self.period;
         let dist = s * (self.speed)(t);
         (t > 0.0 && dist < self.len).then_some(self.z_top - dist)
@@ -159,7 +159,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
             let (period, r, speed) = (o.period, o.radius, o.speed.clone());
             let (z_top, z_bottom, y_bottom) = (o.z_top, o.z_bottom, o.y_bottom);
             b.mover(move |t, ctx| {
-                let tt = t.max(0.0) + phase;
+                let tt = t.max_js(0.0) + phase;
                 let cycle = (tt / period).floor();
                 let s = tt - cycle * period;
                 let dist = s * speed(t);
@@ -172,8 +172,8 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
                     return;
                 }
                 let z = z_top - dist;
-                let grow = (s / 0.3).min(1.0) * ((len - dist) / 1.5).min(1.0);
-                n.scale = V3::splat(grow.max(0.01));
+                let grow = (s / 0.3).min_js(1.0) * ((len - dist) / 1.5).min_js(1.0);
+                n.scale = V3::splat(grow.max_js(0.01));
                 n.pos = V3::new(x, y_bottom + (z - z_bottom) * slope + r / cos_a, z);
                 n.rot.x = -dist / r;
             });
@@ -217,7 +217,7 @@ pub struct Glove {
 
 impl Glove {
     pub fn x_at(&self, t: f64) -> f64 {
-        let out = self.reach * m::pow(m::sin(t.max(0.0) * self.w + self.ph).max(0.0), 3.0);
+        let out = self.reach * m::pow(m::sin(t.max_js(0.0) * self.w + self.ph).max_js(0.0), 3.0);
         self.x - self.side * out
     }
 }

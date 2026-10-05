@@ -2,6 +2,7 @@
 //! recorded hash. Regenerate after an intended change with `FB_BLESS=1 cargo test -p fb_arena --test determinism`.
 use fb_arena::{Arena, ArenaKind};
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
+use fb_shared::m::MinMaxJs;
 
 const DIRS: [(i8, i8); 9] = [
     (127, 0),
@@ -40,7 +41,7 @@ fn run(map: &str, seed: u32) -> String {
         arena.add_pawn(id, id > 4);
     }
     // (The lobby and the podium have no end: a minute of them.)
-    let end = (def.meta().duration.min(60.0) * 120.0) as i64;
+    let end = (def.meta().duration.min_js(60.0) * 120.0) as i64;
     let mut events = 0;
     for k in -719..=end {
         events += arena.step(k, |id| script(id, k)).len();

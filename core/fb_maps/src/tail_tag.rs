@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use fb_shared::rng::shuffle;
 use fb_sim::bots::{ArenaOpts, BOT_DT, HumanOpts, arena_brain, humanize, init_bot, nav_to, unstick};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{BeanDeco, Cx, GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -151,7 +151,7 @@ impl MapDef for TailTag {
             let node = b.box_(0.0, -0.5, 0.0, 3.2, 1.0, 3.2, p, dynamic()).node;
             let ph = k as f64 * m::PI + b.rng.next();
             b.mover(move |t, ctx| {
-                let a = ph + t.max(0.0) * orbit;
+                let a = ph + t.max_js(0.0) * orbit;
                 let n = ctx.node(node);
                 n.pos = V3::new(m::cos(a) * 17.6, -0.5, m::sin(a) * 17.6);
                 n.rot.y = -a;
@@ -166,7 +166,7 @@ impl MapDef for TailTag {
         let mut order = ctx.participants.to_vec();
         shuffle(&mut order, &mut b.rng);
         let len = order.len() as f64;
-        let n = 1f64.max((len - 1.0).min((len / 2.0).ceil())) as usize;
+        let n = 1f64.max_js((len - 1.0).min_js((len / 2.0).ceil())) as usize;
         let st = b.state(Tails {
             tails: order.into_iter().take(n).collect(),
             immune: BTreeMap::new(),
@@ -185,16 +185,34 @@ impl MapDef for TailTag {
                 if t < 0.0 {
                     return;
                 }
+                // A holder who left the room takes no tail with them: it goes to the bean without one
+                // with the fewest points (else a round where every holder left has nobody scoring).
+                if cx.server {
+                    let mut gone_ids = cx.world.st(st).tails.clone();
+                    gone_ids.retain(|&id| cx.bodies.get(id).is_none());
+                    for gone in gone_ids {
+                        let s = cx.world.st(st);
+                        let to = cx
+                            .bodies
+                            .ids()
+                            .into_iter()
+                            .filter(|&oid| !s.has(i64::from(oid)))
+                            .min_by(|&a, &b| cx.score(a).total_cmp(&cx.score(b)));
+                        if let Some(to) = to {
+                            pass(cx, st, gone, to);
+                        }
+                    }
+                }
                 // Tails weigh you down a little: the chasers can catch up.
                 let tails = cx.world.st(st).tails.clone();
                 for &id in &tails {
                     let Some(body) = cx.bodies.get_mut(id) else { continue };
                     body.slow_k = if t < body.slow_until {
-                        body.slow_k.min(TAIL_SLOW)
+                        body.slow_k.min_js(TAIL_SLOW)
                     } else {
                         TAIL_SLOW
                     };
-                    body.slow_until = body.slow_until.max(t + 0.25);
+                    body.slow_until = body.slow_until.max_js(t + 0.25);
                 }
                 let s = t.floor();
                 if s == cx.world.st(st).last_second {
@@ -357,7 +375,7 @@ impl MapDef for TailTag {
                     }
                 } else {
                     // Chase, cutting the corner towards where the tail is going.
-                    let lead = 0.6f64.min(nd / 12.0);
+                    let lead = 0.6f64.min_js(nd / 12.0);
                     let tx = near.pos.x + near.vel.x * lead;
                     let tz = near.pos.z + near.vel.z * lead;
                     nav_to(bot, tx, tz, out, bot.mem.spd.unwrap_or(1.0), 1.0);

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use fb_sim::bots::{HumanOpts, humanize, init_bot};
 use fb_sim::builder::{Builder, PrimOpts};
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -163,7 +163,7 @@ impl MapDef for RollOut {
                 let inside = p.y < CY;
                 let rs = if inside { R - 0.5 } else { R };
                 let mirror = if inside { -1.0 } else { 1.0 };
-                let t = bot.t.max(0.0);
+                let t = bot.t.max_js(0.0);
                 let omega = if t > 0.0 { ring.dir * (0.35 + 0.004 * t) } else { 0.0 };
                 // The top of the drum carries us sideways at −ω·R; "up" is against it.
                 let carry = -omega * rs * mirror;
@@ -186,7 +186,7 @@ impl MapDef for RollOut {
                             ahead = Some((near, far));
                         }
                     } else if far <= -0.2 {
-                        behind = behind.min(-far);
+                        behind = behind.min_js(-far);
                     }
                 }
                 // On the ground: hold our place against the carry and drift back to the crest, but never
@@ -195,9 +195,9 @@ impl MapDef for RollOut {
                 let to_top = -p.x;
                 let into_behind = up != 0.0 && m::sign(to_top) == -up && behind < 2.8;
                 if !into_behind {
-                    mx += (-0.45f64).max(0.45f64.min(to_top * 0.35));
+                    mx += (-0.45f64).max_js(0.45f64.min_js(to_top * 0.35));
                 }
-                let mz = (-1f64).max(1f64.min((lane - p.z) * 0.6));
+                let mz = (-1f64).max_js(1f64.min_js((lane - p.z) * 0.6));
                 // A hole coming at us: hop when its near edge reaches our feet. Worse players jump a little
                 // early or late.
                 let slop = (1.0 - bot.mem.skill.unwrap_or(0.7)) * 0.5;
@@ -210,11 +210,14 @@ impl MapDef for RollOut {
                     && near > -0.3
                 {
                     // Clear the near edge, the hole and a body length, minus what the drum brings us.
-                    let span = far - near.max(0.0) + 1.6;
+                    let span = far - near.max_js(0.0) + 1.6;
                     out.jump = true;
                     // …but never so far that it lands on the steep side of the drum.
-                    let room = 0.2f64.max((3.2 - up * p.x * mirror) / 6.4);
-                    mx = up * 1f64.min(room).min(0.2f64.max((span - carry.abs() * 0.75) / 0.75 / 8.5));
+                    let room = 0.2f64.max_js((3.2 - up * p.x * mirror) / 6.4);
+                    mx = up
+                        * 1f64
+                            .min_js(room)
+                            .min_js(0.2f64.max_js((span - carry.abs() * 0.75) / 0.75 / 8.5));
                     bot.mem.set("hopMx", mx);
                     bot.mem.set("hopUntil", bot.t + 0.7);
                 } else if !grounded && bot.mem.get("hopUntil").unwrap_or(-1.0) > bot.t {
@@ -222,7 +225,7 @@ impl MapDef for RollOut {
                 }
                 let l = m::hypot(mx, mz);
                 let l = if l == 0.0 { 1.0 } else { l };
-                let k = l.min(1.0);
+                let k = l.min_js(1.0);
                 out.mx = (mx / l) * k;
                 out.mz = (mz / l) * k;
                 humanize(

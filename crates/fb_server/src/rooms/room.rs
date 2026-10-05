@@ -43,7 +43,8 @@ pub struct RoomOptions {
     pub intro_ticks: u32,
     /// Accept dev commands (server `--dev`).
     pub dev: bool,
-    /// Beans falling out of a survival round are out (the client has no spectator view yet: off on the server).
+    /// Beans falling out of a survival round are out (off with `fb_server --respawn`: stress runs keep
+    /// everybody in play).
     pub eliminate: bool,
     /// The room's code and name in the room list (empty for rooms that are not listed).
     pub id: String,
@@ -54,6 +55,8 @@ pub struct RoomOptions {
     pub pin: Option<String>,
     /// Kept when nobody is in it (the dev server's room).
     pub permanent: bool,
+    /// Who opened it, as limits per address count (`auth::address_key`; None: this machine or nobody).
+    pub creator: Option<String>,
 }
 
 impl Default for RoomOptions {
@@ -71,6 +74,7 @@ impl Default for RoomOptions {
             owner: None,
             pin: None,
             permanent: false,
+            creator: None,
         }
     }
 }
@@ -223,6 +227,11 @@ impl Room {
 
     pub fn permanent(&self) -> bool {
         self.opts.permanent
+    }
+
+    /// Who opened the room, as limits per address count it.
+    pub fn creator(&self) -> Option<&str> {
+        self.opts.creator.as_deref()
     }
 
     pub fn dev(&self) -> bool {
@@ -691,7 +700,11 @@ impl Room {
         self.send_to(id, ServerMsg::Arena(self.arena_info(true)));
         if let Some(conn) = self.player(id).and_then(|p| p.conn) {
             for ev in &self.history {
-                self.out.push(Out::Event(conn, ev.clone()));
+                let ev = MapEventMsg {
+                    history: true,
+                    ..ev.clone()
+                };
+                self.out.push(Out::Event(conn, ev));
             }
         }
     }
@@ -1290,6 +1303,7 @@ impl Room {
             arena: self.arena_id,
             tick,
             ev,
+            history: false,
         };
         for p in &self.players {
             if let Some(c) = p.conn {

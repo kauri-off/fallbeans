@@ -12,7 +12,7 @@ use fb_shared::*;
 
 use super::room::{Practice, Room, RoomOptions, Who, make_pin};
 use super::{ConnId, Inputs, Out, random_u32, ticks};
-use crate::auth::{Limiter, same_key};
+use crate::auth::{Limiter, address_key, same_key};
 
 /// A connection that sent no hello within this long is closed (s).
 const HELLO_TIMEOUT_S: f64 = 5.0;
@@ -21,6 +21,11 @@ const LIST_RATE: u32 = 20;
 /// Room codes avoid look-alike characters (no i, l, o, 0, 1).
 const ID_CHARS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 const ID_LENGTH: usize = 5;
+/// Per address (`auth::address_key`: IPv6 per /64, this machine exempt), so that one script cannot take
+/// the whole server: open connections, rooms opened, practice rooms.
+pub(super) const SESSIONS_PER_ADDRESS: usize = 16;
+const ROOMS_PER_ADDRESS: usize = 3;
+const PRACTICE_PER_ADDRESS: usize = 1;
 
 /// A player behind a connection: at the room list (`room` None) or in a room.
 #[derive(Clone, Debug)]
@@ -50,6 +55,8 @@ pub struct Session {
     window: u64,
     count: u32,
     timed_out: bool,
+    /// Server tick of the last "bad message" warning (one a second at most: a flood would fill the log).
+    warned: Option<u64>,
 }
 
 pub struct Hub {
@@ -96,7 +103,7 @@ impl Hub {
     /// A room that stays open with nobody in it (the dev room; rooms stress runs meet in).
     pub fn open_permanent(&mut self, id: &str, title: &str) {
         if !self.listed().any(|(_, r)| r.id == id) {
-            self.open_room(id.into(), title.into(), None, None, true);
+            self.open_room(id.into(), title.into(), None, None, true, None);
         }
     }
 
@@ -188,6 +195,13 @@ impl Hub {
             self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
             return;
         }
+        if let Some(key) = address_key(&ip)
+            && self.connections_from(&key) >= SESSIONS_PER_ADDRESS
+        {
+            warn!(ip, "too many connections from one address");
+            self.refuse(conn, RejectReason::Busy, "С этого адреса уже слишком много подключений");
+            return;
+        }
         self.sessions.insert(
             conn,
             Session {
@@ -198,6 +212,7 @@ impl Hub {
                 window: 0,
                 count: 0,
                 timed_out: false,
+                warned: None,
             },
         );
     }
@@ -211,9 +226,13 @@ impl Hub {
     }
 
     pub fn message(&mut self, conn: ConnId, m: ClientMsg) {
-        let Some(s) = self.sessions.get(&conn) else { return };
+        let real = self.real;
+        let Some(s) = self.sessions.get_mut(&conn) else { return };
         if let Err(what) = m.check() {
-            warn!(ip = s.ip, id = s.member.as_ref().map(|m| m.id), what, "bad message");
+            if s.warned.is_none_or(|at| real.saturating_sub(at) >= ticks(1.0)) {
+                s.warned = Some(real);
+                warn!(ip = s.ip, id = s.member.as_ref().map(|m| m.id), what, "bad message");
+            }
             return;
         }
         let Some(member) = &s.member else {
@@ -358,6 +377,17 @@ impl Hub {
             let id = self.rooms[&mine].id.clone();
             return self.join(conn, &id, None);
         }
+        let creator = self.sessions.get(&conn).and_then(|s| address_key(&s.ip));
+        if let Some(c) = creator.as_deref()
+            && self.listed().filter(|(_, r)| r.creator() == Some(c)).count() >= ROOMS_PER_ADDRESS
+        {
+            return self.deny(
+                conn,
+                None,
+                DenyReason::Limit,
+                "С этого адреса открыто слишком много комнат — зайдите в одну из них",
+            );
+        }
         if self.listed().count() >= MAX_ROOMS {
             return self.deny(
                 conn,
@@ -376,7 +406,7 @@ impl Hub {
                     format!("Комната {name}")
                 }
             });
-        self.open_room(id.clone(), title, Some(uid), private.then(make_pin), false);
+        self.open_room(id.clone(), title, Some(uid), private.then(make_pin), false, creator);
         info!(room = id, private, rooms = self.listed().count(), "room opened");
         self.join(conn, &id, None)
     }
@@ -553,6 +583,7 @@ impl Hub {
         owner: Option<String>,
         pin: Option<String>,
         permanent: bool,
+        creator: Option<String>,
     ) -> u32 {
         let opts = RoomOptions {
             id,
@@ -560,6 +591,7 @@ impl Hub {
             owner,
             pin,
             permanent,
+            creator,
             ..self.base.clone()
         };
         let key = self.next_key;
@@ -603,6 +635,17 @@ impl Hub {
         let Some(game) = director::game(game) else {
             return self.refuse(conn, RejectReason::Bad, "Нет такой карты");
         };
+        let creator = self.sessions.get(&conn).and_then(|s| address_key(&s.ip));
+        if let Some(c) = creator.as_deref()
+            && self
+                .rooms
+                .values()
+                .filter(|r| r.practice() && r.creator() == Some(c))
+                .count()
+                >= PRACTICE_PER_ADDRESS
+        {
+            return self.refuse(conn, RejectReason::Busy, "С этого адреса уже идёт тренировка");
+        }
         if self.rooms.values().filter(|r| r.practice()).count() >= MAX_PRACTICE_ROOMS {
             return self.refuse(
                 conn,
@@ -617,6 +660,7 @@ impl Hub {
                 bots: 3,
             }),
             permanent: false,
+            creator,
             ..self.base.clone()
         };
         let key = self.next_key;
@@ -663,6 +707,14 @@ impl Hub {
     /// The room keeping a place for this player (they are in it, or dropped out of its game).
     fn room_of(&self, uid: &str) -> Option<u32> {
         self.listed().find(|(_, r)| r.player_of(uid).is_some()).map(|(k, _)| *k)
+    }
+
+    /// Open connections from the address `key` (`auth::address_key`).
+    fn connections_from(&self, key: &str) -> usize {
+        self.sessions
+            .values()
+            .filter(|s| address_key(&s.ip).as_deref() == Some(key))
+            .count()
     }
 
     fn owned(&self, uid: &str) -> Option<u32> {

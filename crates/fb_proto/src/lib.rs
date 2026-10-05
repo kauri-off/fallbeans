@@ -514,6 +514,9 @@ pub struct MapEventMsg {
     /// Lightyear tick it happened on.
     pub tick: u32,
     pub ev: MapEventKind,
+    /// Sent again from the arena's history to someone who just came in: what it changes applies, its sounds
+    /// and notes do not (it happened before they were there).
+    pub history: bool,
 }
 
 #[cfg(test)]

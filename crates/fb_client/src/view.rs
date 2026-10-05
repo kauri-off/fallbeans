@@ -153,7 +153,7 @@ fn spawn_map(
                 let l = 1 + lift % meshes::LIFTS;
                 let spec = prim_spec(&map.look, *kind, *dims, *pal, *freq, *surface, *pattern);
                 let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
-                let piece = commands.spawn(MapPrim(spec)).id();
+                let piece = commands.spawn(MapPrim(spec, mat.clone())).id();
                 // Each level of detail a child, shown by the camera's distance (cross-faded).
                 let ranges = meshes::level_ranges(*kind, *dims, lod_k);
                 let single = ranges.len() == 1;

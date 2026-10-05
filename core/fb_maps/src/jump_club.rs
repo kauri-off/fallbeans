@@ -2,7 +2,7 @@
 //! come from the seed.
 use fb_sim::bots::{ArenaOpts, BOT_DT, BotInput, BotView, arena_brain};
 use fb_sim::builder::{Builder, PrimOpts};
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::physics::BodyState;
@@ -77,7 +77,7 @@ impl MapDef for JumpClub {
         let mut opts = ArenaOpts::new(8.0);
         opts.safe = Some(Box::new(|x, z, _| m::hypot(x, z) > 3.5));
         opts.jump_when = Some(Box::new(move |bot: &mut BotView| {
-            let t = bot.t.max(0.0);
+            let t = bot.t.max_js(0.0);
             if t <= 0.0 {
                 return false;
             }
@@ -88,7 +88,7 @@ impl MapDef for JumpClub {
             let (jc_t, jc_eta) = (mem.get("jcT"), mem.get("jcEta"));
             let seen = jc_t.is_some_and(|jt| t - jt < 0.2) && jc_eta.unwrap_or(0.0) > eta;
             let rate = if seen {
-                0.2f64.max((jc_eta.unwrap_or(eta) - eta) / (t - jc_t.unwrap_or(t)))
+                0.2f64.max_js((jc_eta.unwrap_or(eta) - eta) / (t - jc_t.unwrap_or(t)))
             } else {
                 1.0
             };
@@ -104,7 +104,7 @@ impl MapDef for JumpClub {
         // Both bars coming by at about the same time: run along the circle towards the one that comes
         // first (under the high one standing, over the low one).
         let dodge = move |bot: &mut BotView, out: &mut BotInput| {
-            let t = bot.t.max(0.0);
+            let t = bot.t.max_js(0.0);
             let p = bot.body.pos;
             let r = m::hypot(p.x, p.z);
             if t <= 0.0 || r < 2.0 || bot.body.state != BodyState::Normal {
@@ -115,7 +115,7 @@ impl MapDef for JumpClub {
             let clash = if low_first { high - eta < 0.8 } else { eta - high < 0.35 };
             // Better players spot it sooner.
             let sees = 0.3 + bot.mem.skill.unwrap_or(0.7) * 0.9;
-            if !clash || eta.min(high) > sees || eta.min(high) < 0.08 {
+            if !clash || eta.min_js(high) > sees || eta.min_js(high) < 0.08 {
                 return;
             }
             let w = if low_first { low_omega(t) } else { high_omega(t) };

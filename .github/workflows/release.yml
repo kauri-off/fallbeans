@@ -4,8 +4,9 @@ name: release
 on:
   workflow_dispatch:
 
+# Read-only for the build jobs (they run third-party tools); only the release job writes.
 permissions:
-  contents: write
+  contents: read
 
 concurrency: release
 
@@ -50,7 +51,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: choco install nsis --no-progress -y
       - run: cargo xtask dist nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: nsis
           path: dist/*.exe
@@ -58,20 +59,27 @@ jobs:
 
   appimage:
     needs: version
-    # The oldest supported Ubuntu: its glibc is what the AppImage needs at least.
-    runs-on: ubuntu-22.04
+    # Built inside Ubuntu 22.04, the oldest supported one: its glibc is what the AppImage needs at least. A
+    # container on a current runner, since GitHub retires the ubuntu-22.04 runner image (gone 2027-04-17).
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
+      # (The bare image: what the runner images have and the steps below need. Steps run as root here.)
+      - run: >-
+          apt-get update && apt-get install -y --no-install-recommends
+          ca-certificates curl git build-essential pkg-config $LINUX_PACKAGES
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
       - name: appimagetool
         run: |
           curl -sSfL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
       - run: cargo xtask dist appimage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: appimage
           path: dist/*.AppImage
@@ -88,7 +96,7 @@ jobs:
       # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo xtask dist flatpak
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: flatpak
           path: dist/*.flatpak
@@ -106,7 +114,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
       - run: cargo install --locked cargo-deb
       - run: cargo xtask dist deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: deb
           path: dist/*.deb
@@ -124,7 +132,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
       - run: cargo install --locked cargo-generate-rpm
       - run: cargo xtask dist rpm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: rpm
           path: dist/*.rpm
@@ -133,9 +141,11 @@ jobs:
   release:
     needs: [version, check, nsis, appimage, flatpak, deb, rpm]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
@@ -145,6 +155,11 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd dist
+          # GitHub renames assets with characters other than letters, digits and @-_+. (the `~` of the
+          # server packages' version becomes `.`): rename first, so SHA256SUMS names the files as published.
+          for f in *~*; do
+            if [ -e "$f" ]; then mv -- "$f" "${f//\~/.}"; fi
+          done
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
           title="Fall Beans $(echo "$VERSION" | sed -E 's/-(.*)$/ \U\1/')"

@@ -31,7 +31,8 @@ fn predicted_respawn_matches_the_arena() {
             assert!(arena.dev_teleport(pid, low, None), "{id}");
             let teleports = arena.pawn(pid).unwrap().teleports;
             let spawn_i = arena.pawn(pid).unwrap().spawn_i;
-            arena.step(30, |_| InputFrame::IDLE);
+            // (One tick per pawn: the arena never runs a tick twice.)
+            arena.step(30 + i as i64, |_| InputFrame::IDLE);
             let p = arena.pawn(pid).unwrap();
             let to = respawn_point(&arena.spec, ArenaKind::Round, arena.fall, checkpoint, spawn_i).unwrap();
             let mut predicted = Body::new(pid as i32);

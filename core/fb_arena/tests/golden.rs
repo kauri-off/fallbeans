@@ -5,6 +5,7 @@ mod common;
 use common::{check_bodies, check_colliders, close, f, load};
 use fb_arena::{Arena, ArenaEvent, ArenaKind, PawnStatus};
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
+use fb_shared::m::MinMaxJs;
 use serde_json::Value;
 
 const DIRS: [(i8, i8); 9] = [
@@ -47,7 +48,7 @@ const TOL: f64 = 1e-9;
 
 /// An arena event as the TS hooks record it (without the tick).
 fn same_event(e: &ArenaEvent, w: &Value) -> bool {
-    let num = |v: &Value, x: f64| v.as_f64().is_some_and(|y| (x - y).abs() <= TOL * 1f64.max(x.abs()));
+    let num = |v: &Value, x: f64| v.as_f64().is_some_and(|y| (x - y).abs() <= TOL * 1f64.max_js(x.abs()));
     match e {
         ArenaEvent::Bonus(b) => {
             let d = &w["data"];
@@ -108,9 +109,10 @@ fn check_map(id: &str) {
             arena.add_pawn(pid, bots.contains(&pid));
         }
         let states = run["states"].as_array().unwrap();
-        let worlds = run["worlds"].as_array().unwrap();
+        assert_eq!(states.len() as i64, end - tick0, "{what}: one state hash per tick");
         let want = run["events"].as_array().unwrap();
         let mut rows = run["rows"].as_array().unwrap().iter().peekable();
+        let mut worlds = run["worlds"].as_array().unwrap().iter().peekable();
         let mut events: Vec<(i64, ArenaEvent)> = Vec::new();
         let mut worst = 0.0f64;
         for (n, k) in (tick0 + 1..=end).enumerate() {
@@ -125,7 +127,12 @@ fn check_map(id: &str) {
                 );
             }
             if let Some(row) = rows.next_if(|r| r[0].as_i64() == Some(k)) {
-                worst = worst.max(check_bodies(&what, row, arena.pawns.iter().map(|p| (p.id, &p.body))));
+                assert_eq!(
+                    row.as_array().unwrap().len(),
+                    1 + arena.pawns.len() * 12,
+                    "{what}: tick {k} row length"
+                );
+                worst = worst.max_js(check_bodies(&what, row, arena.pawns.iter().map(|p| (p.id, &p.body))));
                 let extra = &row.as_array().unwrap()[1 + arena.pawns.len() * 10..];
                 for (p, g) in arena.pawns.iter().zip(extra.chunks(2)) {
                     let status = match p.status {
@@ -147,7 +154,7 @@ fn check_map(id: &str) {
                 states[n].as_str().unwrap(),
                 "{what}: state hash at tick {k} (compare the rows around it)"
             );
-            if let Some(w) = worlds.iter().find(|w| w[0].as_i64() == Some(k)) {
+            if let Some(w) = worlds.next_if(|w| w[0].as_i64() == Some(k)) {
                 assert_eq!(
                     arena.world.hash(false),
                     w[1].as_str().unwrap(),
@@ -155,10 +162,15 @@ fn check_map(id: &str) {
                 );
             }
         }
+        // (Rows and world hashes are in tick order: one left over was never compared.)
+        assert!(rows.next().is_none(), "{what}: a row outside the run");
+        assert!(worlds.next().is_none(), "{what}: a world hash outside the run");
         assert_eq!(events.len(), want.len(), "{what}: number of events");
         assert_eq!(arena.finished, ids(&run["finished"]), "{what}: finishing order");
         assert_eq!(arena.out, ids(&run["out"]), "{what}: elimination order");
-        for (p, s) in arena.pawns.iter().zip(run["stats"].as_array().unwrap()) {
+        let stats = run["stats"].as_array().unwrap();
+        assert_eq!(stats.len(), arena.pawns.len(), "{what}: stats per pawn");
+        for (p, s) in arena.pawns.iter().zip(stats) {
             let st = &p.stats;
             let got = [st.falls, st.shortcuts, st.kos, st.grabs, st.tackles];
             let want = ["falls", "shortcuts", "kos", "grabs", "tackles"].map(|k| s[k].as_u64().unwrap() as u32);

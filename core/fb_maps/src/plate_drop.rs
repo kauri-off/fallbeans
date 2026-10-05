@@ -6,7 +6,7 @@ use fb_shared::rng::shuffle;
 use fb_sim::bots::{ArenaOpts, arena_brain};
 use fb_sim::builder::Builder;
 use fb_sim::collider::ColId;
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
@@ -111,7 +111,7 @@ impl MapDef for PlateDrop {
                 g += 1;
                 k += 1;
             }
-            at += 2.3f64.max(5.2 - k as f64 * 0.07);
+            at += 2.3f64.max_js(5.2 - k as f64 * 0.07);
         }
         for r in [3.0, 7.0] {
             for a in 0..4 {
@@ -185,7 +185,7 @@ impl MapDef for PlateDrop {
             plate_at2(x, z).is_some_and(|f| f - t > WARN + 2.0)
         }));
         opts.jump_when = Some(Box::new(move |bot| {
-            let t = bot.t.max(0.0);
+            let t = bot.t.max_js(0.0);
             if t <= 0.0 {
                 return false;
             }

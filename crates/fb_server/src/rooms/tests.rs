@@ -599,6 +599,19 @@ fn a_bot_gives_up_its_place_and_status_follows_the_arena() {
     assert_eq!(t.room.arena.pawn(b.id).map(|p| p.status), Some(PawnStatus::Play));
 }
 
+#[test]
+fn forgets_the_debug_trace_of_whoever_leaves_the_arena() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    t.ctl(a, ClientMsg::AddBot);
+    let bot = t.lobby(a).players.iter().find(|p| p.bot).unwrap().id;
+    t.advance(0.5);
+    assert!(t.room.arena.trace.contains_key(&bot));
+    t.ctl(a, ClientMsg::RemoveBot(bot));
+    assert!(!t.room.arena.trace.contains_key(&bot));
+    assert!(t.room.arena.trace.contains_key(&a.id));
+}
+
 // ------------------------------------------------------------------ hub
 
 struct HubBench {
@@ -635,8 +648,13 @@ impl HubBench {
     }
 
     fn open_as(&mut self, uid: &str) -> ConnId {
+        self.open_from("127.0.0.1", uid)
+    }
+
+    fn open_from(&mut self, ip: &str, uid: &str) -> ConnId {
         self.next_conn += 1;
-        self.hub.open(self.next_conn, "127.0.0.1".into(), uid.into());
+        self.hub.open(self.next_conn, ip.into(), uid.into());
+        self.pump();
         self.next_conn
     }
 
@@ -887,4 +905,62 @@ fn hub_closes_a_room_that_panics_and_carries_on() {
         },
     );
     assert_eq!(t.hub.listed().count(), 1);
+}
+
+#[test]
+fn one_address_cannot_take_the_whole_server() {
+    let mut t = HubBench::new(false);
+    let hello = |t: &mut HubBench, ip: &str, uid: &str, practice: Option<&str>| {
+        let c = t.open_from(ip, uid);
+        t.send(
+            c,
+            ClientMsg::Hello(Hello {
+                practice: practice.map(String::from),
+                ..Default::default()
+            }),
+        );
+        c
+    };
+    let create = |t: &mut HubBench, c| {
+        t.send(
+            c,
+            ClientMsg::Create {
+                title: String::new(),
+                private: false,
+            },
+        );
+        t.last(c, |m| matches!(m, ServerMsg::Welcome { .. })).is_some()
+    };
+    // Rooms: three per address, then "join one of them"; another address still opens its own.
+    for i in 0..3 {
+        let c = hello(&mut t, "203.0.113.7", &format!("r{i}"), None);
+        assert!(create(&mut t, c), "room {i}");
+    }
+    let c = hello(&mut t, "203.0.113.7", "r3", None);
+    assert!(!create(&mut t, c));
+    assert!(matches!(
+        t.last(c, |m| matches!(m, ServerMsg::Denied { .. })),
+        Some(ServerMsg::Denied {
+            reason: DenyReason::Limit,
+            ..
+        })
+    ));
+    let other = hello(&mut t, "198.51.100.2", "x", None);
+    assert!(create(&mut t, other));
+    // Practice: one per address.
+    let p = hello(&mut t, "203.0.113.9", "p1", Some("hex-a-gone"));
+    assert!(!t.closed(p));
+    let p2 = hello(&mut t, "203.0.113.9", "p2", Some("hex-a-gone"));
+    assert!(t.closed(p2));
+    // Connections: SESSIONS_PER_ADDRESS from one IPv6 network (any of its addresses), not from this machine.
+    for i in 0..super::hub::SESSIONS_PER_ADDRESS {
+        let c = t.open_from(&format!("2001:db8:5:6::{i:x}"), &format!("s{i}"));
+        assert!(!t.closed(c), "connection {i}");
+    }
+    let c = t.open_from("2001:db8:5:6::ffff", "s-last");
+    assert!(t.closed(c));
+    for i in 0..40 {
+        let c = t.open_from("127.0.0.1", &format!("l{i}"));
+        assert!(!t.closed(c), "local connection {i}");
+    }
 }

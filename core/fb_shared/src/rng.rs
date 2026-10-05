@@ -18,6 +18,7 @@ impl Rng {
         (t ^ (t >> 14)) as f64 / 4_294_967_296.0
     }
 
+    /// One element, drawn uniformly. Panics on an empty slice.
     pub fn pick<'a, T>(&mut self, a: &'a [T]) -> &'a T {
         &a[(self.next() * a.len() as f64).floor() as usize]
     }

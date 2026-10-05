@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::collider::{ColId, Collider, ColliderOpts, Shape};
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::map::{Cx, MapOut, Touches, json};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
@@ -518,7 +518,7 @@ impl Builder {
         for sx in [-0.45, 0.45] {
             self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco.clone());
         }
-        let rungs = m::round_js(h / 0.38).max(2.0) as u32;
+        let rungs = m::round_js(h / 0.38).max_js(2.0) as u32;
         for k in 1..rungs {
             self.cyl(
                 0.0,
@@ -810,7 +810,7 @@ impl Builder {
             let used = if t < pair.at || t >= pair.closed_until {
                 0.0
             } else {
-                ((t - pair.at) / 0.15).min((pair.closed_until - t) / 0.2).min(1.0)
+                ((t - pair.at) / 0.15).min_js((pair.closed_until - t) / 0.2).min_js(1.0)
             };
             let shut = if exit_only {
                 0.0

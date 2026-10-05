@@ -261,13 +261,18 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
     let mut results = Vec::new();
     for id in &o.maps {
         if fb_maps::GAMES.iter().all(|m| m.meta().id != id) {
+            let msg = if fb_maps::by_id(id).is_some() {
+                format!("{id} is not a game: map audits run on games only")
+            } else {
+                format!("unknown map {id}")
+            };
             results.push(AuditResult {
                 audit: "maps",
                 map: id.clone(),
                 ms: 0,
                 findings: vec![Finding {
                     severity: Severity::Error,
-                    msg: format!("unknown map {id}"),
+                    msg,
                     at: None,
                     t: None,
                     data: None,

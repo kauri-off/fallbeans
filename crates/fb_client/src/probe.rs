@@ -1,6 +1,5 @@
 //! Whether UDP works again, asked while playing over WebSocket: a netcode connection of its own, in an app of
 //! its own (the game's world must not see a second client), that has to come up and hold.
-use core::net::{Ipv4Addr, SocketAddr};
 use core::time::Duration;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Instant;
@@ -13,10 +12,10 @@ use lightyear::connection::client::{Connect, Connected, Disconnect, Disconnected
 use lightyear::netcode::NetcodeClient;
 use lightyear::netcode::auth::Authentication;
 use lightyear::netcode::client_plugin::{NetcodeClientPlugin, NetcodeConfig};
-use lightyear::prelude::{Link, LinkConditionerConfig, LocalAddr, RecvLinkConditioner, UdpIo};
+use lightyear::prelude::{Link, LinkConditionerConfig, RecvLinkConditioner, UdpIo};
 use lightyear_udp::UdpPlugin;
 
-use crate::net::{UDP_TRY_S, request, token_of};
+use crate::net::{UDP_TRY_S, local_addr_for, request, token_of};
 
 /// How long the probe's connection has to hold.
 const HOLD_S: f32 = 5.0;
@@ -46,11 +45,12 @@ fn run(url: &str, req: &SessionRequest, conditioner: Option<LinkConditionerConfi
     ));
     app.finish();
     app.cleanup();
+    let local = local_addr_for(netcode.inner.server_addr());
     let link = app
         .world_mut()
         .spawn((
             Link::default().with_conditioner(conditioner.map(RecvLinkConditioner::new)),
-            LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0)),
+            local,
             UdpIo::default(),
             netcode,
         ))

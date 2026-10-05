@@ -57,6 +57,8 @@ fn pool_for(mode: Mode, players: u32) -> Vec<&'static GameMeta> {
 /// The rounds of one game. Every player plays every round; genres alternate where possible and a big
 /// "finale" map closes the game when the pool has one.
 pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<&'static str> {
+    // (Nobody in the room yet: plan as for one, every game fits it.)
+    let players = players.max(1);
     let custom: Vec<&'static str> = pl
         .games
         .iter()
@@ -69,6 +71,10 @@ pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<&'static str
     }
     let n = pl.rounds.clamp(1, 12) as usize;
     let pool = pool_for(if pl.mode == Mode::Custom { Mode::Mix } else { pl.mode }, players);
+    if pool.is_empty() {
+        // (Every mode has games for one player; without any, the bag below would never fill.)
+        return Vec::new();
+    }
     let mut finales: Vec<&GameMeta> = pool.iter().copied().filter(|g| g.finale).collect();
     let last = if n > 1 && !finales.is_empty() {
         shuffle(&mut finales, rng);
@@ -174,6 +180,19 @@ mod tests {
             for id in plan_game(5, &races, &mut rng) {
                 assert_eq!(game(id).unwrap().genre, Genre::Race);
             }
+        }
+    }
+
+    #[test]
+    fn plans_a_game_for_an_empty_room() {
+        for mode in [Mode::Mix, Mode::Races, Mode::Survival, Mode::Custom] {
+            let pl = Playlist {
+                mode,
+                ..Default::default()
+            };
+            let plan = plan_game(0, &pl, &mut Rng::new(5));
+            assert_eq!(plan.len(), 5, "{mode:?}");
+            assert!(plan.iter().all(|id| fits(game(id).unwrap(), 1)), "{mode:?}");
         }
     }
 

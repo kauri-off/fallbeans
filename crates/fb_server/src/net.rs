@@ -7,11 +7,15 @@ use lightyear::connection::client::Connected;
 use lightyear::netcode::{NetcodeServer, TokenUserData};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use lightyear::websocket::prelude::tungstenite::protocol::WebSocketConfig;
 
-use crate::auth::uid_from_user_data;
+use crate::auth::from_user_data;
 use crate::http::Keys;
 use crate::opts::Opts;
 use crate::play::{Rooms, conn_of};
+
+/// Largest WebSocket frame or message a client may send (bytes).
+const WS_MESSAGE_MAX: usize = 64 * 1024;
 
 pub struct NetPlugin;
 
@@ -32,9 +36,15 @@ impl Plugin for NetPlugin {
 fn start_server(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>) {
     let udp_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), opts.udp_port);
     let ws_addr = SocketAddr::new(opts.ws_addr, opts.ws_port);
+    // A client sends one netcode packet (about a kilobyte) per message: tungstenite's defaults (16 MB frames,
+    // 64 MB messages) would let anyone who opens the port make the server buffer that much per connection.
+    let socket = WebSocketConfig::default()
+        .max_frame_size(Some(WS_MESSAGE_MAX))
+        .max_message_size(Some(WS_MESSAGE_MAX));
     let ws_config = lightyear::websocket::server::ServerConfig::builder()
         .with_bind_address(ws_addr)
-        .with_no_encryption();
+        .with_no_encryption()
+        .with_socket_config(socket);
     let server = commands
         .spawn((
             Name::new("server"),
@@ -80,11 +90,20 @@ fn on_connected(
     let (Ok((remote, addr, data)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };
-    // The address the link came from: a player's own, a VPN's exit, or nginx's (WebSocket: its access log
-    // has the player's).
-    let from = addr.map_or_else(|| "?".to_string(), |a| a.0.ip().to_string());
-    info!("connected: {:?} from {from}", remote.0);
-    let uid = data.map(|d| uid_from_user_data(&d.0)).unwrap_or_default();
+    // The address the link came from: a player's own, a VPN's exit, or nginx's for a WebSocket. Through a
+    // local proxy, the address the client asked for its token from (in the sealed token) stands for the
+    // player: otherwise every WebSocket player would share 127.0.0.1, and its PIN guesses.
+    let (uid, asked_from) = data.map(|d| from_user_data(&d.0)).unwrap_or_default();
+    let link_ip = addr.map(|a| a.0.ip());
+    let ip = match link_ip {
+        Some(ip) if !ip.is_loopback() => Some(ip),
+        _ => asked_from.or(link_ip),
+    };
+    let from = ip.map_or_else(|| "?".to_string(), |ip| ip.to_string());
+    match link_ip.filter(|l| Some(*l) != ip) {
+        Some(via) => info!("connected: {:?} from {from} via {via}", remote.0),
+        None => info!("connected: {:?} from {from}", remote.0),
+    }
     rooms.hub.open(conn_of(link), from, uid);
 }
 

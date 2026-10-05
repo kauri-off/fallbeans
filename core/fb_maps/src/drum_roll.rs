@@ -7,7 +7,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, pick_sections, race_course, rotor_decks, trampoline_gap,
     with_rests,
 };
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -112,7 +112,7 @@ struct Pulse {
 
 impl Pulse {
     fn angle(self, t: f64) -> f64 {
-        let tt = t.max(0.0);
+        let tt = t.max_js(0.0);
         self.base * tt - (self.amp / self.w) * (m::cos(tt * self.w + self.ph) - m::cos(self.ph))
     }
 }
@@ -196,7 +196,8 @@ fn drum_stairs() -> Segment {
             z: end_z + 6.0,
             y: end_y,
             routes: vec![stairs_route(), stairs_route(), beam_route],
-            forbidden: Some(Box::new(move |p| p.y > beam_y + 3.0)),
+            // Only over this section: the course ORs every section's zone over the whole map.
+            forbidden: Some(Box::new(move |p| p.z > z0 && p.z < end_z && p.y > beam_y + 3.0)),
             checkpoint: Some((end_z + 0.5, V3::new(0.0, end_y + 0.1, end_z + 3.0))),
         }
     })
@@ -284,7 +285,7 @@ fn peg_drums(n: u32) -> Segment {
             let w = -(0.55 + s.rng() * 0.25);
             let ph = s.rng() * 6.0;
             let pegs = 3;
-            let ang = move |t: f64| ph + t.max(0.0) * w;
+            let ang = move |t: f64| ph + t.max_js(0.0) * w;
             drum(s.b, 0.0, y + 0.2, c, r, 9.0, ang, PALS[i as usize % 4], false, pegs);
             // Pegs sit at angle β = offset + ang(t) on the drum (β = 0 on top, growing towards +z) and
             // come round to the bot at |w| rad/s: jump just before one reaches it.
@@ -344,7 +345,7 @@ fn roller_bridge(n: u32) -> Segment {
                 c,
                 r,
                 7.0,
-                move |t| t.max(0.0) * sp,
+                move |t| t.max_js(0.0) * sp,
                 PALS[i as usize % 4],
                 false,
                 0,

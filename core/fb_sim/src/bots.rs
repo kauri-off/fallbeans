@@ -5,7 +5,7 @@ use core::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::V3;
 use crate::nav::{Nav, NavPoint, PathOpts};
 use crate::physics::{Body, BodyState, DIVE_SPEED, GRAVITY, RUN_SPEED};
@@ -15,6 +15,8 @@ use fb_shared::rng::Rng;
 
 /// Bot brains run at 20 Hz (BOT_EVERY ticks); timers below use this step.
 pub const BOT_DT: f64 = 1.0 / 20.0;
+// BOT_DT is written out (not BOT_EVERY · DT, which rounds differently): keep the two in step.
+const _: () = assert!(fb_shared::TICK_RATE == 20 * fb_shared::BOT_EVERY);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BotInput {
@@ -184,9 +186,9 @@ pub struct Waypoint {
     /// Stick deflection towards it (default: full). Careful sections go slower.
     pub speed: Option<f64>,
     /// Somewhere to go instead for now; None: carry on along the path.
-    pub detour: Option<Box<dyn Fn(&mut BotView) -> Option<(f64, f64)> + Send + Sync>>,
+    pub detour: Option<Detour>,
     /// Full control for a special stretch (returns false to follow the waypoint as usual).
-    pub drive: Option<Box<dyn Fn(&mut BotView, &mut BotInput) -> bool + Send + Sync>>,
+    pub drive: Option<Drive>,
 }
 
 pub type Detour = Box<dyn Fn(&mut BotView) -> Option<(f64, f64)> + Send + Sync>;
@@ -291,7 +293,7 @@ pub fn steer(bot: &BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f64) ->
         out.mz = 0.0;
         return d;
     }
-    let k = (d / 1.5).min(1.0) * speed;
+    let k = (d / 1.5).min_js(1.0) * speed;
     out.mx = (dx / d) * k;
     out.mz = (dz / d) * k;
     d
@@ -303,7 +305,7 @@ pub fn follow(bot: &BotView, tx: f64, tz: f64, out: &mut BotInput) -> f64 {
     let ex = tx - b.pos.x;
     let dz = tz - b.pos.z;
     let mx = (ex * 0.55).clamp(-1.0, 1.0);
-    let mz = m::sign(dz) * (1.0 - mx.abs() * 0.5).min(dz.abs() * 0.6);
+    let mz = m::sign(dz) * (1.0 - mx.abs() * 0.5).min_js(dz.abs() * 0.6);
     let l = m::hypot(mx, mz);
     out.mx = if l > 1.0 { mx / l } else { mx };
     out.mz = if l > 1.0 { mz / l } else { mz };
@@ -363,8 +365,8 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
         bot.plan.tz = tz;
         bot.plan.at = bot.t;
     }
-    let path = match &bot.plan.path {
-        Some(p) if !p.is_empty() => p.clone(),
+    let path: &[NavPoint] = match bot.plan.path.as_deref() {
+        Some(p) if !p.is_empty() => p,
         _ => {
             steer(bot, tx, tz, out, speed);
             return direct;
@@ -372,21 +374,22 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
     };
     // Move on past points we have reached or passed, and past points that would be a step back or
     // sideways (a fresh route starts at the nearest cell, which may lie behind).
-    while bot.plan.i < path.len() - 1 {
-        let p = path[bot.plan.i];
-        let q = path[bot.plan.i + 1];
+    let mut i = bot.plan.i;
+    while i < path.len() - 1 {
+        let p = path[i];
+        let q = path[i + 1];
         let d = m::hypot(p.x - b.pos.x, p.z - b.pos.z);
         let seg = m::hypot(q.x - p.x, q.z - p.z);
         let ahead = (q.x - p.x) * (b.pos.x - p.x) + (q.z - p.z) * (b.pos.z - p.z) > 0.0;
         let closer = m::hypot(q.x - b.pos.x, q.z - b.pos.z) <= seg + 0.2;
         let level = (p.y - b.pos.y).abs() < 0.6 && (q.y - b.pos.y).abs() < 0.6;
         if d < 0.7 || (!q.jump && !p.jump && d < 2.0 && (ahead || (closer && level))) {
-            bot.plan.i += 1;
+            i += 1;
         } else {
             break;
         }
     }
-    let i = bot.plan.i;
+    bot.plan.i = i;
     let p = path[i];
     let last = i == path.len() - 1;
     // Aim a little further along when the way there is plain ground: rounded turns, not zig-zags.
@@ -425,7 +428,7 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
         } else {
             0.0
         };
-        let when = if climb { 1.3 } else { (gap * 0.8 + 0.5).min(2.8) };
+        let when = if climb { 1.3 } else { (gap * 0.8 + 0.5).min_js(2.8) };
         if d < when && (along > 2.5 || climb) {
             out.jump = true;
         }
@@ -626,9 +629,9 @@ pub fn smart_dive(bot: &mut BotView, out: &mut BotInput, land: Option<&LandCheck
         if short.is_some_and(|s| s.safe) || (land.is_some() && short.is_none()) {
             return;
         }
-        let along = (b.vel.x * fx + b.vel.z * fz).max(0.0);
-        let sp = DIVE_SPEED.max(along.min(DIVE_SPEED * 1.25));
-        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y.max(3.0)) else {
+        let along = (b.vel.x * fx + b.vel.z * fz).max_js(0.0);
+        let sp = DIVE_SPEED.max_js(along.min_js(DIVE_SPEED * 1.25));
+        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y.max_js(3.0)) else {
             return;
         };
         if !far.safe {
@@ -674,7 +677,7 @@ pub fn shove_off(bot: &BotView, o: V3, ok: &dyn Fn(f64, f64) -> bool) -> Option<
     let beyond = [2.0, 3.0, 4.0].iter().any(|&k| !ok(o.x + ux * k, o.z + uz * k));
     let own = [0.8, 1.6]
         .iter()
-        .all(|&k: &f64| ok(b.pos.x + ux * k.min(d), b.pos.z + uz * k.min(d)));
+        .all(|&k: &f64| ok(b.pos.x + ux * k.min_js(d), b.pos.z + uz * k.min_js(d)));
     (beyond && own).then_some((ux, uz, d))
 }
 
@@ -799,7 +802,7 @@ fn incoming(bot: &BotView) -> Option<Threat> {
         } else if o.reach && d < 2.6 {
             // Somebody about to grab: back off out of reach.
             let closing = (o.vel.x * rx + o.vel.z * rz) / d;
-            let t = (d - 2.1).max(0.0) / closing.max(1.0);
+            let t = (d - 2.1).max_js(0.0) / closing.max_js(1.0);
             if best.as_ref().is_none_or(|b| t < b.t) {
                 best = Some(Threat {
                     t,
@@ -836,7 +839,7 @@ fn dodge(bot: &mut BotView, out: &mut BotInput, safe: Option<&dyn Fn(f64, f64) -
     let skill = mem.skill();
     let react = mem.react.unwrap_or(0.15);
     // One look per attack: whether this bot notices it in time is decided once.
-    mem.dodge_seen = Some(t + 0.3f64.max(threat.t + 0.1));
+    mem.dodge_seen = Some(t + 0.3f64.max_js(threat.t + 0.1));
     if threat.t < react * 0.6 || bot.rng.next() > 0.25 + skill * 0.6 {
         return false;
     }
@@ -846,7 +849,7 @@ fn dodge(bot: &mut BotView, out: &mut BotInput, safe: Option<&dyn Fn(f64, f64) -
     let mem = &mut *bot.mem;
     mem.dodges = Some(mem.dodges.unwrap_or(0.0) + 1.0);
     if safe.is_some() && step {
-        mem.dodge_until = Some(t + 0.45f64.min(threat.t + 0.2));
+        mem.dodge_until = Some(t + 0.45f64.min_js(threat.t + 0.2));
         mem.dodge_x = Some(threat.ax);
         mem.dodge_z = Some(threat.az);
         out.mx = threat.ax;
@@ -1127,9 +1130,9 @@ pub fn aim_landing(bot: &BotView, tx: f64, ty: f64, tz: f64, out: &mut BotInput)
         steer(bot, tx, tz, out, 1.0);
         return false;
     }
-    let t = 0.08f64.max((b.vel.y + m::sqrt(disc)) / GRAVITY);
+    let t = 0.08f64.max_js((b.vel.y + m::sqrt(disc)) / GRAVITY);
     // (Air control: full stick asks for a run, or for the speed the body already flies at.)
-    let top = RUN_SPEED.max(m::hypot(b.vel.x, b.vel.z));
+    let top = RUN_SPEED.max_js(m::hypot(b.vel.x, b.vel.z));
     let mut mx = dx / t / top;
     let mut mz = dz / t / top;
     let l = m::hypot(mx, mz);
@@ -1160,13 +1163,7 @@ fn hop_x(h: &Hop, t: f64) -> f64 {
 }
 
 /// Bouncing across pads to a landing spot: a waypoint `drive`. Returns false once on the ground past `edge`.
-pub fn hop_chain(
-    key: String,
-    hops: Vec<Hop>,
-    land: V3,
-    edge: f64,
-    ready: Option<BotTest>,
-) -> Box<dyn Fn(&mut BotView, &mut BotInput) -> bool + Send + Sync> {
+pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option<BotTest>) -> Drive {
     Box::new(move |bot, out| {
         let b = bot.body;
         let p = b.pos;
@@ -1201,11 +1198,11 @@ pub fn hop_chain(
                 let mut hi = f64::NEG_INFINITY;
                 for k in 0..40 {
                     let x = hop_x(h, bot.t + k as f64 * 0.25);
-                    lo = lo.min(x);
-                    hi = hi.max(x);
+                    lo = lo.min_js(x);
+                    hi = hi.max_js(x);
                 }
                 let wx = if hi - lo > 1.0 {
-                    (hi - 0.5).min((lo + 0.5).max(p.x))
+                    (hi - 0.5).min_js((lo + 0.5).max_js(p.x))
                 } else {
                     lo
                 };
@@ -1603,9 +1600,9 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
             score -= (m::hypot(x - cx, z - cz) - bot.mem.pref.unwrap_or(5.0)).abs() * 0.25;
             let mut crowd: f64 = 9.0;
             for o in bot.others {
-                crowd = crowd.min(m::hypot(o.pos.x - x, o.pos.z - z));
+                crowd = crowd.min_js(m::hypot(o.pos.x - x, o.pos.z - z));
             }
-            score += crowd.min(4.0) * (0.6 - aggro * 0.5);
+            score += crowd.min_js(4.0) * (0.6 - aggro * 0.5);
             score -= m::hypot(x - b.pos.x, z - b.pos.z) * 0.08;
             score += bot.rng.next() * 1.5;
             if score > best {

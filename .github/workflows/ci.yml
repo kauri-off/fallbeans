@@ -4,6 +4,14 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     strategy:
@@ -29,7 +37,7 @@ jobs:
         run: cargo xtask stress --clients 4 --secs 30 --lag 40 --jitter 10 --loss 0.02
       - name: Stress logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stress-${{ matrix.os }}
           path: target/stress/

@@ -1,5 +1,5 @@
 //! Rare one-off bonuses on the course: spots and kinds follow from the seed; the server decides who took one.
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::V3;
 use crate::physics::{Body, power};
 use fb_shared::rng::Rng;
@@ -52,7 +52,7 @@ impl Bonuses {
             let s = spots[pick];
             let kind = kinds[(rng.next() * kinds.len() as f64).floor() as usize];
             let appear_at = if arena {
-                12.0 + rng.next() * (duration * 0.55 - 12.0).max(1.0)
+                12.0 + rng.next() * (duration * 0.55 - 12.0).max_js(1.0)
             } else {
                 0.0
             };

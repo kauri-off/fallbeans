@@ -650,7 +650,7 @@ pub fn animate_beans(
                 .standings
                 .iter()
                 .find(|s| s.id == id.0)
-                .map(|s| s.place as usize - 1);
+                .and_then(|s| (s.place as usize).checked_sub(1));
             podium_pose(place, session.standings.len().max(1))
         });
         let (yaw, _, _) = root.rotation.to_euler(EulerRot::YXZ);

@@ -6,7 +6,7 @@ use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, bumper_ramp, pick_sections, race_course, seesaws, trampoline_gap, with_rests,
 };
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -61,7 +61,7 @@ fn mushroom_forest(n: usize, power: f64) -> Segment {
             }
             z += 5.0 + s.rng() * 1.2;
             let dir = if s.rng() < 0.5 { -1.0 } else { 1.0 };
-            x = (-4f64).max(4f64.min(x + dir * (1.5 + s.rng() * 1.8)));
+            x = (-4f64).max_js(4f64.min_js(x + dir * (1.5 + s.rng() * 1.8)));
             top += 0.7;
         }
         let land_y = top + 1.2;

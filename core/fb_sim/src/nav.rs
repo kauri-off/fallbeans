@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use crate::collider::{ColId, Collider, Shape};
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::{V3, dot, len_sq, normalize};
 use crate::world::World;
 
@@ -79,7 +79,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                     axis = i as i32;
                     sign = sg;
                 }
-                t1 = t1.min(b);
+                t1 = t1.min_js(b);
                 if t0 > t1 {
                     return None;
                 }
@@ -123,8 +123,8 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                 side_a = (-b - q) / (2.0 * a);
                 side_b = (-b + q) / (2.0 * a);
             }
-            t0 = cap_a.max(side_a);
-            t1 = cap_b.min(side_b);
+            t0 = cap_a.max_js(side_a);
+            t1 = cap_b.min_js(side_b);
             if t0 > t1 {
                 return None;
             }
@@ -153,7 +153,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
     }
     n = c.cur.transform_dir(n);
     Some(Span {
-        hi: top - t0.max(0.0),
+        hi: top - t0.max_js(0.0),
         lo: top - t1,
         ny: n.y,
         col: c.index,
@@ -285,11 +285,11 @@ impl NavGrid {
         for c in world.colliders.iter().filter(|c| solid(c)) {
             any = true;
             let (ex, ez) = c.extent_xz();
-            x0 = x0.min(c.center.x - ex);
-            x1 = x1.max(c.center.x + ex);
-            z0 = z0.min(c.center.z - ez);
-            z1 = z1.max(c.center.z + ez);
-            top = top.max(c.center.y + c.radius);
+            x0 = x0.min_js(c.center.x - ex);
+            x1 = x1.max_js(c.center.x + ex);
+            z0 = z0.min_js(c.center.z - ez);
+            z1 = z1.max_js(c.center.z + ez);
+            top = top.max_js(c.center.y + c.radius);
         }
         if !any {
             x0 = -1.0;
@@ -298,8 +298,8 @@ impl NavGrid {
             z1 = 1.0;
             top = 1.0;
         }
-        let nx = (((x1 - x0) / NAV_CELL).ceil() + 2.0).max(1.0) as usize;
-        let nz = (((z1 - z0) / NAV_CELL).ceil() + 2.0).max(1.0) as usize;
+        let nx = (((x1 - x0) / NAV_CELL).ceil() + 2.0).max_js(1.0) as usize;
+        let nz = (((z1 - z0) / NAV_CELL).ceil() + 2.0).max_js(1.0) as usize;
         let mut nav = NavGrid::new(x0 - NAV_CELL, z0 - NAV_CELL, nx, nz);
         let mut spans: Vec<Vec<Span>> = Vec::with_capacity(nx * nz);
         let mut near = Vec::new();
@@ -318,7 +318,8 @@ impl NavGrid {
                         list.push(sp);
                     }
                 }
-                list.sort_by(|a, b| b.hi.partial_cmp(&a.hi).unwrap());
+                // (`hi` is never NaN for a finite top; were it, JS's comparator would call it equal.)
+                list.sort_by(|a, b| b.hi.partial_cmp(&a.hi).unwrap_or(core::cmp::Ordering::Equal));
                 let cell = iz * nx + ix;
                 let mut layer = 0;
                 for (si, s) in list.iter().enumerate() {
@@ -425,7 +426,8 @@ impl NavGrid {
     fn cell_of(&self, x: f64, z: f64) -> i64 {
         let ix = ((x - self.x0) / NAV_CELL).floor();
         let iz = ((z - self.z0) / NAV_CELL).floor();
-        if ix < 0.0 || iz < 0.0 || ix >= self.nx as f64 || iz >= self.nz as f64 {
+        // (Written so that NaN is off the grid too.)
+        if !(ix >= 0.0 && iz >= 0.0 && ix < self.nx as f64 && iz < self.nz as f64) {
             return -1;
         }
         iz as i64 * self.nx as i64 + ix as i64
@@ -492,7 +494,7 @@ impl<'a> Nav<'a> {
         Self { grid, world }
     }
 
-    /// Ground height under (x, z) near height y (within `tol`, 1.2 by default), or None.
+    /// Ground height under (x, z) within `tol` of height y (TS defaulted `tol` to 1.2), or None.
     pub fn ground_at(&self, x: f64, z: f64, y: f64, tol: f64) -> Option<f64> {
         let g = self.grid;
         let id = g.layer_near(self.world, g.cell_of(x, z), y, tol);
@@ -565,11 +567,16 @@ impl<'a> Nav<'a> {
             return None;
         }
         let start = start as usize;
-        let radius = NAV_CELL.max(opts.radius.unwrap_or(0.8));
+        let radius = NAV_CELL.max_js(opts.radius.unwrap_or(0.8));
         let max_nodes = opts.max_nodes.unwrap_or(6000);
         let mut guard = g.search.lock().unwrap_or_else(|e| e.into_inner());
         let s = &mut *guard;
-        s.generation += 1;
+        s.generation = s.generation.wrapping_add(1);
+        if s.generation == 0 {
+            // Wrapped round: stamps of old searches would read as this one's.
+            s.seen.fill(0);
+            s.generation = 1;
+        }
         let gen_now = s.generation;
         s.heap.clear();
         let h = |id: usize| {

@@ -70,13 +70,21 @@ pub fn candidates(addr: &str) -> Vec<String> {
         return vec![format!("http://[{addr}]:{HTTP_PORT}/fallbeans")];
     }
     let (host, port) = match addr.rsplit_once(':') {
+        // `[v6]` without a port.
+        _ if addr.starts_with('[') && addr.ends_with(']') => (addr, None),
         Some((h, p)) if !h.contains(':') || h.starts_with('[') => match p.parse::<u16>() {
             Ok(p) => (h, Some(p)),
             Err(_) => return vec![],
         },
         _ => (addr, None),
     };
-    if host.is_empty() {
+    if host.is_empty()
+        || (host.starts_with('[')
+            && !host
+                .strip_prefix('[')
+                .and_then(|h| h.strip_suffix(']'))
+                .is_some_and(|h| h.parse::<core::net::Ipv6Addr>().is_ok()))
+    {
         return vec![];
     }
     if let Some(p) = port {
@@ -229,7 +237,8 @@ mod tests {
         assert_eq!(c("http://h:1/x/fallbeans"), ["http://h:1/x/fallbeans"]);
         assert_eq!(c("::1"), ["http://[::1]:5887/fallbeans"]);
         assert_eq!(c("[::1]:7000"), ["http://[::1]:7000/fallbeans"]);
-        for bad in ["", "a b", "h:x", "ftp://h", "h/x", ":80"] {
+        assert_eq!(c("[::1]"), ["http://[::1]:5887/fallbeans"]);
+        for bad in ["", "a b", "h:x", "ftp://h", "h/x", ":80", "[x]", "[::1]:x", "[mypc]:80"] {
             assert!(c(bad).is_empty(), "{bad}");
         }
     }

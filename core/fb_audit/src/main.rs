@@ -9,6 +9,20 @@ use fb_audit::{RunOpts, audit_names, format_report, run_audits};
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let valued = ["--only", "--skip", "--seed"];
+    let flags = ["--quick", "--metrics", "--notes", "--json"];
+    if let Some(bad) = args
+        .iter()
+        .find(|a| a.starts_with("--") && !valued.contains(&a.as_str()) && !flags.contains(&a.as_str()))
+    {
+        eprintln!(
+            "unknown option {bad} (usage: fb_audit [map…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics] [--notes] [--json])"
+        );
+        return ExitCode::from(2);
+    }
+    if let Some(n) = valued.iter().find(|n| args.last().is_some_and(|a| a == *n)) {
+        eprintln!("{n} takes a value");
+        return ExitCode::from(2);
+    }
     let opt = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
     let list = |n: &str| -> Vec<String> {
         opt(n)

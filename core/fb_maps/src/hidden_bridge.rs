@@ -10,6 +10,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, moving_platforms, pick_sections, pistons, race_course, rotor_decks,
     seg_emit, tipping_bridge, with_rests,
 };
+use fb_sim::m::MinMaxJs;
 use fb_sim::map::{Cx, GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -351,11 +352,11 @@ fn glass_bridge(id: usize, rows: usize, cols: usize, glove_rows: &'static [usize
             }
             // Line up first, then step straight across: cutting the corner would cross a broken pane's hole.
             let on = tiles.iter().find(|t| t.collider as i32 == bot.body.ground_col);
-            let exit_x = on.map_or(target.x, |on| (on.x - 0.95).max((on.x + 0.95).min(target.x)));
+            let exit_x = on.map_or(target.x, |on| (on.x - 0.95).max_js((on.x + 0.95).min_js(target.x)));
             let exit_z = on.map_or(target.z - PANE / 2.0 - 0.4, |on| on.z + PANE / 2.0) - 0.45;
             let aligned = (p.x - exit_x).abs() < 0.35 || p.z > exit_z + 0.2;
             if standing && !aligned && p.z < target.z - PANE / 2.0 {
-                steer(bot, exit_x, exit_z.min(p.z.max(exit_z - 1.0)), out, 0.7);
+                steer(bot, exit_x, exit_z.min_js(p.z.max_js(exit_z - 1.0)), out, 0.7);
             } else {
                 steer(bot, target.x, target.z + 0.3, out, bot.mem.spd.unwrap_or(1.0));
             }

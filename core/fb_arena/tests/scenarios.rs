@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use fb_arena::{Stepper, tick_bodies, touch_hook};
 use fb_shared::input::InputFrame;
+use fb_shared::m::MinMaxJs;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
@@ -147,7 +148,7 @@ fn check(name: &str) {
         .unwrap()
         .iter()
         .find(|s| s["name"] == name)
-        .unwrap_or_else(|| panic!("no scenario {name} in scenarios.json: re-export with `cargo xtask golden`"));
+        .unwrap_or_else(|| panic!("no scenario {name} in scenarios.json.gz (the traces are frozen)"));
     let mut b = Builder::new(1, false);
     build(name, &mut b);
     let mut touches = core::mem::take(&mut b.touches);
@@ -194,7 +195,7 @@ fn check(name: &str) {
         let t = k as f64 * DT;
         let mut touch = touch_hook(&mut touches, true, t, None, &mut scores, &mut out);
         tick_bodies(&mut world, t, &mut steppers, &[], &mut touch);
-        worst = worst.max(check_bodies(name, row, bodies.iter().map(|(id, body, _)| (*id, body))));
+        worst = worst.max_js(check_bodies(name, row, bodies.iter().map(|(id, body, _)| (*id, body))));
         if let Some(h) = hashes.iter().find(|h| h[0].as_i64() == Some(k)) {
             assert_eq!(
                 world.hash(false),

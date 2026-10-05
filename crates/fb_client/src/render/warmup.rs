@@ -1,6 +1,7 @@
 //! Shader warm-up: at the room list a few tiny objects in front of the camera use every
 //! kind of material the game draws, so their pipelines are compiled before the first round instead of
 //! things popping in as it starts. They go once the game has been running a few seconds.
+use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
@@ -84,8 +85,22 @@ fn spawn(
         commands.spawn((
             Warm,
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(m),
+            MeshMaterial3d(m.clone()),
             at(i),
+            NotShadowCaster,
+            ChildOf(cam),
+        ));
+        // The same with a cross-fading visibility range: the levels of detail use another variant.
+        commands.spawn((
+            Warm,
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(m),
+            at(i + 5),
+            VisibilityRange {
+                start_margin: 0.0..0.0,
+                end_margin: 1.0e4..2.0e4,
+                use_aabb: false,
+            },
             NotShadowCaster,
             ChildOf(cam),
         ));

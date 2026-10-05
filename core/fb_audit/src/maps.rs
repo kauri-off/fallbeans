@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fb_arena::{Arena, ArenaKind, PawnStatus, Stepper, tick_bodies, touch_hook};
 use fb_shared::game::Genre;
+use fb_shared::m::MinMaxJs;
 use fb_shared::{DT, MAX_PLAYERS, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
 use fb_sim::map::MapDef;
@@ -134,6 +135,9 @@ fn meta(map: &'static dyn MapDef, _: &Ctx, out: &mut Out) {
     if fb_maps::GAMES.iter().filter(|g| g.meta().title == meta.title).count() > 1 {
         out.error(format!("title \"{}\" is used twice", meta.title));
     }
+    if fb_maps::MAPS.iter().filter(|g| g.meta().id == meta.id).count() != 1 {
+        out.error(format!("id \"{}\" is not in fb_maps::MAPS exactly once", meta.id));
+    }
     out.metric("duration", meta.duration);
     out.metric("genre", meta.genre.id());
 }
@@ -165,7 +169,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             }
         }
     }
-    let lowest = sp.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+    let lowest = sp.iter().map(|p| p.y).fold(f64::INFINITY, m::min);
     if spec.kill_y > lowest - 2.0 {
         out.error(format!(
             "killY {} is within 2 m of the lowest spawn (y {})",
@@ -202,7 +206,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 let start = sp
                     .iter()
                     .map(|&p| spec.progress.as_ref().map_or(p.z, |f| f(p)))
-                    .fold(f64::NEG_INFINITY, f64::max);
+                    .fold(f64::NEG_INFINITY, m::max);
                 if fin.z <= start {
                     out.error("the finish is not ahead of the spawns");
                 }
@@ -282,7 +286,7 @@ fn spawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut worst: f64 = 0.0;
     for (i, p) in a.spec.spawns.clone().into_iter().enumerate() {
         let r = stand_test(&mut a, p, 0.0, 2.0);
-        worst = worst.max(r.start.0);
+        worst = worst.max_js(r.start.0);
         if r.start.0 > 0.05 {
             let what = label(&a, r.start.1);
             out.error(format!("spawn {i} starts {} m inside {what}", r3(r.start.0)))
@@ -435,7 +439,7 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let local: Vec<Vec<V3>> = a.world.colliders.iter().map(sample_points).collect();
     let mut pairs: BTreeMap<(ColId, ColId), Clip> = BTreeMap::new();
     let step = if ctx.quick { 0.25 } else { 0.1 };
-    let end = meta.duration.min(if ctx.quick { 20.0 } else { 60.0 });
+    let end = meta.duration.min_js(if ctx.quick { 20.0 } else { 60.0 });
     let samples = (end / step).floor() as usize + 1;
     let mut near = Vec::new();
     let mut c = Contact::default();
@@ -684,11 +688,11 @@ fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
     }
     r.sim_ms = clock.ms();
     r.ticks = h.arena.tick - tick0;
-    r.bot_seconds = h.ids.len() as f64 * h.arena.time().max(1.0);
+    r.bot_seconds = h.ids.len() as f64 * h.arena.time().max_js(1.0);
     r.finish_times = h.finishes.iter().map(|f| f.1).collect();
     r.out_times = h.falls.iter().filter(|f| f.out).map(|f| f.t).collect();
     r.survivors = h.alive();
-    r.top_score = h.arena.scores.values().copied().fold(0.0, f64::max);
+    r.top_score = h.arena.scores.values().copied().fold(0.0, m::max);
     r.falls = h
         .falls
         .iter()
@@ -733,7 +737,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let first_outs: Vec<f64> = runs
         .iter()
         .filter(|r| !r.out_times.is_empty())
-        .map(|r| r.out_times.iter().copied().fold(f64::INFINITY, f64::min))
+        .map(|r| r.out_times.iter().copied().fold(f64::INFINITY, m::min))
         .collect();
     let bot_seconds: f64 = runs.iter().map(|r| r.bot_seconds).sum();
     let sim_ms: f64 = runs.iter().map(|r| r.sim_ms).sum();
@@ -775,7 +779,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             }
         }
         Genre::Survival => {
-            let first = first_outs.iter().copied().fold(meta.duration, f64::min);
+            let first = first_outs.iter().copied().fold(meta.duration, m::min);
             out.metric("firstOut", r1(first));
             out.metric("outP50", r1(median(&out_times)));
             out.metric(

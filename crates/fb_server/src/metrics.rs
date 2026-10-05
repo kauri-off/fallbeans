@@ -54,7 +54,7 @@ impl Usage {
             return (f64::NAN, f64::NAN);
         };
         let ms = p.accumulated_cpu_time();
-        let cpu = (ms - core::mem::replace(&mut self.cpu_ms, ms)) as f64 / 10.0 / span;
+        let cpu = ms.saturating_sub(core::mem::replace(&mut self.cpu_ms, ms)) as f64 / 10.0 / span;
         (cpu, p.memory() as f64 / 1048576.0)
     }
 }
@@ -85,7 +85,15 @@ fn report(
 ) {
     let now = time.elapsed_secs_f64();
     let span = now - t.last_report;
-    if opts.metrics_every <= 0.0 || span < opts.metrics_every {
+    if opts.metrics_every <= 0.0 || opts.metrics_every.is_nan() {
+        // Off: nothing reads the samples, which would otherwise pile up (120 a second, for good).
+        t.us.clear();
+        for mut st in &mut pawns {
+            st.missed = 0;
+        }
+        return;
+    }
+    if span < opts.metrics_every {
         return;
     }
     t.last_report = now;

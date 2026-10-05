@@ -70,3 +70,26 @@ pub static MAPS: &[&dyn MapDef] = &[
 pub fn by_id(id: &str) -> Option<&'static dyn MapDef> {
     MAPS.iter().copied().find(|m| m.meta().id == id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_are_the_games_then_the_lobby_and_the_podium() {
+        let ids = |list: &[&dyn MapDef]| list.iter().map(|m| m.meta().id).collect::<Vec<_>>();
+        let games = ids(GAMES);
+        let mut all = games.clone();
+        all.extend(["lobby", "podium"]);
+        assert_eq!(ids(MAPS), all);
+        let mut uniq = all.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), all.len(), "a map id is used twice");
+        for id in all {
+            assert_eq!(by_id(id).map(|m| m.meta().id), Some(id));
+        }
+        assert_eq!(lobby::META.id, "lobby");
+        assert_eq!(podium::META.id, "podium");
+    }
+}

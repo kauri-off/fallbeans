@@ -22,7 +22,8 @@ pub struct Opts {
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub http_addr: IpAddr,
     /// The address players reach the UDP port at, put into connect tokens (and checked by netcode). Default:
-    /// the address the client asked the HTTP API at when it is an IP, else 127.0.0.1, and no check.
+    /// the address the client asked the HTTP API at when it is an IP, else the address of our socket that
+    /// took the request (127.0.0.1 when unknown), and no check.
     #[arg(long)]
     pub public_host: Option<IpAddr>,
     /// The WebSocket URL players are given (default: wss://<host>/fallbeans/ws when asked through an https

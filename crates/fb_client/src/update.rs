@@ -116,13 +116,22 @@ fn start(mut commands: Commands, opts: Res<Opts>) {
     });
 }
 
-fn agent(timeout: Option<Duration>) -> ureq::Agent {
+/// `body`: how long a response's body may take (None: as long as the whole call may).
+fn agent(timeout: Option<Duration>, body: Option<Duration>) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(timeout)
         .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
+        .timeout_recv_body(body)
         .user_agent(concat!("fallbeans/", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
+}
+
+/// How long the download of `size` bytes may take: a stalled one ends with an error instead of
+/// "downloading" for ever (ureq has no idle timeout), a slow line (32 KB/s) still gets through.
+fn download_budget(size: u64) -> Duration {
+    Duration::from_secs(120 + size / 32_768)
 }
 
 /// Whether `tag` (`v0.2.0`, `0.2.0-alpha.2`) is a newer version than this build.
@@ -134,7 +143,7 @@ pub fn newer(tag: &str, current: &str) -> bool {
 /// The latest release, if newer than this build.
 fn latest(install: &Install) -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let v: serde_json::Value = agent(Some(Duration::from_secs(10)))
+    let v: serde_json::Value = agent(Some(Duration::from_secs(10)), None)
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .call()
@@ -224,6 +233,10 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
 impl Update {
     /// Downloads and installs the release found; the game restarts into it (`State::Restarting`: quit now).
     pub fn install(&mut self) {
+        // (Two clicks before the next frame would start two downloads into one file.)
+        if self.working.is_some() {
+            return;
+        }
         let (Some(install), Some(release)) = (self.install.clone(), self.release.clone()) else {
             return;
         };
@@ -258,8 +271,7 @@ fn fetch_and_install(
     sums_url: &str,
     got: &AtomicU64,
 ) -> Result<(), String> {
-    let agent = agent(None);
-    let sums = agent
+    let sums = agent(Some(Duration::from_secs(30)), None)
         .get(sums_url)
         .call()
         .and_then(|mut r| r.body_mut().read_to_string())
@@ -271,31 +283,46 @@ fn fetch_and_install(
             n.push(".new");
             PathBuf::from(n)
         }
-        _ => std::env::temp_dir().join(name),
+        // (The release's name for the file, never a path of its own.)
+        _ => std::path::Path::new(name)
+            .file_name()
+            .map(|n| std::env::temp_dir().join(n))
+            .ok_or_else(|| format!("{name}: not a file name"))?,
     };
-    let mut resp = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
-    let mut body = resp.body_mut().as_reader();
+    let mut resp = agent(None, Some(download_budget(size)))
+        .get(url)
+        .call()
+        .map_err(|e| format!("{url}: {e}"))?;
     let mut file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut hash = Sha256::new();
-    let mut buf = vec![0; 1 << 16];
     let mut total = 0u64;
-    loop {
-        let n = body.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
-        if n == 0 {
-            break;
+    let fetched = (|| {
+        let mut body = resp.body_mut().as_reader();
+        let mut buf = vec![0; 1 << 16];
+        loop {
+            let n = body.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&buf[..n]);
+            file.write_all(&buf[..n])
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            total += n as u64;
+            got.store(total, Ordering::Relaxed);
         }
-        hash.update(&buf[..n]);
-        file.write_all(&buf[..n])
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        total += n as u64;
-        got.store(total, Ordering::Relaxed);
-    }
-    file.sync_all().map_err(|e| format!("{}: {e}", path.display()))?;
+        file.sync_all().map_err(|e| format!("{}: {e}", path.display()))
+    })();
     drop(file);
     let have: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if total != size || have != want {
+    // A broken or wrong download leaves nothing behind (an AppImage's `.new` would sit next to the game).
+    let checked = fetched.and_then(|()| {
+        (total == size && have == want)
+            .then_some(())
+            .ok_or_else(|| format!("{name}: the download does not match the release"))
+    });
+    if let Err(e) = checked {
         let _ = std::fs::remove_file(&path);
-        return Err(format!("{name}: the download does not match the release"));
+        return Err(e);
     }
     match install {
         Install::Nsis => {
@@ -323,8 +350,12 @@ fn fetch_and_install(
     Ok(())
 }
 
-/// Opens a page in the system's browser.
+/// Opens a page in the system's browser (web pages only: `explorer` and `xdg-open` open files too).
 pub fn open_url(url: &str) {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        warn!("not a web page: {url}");
+        return;
+    }
     let r = if cfg!(windows) {
         std::process::Command::new("explorer").arg(url).spawn()
     } else if cfg!(target_os = "macos") {
@@ -349,6 +380,16 @@ mod tests {
         assert!(!newer("v0.1.0-alpha", "0.1.0-alpha"));
         assert!(!newer("v0.0.9", "0.1.0-alpha"));
         assert!(!newer("nightly", "0.1.0-alpha"));
+    }
+
+    #[test]
+    fn a_slow_download_still_fits() {
+        // 100 MB at 32 KB/s: under an hour, and a stall ends.
+        let b = download_budget(100 << 20);
+        assert!(
+            b >= Duration::from_secs(3200) && b <= Duration::from_secs(3600),
+            "{b:?}"
+        );
     }
 
     #[test]

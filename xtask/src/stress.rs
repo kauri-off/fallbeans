@@ -8,6 +8,7 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use clap::Args;
+use sha2::Digest;
 
 use crate::{Shared, root};
 
@@ -150,12 +151,21 @@ pub fn stress(a: &StressArgs) -> bool {
             .args(server_flags(&dir.join("server.trace").to_string_lossy()))
             .stdout(log("server.log"))
             .stderr(log("server.err.log"));
-        let Ok(child) = server_cmd.spawn() else {
+        let Ok(mut child) = server_cmd.spawn() else {
             eprintln!("cannot start the server");
             return false;
         };
-        server = Some(child);
         std::thread::sleep(Duration::from_millis(800));
+        // Gone already (a port taken by a server left running, bad flags): the clients would wait for
+        // nothing for the whole run.
+        if let Ok(Some(status)) = child.try_wait() {
+            eprintln!(
+                "stress: the server exited at once ({status}):\n{}",
+                read_log(&dir, "server")
+            );
+            return false;
+        }
+        server = Some(child);
     }
     let mut clients: Vec<Child> = Vec::new();
     for i in 0..a.clients {
@@ -226,7 +236,7 @@ fn server_cores() -> Option<Pin> {
     })
 }
 
-/// The first word of `sha256sum`'s output.
+/// The first word of `sha256sum`'s output (on the host).
 fn first_word(out: std::io::Result<std::process::Output>) -> String {
     out.ok()
         .map(|o| {
@@ -248,7 +258,15 @@ fn start_remote(a: &StressArgs, dir: &Path, flags: &[String], public_ip: &str) -
     if !crate::deploy::build_linux_server(&a.wsl_distro, &bin) {
         return false;
     }
-    let local = first_word(Command::new("sha256sum").arg(&bin).output());
+    // (Hashed here: Windows has no `sha256sum`, and an empty hash would upload the server every run.)
+    let local = fs::read(&bin)
+        .map(|b| {
+            sha2::Sha256::digest(&b)
+                .iter()
+                .map(|x| format!("{x:02x}"))
+                .collect::<String>()
+        })
+        .unwrap_or_default();
     let there = first_word(
         a.host
             .ssh(&format!(

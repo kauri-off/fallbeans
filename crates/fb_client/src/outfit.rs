@@ -584,7 +584,7 @@ pub fn wiggle(w: Wiggle, base: &Transform, tf: &mut Transform, t: f32, speed: f3
     let (bx, by, bz) = base.rotation.to_euler(EulerRot::XYZ);
     match w {
         Wiggle::Rotor => {
-            *rotor += dt.clamp(0.0, 0.1) * (5.0 + speed * 3.0);
+            *rotor = (*rotor + dt.clamp(0.0, 0.1) * (5.0 + speed * 3.0)).rem_euclid(TAU);
             tf.rotation = Quat::from_rotation_y(*rotor);
         }
         Wiggle::BunnyEar(i) => {

@@ -25,7 +25,8 @@ fn f16(x: f32) -> u16 {
         let m = (mant | 0x80_0000) >> (1 - exp);
         return ((m + 0x1000) >> 13) as u16;
     }
-    let h = ((exp as u32) << 10) | ((mant + 0x1000) >> 13);
+    // (Added, not or-ed: a mantissa rounded up to 0x400 carries into the exponent.)
+    let h = ((exp as u32) << 10) + ((mant + 0x1000) >> 13);
     h.min(0x7bff) as u16
 }
 
@@ -105,5 +106,8 @@ mod tests {
         assert_eq!(f16(0.5), 0x3800);
         assert_eq!(f16(2.0), 0x4000);
         assert_eq!(f16(1e9), 0x7bff);
+        // Rounds up across a power of two (odd and even exponents).
+        assert_eq!(f16(1.9999), 0x4000);
+        assert_eq!(f16(3.9999), 0x4400);
     }
 }

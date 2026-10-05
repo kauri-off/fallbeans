@@ -10,6 +10,8 @@ Unicode true
 Name "${APP}"
 OutFile "${OUT}"
 InstallDir "$LOCALAPPDATA\Programs\FallBeans"
+; An update (and a reinstall) goes where the game already is, not to the default folder.
+InstallDirRegKey HKCU "${UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
@@ -33,8 +35,23 @@ Function .onInit
     StrCpy $Update 0
   ${Else}
     StrCpy $Update 1
-    ; The game that started the update is closing.
-    Sleep 2000
+    ; The game that started the update is closing: wait (up to 30 s) until its exe can be written, or
+    ; the silent install would skip the locked file and leave the old game with the new assets.
+    ${If} ${FileExists} "$INSTDIR\fb_client.exe"
+      StrCpy $R2 0
+      ${Do}
+        Sleep 500
+        ClearErrors
+        FileOpen $R3 "$INSTDIR\fb_client.exe" a
+        ${IfNot} ${Errors}
+          FileClose $R3
+          ${ExitDo}
+        ${EndIf}
+        IntOp $R2 $R2 + 1
+      ${LoopUntil} $R2 >= 60
+    ${Else}
+      Sleep 2000
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 

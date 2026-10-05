@@ -149,8 +149,13 @@ pub fn rank_groups(r: &RoundView, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
     }
 }
 
-/// Sorted by key, best first (a stable sort, as JS), equal keys grouped.
+/// Sorted by key, best first (a stable sort, as JS), equal keys grouped. A NaN key ranks last (as −∞):
+/// the comparison stays a total order and those players share one group.
 fn group_by(ids: &[u32], key: impl Fn(u32) -> f64) -> Vec<Vec<u32>> {
+    let key = |id| {
+        let k = key(id);
+        if k.is_nan() { f64::NEG_INFINITY } else { k }
+    };
     let mut sorted = ids.to_vec();
     sorted.sort_by(|&a, &b| key(b).partial_cmp(&key(a)).unwrap_or(core::cmp::Ordering::Equal));
     let mut groups: Vec<Vec<u32>> = Vec::new();
@@ -413,6 +418,16 @@ mod tests {
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
         let got: Vec<(u32, i64)> = rows.iter().map(|r| (r.id, r.points)).collect();
         assert_eq!(got, [(2, 10), (1, 5), (3, 5), (4, 0)]);
+    }
+
+    #[test]
+    fn nan_keys_rank_last_in_one_group() {
+        let key = |id| match id {
+            1 | 3 => f64::NAN,
+            2 => 3.0,
+            _ => 1.0,
+        };
+        assert_eq!(group_by(&IDS, key), [vec![2], vec![4], vec![1, 3]]);
     }
 
     #[test]

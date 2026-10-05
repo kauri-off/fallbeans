@@ -48,6 +48,25 @@ impl Host {
             eprintln!("no server host given: {}", missing.join(", "));
             return false;
         }
+        // The target is an argument of ssh (a leading `-` would be an option), the domain goes into the
+        // remote command in single quotes: plain names only.
+        let target = self.target();
+        if target.starts_with('-')
+            || !target
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "@.-_:[]".contains(c))
+        {
+            eprintln!("--host / DEPLOY_HOST is not an SSH target (user@host): {target:?}");
+            return false;
+        }
+        let domain = self.domain();
+        if domain.is_empty()
+            || domain.starts_with(['-', '.'])
+            || !domain.chars().all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))
+        {
+            eprintln!("--domain / DEPLOY_DOMAIN is not a domain name: {domain:?}");
+            return false;
+        }
         if let Some(k) = self.try_key()
             && !k.exists()
         {
@@ -97,7 +116,20 @@ impl Host {
             .try_key()
             .map(|k| vec!["-i".into(), k.to_string_lossy().into()])
             .unwrap_or_default();
-        v.extend(["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"].map(String::from));
+        // A dead link (sleep, Wi-Fi change) ends the command after a minute instead of hanging it.
+        v.extend(
+            [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=4",
+            ]
+            .map(String::from),
+        );
         v
     }
 

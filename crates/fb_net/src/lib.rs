@@ -32,8 +32,6 @@ pub fn build() -> String {
 }
 
 pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
-/// Dev key for netcode's manual authentication (phase 0: no session endpoint yet).
-pub const DEV_KEY: [u8; 32] = [0; 32];
 pub const UDP_PORT: u16 = 5888;
 /// The HTTP API (session, health, debug); production: behind nginx at https://…/fallbeans/.
 pub const HTTP_PORT: u16 = 5887;
@@ -45,7 +43,7 @@ pub const SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// cost 56 KB/s up from a client running at 1000 frames and as many acks back from the server.
 pub const INPUT_SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// A jump or dive that reaches the server up to this many ticks after its tick still happens, on the next
-/// tick (`fb_server::room::frame_for`); older inputs are of no use to the server.
+/// tick (`fb_server::play::frame_for`); older inputs are of no use to the server.
 pub const LATE_TICKS: u32 = 30;
 /// Each input message repeats the inputs of this many before it (two ticks a message): a loss burst of up
 /// to LATE_TICKS (250 ms, a Wi-Fi hiccup) loses no press. Lightyear's default, 5, covers 83 ms.

@@ -1,4 +1,4 @@
-use crate::m;
+use crate::m::{self, MinMaxJs};
 use crate::math::{M4, V3, add_scaled, div_s, dot, len, len_sq};
 use crate::nodes::{NodeId, Nodes};
 
@@ -262,7 +262,7 @@ impl Collider {
                         t0 = ta;
                         axis = a as i32;
                     }
-                    t1 = t1.min(tb);
+                    t1 = t1.min_js(tb);
                     if t0 > t1 {
                         return -1.0;
                     }
@@ -338,7 +338,7 @@ impl Collider {
     pub fn surface_velocity(&self, local: V3, dt: f64) -> V3 {
         let p = self.cur.apply_point(local);
         let w = self.prev.apply_point(local);
-        div_s(p - w, dt.max(1e-4))
+        div_s(p - w, dt.max_js(1e-4))
     }
 }
 

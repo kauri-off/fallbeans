@@ -6,7 +6,7 @@ use std::sync::Arc;
 use fb_sim::bots::{HumanOpts, LandCheck, humanize, init_bot, unstick};
 use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
-use fb_sim::m;
+use fb_sim::m::{self, MinMaxJs};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -233,7 +233,7 @@ impl MapDef for HexAGone {
                     score -= m::atan2(m::sin(a - heading), m::cos(a - heading)).abs() * 0.6;
                     let ex = p.x + m::sin(a) * 4.0;
                     let ez = p.z + m::cos(a) * 4.0;
-                    score -= 0f64.max(m::hypot(ex, ez) - SIZE * 1.5 * (RINGS - 1) as f64) * 2.0;
+                    score -= 0f64.max_js(m::hypot(ex, ez) - SIZE * 1.5 * (RINGS - 1) as f64) * 2.0;
                     score += (bot.rng.next() - 0.5) * 0.4;
                     if score > best_score {
                         best_score = score;

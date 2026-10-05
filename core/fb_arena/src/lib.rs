@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
+use fb_shared::m::MinMaxJs;
 use fb_shared::rng::Rng;
 use fb_shared::{BOT_EVERY, DT, m};
 use fb_sim::bonus::{BonusTaken, Bonuses};
@@ -371,7 +372,7 @@ pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[O
     for (s, c) in bodies.iter_mut().zip(&carries) {
         s.body.after_world_update(c, world);
     }
-    let mut others: Vec<OtherBody> = bodies
+    let others: Vec<OtherBody> = bodies
         .iter()
         .filter(|s| !s.body.in_portal())
         .map(|s| other_of(s.id, s.body))
@@ -386,7 +387,6 @@ pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[O
             touch(w, id, b, e, tc)
         });
     }
-    others.clear();
 }
 
 /// Which way a bean placed at `p` faces.
@@ -608,7 +608,7 @@ impl Arena {
             teleports: 0,
             stats: RoundStats::default(),
             last_hit: None,
-            active_at: self.time().max(0.0),
+            active_at: self.time().max_js(0.0),
             forbidden_for: 0.0,
             force_grab_until: -1e9,
             reaching: false,
@@ -629,7 +629,7 @@ impl Arena {
             let mut d = f64::INFINITY;
             for p in &self.pawns {
                 if p.status == PawnStatus::Play {
-                    d = d.min(fb_sim::math::dist_sq(p.body.pos, s));
+                    d = d.min_js(fb_sim::math::dist_sq(p.body.pos, s));
                 }
             }
             if d > SPAWN_CLEAR * SPAWN_CLEAR {
@@ -648,6 +648,8 @@ impl Arena {
     pub fn remove_pawn(&mut self, id: u32) {
         self.op("remove", json!([id]));
         self.pawns.retain(|p| p.id != id);
+        // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up.)
+        self.trace.remove(&id);
     }
 
     /// Dev: bot brains run (false: bots stand still).
@@ -748,7 +750,7 @@ impl Arena {
                 if p.frame != InputFrame::IDLE {
                     p.active_at = t;
                 }
-                p.stats.idle = p.stats.idle.max(t - p.active_at);
+                p.stats.idle = p.stats.idle.max_js(t - p.active_at);
             }
             if let Some(r) = &mut self.recording
                 && p.bot.is_none()
@@ -1054,7 +1056,7 @@ impl Arena {
                 let dz = ob.pos.z - b.pos.z;
                 let d = m::hypot(dx, dz);
                 // Reach grows with the size of either bean (giants have long arms, and are big targets).
-                let size = b.size.max(ob.size);
+                let size = b.size.max_js(ob.size);
                 if d > GRAB_REACH * size || (ob.pos.y - b.pos.y).abs() > 1.6 * size {
                     continue;
                 }
@@ -1125,7 +1127,7 @@ impl Arena {
                 let nx = if d > 1e-3 { dx / d } else { fx };
                 let nz = if d > 1e-3 { dz / d } else { fz };
                 let sp = m::hypot(b.vel.x, b.vel.z);
-                let k = 5.0 + (sp * 0.4).min(5.0);
+                let k = 5.0 + (sp * 0.4).min_js(5.0);
                 o.body
                     .knock(&mut o.ev, nx * k + fx * 2.0, nz * k + fz * 2.0, 4.5, 0.9, false);
                 o.last_hit = Some(Hit {
@@ -1173,7 +1175,7 @@ impl Arena {
                 ob.vel.x -= (dx * away * 0.6) / heavy;
                 ob.vel.z -= (dz * away * 0.6) / heavy;
             }
-            let k = ((dist - HOLD_LEN) * 0.5).min(1.0) / heavy;
+            let k = ((dist - HOLD_LEN) * 0.5).min_js(1.0) / heavy;
             ob.pos.x -= dx * k * 0.1;
             ob.pos.z -= dz * k * 0.1;
         }
@@ -1188,7 +1190,7 @@ impl Arena {
         let pos = p.body.pos;
         let prog = spec.progress.as_ref().map_or(pos.z, |f| f(pos));
         if t >= 0.0 {
-            p.progress = p.progress.max(prog);
+            p.progress = p.progress.max_js(prog);
         }
         if let Some(fin) = spec.finish
             && round
@@ -1259,7 +1261,7 @@ impl Arena {
             }
             let p = &mut self.pawns[i];
             p.status = PawnStatus::Out;
-            p.stats.out_at = Some(t.max(0.0));
+            p.stats.out_at = Some(t.max_js(0.0));
             self.note("out", Some(id), Some(what));
             self.out.push(id);
             events.push(ArenaEvent::Ko(ko(true)));

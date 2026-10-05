@@ -1,4 +1,5 @@
 //! Checks shared by the golden-trace tests.
+use fb_shared::m::MinMaxJs;
 use fb_sim::collider::Shape;
 use fb_sim::physics::Body;
 use fb_sim::world::World;
@@ -11,8 +12,9 @@ pub fn f(v: &Value) -> f64 {
 /// A trace recorded by the TS version (gzipped JSON).
 pub fn load(name: &str) -> Value {
     let path = format!("{}/tests/golden/{name}.json.gz", env!("CARGO_MANIFEST_DIR"));
+    // (Frozen: the TS version that recorded them is gone from this branch, see README.md.)
     let file =
-        std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e} (export it with `cargo xtask golden`)"));
+        std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e} (golden traces cannot be re-recorded)"));
     serde_json::from_reader(std::io::BufReader::new(flate2::read::GzDecoder::new(file))).unwrap()
 }
 
@@ -22,7 +24,7 @@ pub fn close(a: &Value, b: &Value, tol: f64) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => {
             let (x, y) = (x.as_f64().unwrap(), y.as_f64().unwrap());
-            (x - y).abs() <= tol * 1f64.max(x.abs())
+            (x - y).abs() <= tol * 1f64.max_js(x.abs())
         }
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(a, b)| close(a, b, tol)),
         (Value::Object(x), Value::Object(y)) => {
@@ -66,7 +68,7 @@ pub fn check_bodies<'a>(what: &str, row: &Value, bodies: impl Iterator<Item = (u
         let got = [b.pos.x, b.pos.y, b.pos.z, b.vel.x, b.vel.y, b.vel.z, b.yaw, b.tilt];
         for (j, v) in got.iter().enumerate() {
             let d = (v - f(&g[j])).abs();
-            worst = worst.max(d);
+            worst = worst.max_js(d);
             assert!(
                 d < 1e-9,
                 "{what}: tick {k} body {id} field {j}: rust {v} ts {} (state rust {:?} ts {})",

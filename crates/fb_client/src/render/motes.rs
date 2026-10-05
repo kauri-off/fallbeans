@@ -117,17 +117,18 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: Res
             u: MotesUniform::default(),
         })),
         Transform::default(),
+        Visibility::default(),
         NoFrustumCulling,
         NotShadowCaster,
         NotShadowReceiver,
     ));
 }
 
-/// The look's colour and drift; off without a map or when switched off.
+/// The look's colour and drift; off without a map, and not drawn at all when switched off.
 fn apply(
     map: Option<Res<Map>>,
     g: Res<Graphics>,
-    q: Query<&MeshMaterial3d<MotesMaterial>, With<Motes>>,
+    mut q: Query<(&MeshMaterial3d<MotesMaterial>, &mut Visibility), With<Motes>>,
     mut mats: ResMut<Assets<MotesMaterial>>,
     mut last: Local<Option<(u32, bool)>>,
 ) {
@@ -136,7 +137,13 @@ fn apply(
         return;
     }
     *last = now;
-    let Ok(h) = q.single() else { return };
+    let Ok((h, mut vis)) = q.single_mut() else { return };
+    // (Without a map they stay drawn, invisibly: that compiles their pipeline before the first round.)
+    vis.set_if_neq(if map.is_some() && !g.motes {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    });
     let Some(mut m) = mats.get_mut(&h.0) else { return };
     m.u = match map {
         Some(map) if g.motes => {

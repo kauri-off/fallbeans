@@ -29,7 +29,7 @@ Lightyear. **С чего продолжать — [`docs/state.md`](docs/state.m
       tests/       golden.rs (полные раунды карт с ботами против следов TS-арены), scenarios.rs (ветки физики боба в малых мирах против следов TS),
                    physics.rs (свойства физики боба: порт physics.test.ts),
                    determinism.rs (записанные хэши), replay.rs (откат = прямой прогон), recording.rs (запись раунда → replay),
-                   looks.rs (особые элементы сцены всех карт проходят раунд)
+                   looks.rs (особые элементы сцены всех карт проходят раунд), respawn.rs (предсказание респауна)
     fb_audit       аудиты карт и систем (порт src/audit), harness безголовых раундов; бинарник fb_audit; rayon
       tests/       quick.rs (быстрые аудиты: 0 ошибок и 0 предупреждений)
   crates/          всё на Bevy и Lightyear
@@ -40,7 +40,8 @@ Lightyear. **С чего продолжать — [`docs/state.md`](docs/state.m
                    play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход),
                    http (axum в своём потоке: сессия и connect token, health, debug API), logbook, metrics, opts
     fb_client      servers (список серверов игрока, адрес → HTTP API, проверка /health), update (обновление из релизов
-                   GitHub), net (сессия по HTTP, подключение, переподключение, фолбэк на WS), clock (опережение часов), diag
+                   GitHub), net (сессия по HTTP, подключение, переподключение, фолбэк на WS), probe (проверка UDP с WS
+                   своим соединением netcode), clock (опережение часов), diag
                    (диагностика сети, подсказка про VPN), session (hello, комната, лобби; --start), game (карта, предсказание
                    с респауном, события карты и `Cue`, ввод с клавиатуры, мыши и геймпада, эмоции, автопилот), view (карта,
                    режим зрителя), camera (порт camera.ts: штанга с коллайдерами, тряска, интро-пролёт, подиум), beans
@@ -166,7 +167,8 @@ Q / ПКМ — захват, 1–5 — эмоции, Esc — меню, Enter —
   (`InputFrame::clamped`). Сервер читает `InputBuffer` сам (`play::frame_for`; перенос Lightyear в
   `ActionState` выключен, он выбрасывает поздний ввод): без ввода держит стик и захват `INPUT_HOLD` тиков,
   нажатие, пришедшее до `LATE_TICKS` (250 мс) позже своего тика, выполняет на следующем.
-- Настройки ввода (`INPUT_SEND_INTERVAL`, `INPUT_REDUNDANCY` = `LATE_TICKS`) и `--input-margin` подобраны
+- Настройки ввода (`INPUT_SEND_INTERVAL` — 60 Гц, `INPUT_REDUNDANCY` = `LATE_TICKS` / 2: 15 сообщений по два тика
+  покрывают те же 30 тиков) и `--input-margin` подобраны
   замерами (`docs/decisions.md`); менять — с прогоном `xtask stress` (и `--remote`) до и после.
 - Один `Server` Lightyear слушает оба транспорта (`net::start_server`: `ServerUdpIo` и `WebSocketServerIo` на одной
   сущности), топология обычная `Server`. Connect token выдаёт HTTP API (`http.rs`): ключ netcode выводится из
@@ -215,7 +217,7 @@ Q / ПКМ — захват, 1–5 — эмоции, Esc — меню, Enter —
   `MAP HASH MISMATCH` при расхождении карты), сервер раз в `--metrics-every` с — `metrics:` (тик p50/p99/max, самый длинный кадр, тики без ввода
   игрока вовремя, трафик, пакеты, CPU — доля одного ядра за окно, RSS). HUD в окне показывает то же. `stress`
   падает на тике p99 > 1 мс (все комнаты вместе), CPU сервера > 60% ядра (`--max-cpu`), RSS > 300 МБ
-  (`--max-mem`); `--limit-server` (Linux) запускает сервер одного на последнем ядре (клиенты — на остальных) в
+  (`--max-mem`); `--limit-server` (Linux) запускает сервер одним процессом на последнем ядре (клиенты — на остальных) в
   scope systemd с `MemoryMax=300M` и без swap.
 - **Трассы клиента** пишутся только при живом соединении; `R тик` — начало соединения (первого или после
   переподключения): `stress` с этого тика ждёт, пока сервер получит ввод клиента, и не считает этот разрыв
@@ -257,12 +259,14 @@ release → Run workflow; только по просьбе автора). Он �
 | --- | --- | --- |
 | `check` | `cargo xtask check` | ubuntu |
 | `nsis` | `FallBeans-<v>-setup.exe` | windows, `cargo xtask dist nsis` |
-| `appimage` | `FallBeans-<v>-x86_64.AppImage` | ubuntu-22.04 (glibc 2.35), `appimagetool` |
+| `appimage` | `FallBeans-<v>-x86_64.AppImage` | контейнер `ubuntu:22.04` (glibc 2.35) на ubuntu-latest, `appimagetool` |
 | `flatpak` | `FallBeans-<v>-x86_64.flatpak` | ubuntu-24.04, `flatpak-builder`, рантайм `org.freedesktop.Platform` 25.08 |
 | `deb`, `rpm` | `fallbeans-server` | статический musl-сервер, `cargo-deb` / `cargo-generate-rpm` |
 
 Затем задача `release` создаёт GitHub-релиз `v<версия>` (не pre-release: `/releases/latest` их пропускает) со
-всеми файлами, `SHA256SUMS` и текстом из `packaging/release-notes.md`. Подписей нет.
+всеми файлами, `SHA256SUMS` и текстом из `packaging/release-notes.md`. Подписей нет. Версия пакетов сервера —
+`0.1.0~alpha` (`~` ставит альфу раньше `0.1.0`), но в именах файлов `~` заменяется на `.` до подсчёта
+`SHA256SUMS`: GitHub сам переименовывает файлы с `~`, и суммы не совпали бы с именами.
 
 Обновление клиента (`fb_client/src/update.rs`): при запуске клиент спрашивает
 `api.github.com/repos/kauri-off/fallbeans/releases/latest` и сравнивает версии (semver: `0.1.0-alpha` <
@@ -329,9 +333,8 @@ WS 5891 и HTTP 5892 за nginx, `--public-host` — адрес хоста) на
   кроме лобби (свободный спавн зависит от всех бобов), выбывания и срезки: там — откат, когда придёт сервер.
 - Звук идёт через cpal: на Linux без `pipewire-alsa` ALSA-устройство по умолчанию занято PipeWire, rodio пишет
   `ALSA lib pcm_dmix… unable to open slave` и берёт следующее устройство (`pulse`/`pipewire`).
-- Особые элементы сцены (плитки, стёкла, порталы) — `StandardMaterial` по отделке, без поверхностей и узоров;
-  створки закрытого портала — диск, растущий из центра, а не две половины от обода (`docs/decisions.md`).
 - API выбирается флагом или в настройках и действует со следующего запуска: перезапуска на другом API при падении
   инициализации нет.
 - Окно не в фокусе на машине автора рисуется на 20 FPS (композитор): кадр мерить с окном на переднем плане.
-- Золотые следы есть только для `jump-club`: лестницы, уступы, порталы, конвейеры, батуты, лёд с TS не сверены.
+- Золотые следы — снимок TS: переснять их нечем, новое поведение карт с TS уже не сверить (`jump-club` сид 1
+  отличается от TS на 5,6e-17 — не разобрано).
