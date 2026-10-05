@@ -1,4 +1,4 @@
-//! The rooms of the server and who is where (port of `server/rooms/hub.ts` and `server/net/gateway.ts`).
+//! The rooms of the server and who is where.
 //! Anyone may open one room of their own (they are its host whenever they are in it) and be in one room at
 //! a time; a private room asks newcomers for its PIN. Rooms close when everybody has left. Practice rooms
 //! are separate: one player, not listed.
@@ -73,7 +73,6 @@ pub struct Hub {
     /// The room list as last sent, to skip changes that do not show in it.
     sent: String,
     guesses: Limiter,
-    updating: bool,
     real: u64,
     pub out: Vec<Out>,
 }
@@ -89,7 +88,6 @@ impl Hub {
             empty_since: BTreeMap::new(),
             sent: String::new(),
             guesses: Limiter::default(),
-            updating: false,
             real,
             out: Vec::new(),
         };
@@ -110,10 +108,6 @@ impl Hub {
     /// Server tick of the last update.
     pub fn real_tick(&self) -> u64 {
         self.real
-    }
-
-    pub fn updating(&self) -> bool {
-        self.updating
     }
 
     /// Listed rooms (not practice).
@@ -193,11 +187,6 @@ impl Hub {
 
     /// A connection of player `uid` (empty: the token had no identity, the connection is refused).
     pub fn open(&mut self, conn: ConnId, ip: String, uid: String) {
-        if self.updating {
-            self.send(conn, ServerMsg::Updating);
-            self.out.push(Out::Close(conn));
-            return;
-        }
         if uid.is_empty() {
             warn!(ip, "connection without an identity");
             self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
@@ -551,30 +540,6 @@ impl Hub {
                 }
                 Some(&since) if real.saturating_sub(since) >= ticks(ROOM_EMPTY_S) => self.close_room(key),
                 _ => {}
-            }
-        }
-    }
-
-    /// Into or out of an update of the game: going in, every connection is told and closed.
-    pub fn set_updating(&mut self, on: bool) {
-        if on == self.updating {
-            return;
-        }
-        self.updating = on;
-        info!(
-            connections = self.sessions.len(),
-            "{}",
-            if on {
-                "updating: disconnecting everybody"
-            } else {
-                "update over: open again"
-            }
-        );
-        if on {
-            let conns: Vec<ConnId> = self.sessions.keys().copied().collect();
-            for c in conns {
-                self.send(c, ServerMsg::Updating);
-                self.out.push(Out::Close(c));
             }
         }
     }

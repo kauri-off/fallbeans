@@ -1,8 +1,8 @@
-use crate::math::{M4, V3};
+use crate::math::{Affine, V3, compose};
 
 pub type NodeId = u32;
 
-/// One transform in the map's scene graph (a three.js `Object3D` without the rendering).
+/// One transform in the map's scene graph.
 #[derive(Clone, Debug)]
 pub struct Node {
     pub parent: Option<NodeId>,
@@ -11,7 +11,7 @@ pub struct Node {
     pub rot: V3,
     pub scale: V3,
     pub visible: bool,
-    pub world: M4,
+    pub world: Affine,
 }
 
 /// Nodes in creation order: a parent always comes before its children.
@@ -28,7 +28,7 @@ impl Default for Nodes {
             rot: V3::ZERO,
             scale: V3::ONE,
             visible: true,
-            world: M4::IDENTITY,
+            world: Affine::IDENTITY,
         }])
     }
 }
@@ -42,7 +42,7 @@ impl Nodes {
             rot: V3::ZERO,
             scale: V3::ONE,
             visible: true,
-            world: M4::IDENTITY,
+            world: Affine::IDENTITY,
         });
         id
     }
@@ -60,9 +60,9 @@ impl Nodes {
     /// Recomputes one node's world matrix from its parent's current one.
     pub fn update_one(&mut self, id: NodeId) {
         let n = &self.0[id as usize];
-        let local = M4::compose(n.pos, n.rot, n.scale);
+        let local = compose(n.pos, n.rot, n.scale);
         let world = match n.parent {
-            Some(p) => self.0[p as usize].world.mul(&local),
+            Some(p) => self.0[p as usize].world * local,
             None => local,
         };
         self.0[id as usize].world = world;

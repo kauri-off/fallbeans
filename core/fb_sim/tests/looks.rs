@@ -1,25 +1,40 @@
-//! Looks of rounds against the TS client (`lookFor` over map sets and seeds: `looks.json`, exported once).
+//! Looks of rounds by map set and seed (`looks.json`): a seed keeps the look, pattern and palette it had.
+//! Record again after an intended change with `FB_BLESS=1 cargo test -p fb_sim --test looks`.
 use fb_sim::looks::{PAL_KEYS, look_for};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
+
+fn case(set: &[&str], seed: u32) -> Value {
+    let got = look_for(set, seed);
+    let palette: Map<String, Value> = PAL_KEYS
+        .iter()
+        .zip(&got.palette)
+        .map(|(k, p)| (k.to_string(), json!([p[0], p[1]])))
+        .collect();
+    json!({ "set": set, "seed": seed, "id": got.look.id, "pattern": got.pattern.name(), "palette": palette })
+}
 
 #[test]
-fn rounds_pick_the_looks_of_ts() {
-    let cases: Vec<Value> = serde_json::from_str(include_str!("looks.json")).unwrap();
-    for c in cases {
-        let set: Vec<&str> = c["set"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let seed = c["seed"].as_u64().unwrap() as u32;
-        let got = look_for(&set, seed);
-        assert_eq!(got.look.id, c["id"].as_str().unwrap(), "{set:?} {seed}");
-        assert_eq!(got.pattern.name(), c["pattern"].as_str().unwrap(), "{set:?} {seed}");
-        for (i, k) in PAL_KEYS.iter().enumerate() {
-            let want = &c["palette"][k];
-            assert_eq!(got.palette[i][0], want[0].as_str().unwrap(), "{set:?} {seed} {k}");
-            assert_eq!(got.palette[i][1], want[1].as_str().unwrap(), "{set:?} {seed} {k}");
-        }
+fn round_looks_are_stable() {
+    let path = format!("{}/tests/looks.json", env!("CARGO_MANIFEST_DIR"));
+    let want: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let got: Vec<Value> = want
+        .iter()
+        .map(|c| {
+            let set: Vec<&str> = c["set"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            case(&set, c["seed"].as_u64().unwrap() as u32)
+        })
+        .collect();
+    if std::env::var("FB_BLESS").is_ok() {
+        let lines: Vec<String> = got.iter().map(|c| c.to_string()).collect();
+        std::fs::write(&path, format!("[\n{}\n]\n", lines.join(",\n"))).unwrap();
+        return;
+    }
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!(g, w, "the look of {} with seed {}", w["set"], w["seed"]);
     }
 }

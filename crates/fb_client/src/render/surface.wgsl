@@ -1,4 +1,4 @@
-// Surfaces (port of materials.ts): triplanar detail in the object's own space (normal, cavity shading,
+// Surfaces: triplanar detail in the object's own space (normal, cavity shading,
 // roughness, frost) and the look's two-tone pattern, on top of the standard PBR material.
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,

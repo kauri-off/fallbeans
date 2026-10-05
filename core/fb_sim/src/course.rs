@@ -1,22 +1,22 @@
-//! Race courses built from sections (port of `sim/course.ts`). A map lists its sections (fixed ones, and
+//! Race courses built from sections. A map lists its sections (fixed ones, and
 //! pools the seed draws from and shuffles); each builds itself from where the last one ended, with its
 //! own timings drawn from the seed, and tells the bots how to get through (one or more routes). Rest
 //! platforms between them are checkpoints. Server and clients build the same course.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::bots::{BOT_DT, BotBrain, BotView, SharedTest, Waypoint, init_bot, path_step};
+use crate::bots::{BOT_DT, BotBrain, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
 use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use crate::collider::{ColId, ColliderOpts, Shape};
-use crate::m::{self, MinMaxJs};
-use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapSpec, OnTick, PosTest, Value, json};
+use crate::m::{self, MinMax};
+use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapEvent, MapSpec, OnTick, PosTest, SegEvent};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
 use crate::scene::{Palette, Piece, lamp_part, pal};
 use fb_shared::rng::{Rng, shuffle};
 
-pub type SegHandler = Box<dyn FnMut(&mut Cx, &Value) + Send + Sync>;
+pub type SegHandler = Box<dyn FnMut(&mut Cx, &SegEvent) + Send + Sync>;
 
 pub struct SegCtx<'a> {
     pub b: &'a mut Builder,
@@ -24,10 +24,23 @@ pub struct SegCtx<'a> {
     /// Where the section starts (the end of the previous one) and the floor height there.
     pub z: f64,
     pub y: f64,
-    /// Names of this section's events start with it (made unique per section).
-    key: String,
-    handlers: &'a mut BTreeMap<String, SegHandler>,
+    /// The section's place in the course: its events carry it.
+    seg: u32,
+    handlers: &'a mut BTreeMap<u32, Vec<SegHandler>>,
     ticks: &'a mut Vec<OnTick>,
+    /// Notes the course's bots share between sections.
+    pub notes: CourseNotes,
+}
+
+/// Bots' notes that hold across the sections of a course.
+#[derive(Clone, Copy)]
+pub struct CourseNotes {
+    /// Helping at a gate: until when, on which side, and the gate (its z) last helped at.
+    pub help: Note<f64>,
+    pub help_side: Note<f64>,
+    pub helped: Note<f64>,
+    /// Seconds spent pushing a door that holds.
+    pub push: Note<f64>,
 }
 
 impl SegCtx<'_> {
@@ -35,14 +48,14 @@ impl SegCtx<'_> {
         self.b.rng.next()
     }
 
-    /// Handles this section's event `name`.
-    pub fn on(&mut self, name: &str, f: impl FnMut(&mut Cx, &Value) + Send + Sync + 'static) {
-        self.handlers.insert(self.event(name), Box::new(f));
+    /// Handles this section's events.
+    pub fn on(&mut self, f: impl FnMut(&mut Cx, &SegEvent) + Send + Sync + 'static) {
+        self.handlers.entry(self.seg).or_default().push(Box::new(f));
     }
 
-    /// The full name of this section's event `name` (what `seg_emit` sends).
-    pub fn event(&self, name: &str) -> String {
-        format!("{}{name}", self.key)
+    /// The section's number, for `seg_emit`.
+    pub fn seg(&self) -> u32 {
+        self.seg
     }
 
     /// Server: per-tick logic of this section.
@@ -51,9 +64,9 @@ impl SegCtx<'_> {
     }
 }
 
-/// Emits a section's event (its full name from `SegCtx::event`).
-pub fn seg_emit(cx: &mut Cx, key: &str, d: Value) {
-    cx.emit("seg", json!({ "k": key, "d": d }));
+/// Emits an event of section `seg` (from `SegCtx::seg`).
+pub fn seg_emit(cx: &mut Cx, seg: u32, ev: SegEvent) {
+    cx.emit(MapEvent::Seg { seg, ev });
 }
 
 #[derive(Default)]
@@ -122,7 +135,13 @@ fn dynamic() -> PrimOpts {
 /// Builds a race course and returns its spec (spawns, finish, checkpoints, events, bots).
 pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     let spawns = b.start_area(0.0);
-    let mut handlers: BTreeMap<String, SegHandler> = BTreeMap::new();
+    let mut handlers: BTreeMap<u32, Vec<SegHandler>> = BTreeMap::new();
+    let notes = CourseNotes {
+        help: b.note(),
+        help_side: b.note(),
+        helped: b.note(),
+        push: b.note(),
+    };
     let mut ticks: Vec<OnTick> = Vec::new();
     let mut routes: Vec<Vec<Vec<Waypoint>>> = Vec::new();
     let mut forbidden: Vec<PosTest> = Vec::new();
@@ -142,9 +161,10 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
             ctx,
             z: zz,
             y,
-            key: format!("s{i}:"),
+            seg: i as u32,
             handlers: &mut handlers,
             ticks: &mut ticks,
+            notes,
         };
         let out = seg(&mut s);
         routes.push(out.routes);
@@ -156,13 +176,13 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         }
         zz = out.z;
         y = out.y;
-        min_y = min_y.min_js(y);
-        max_y = max_y.max_js(y);
+        min_y = min_y.at_most(y);
+        max_y = max_y.at_least(y);
     }
     let finish = if let Some(fw) = o.finish_with {
         let (finish, route) = fw(b, zz, y);
         routes.push(vec![route]);
-        max_y = max_y.max_js(finish.y + 1.0);
+        max_y = max_y.at_least(finish.y + 1.0);
         finish
     } else {
         let len = o.finish_len.unwrap_or(16.0);
@@ -170,8 +190,8 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         let finish_z = zz + 3.0;
         b.finish(0.0, y, finish_z);
         routes.push(vec![vec![
-            Waypoint::w(0.0, finish_z - 1.0, 2.0),
-            Waypoint::w(0.0, finish_z + 5.0, 3.0),
+            Waypoint::spread(0.0, finish_z - 1.0, 2.0),
+            Waypoint::spread(0.0, finish_z + 5.0, 3.0),
         ]]);
         Finish {
             z: finish_z,
@@ -182,26 +202,22 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     b.clouds_with(
         0.0,
         zz / 2.0,
-        60f64.max_js(zz * 0.45),
+        60f64.at_least(zz * 0.45),
         o.clouds.unwrap_or(40),
         min_y - 30.0,
         max_y + 6.0,
     );
+    let picks: Vec<Note<usize>> = routes.iter().map(|_| b.note()).collect();
     MapSpec {
         spawns,
         kill_y: min_y - 14.0,
         finish: Some(finish),
         checkpoints,
         forbidden: Some(Box::new(move |p| forbidden.iter().any(|f| f(p)))),
-        on_event: Some(Box::new(move |cx, name, data| {
-            if name != "seg" {
-                return;
-            }
-            let Some(k) = data["k"].as_str().filter(|k| k.len() <= 64) else {
-                return;
-            };
-            if let Some(h) = handlers.get_mut(k) {
-                h(cx, &data["d"]);
+        on_event: Some(Box::new(move |cx, ev| {
+            let MapEvent::Seg { seg, ev } = ev else { return };
+            for h in handlers.get_mut(seg).into_iter().flatten() {
+                h(cx, ev);
             }
         })),
         tick: Some(Box::new(move |cx, t| {
@@ -209,31 +225,30 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
                 f(cx, t);
             }
         })),
-        bot: Some(course_brain(routes)),
+        bot: Some(course_brain(routes, picks)),
         ..Default::default()
     }
 }
 
-/// Each bot takes one route per section (chosen when it starts) and follows the joined path.
-pub fn course_brain(sections: Vec<Vec<Vec<Waypoint>>>) -> BotBrain {
-    let keys: Vec<String> = (0..sections.len()).map(|i| format!("r{i}")).collect();
+/// Each bot takes one route per section (chosen when it starts, kept in `picks`) and follows the joined path.
+pub fn course_brain(sections: Vec<Vec<Vec<Waypoint>>>, picks: Vec<Note<usize>>) -> BotBrain {
     Box::new(move |bot, out| {
         init_bot(bot);
         let mut pts: Vec<&Waypoint> = Vec::new();
-        for (r, k) in sections.iter().zip(&keys) {
+        for (r, &k) in sections.iter().zip(&picks) {
             let pick = match bot.mem.get(k) {
                 Some(v) => v,
                 None => {
                     let v = if r.len() > 1 {
-                        (bot.rng.next() * r.len() as f64).floor()
+                        (bot.rng.next() * r.len() as f64).floor() as usize
                     } else {
-                        0.0
+                        0
                     };
                     bot.mem.set(k, v);
                     v
                 }
             };
-            if let Some(route) = r.get(pick as usize).or(r.first()) {
+            if let Some(route) = r.get(pick).or(r.first()) {
                 pts.extend(route);
             }
         }
@@ -250,7 +265,7 @@ pub fn rest(len: f64, w: f64, p: Palette) -> Segment {
         SegOut {
             z: s.z + len,
             y: s.y,
-            routes: vec![vec![Waypoint::w(0.0, s.z + len / 2.0, 1.5)]],
+            routes: vec![vec![Waypoint::spread(0.0, s.z + len / 2.0, 1.5)]],
             checkpoint: Some((s.z + 0.5, V3::new(0.0, s.y + 0.1, s.z + len / 2.0))),
             ..Default::default()
         }
@@ -312,17 +327,17 @@ pub fn rotor_decks(n: u32) -> Segment {
                 } else {
                     0.0
                 };
-                if d - vin.max_js(0.0) * eta.max_js(0.0) > r + 1.2 {
+                if d - vin.at_least(0.0) * eta.at_least(0.0) > r + 1.2 {
                     return false;
                 }
                 eta > 0.1 && eta < 0.24 && (!high || arm_contact_eta(p, high_ang(bot.t), hsp, 1, 0.0, c, 0.36) > 0.8)
             });
             let side = if s.rng() < 0.5 { -1.0 } else { 1.0 };
             route.extend([
-                Waypoint::w(0.0, c - r - 1.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(side * 2.6, c - 2.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(side * 2.6, c + 2.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(0.0, c + r + 1.0, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(0.0, c - r - 1.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(side * 2.6, c - 2.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(side * 2.6, c + 2.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(0.0, c + r + 1.0, 0.3).jump_shared(&jump_when),
             ]);
             zz = c + r - 0.3;
         }
@@ -342,7 +357,7 @@ pub fn moving_platforms(n: u32) -> Segment {
         let y = s.y;
         s.b.box_(0.0, y - 1.0, s.z + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, d());
         let mut zz = s.z + 6.0;
-        let mut route = vec![Waypoint::w(0.0, s.z + 4.0, 0.2)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 4.0, 0.2)];
         let mut edge = zz;
         for i in 0..n {
             let c = zz + 2.0 + 2.25;
@@ -378,7 +393,7 @@ pub fn moving_platforms(n: u32) -> Segment {
         }
         zz += 2.0;
         s.b.box_(0.0, y - 1.0, zz + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, d());
-        route.push(Waypoint::w(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.0)));
+        route.push(Waypoint::spread(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.0)));
         SegOut {
             z: zz + 6.0,
             y,
@@ -390,7 +405,6 @@ pub fn moving_platforms(n: u32) -> Segment {
 }
 
 /// Narrow bridges under swinging hammers (two of them side by side: pick one), timings from the seed.
-#[allow(clippy::approx_constant, reason = "6.28 as in TS, not TAU")]
 pub fn hammer_bridges(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
@@ -399,22 +413,22 @@ pub fn hammer_bridges(n: u32) -> Segment {
         for bx in [-4.5, 4.5] {
             let p = if bx < 0.0 { pal::BLUE } else { pal::TEAL };
             s.b.box_(bx, y - 1.0, s.z + len / 2.0, 3.2, 2.0, len, p, d());
-            let mut route = vec![Waypoint::w(bx, s.z + 0.8, 0.0)];
+            let mut route = vec![Waypoint::spread(bx, s.z + 0.8, 0.0)];
             for k in 0..n {
                 // The two bridges' hammers are staggered (their heads swing over the other bridge).
                 let hz = s.z + 3.5 + k as f64 * 7.0 + if bx > 0.0 { 3.5 } else { 0.0 };
                 let w = 1.7 + s.rng() * 0.9;
-                let ph = s.rng() * 6.28;
+                let ph = s.rng() * m::TAU;
                 s.b.hammer(bx, y + 7.4, hz, w, ph, 1.12, true);
                 let head_x = move |t: f64| bx + 6.0 * m::sin(m::sin(t * w + ph) * 1.12);
-                route.push(Waypoint::w(bx, hz - 2.6, 0.0));
-                route.push(Waypoint::w(bx, hz + 2.0, 0.0).wait(move |bot| {
+                route.push(Waypoint::spread(bx, hz - 2.6, 0.0));
+                route.push(Waypoint::spread(bx, hz + 2.0, 0.0).wait(move |bot| {
                     [0.0, 0.2, 0.4, 0.6, 0.8]
                         .iter()
                         .all(|dt| (head_x(bot.t + dt) - bx).abs() > 2.6)
                 }));
             }
-            route.push(Waypoint::w(bx, s.z + len + 1.0, 0.0));
+            route.push(Waypoint::spread(bx, s.z + len + 1.0, 0.0));
             routes.push(route);
         }
         let (z0, z_end) = (s.z, s.z + len);
@@ -435,7 +449,7 @@ pub fn cycle_open(t: f64, period: f64, phase: f64, share: f64) -> f64 {
     let f = (((t + phase) % period) + period) % period / period;
     let ramp = 0.08;
     if f < share {
-        return 1f64.min_js(f / ramp).min_js((share - f) / ramp);
+        return 1f64.at_most(f / ramp).at_most((share - f) / ramp);
     }
     0.0
 }
@@ -505,15 +519,16 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
                     });
                 }
                 let open = move |t: f64| cycle_open(t, period, phase, share);
-                routes[di].push(Waypoint::w(x, wz - 2.2, 0.0));
+                routes[di].push(Waypoint::spread(x, wz - 2.2, 0.0));
                 routes[di].push(
-                    Waypoint::w(x, wz + 1.6, 0.0).wait(move |bot| open(bot.t + 0.15) > 0.7 && open(bot.t + 0.55) > 0.7),
+                    Waypoint::spread(x, wz + 1.6, 0.0)
+                        .wait(move |bot| open(bot.t + 0.15) > 0.7 && open(bot.t + 0.55) > 0.7),
                 );
             }
         }
         s.b.bonus(0.0, y, s.z + 4.0 + gap_z / 2.0);
         for r in &mut routes {
-            r.push(Waypoint::w(0.0, s.z + len + 0.5, 1.0));
+            r.push(Waypoint::spread(0.0, s.z + len + 0.5, 1.0));
         }
         let z0 = s.z;
         SegOut {
@@ -540,14 +555,14 @@ const GATE_RATE: f64 = 2.2;
 impl Gate {
     fn held(&self, t: f64) -> f64 {
         if self.pressed {
-            1f64.min_js(self.level0 + 0f64.max_js(t - self.at) * GATE_RATE)
+            1f64.at_most(self.level0 + 0f64.at_least(t - self.at) * GATE_RATE)
         } else {
-            0f64.max_js(self.level0 - 0f64.max_js(t - self.at) * GATE_RATE)
+            0f64.at_least(self.level0 - 0f64.at_least(t - self.at) * GATE_RATE)
         }
     }
 
     fn open(&self, t: f64) -> f64 {
-        cycle_open(t, self.period, self.phase, 0.22).max_js(self.held(t))
+        cycle_open(t, self.period, self.phase, 0.22).at_least(self.held(t))
     }
 
     fn set_pressed(&mut self, on: bool, t: f64) {
@@ -581,8 +596,8 @@ pub fn coop_gate(w: f64) -> Segment {
             period,
             phase,
         });
-        s.on("btn", move |cx, d| {
-            if let (Some(on), Some(at)) = (d["on"].as_bool(), d["at"].as_f64()) {
+        s.on(move |cx, ev| {
+            if let SegEvent::Button { on, at } = *ev {
                 cx.world.st_mut(gate).set_pressed(on, at);
             }
         });
@@ -630,7 +645,7 @@ pub fn coop_gate(w: f64) -> Segment {
             });
         }
         // Server: somebody standing on a button holds the gate open.
-        let btn = s.event("btn");
+        let (seg, notes) = (s.seg(), s.notes);
         s.tick(move |cx, t| {
             let mut any = false;
             for id in cx.bodies.ids() {
@@ -643,40 +658,40 @@ pub fn coop_gate(w: f64) -> Segment {
             }
             if any != cx.world.st(gate).pressed && t >= 0.0 {
                 cx.world.st_mut(gate).set_pressed(any, t);
-                seg_emit(cx, &btn, json!({ "on": any, "at": t }));
+                seg_emit(cx, seg, SegEvent::Button { on: any, at: t });
             }
         });
         let route = vec![
-            Waypoint::w(0.0, s.z + 2.0, 1.0),
+            Waypoint::spread(0.0, s.z + 2.0, 1.0),
             // Helpful bots go and stand on a button for a while when the gate is shut and nobody helps.
-            Waypoint::w(0.0, wz - 2.0, 0.8).detour(move |bot| {
-                if bot.mem.get("help").unwrap_or(-1e9) > bot.t {
-                    let side = bot.mem.get("helpSide").unwrap_or(1.0);
+            Waypoint::spread(0.0, wz - 2.0, 0.8).detour(move |bot| {
+                if bot.mem.get(notes.help).unwrap_or(-1e9) > bot.t {
+                    let side = bot.mem.get(notes.help_side).unwrap_or(1.0);
                     return Some((side * bx, bz));
                 }
-                if bot.mem.get("helped") == Some(wz) || bot.body.pos.z > wz - 3.5 || bot.t <= 0.0 {
+                if bot.mem.get(notes.helped) == Some(wz) || bot.body.pos.z > wz - 3.5 || bot.t <= 0.0 {
                     return None;
                 }
                 let g = bot.world.st(gate);
                 if g.open(bot.t) < 0.3
                     && !g.pressed
-                    && bot.mem.aggro.unwrap_or(0.5) < 0.35
+                    && bot.mem.traits.aggro < 0.35
                     && bot.rng.next() < 0.4 * BOT_DT * 10.0
                 {
-                    bot.mem.set("helped", wz);
+                    bot.mem.set(notes.helped, wz);
                     let side = if bot.body.pos.x < 0.0 { -1.0 } else { 1.0 };
-                    bot.mem.set("helpSide", side);
+                    bot.mem.set(notes.help_side, side);
                     let until = bot.t + 3.0 + bot.rng.next() * 3.0;
-                    bot.mem.set("help", until);
+                    bot.mem.set(notes.help, until);
                     return Some((side * bx, bz));
                 }
                 None
             }),
-            Waypoint::w(0.0, wz + 2.0, 0.3).wait(move |bot| {
+            Waypoint::spread(0.0, wz + 2.0, 0.3).wait(move |bot| {
                 let g = bot.world.st(gate);
                 g.open(bot.t) > 0.75 && g.open(bot.t + 0.5) > 0.7
             }),
-            Waypoint::w(0.0, s.z + len - 1.0, 1.0),
+            Waypoint::spread(0.0, s.z + len - 1.0, 1.0),
         ];
         SegOut {
             z: s.z + len,
@@ -777,35 +792,34 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 if !d.broken {
                     continue;
                 }
-                let (obj, dt) = (d.obj, (t - d.broken_at).max_js(0.0));
+                let (obj, dt) = (d.obj, (t - d.broken_at).at_least(0.0));
                 let n = ctx.node(obj);
-                n.rot.x = (dt * dt * 7.0).min_js(m::PI / 2.0);
+                n.rot.x = (dt * dt * 7.0).at_most(m::PI / 2.0);
                 n.visible = dt <= 1.4;
             }
         });
-        let key = s.event("door");
+        let seg = s.seg();
         for (col, id) in breakable_cols {
-            let key = key.clone();
             s.b.on_touch(col, move |cx, _, _, _| {
                 if cx.server {
-                    seg_emit(cx, &key, json!(id));
+                    seg_emit(cx, seg, SegEvent::Door(id as u32));
                 } else {
                     break_door(cx, id);
                 }
             });
         }
-        s.on("door", move |cx, d| {
-            if let Some(id) = d.as_f64() {
+        s.on(move |cx, ev| {
+            if let SegEvent::Door(id) = *ev {
                 break_door(cx, id as usize);
             }
         });
+        let notes = s.notes;
         let mut route = Vec::new();
         for (r, &wz) in row_z.iter().enumerate() {
-            let pick_key = format!("door{}", m::round_js(wz));
-            let tried_key = format!("tried{}", m::round_js(wz));
+            let (pick_key, tried_key): (Note<usize>, Note<u32>) = (s.b.note(), s.b.note());
             let r = r as u32;
             // Like a player: take a door someone broke, or barge into one; if it holds, try the next.
-            route.push(Waypoint::w(0.0, wz + 1.5, 0.5).detour(move |bot| {
+            route.push(Waypoint::spread(0.0, wz + 1.5, 0.5).detour(move |bot| {
                 let p = bot.body.pos;
                 if p.z > wz + 0.6 {
                     return None;
@@ -817,7 +831,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     .filter(|d| d.row == r)
                     .map(|d| (d.broken, d.x))
                     .collect();
-                let mut pick = bot.mem.get(&pick_key).map(|v| v as usize);
+                let mut pick = bot.mem.get(pick_key);
                 let open: Vec<usize> = (0..row.len()).filter(|&i| row[i].0).collect();
                 if !open.is_empty() && pick.is_none_or(|k| !row.get(k).is_some_and(|d| d.0)) {
                     let mut nearest = open[0];
@@ -833,9 +847,9 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 let pick = match pick {
                     Some(k) => k,
                     None => {
-                        let mask = bot.mem.get(&tried_key).unwrap_or(0.0) as u32;
+                        let mask = bot.mem.get(tried_key).unwrap_or(0);
                         let mut options: Vec<usize> = (0..5).filter(|i| mask & (1 << i) == 0).collect();
-                        let pref = p.x + bot.mem.off.unwrap_or(0.0) * 3.0;
+                        let pref = p.x + bot.mem.traits.off * 3.0;
                         options.sort_by(|&a, &c| {
                             let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
                             da.partial_cmp(&dc).unwrap_or(core::cmp::Ordering::Equal)
@@ -852,19 +866,19 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                         }
                     }
                 };
-                bot.mem.set(&pick_key, pick as f64);
+                bot.mem.set(pick_key, pick);
                 let (broken, dx) = row[pick];
                 if !broken && p.z > wz - 1.05 && (p.x - dx).abs() < 1.2 {
-                    let push = bot.mem.get("push").unwrap_or(0.0) + BOT_DT;
-                    bot.mem.set("push", push);
-                    if push > 0.25 + bot.mem.react.unwrap_or(0.15) {
-                        let tried = bot.mem.get(&tried_key).unwrap_or(0.0) as u32 | (1 << pick);
-                        bot.mem.set(&tried_key, tried as f64);
-                        bot.mem.remove(&pick_key);
-                        bot.mem.set("push", 0.0);
+                    let push = bot.mem.get(notes.push).unwrap_or(0.0) + BOT_DT;
+                    bot.mem.set(notes.push, push);
+                    if push > 0.25 + bot.mem.traits.react {
+                        let tried = bot.mem.get(tried_key).unwrap_or(0) | (1 << pick);
+                        bot.mem.set(tried_key, tried);
+                        bot.mem.remove(pick_key);
+                        bot.mem.set(notes.push, 0.0);
                     }
                 } else {
-                    bot.mem.set("push", 0.0);
+                    bot.mem.set(notes.push, 0.0);
                 }
                 let aligned = (p.x - dx).abs() < 0.5;
                 Some(if broken || aligned || p.z > wz - 1.5 {
@@ -874,7 +888,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 })
             }));
         }
-        route.push(Waypoint::w(0.0, s.z + len - 0.5, 1.0));
+        route.push(Waypoint::spread(0.0, s.z + len - 0.5, 1.0));
         let z0 = s.z;
         SegOut {
             z: s.z + len,
@@ -941,8 +955,8 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
             z: z1 + 4.0,
             y: y + rise,
             routes: vec![vec![
-                Waypoint::w(0.0, z0 + len * 0.45, 3.0),
-                Waypoint::w(0.0, z1 + 2.0, 2.0),
+                Waypoint::spread(0.0, z0 + len * 0.45, 3.0),
+                Waypoint::spread(0.0, z1 + 2.0, 2.0),
             ]],
             forbidden: Some(Box::new(move |p| p.z > z0 && p.z < z1 && p.x.abs() > w / 2.0 + 0.05)),
             ..Default::default()
@@ -955,7 +969,7 @@ pub fn seesaws(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let mut zz = s.z + 3.0;
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 1.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         s.b.box_(0.0, y - 1.0, s.z + 1.5, 12.0, 2.0, 3.0, pal::PURPLE, d());
         let mut edge = s.z + 3.0;
         for i in 0..n {
@@ -970,13 +984,13 @@ pub fn seesaws(n: u32) -> Segment {
                 n.rot.z = m::sin(t * w1 + ph) * 0.36;
                 n.rot.x = m::sin(t * 0.8 + ph) * 0.12;
             });
-            route.push(Waypoint::w(x, c, 0.3).jump_when(edge_jump(edge, 1.1)));
+            route.push(Waypoint::spread(x, c, 0.3).jump_when(edge_jump(edge, 1.1)));
             edge = c + 3.75;
             zz = c + 3.75;
         }
         zz += 2.0;
         s.b.box_(0.0, y - 1.0, zz + 3.0, 12.0, 2.0, 6.0, pal::PURPLE, d());
-        route.push(Waypoint::w(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.1)));
+        route.push(Waypoint::spread(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.1)));
         SegOut {
             z: zz + 6.0,
             y,
@@ -1012,7 +1026,7 @@ pub fn conveyor(len: f64) -> Segment {
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
             let w = 1.4 + s.rng() * 0.6;
             let ph = s.rng() * 6.0;
-            let px = move |t: f64| side * (5.6 - 3.2 * 0f64.max_js(m::sin(t * w + ph)));
+            let px = move |t: f64| side * (5.6 - 3.2 * 0f64.at_least(m::sin(t * w + ph)));
             let o = PrimOpts {
                 dynamic: true,
                 col: ColliderOpts {
@@ -1027,13 +1041,13 @@ pub fn conveyor(len: f64) -> Segment {
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = px(t));
             s.b.bumper(-side * 2.9, y, pz + 4.0, 0.75, 10.0);
             let lane = -side * 1.9;
-            route.push(Waypoint::w(lane, pz - 2.0, 0.0));
+            route.push(Waypoint::spread(lane, pz - 2.0, 0.0));
             route.push(
-                Waypoint::w(lane, pz + 1.5, 0.0).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
+                Waypoint::spread(lane, pz + 1.5, 0.0).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
             );
         }
         s.b.bonus(0.0, y, s.z + len * 0.5);
-        route.push(Waypoint::w(0.0, s.z + len + 0.5, 0.5));
+        route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
         let z0 = s.z;
         SegOut {
             z: s.z + len,
@@ -1088,12 +1102,12 @@ pub fn trampoline_gap() -> Segment {
             .iter()
             .map(|&tx| {
                 vec![
-                    Waypoint::w(tx, tz, 0.0),
+                    Waypoint::spread(tx, tz, 0.0),
                     // Missed the trampoline (down in the basin, past it): back to the nearest one.
-                    Waypoint::w(tx * 0.5, far + 2.5, 0.3).detour(move |bot| {
+                    Waypoint::spread(tx * 0.5, far + 2.5, 0.3).detour(move |bot| {
                         (bot.body.pos.y < basin_y + 1.0).then_some((if bot.body.pos.x < 0.0 { -2.8 } else { 2.8 }, tz))
                     }),
-                    Waypoint::w(0.0, far + 5.0, 1.0),
+                    Waypoint::spread(0.0, far + 5.0, 1.0),
                 ]
             })
             .collect();
@@ -1121,7 +1135,7 @@ pub fn portal_fork() -> Segment {
         for sx in [1.0, 8.0] {
             s.b.box_(sx, y + 1.2, s.z + len / 2.0, 0.8, 2.4, len, pal::PINK, d());
         }
-        let mut zig = vec![Waypoint::w(4.5, s.z + 1.0, 0.0)];
+        let mut zig = vec![Waypoint::spread(4.5, s.z + 1.0, 0.0)];
         for k in 0..4 {
             let wz = s.z + 4.0 + k as f64 * 5.5;
             let left = k % 2 == 0;
@@ -1136,10 +1150,10 @@ pub fn portal_fork() -> Segment {
                 d(),
             );
             let gx = if left { 6.3 } else { 2.7 };
-            zig.push(Waypoint::w(gx, wz - 1.4, 0.0));
-            zig.push(Waypoint::w(gx, wz + 1.4, 0.0));
+            zig.push(Waypoint::spread(gx, wz - 1.4, 0.0));
+            zig.push(Waypoint::spread(gx, wz + 1.4, 0.0));
         }
-        zig.push(Waypoint::w(4.5, s.z + len + 1.0, 0.0));
+        zig.push(Waypoint::spread(4.5, s.z + len + 1.0, 0.0));
         // Left: a short run, a gap, the portal.
         s.b.box_(-4.5, y - 1.0, s.z + 4.0, 6.0, 2.0, 8.0, pal::BLUE, d());
         let gap_end = s.z + 8.0 + 3.0 + s.rng() * 0.6;
@@ -1164,12 +1178,12 @@ pub fn portal_fork() -> Segment {
         );
         s.b.bonus(-4.5, y, s.z + 5.0);
         let hop = vec![
-            Waypoint::w(-4.5, s.z + 5.0, 0.0),
-            Waypoint::w(-4.5, gap_end + 1.2, 0.0).jump_when(edge_jump(s.z + 8.0, 1.1)),
-            Waypoint::w(-4.5, pz + 0.5, 0.0),
-            Waypoint::w(0.0, s.z + len + 5.0, 1.0),
+            Waypoint::spread(-4.5, s.z + 5.0, 0.0),
+            Waypoint::spread(-4.5, gap_end + 1.2, 0.0).jump_when(edge_jump(s.z + 8.0, 1.1)),
+            Waypoint::spread(-4.5, pz + 0.5, 0.0),
+            Waypoint::spread(0.0, s.z + len + 5.0, 1.0),
         ];
-        zig.push(Waypoint::w(0.0, s.z + len + 5.0, 1.0));
+        zig.push(Waypoint::spread(0.0, s.z + len + 5.0, 1.0));
         let z0 = s.z;
         SegOut {
             z: s.z + len + 6.0,
@@ -1190,7 +1204,7 @@ pub fn glove_alley(n: u32) -> Segment {
         let len = n as f64 * 5.0 + 4.0;
         let w = 7.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::TEAL, d());
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 0.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.0)];
         for k in 0..n {
             let gz = s.z + 3.0 + k as f64 * 5.0;
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
@@ -1211,14 +1225,14 @@ pub fn glove_alley(n: u32) -> Segment {
                 },
             );
             let rest = side * (w / 2.0 + 2.6);
-            route.push(Waypoint::w(0.0, gz - 2.2, 0.0));
-            route.push(Waypoint::w(0.0, gz + 1.8, 0.0).wait(move |bot| {
+            route.push(Waypoint::spread(0.0, gz - 2.2, 0.0));
+            route.push(Waypoint::spread(0.0, gz + 1.8, 0.0).wait(move |bot| {
                 [0.0, 0.25, 0.5]
                     .iter()
                     .all(|dt| (gx.x_at(bot.t + dt) - rest).abs() < 1.2)
             }));
         }
-        route.push(Waypoint::w(0.0, s.z + len + 0.5, 0.5));
+        route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
         SegOut {
             z: s.z + len,
             y,
@@ -1278,12 +1292,12 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
                 s.b.box_(side * (gap / 2.0 + w / 2.0), 1.4, 0.0, w, 3.4, 0.8, p, o);
             }
             s.b.mover(move |t, ctx| ctx.node(gate).pos.x = gx(t));
-            route.push(Waypoint::w(0.0, gz - 3.0, 0.5));
+            route.push(Waypoint::spread(0.0, gz - 3.0, 0.5));
             route.push(Waypoint::moving(gx, gz + 1.2).wait(move |bot| (gx(bot.t + 0.45) - bot.body.pos.x).abs() < 1.2));
             route.push(Waypoint::moving(gx, gz + 2.5));
         }
         s.b.box_(0.0, y + rise - 1.0, z1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, d());
-        route.push(Waypoint::w(0.0, z1 + 3.0, 1.0));
+        route.push(Waypoint::spread(0.0, z1 + 3.0, 1.0));
         SegOut {
             z: z1 + 6.0,
             y: y + rise,
@@ -1302,7 +1316,7 @@ pub fn tipping_bridge(n: u32) -> Segment {
         let y = s.y;
         let flap = 3.0;
         s.b.box_(0.0, y - 1.0, s.z + 1.0, 6.0, 2.0, 2.0, pal::PURPLE, d());
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 0.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.0)];
         let mut zz = s.z + 2.0;
         for k in 0..n {
             let c = zz + flap / 2.0 + 0.15;
@@ -1327,13 +1341,13 @@ pub fn tipping_bridge(n: u32) -> Segment {
             let dir = if s.rng() < 0.5 { -1.0 } else { 1.0 };
             s.b.mover(move |t, ctx| ctx.node(pivot).rot.z = dir * tip(t) * 1.35);
             route.push(
-                Waypoint::w(0.0, c + flap / 2.0 - 0.3, 0.0)
+                Waypoint::spread(0.0, c + flap / 2.0 - 0.3, 0.0)
                     .wait(move |bot| [0.1, 0.4, 0.7].iter().all(|dt| tip(bot.t + dt) < 0.05)),
             );
             zz += flap + 0.3;
         }
         s.b.box_(0.0, y - 1.0, zz + 2.0, 12.0, 2.0, 4.0, pal::PURPLE, d());
-        route.push(Waypoint::w(0.0, zz + 2.0, 0.5));
+        route.push(Waypoint::spread(0.0, zz + 2.0, 0.5));
         SegOut {
             z: zz + 4.0,
             y,
@@ -1351,7 +1365,7 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
         let gap_z = 5.0;
         let len = rows as f64 * gap_z + 4.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 0.5)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.5)];
         for k in 0..rows {
             let pz = s.z + 3.0 + k as f64 * gap_z;
             let period = 2.2 + s.rng() * 1.2;
@@ -1404,13 +1418,14 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                     ctx.node(node).pos.x = side * (w / 2.0 + (w / 4.0 + 0.25) - out(t) * (w / 2.0 - 0.1));
                 });
             }
-            route.push(Waypoint::w(0.0, pz - 2.0, 0.5));
+            route.push(Waypoint::spread(0.0, pz - 2.0, 0.5));
             route.push(
-                Waypoint::w(0.0, pz + 1.6, 0.5).wait(move |bot| out(bot.t + 0.1) < 0.02 && out(bot.t + 0.45) < 0.02),
+                Waypoint::spread(0.0, pz + 1.6, 0.5)
+                    .wait(move |bot| out(bot.t + 0.1) < 0.02 && out(bot.t + 0.45) < 0.02),
             );
         }
         s.b.bonus(w / 2.0 - 2.0, y, s.z + 3.0 + gap_z * 1.5);
-        route.push(Waypoint::w(0.0, s.z + len + 0.5, 0.5));
+        route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
         SegOut {
             z: s.z + len,
             y,

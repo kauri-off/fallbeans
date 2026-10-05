@@ -1,4 +1,4 @@
-//! Boards with an emoji (port of `emojiTexture` in `view.ts`): the board's colour, a white frame and the
+//! Boards with an emoji: the board's colour, a white frame and the
 //! emoji drawn from the game's colour emoji font (its bitmaps, through swash as Bevy's text does).
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;

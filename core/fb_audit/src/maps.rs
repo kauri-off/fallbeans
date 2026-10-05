@@ -1,14 +1,14 @@
 //! Audits of one map: meta and spec rules, spawns and respawns, clipping, navigation, determinism,
-//! budgets and bot balance (port of `audit/maps.ts`).
+//! budgets and bot balance.
 use std::collections::{BTreeMap, BTreeSet};
 
 use fb_arena::{Arena, ArenaKind, PawnStatus, Stepper, tick_bodies, touch_hook};
 use fb_shared::game::Genre;
-use fb_shared::m::MinMaxJs;
+use fb_shared::m::MinMax;
 use fb_shared::{DT, MAX_PLAYERS, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
 use fb_sim::map::MapDef;
-use fb_sim::math::{V3, len};
+use fb_sim::math::V3;
 use fb_sim::nav::{Nav, NavGrid, PathOpts};
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::physics::{Body, BodyInput, R, SPHERES, StepEvents};
@@ -65,7 +65,7 @@ fn simulate(
     let mut scores = BTreeMap::new();
     let mut out = Vec::new();
     let mut ev = StepEvents::default();
-    let n = m::round_js(seconds / DT) as i64;
+    let n = (seconds / DT).round() as i64;
     for i in 1..=n {
         let t = t0 + i as f64 * DT;
         {
@@ -163,7 +163,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 .at(p);
         }
         for (j, &q) in sp[..i].iter().enumerate() {
-            let d = len(p - q);
+            let d = (p - q).length();
             if d < MIN_SPAWN_GAP {
                 out.error(format!("spawns {j} and {i} are {} m apart", r3(d))).at(p);
             }
@@ -286,7 +286,7 @@ fn spawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut worst: f64 = 0.0;
     for (i, p) in a.spec.spawns.clone().into_iter().enumerate() {
         let r = stand_test(&mut a, p, 0.0, 2.0);
-        worst = worst.max_js(r.start.0);
+        worst = worst.at_least(r.start.0);
         if r.start.0 > 0.05 {
             let what = label(&a, r.start.1);
             out.error(format!("spawn {i} starts {} m inside {what}", r3(r.start.0)))
@@ -441,21 +441,20 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let local: Vec<Vec<V3>> = a.world.colliders.iter().map(sample_points).collect();
     let mut pairs: BTreeMap<(ColId, ColId), Clip> = BTreeMap::new();
     let step = if ctx.quick { 0.25 } else { 0.1 };
-    let end = meta.duration.min_js(if ctx.quick { 20.0 } else { 60.0 });
+    let end = meta.duration.at_most(if ctx.quick { 20.0 } else { 60.0 });
     let samples = (end / step).floor() as usize + 1;
     let mut near = Vec::new();
     let mut c = Contact::default();
     let mut checks: u64 = 0;
-    // (Time summed step by step, as TS does: the last sample depends on it.)
-    let (mut s, mut t) = (0, 0.0);
-    while t <= end {
+    for s in 0..samples {
+        let t = s as f64 * step;
         a.world.set_time(t);
         let world = &a.world;
         let mut test = |ia: ColId, ib: ColId| {
             let (ca, cb) = (world.col(ia), world.col(ib));
             // Points of a inside b.
             for &p in &local[ia as usize] {
-                let w = ca.cur.apply_point(p);
+                let w = ca.cur.transform_point3(p);
                 checks += 1;
                 if !cb.contact(w, 0.001, &mut c) || c.depth < 0.06 {
                     continue;
@@ -496,8 +495,6 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 test(ib, ia);
             }
         }
-        s += 1;
-        t += step;
     }
     // Overlapping nearly all the time: an axle or a hinge (a rotor arm in its hub), not clipping.
     let attached = pairs
@@ -638,20 +635,20 @@ fn limits(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 // ------------------------------------------------------------------ bots: balance, stuck spots, cost
 
 #[derive(Default)]
-struct SeedRun {
+pub(crate) struct SeedRun {
     stuck: Vec<(u32, V3, f64)>,
-    finish_times: Vec<f64>,
-    out_times: Vec<f64>,
-    survivors: usize,
-    top_score: f64,
+    pub finish_times: Vec<f64>,
+    pub out_times: Vec<f64>,
+    pub survivors: usize,
+    pub top_score: f64,
     /// Falls that were not eliminations: (progress, cause).
-    falls: Vec<(f64, &'static str)>,
-    bot_seconds: f64,
+    pub falls: Vec<(f64, &'static str)>,
+    pub bot_seconds: f64,
     sim_ms: f64,
     ticks: i64,
 }
 
-fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
+pub(crate) fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
     let mut h = Harness::new(
         map,
         &Opts {
@@ -673,7 +670,7 @@ fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
                 continue;
             }
             match last.get(&p.id) {
-                Some(&(at, since)) if len(at - p.body.pos) <= 0.5 => {
+                Some(&(at, since)) if (at - p.body.pos).length() <= 0.5 => {
                     if t - since >= 12.0 {
                         r.stuck.push((p.id, p.body.pos, t));
                         last.insert(p.id, (p.body.pos, t));
@@ -690,7 +687,7 @@ fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
     }
     r.sim_ms = clock.ms();
     r.ticks = h.arena.tick - tick0;
-    r.bot_seconds = h.ids.len() as f64 * h.arena.time().max_js(1.0);
+    r.bot_seconds = h.ids.len() as f64 * h.arena.time().at_least(1.0);
     r.finish_times = h.finishes.iter().map(|f| f.1).collect();
     r.out_times = h.falls.iter().filter(|f| f.out).map(|f| f.t).collect();
     r.survivors = h.alive();
@@ -712,7 +709,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         vec![ctx.seed, 23, 37, 51, 77]
     };
     let runs: Vec<SeedRun> = seeds.par_iter().map(|&s| play_seed(map, s)).collect();
-    // In the order first seen: ties among the hottest keep it (as a JS Map).
+    // In the order first seen: ties among the hottest keep it.
     let mut spots: Vec<(String, u32)> = Vec::new();
     let mut falls = 0;
     let mut stuck = 0;
@@ -725,7 +722,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         }
         for &(progress, cause) in &r.falls {
             falls += 1;
-            let key = format!("z≈{} {cause}", m::round_js(progress / 5.0) * 5.0);
+            let key = format!("z≈{} {cause}", (progress / 5.0).round() * 5.0);
             match spots.iter_mut().find(|(k, _)| *k == key) {
                 Some(s) => s.1 += 1,
                 None => spots.push((key, 1)),
@@ -763,7 +760,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             out.metric("finishRate", r3(rate));
             out.metric("finishP50", r1(p50));
             out.metric("finishP90", r1(quantile(&finish_times, 0.9)));
-            let pct = m::round_js(rate * 100.0);
+            let pct = (rate * 100.0).round();
             if rate < 0.3 {
                 out.error(format!("only {pct}% of bots finish"));
             } else if rate < 0.6 {

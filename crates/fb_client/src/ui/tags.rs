@@ -1,4 +1,4 @@
-//! Names over the beans (port of `hud/Tags.tsx`): interface nodes placed every frame where the bean's head
+//! Names over the beans: interface nodes placed every frame where the bean's head
 //! is on screen, crisp and untouched by fog and the scene's lighting. Maps may add a badge («⭐ 5»).
 use bevy::prelude::*;
 use fb_net::*;

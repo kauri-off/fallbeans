@@ -2,7 +2,7 @@
 //! another slope, then flying shuttles over the clouds to the finish.
 use std::sync::Arc;
 
-use fb_sim::bots::{BotInput, BotView, SharedTest, Waypoint, follow, steer};
+use fb_sim::bots::{BotInput, BotView, Note, SharedTest, Waypoint, follow, steer};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
@@ -77,8 +77,8 @@ fn ice_slope(drop: f64, len: f64) -> Segment {
             z: z1 + 6.0,
             y: y1,
             routes: vec![vec![
-                Waypoint::w(0.0, z0 + len * 0.5, 3.0),
-                Waypoint::w(0.0, z1 + 5.5, 2.0),
+                Waypoint::spread(0.0, z0 + len * 0.5, 3.0),
+                Waypoint::spread(0.0, z1 + 5.5, 2.0),
             ]],
             forbidden: Some(Box::new(move |p| {
                 p.z > z0 && p.z < z1 + 6.0 && p.x.abs() > w / 2.0 + 0.05
@@ -105,9 +105,9 @@ fn dive_gaps(n: u32, gap: f64) -> Segment {
             }
             let edge = z + len;
             let next = edge + gap;
-            route.push(Waypoint::w(0.0, edge - 2.0, 0.5));
+            route.push(Waypoint::spread(0.0, edge - 2.0, 0.5));
             route.push(
-                Waypoint::w(0.0, next + 2.0, 0.0)
+                Waypoint::spread(0.0, next + 2.0, 0.0)
                     .jump_when(edge_jump(edge, 0.9))
                     // In the air past the edge, on the way down: dive for the far side.
                     .drive(move |bot, out| {
@@ -124,7 +124,7 @@ fn dive_gaps(n: u32, gap: f64) -> Segment {
             );
             z = next;
         }
-        route.push(Waypoint::w(0.0, z + len - 1.0, 0.5));
+        route.push(Waypoint::spread(0.0, z + len - 1.0, 0.5));
         SegOut {
             z: z + len,
             y,
@@ -155,8 +155,8 @@ fn dive_bars(n: u32) -> Segment {
             for dz in [7.0, 5.5] {
                 s.b.box_(0.0, y + 0.01, bz - dz, w, 0.02, 0.4, pal::YELLOW, deco());
             }
-            let key = format!("bar{}", m::round_js(bz));
-            route.push(Waypoint::w(0.0, bz + 2.5, 0.0).drive(move |bot, out| {
+            let key: Note<f64> = s.b.note();
+            route.push(Waypoint::spread(0.0, bz + 2.5, 0.0).drive(move |bot, out| {
                 let body = bot.body;
                 let p = body.pos;
                 if p.z > bz + 0.6 {
@@ -168,13 +168,13 @@ fn dive_bars(n: u32) -> Segment {
                     return true;
                 }
                 // Stopped at the bar: back off for another run.
-                if bot.mem.get(&key).unwrap_or(-1.0) > bot.t {
+                if bot.mem.get(key).unwrap_or(-1.0) > bot.t {
                     follow(bot, 0.0, bz - 9.0, out);
                     return true;
                 }
                 if body.grounded && p.z > bz - 2.2 && m::hypot(body.vel.x, body.vel.z) < 2.0 {
                     let until = bot.t + 1.0;
-                    bot.mem.set(&key, until);
+                    bot.mem.set(key, until);
                     return true;
                 }
                 follow(bot, 0.0, bz + 3.0, out);
@@ -185,7 +185,7 @@ fn dive_bars(n: u32) -> Segment {
                 true
             }));
         }
-        route.push(Waypoint::w(0.0, z0 + len - 0.5, 0.5));
+        route.push(Waypoint::spread(0.0, z0 + len - 0.5, 0.5));
         SegOut {
             z: z0 + len,
             y,
@@ -231,10 +231,10 @@ fn ice_rotors(n: u32) -> Segment {
             });
             let side = if s.rng() < 0.5 { -1.0 } else { 1.0 };
             route.extend([
-                Waypoint::w(0.0, c - r - 1.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(side * 2.6, c - 2.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(side * 2.6, c + 2.5, 0.3).jump_shared(&jump_when),
-                Waypoint::w(0.0, c + r + 1.0, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(0.0, c - r - 1.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(side * 2.6, c - 2.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(side * 2.6, c + 2.5, 0.3).jump_shared(&jump_when),
+                Waypoint::spread(0.0, c + r + 1.0, 0.3).jump_shared(&jump_when),
             ]);
             zz = c + r - 0.3;
         }
@@ -376,7 +376,7 @@ fn sky_shuttles() -> Segment {
         let y = s.y;
         s.b.box_(0.0, y - 1.0, s.z + 3.0, w, 2.0, 6.0, pal::PURPLE, o());
         let legs = [(s.z + 6.0, y, y + 2.0), (s.z + 6.0 + gap + 6.0, y + 2.0, y + 4.0)];
-        let mut route = vec![Waypoint::w(0.0, s.z + 2.5, 1.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 2.5, 1.0)];
         let dwell = 1.8;
         let travel = 3.4;
         for (k, &(near, y0, y1)) in legs.iter().enumerate() {
@@ -415,11 +415,11 @@ fn sky_shuttles() -> Segment {
             let len = if k == legs.len() - 1 { 7.0 } else { 6.0 };
             let p = if k == 1 { pal::PINK } else { pal::TEAL };
             s.b.box_(0.0, y1 - 1.0, far + len / 2.0, w, 2.0, len, p, o());
-            route.push(Waypoint::w(0.0, far + 2.5, 0.5).drive(ride_drive(ferries, near, far, y1)));
+            route.push(Waypoint::spread(0.0, far + 2.5, 0.5).drive(ride_drive(ferries, near, far, y1)));
         }
         let end = legs[1].0 + gap + 7.0;
         let top_y = y + 4.0;
-        route.push(Waypoint::w(0.0, end - 1.0, 1.0));
+        route.push(Waypoint::spread(0.0, end - 1.0, 1.0));
         SegOut {
             z: end,
             y: top_y,

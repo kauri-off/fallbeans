@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use fb_sim::bots::{HumanOpts, LandCheck, humanize, init_bot, unstick};
+use fb_sim::bots::{HumanOpts, LandCheck, Note, humanize, init_bot, unstick};
 use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
-use fb_sim::m::{self, MinMaxJs};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
+use fb_sim::m::{self, MinMax};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapEvent, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::{Finish, Form, Palette, Part, Piece, pal};
@@ -51,9 +51,9 @@ impl Tiles {
         let qf = ((sq3 / 3.0) * x - z / 3.0) / SIZE;
         let rf = ((2.0 / 3.0) * z) / SIZE;
         let sf = -qf - rf;
-        let mut q = m::round_js(qf);
-        let mut r = m::round_js(rf);
-        let s = m::round_js(sf);
+        let mut q = qf.round();
+        let mut r = rf.round();
+        let s = sf.round();
         let dq = (q - qf).abs();
         let dr = (r - rf).abs();
         let ds = (s - sf).abs();
@@ -90,6 +90,7 @@ impl MapDef for HexAGone {
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
+        let heading_note: Note<f64> = b.note();
         let sq3 = m::sqrt(3.0);
         let falls: St<Falls> = b.state(Vec::new());
         let mut spots: Vec<(u8, f64, f64, f64)> = Vec::new();
@@ -126,7 +127,7 @@ impl MapDef for HexAGone {
                         }
                         let at = cx.t + FALL_DELAY;
                         if cx.server {
-                            cx.emit("tile", json!({ "i": i, "at": at }));
+                            cx.emit(MapEvent::Tile { i: i as u32, at });
                         } else {
                             cx.world.st_mut(falls)[i] = Some(at);
                         }
@@ -190,14 +191,9 @@ impl MapDef for HexAGone {
             kill_y: -30.0,
             face_center: true,
             view: Some(V3::new(0.0, -6.0, 0.0)),
-            on_event: Some(Box::new(move |cx, name, data| {
-                if name != "tile" {
-                    return;
-                }
-                let (Some(i), Some(at)) = (data["i"].as_u64(), data["at"].as_f64()) else {
-                    return;
-                };
-                if i as usize >= n.min(4096) {
+            on_event: Some(Box::new(move |cx, ev| {
+                let &MapEvent::Tile { i, at } = ev else { return };
+                if i as usize >= n {
                     return;
                 }
                 cx.world.st_mut(falls)[i as usize] = Some(at);
@@ -206,11 +202,11 @@ impl MapDef for HexAGone {
                 init_bot(bot);
                 let p = bot.body.pos;
                 let floor = floor_of(p.y);
-                let speed = bot.mem.spd.unwrap_or(1.0);
+                let speed = bot.mem.traits.spd;
                 let fl = bot.world.st(falls);
                 // Keep moving (tiles drop half a second after being touched) towards intact ground,
                 // preferring directions with more intact tiles ahead and staying away from the rim.
-                let heading = match bot.mem.get("heading") {
+                let heading = match bot.mem.get(heading_note) {
                     Some(h) => h,
                     None => bot.rng.next() * m::PI * 2.0,
                 };
@@ -233,14 +229,14 @@ impl MapDef for HexAGone {
                     score -= m::atan2(m::sin(a - heading), m::cos(a - heading)).abs() * 0.6;
                     let ex = p.x + m::sin(a) * 4.0;
                     let ez = p.z + m::cos(a) * 4.0;
-                    score -= 0f64.max_js(m::hypot(ex, ez) - SIZE * 1.5 * (RINGS - 1) as f64) * 2.0;
+                    score -= 0f64.at_least(m::hypot(ex, ez) - SIZE * 1.5 * (RINGS - 1) as f64) * 2.0;
                     score += (bot.rng.next() - 0.5) * 0.4;
                     if score > best_score {
                         best_score = score;
                         best = a;
                     }
                 }
-                bot.mem.set("heading", best);
+                bot.mem.set(heading_note, best);
                 out.mx = m::sin(best) * speed * 0.7;
                 out.mz = m::cos(best) * speed * 0.7;
                 // Hop along: tiles only drop where we land.

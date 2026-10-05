@@ -1,4 +1,4 @@
-//! What a game is (port of `shared/game.ts`): its description, genre, and how a round treats beans.
+//! What a game is: its description, genre, and how a round treats beans.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,7 +65,7 @@ impl GameMeta {
         }
     }
 
-    /// What `GameMetaSchema` checks in TS; empty when the description is fine.
+    /// What is wrong with the description; empty when it is fine.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         let id_ok = self.id.chars().next().is_some_and(|c| c.is_ascii_lowercase())

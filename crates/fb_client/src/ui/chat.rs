@@ -1,4 +1,4 @@
-//! The room's text chat, bottom left (port of `hud/Chat.tsx`). Normally invisible; a new line shows it for a
+//! The room's text chat, bottom left. Normally invisible; a new line shows it for a
 //! few seconds; Enter opens the line to type in (Enter again sends, Esc closes).
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;

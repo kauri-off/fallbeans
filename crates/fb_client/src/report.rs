@@ -93,7 +93,7 @@ fn report(
             "{:6.1} {} {:.2} {:+.2} {:+.2} {:+.2} {}",
             now - c.at,
             c.tick,
-            fb_sim::math::len(c.by),
+            c.by.length(),
             c.by.x,
             c.by.y,
             c.by.z,

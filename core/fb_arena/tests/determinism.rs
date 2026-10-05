@@ -2,7 +2,7 @@
 //! recorded hash. Regenerate after an intended change with `FB_BLESS=1 cargo test -p fb_arena --test determinism`.
 use fb_arena::{Arena, ArenaKind};
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
-use fb_shared::m::MinMaxJs;
+use fb_shared::m::MinMax;
 
 const DIRS: [(i8, i8); 9] = [
     (127, 0),
@@ -41,7 +41,7 @@ fn run(map: &str, seed: u32) -> String {
         arena.add_pawn(id, id > 4);
     }
     // (The lobby and the podium have no end: a minute of them.)
-    let end = (def.meta().duration.min_js(60.0) * 120.0) as i64;
+    let end = (def.meta().duration.at_most(60.0) * 120.0) as i64;
     let mut events = 0;
     for k in -719..=end {
         events += arena.step(k, |id| script(id, k)).len();
@@ -55,7 +55,7 @@ fn rounds_end_in_the_recorded_state() {
         .iter()
         .flat_map(|m| SEEDS.map(|s| run(m.meta().id, s)))
         .collect();
-    let path = format!("{}/tests/golden/determinism.txt", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/tests/determinism.txt", env!("CARGO_MANIFEST_DIR"));
     let text = got.join("\n") + "\n";
     println!("{text}");
     if std::env::var("FB_BLESS").is_ok() {

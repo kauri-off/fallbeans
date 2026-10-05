@@ -1,5 +1,5 @@
-//! Levels of detail of the models (port of `lod.ts`): each model mesh gets simplified versions M1…M6
-//! (meshoptimizer, the same targets as TS), made once per mesh, and every placed mesh is drawn at the
+//! Levels of detail of the models: each model mesh gets simplified versions M1…M6
+//! (meshoptimizer), made once per mesh, and every placed mesh is drawn at the
 //! level its size on screen calls for, cross-faded by Bevy's visibility ranges.
 use std::collections::HashMap;
 

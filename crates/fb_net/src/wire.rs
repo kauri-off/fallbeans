@@ -26,9 +26,9 @@ fn state(i: u8) -> BodyState {
 }
 
 /// The own bean: what prediction resumes from. Everything the physics step reads is exact: after a
-/// rollback the client must go on from the server's very state. (Timers in f32, as the TS snapshot sent
-/// them, cross zero a tick earlier or later than on the server: the state changes at another tick and
-/// the next rollback follows a second later.) Only the landing impact, drawn and never read, is f32.
+/// rollback the client must go on from the server's very state. (Timers in f32 would cross zero a tick
+/// earlier or later than on the server: the state changes at another tick and the next rollback follows a
+/// second later.) Only the landing impact, drawn and never read, is f32.
 /// The size is not sent: it follows the bonus (`Body::step` sets it from `power` every tick).
 #[derive(Serialize, Deserialize)]
 pub struct Full {

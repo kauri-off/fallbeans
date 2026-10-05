@@ -1,10 +1,9 @@
-//! Recorded rounds and replays (port of `Recording` in `arena.ts` and `server/rooms/replay.ts`): enough
+//! Recorded rounds and replays: enough
 //! to simulate a round again tick by tick and get the same result. Human input is stored as the frames
 //! the simulation actually used, run-length encoded; bots replay from the seed.
 use std::collections::BTreeMap;
 
 use fb_shared::input::InputFrame;
-use fb_sim::map::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::{Arena, ArenaKind};
@@ -22,11 +21,39 @@ pub struct Recording {
     pub pawns: Vec<(u32, bool, Option<usize>, i64)>,
     /// Human frames: [tick, mx, mz, buttons] whenever they change.
     pub frames: BTreeMap<u32, Vec<[i64; 4]>>,
-    /// Dev and roster changes applied between ticks: (after tick, op, args).
-    pub ops: Vec<(i64, String, Value)>,
+    /// Dev and roster changes applied between ticks: (after tick, op).
+    pub ops: Vec<(i64, Op)>,
     pub end_tick: i64,
     /// `state_hash()` at `end_tick`.
     pub hash: String,
+}
+
+/// Something that changed the simulation from outside between ticks: a pawn leaving or joining late, dev tools.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Op {
+    Remove(u32),
+    Late {
+        id: u32,
+        bot: bool,
+        at: Option<[f64; 3]>,
+    },
+    Teleport {
+        id: u32,
+        pos: [f64; 3],
+        yaw: Option<f64>,
+    },
+    Knock {
+        id: u32,
+        v: [f64; 3],
+    },
+    Kill(u32),
+    Grab {
+        actor: u32,
+        target: u32,
+        seconds: f64,
+    },
+    /// Bot brains run (false: bots stand still).
+    Bots(bool),
 }
 
 impl Recording {
@@ -82,7 +109,7 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
     let mut k = first + 1;
     while k <= rec.end_tick && !stopped {
         while let Some(op) = ops.next_if(|o| o.0 < k) {
-            a.apply_op(&op.1, &op.2);
+            a.apply_op(&op.1);
         }
         for p in &later {
             if p.3 == k - 1 {

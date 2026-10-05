@@ -1,4 +1,4 @@
-//! What a bean wears besides its suit colour (port of `shared/outfit.ts`; visual only).
+//! What a bean wears besides its suit colour (visual only).
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -110,7 +110,7 @@ pub struct Outfit {
     pub shoes: Option<Tint>,
 }
 
-/// A bot's outfit: picked from its id, so the same bot always looks the same (the same picks as TS).
+/// A bot's outfit: picked from its id, so the same bot always looks the same.
 pub fn bot_outfit(id: u32) -> Outfit {
     let h = |n: u32| {
         let x = (id.wrapping_mul(31).wrapping_add(n + 1) ^ 0x5bd1_e995).wrapping_mul(0x9e37_79b1);
@@ -156,7 +156,6 @@ mod tests {
             belly: None,
             shoes,
         };
-        // botOutfit(id) in TS.
         assert_eq!(
             bot_outfit(1),
             o(Hat::Halo, Some(Tint::Brown), Glasses::None, Some(Tint::Red))

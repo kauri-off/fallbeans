@@ -1,4 +1,4 @@
-// The sky (port of renderer.ts skyDome): a gradient from the horizon up, the sun's glow, slowly drifting
+// The sky: a gradient from the horizon up, the sun's glow, slowly drifting
 // clouds and, at night, twinkling stars. Linear colours, as bright as a lit white surface.
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::{view, globals}}
 

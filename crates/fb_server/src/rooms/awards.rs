@@ -1,4 +1,4 @@
-//! Fun titles at the end of a game (port of `server/rooms/awards.ts`).
+//! Fun titles at the end of a game.
 use fb_proto::{Award, Pid};
 
 /// A player's numbers over a whole game.
@@ -74,7 +74,7 @@ pub fn compute_awards(players: &[(Pid, &GameStats)]) -> Vec<Award> {
         "survivor",
         "🛡️",
         "Несокрушимость",
-        best(players, |s| Some(fb_shared::m::round_js(s.survived)), 1.0),
+        best(players, |s| Some(s.survived.round()), 1.0),
         &|v| format!("{v} с в игре"),
     );
     add(

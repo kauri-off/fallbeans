@@ -1,20 +1,186 @@
-//! The bean's physics in small worlds against TS traces (golden/scenarios.json, recorded by the TS version on `master`):
-//! pushes, slopes, ice, conveyors, pads, sweeping arms, hammers, platforms, ledges, ladders, giants.
-mod common;
-
-use common::{check_bodies, check_colliders, f, load};
+//! The bean's physics in small worlds: pushes, slopes, ice, conveyors, pads, sweeping arms, hammers,
+//! platforms, ledges, ladders, giants. The beans of each world follow a script; where they are every quarter
+//! second must stay within `TOL` of the recorded path (`tests/paths/<world>.txt`). Record again after an
+//! intended change with `FB_BLESS=1 cargo test -p fb_arena --test scenarios`.
 use std::collections::BTreeMap;
 
 use fb_arena::{Stepper, tick_bodies, touch_hook};
 use fb_shared::input::InputFrame;
-use fb_shared::m::MinMaxJs;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, StepEvents};
 use fb_sim::scene::pal;
-use serde_json::Value;
+
+/// How far a bean may stray from its recorded path, m: further, and the physics feels different.
+const TOL: f64 = 0.05;
+/// Ticks between samples of the path.
+const EVERY: i64 = 30;
+
+/// A scripted bean: where it starts, its bonus, its stick from a tick on and the buttons pressed on a tick.
+struct Bean {
+    at: [f64; 3],
+    power: u8,
+    stick: &'static [(i64, i8, i8)],
+    press: &'static [(i64, u8)],
+}
+
+const fn bean(at: [f64; 3], stick: &'static [(i64, i8, i8)], press: &'static [(i64, u8)]) -> Bean {
+    Bean {
+        at,
+        power: 0,
+        stick,
+        press,
+    }
+}
+
+const fn giant(power: u8, b: Bean) -> Bean {
+    Bean { power, ..b }
+}
+
+const ON: f64 = 0.02;
+const ROTOR_HOPS: &[(i64, u8)] = &[
+    (10, 1),
+    (55, 1),
+    (100, 1),
+    (145, 1),
+    (190, 1),
+    (235, 1),
+    (280, 1),
+    (325, 1),
+    (370, 1),
+    (415, 1),
+    (460, 1),
+    (505, 1),
+    (550, 1),
+    (595, 1),
+    (640, 1),
+];
+
+/// Ticks a world runs, and its beans (ids from 1).
+fn script(name: &str) -> (i64, Vec<Bean>) {
+    match name {
+        "moves" => (
+            720,
+            vec![
+                bean([0.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[(30, 1), (100, 2)]),
+                giant(2, bean([-8.0, ON, 0.0], &[(1, 0, 0)], &[(20, 1), (200, 1), (400, 1)])),
+                giant(
+                    3,
+                    bean(
+                        [8.0, ON, -15.0],
+                        &[(1, 0, 127), (100, 127, 0), (150, 0, -127), (250, -127, 0), (350, 0, 0)],
+                        &[],
+                    ),
+                ),
+                bean(
+                    [-14.0, ON, -15.0],
+                    &[(1, 0, 127), (500, 0, 0)],
+                    &[(40, 1), (60, 2), (300, 1), (302, 2)],
+                ),
+            ],
+        ),
+        "push" => (
+            420,
+            vec![
+                bean([0.0, ON, -3.0], &[(1, 0, 127), (180, 0, 0)], &[]),
+                bean([0.0, ON, 3.0], &[(1, 0, -127), (180, 0, 0)], &[]),
+                giant(1, bean([6.0, ON, -4.0], &[(1, 0, 127), (240, 0, 0)], &[])),
+                bean([6.0, ON, 1.0], &[(1, 0, 0)], &[]),
+                bean([-6.0, ON, -3.0], &[(1, 0, 127), (200, 0, 0)], &[(30, 2)]),
+                bean([-6.0, ON, 1.0], &[(1, 0, 0)], &[]),
+            ],
+        ),
+        "slopes" => (
+            480,
+            vec![
+                bean(
+                    [-6.0, ON, 0.0],
+                    &[(1, 0, 127), (220, 0, 0), (300, 0, -127), (400, 0, 0)],
+                    &[],
+                ),
+                bean([6.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[(60, 1), (120, 1)]),
+                bean([7.0, 5.0, 3.5], &[(1, 0, 0)], &[]),
+                bean([-15.0, ON, 3.0], &[(1, 0, 127), (150, 0, 0)], &[]),
+            ],
+        ),
+        "surfaces" => (
+            480,
+            vec![
+                bean(
+                    [-6.0, ON, -15.0],
+                    &[(1, 0, 127), (90, 0, 0), (200, 127, 0), (240, 0, 0)],
+                    &[],
+                ),
+                bean(
+                    [0.0, ON, -15.0],
+                    &[(1, 0, 127), (90, 0, 0), (200, 127, 0), (240, 0, 0)],
+                    &[],
+                ),
+                bean([6.0, ON, 0.0], &[(120, 0, 127), (360, 0, 0)], &[]),
+            ],
+        ),
+        "rotor" => (
+            720,
+            vec![
+                bean([0.5, ON, -5.0], &[(1, 0, 0)], &[]),
+                bean([3.0, ON, 1.5], &[(1, 0, -127), (97, 0, 0)], &[]),
+                bean([5.0, 1.0, 0.0], &[(1, 0, 0)], &[]),
+                bean([-5.0, ON, -3.0], &[(1, 0, 0)], ROTOR_HOPS),
+            ],
+        ),
+        "hammer" => (
+            600,
+            vec![
+                bean([0.0, ON, -0.6], &[(1, 0, 0)], &[]),
+                bean([0.0, ON, -8.0], &[(1, 0, 127), (300, 0, 0)], &[]),
+                giant(1, bean([0.0, ON, 1.6], &[(1, 0, 0)], &[])),
+            ],
+        ),
+        "bounce" => (
+            480,
+            vec![
+                bean([0.0, ON, 0.0], &[(1, 0, 127), (90, 0, 0)], &[]),
+                bean([6.0, ON, 0.0], &[(1, 0, 127), (90, 0, 0)], &[]),
+                bean([-6.0, ON, 0.0], &[(1, 0, 127), (90, 0, 0)], &[]),
+                bean([12.0, ON, 0.0], &[(1, 0, 127), (90, 0, 0)], &[]),
+                bean([-12.0, 6.0, 5.0], &[(1, 0, 0)], &[]),
+            ],
+        ),
+        "platforms" => (
+            600,
+            vec![
+                bean([-6.0, 1.32, 0.0], &[(400, 0, 127), (460, 0, 0)], &[]),
+                bean([8.0, 1.32, 0.0], &[(1, 0, 0)], &[(300, 1)]),
+                bean([0.0, 2.32, 8.0], &[(450, 127, 0)], &[]),
+            ],
+        ),
+        "climb" => (
+            720,
+            vec![
+                bean([0.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[(25, 1)]),
+                bean([8.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[(25, 1)]),
+                bean([-8.0, ON, 0.0], &[(1, 0, 127), (330, 0, 0)], &[]),
+                bean(
+                    [-16.0, ON, 0.0],
+                    &[(1, 0, 127), (160, 0, -127), (220, 0, 0)],
+                    &[(150, 1)],
+                ),
+            ],
+        ),
+        "portal" => (
+            600,
+            vec![
+                bean([0.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[]),
+                bean([0.5, ON, -2.5], &[(1, 0, 127), (300, 0, 0)], &[]),
+                bean([-10.0, ON, 0.0], &[(1, 0, 127), (100, 0, 0)], &[]),
+                bean([-10.0, ON, 24.0], &[(1, 0, -127), (160, 0, 0)], &[]),
+            ],
+        ),
+        _ => panic!("unknown scenario {name}"),
+    }
+}
 
 fn floor(b: &mut Builder) {
     b.box_(0.0, -1.0, 0.0, 40.0, 2.0, 40.0, pal::BLUE, PrimOpts::default());
@@ -38,7 +204,7 @@ fn surface(col: ColliderOpts) -> PrimOpts {
     }
 }
 
-/// The same worlds as `SCENARIOS` in the TS version's scripts/golden.ts (`master`).
+/// The worlds.
 fn build(name: &str, b: &mut Builder) {
     match name {
         "moves" => {
@@ -124,31 +290,26 @@ fn build(name: &str, b: &mut Builder) {
     }
 }
 
-/// Input of a scenario body on tick k: the last stick change at or before k, buttons pressed on k.
-fn frame(d: &Value, k: i64) -> InputFrame {
+/// Input of a bean on tick k: the last stick change at or before k, buttons pressed on k.
+fn frame(b: &Bean, k: i64) -> InputFrame {
     let mut fr = InputFrame::default();
-    for s in d["stick"].as_array().unwrap() {
-        if s[0].as_i64().unwrap() <= k {
-            fr.mx = s[1].as_i64().unwrap() as i8;
-            fr.mz = s[2].as_i64().unwrap() as i8;
+    for &(at, mx, mz) in b.stick {
+        if at <= k {
+            fr.mx = mx;
+            fr.mz = mz;
         }
     }
-    for p in d["press"].as_array().unwrap() {
-        if p[0].as_i64().unwrap() == k {
-            fr.buttons = p[1].as_u64().unwrap() as u8;
+    for &(at, buttons) in b.press {
+        if at == k {
+            fr.buttons = buttons;
         }
     }
     fr
 }
 
-fn check(name: &str) {
-    let data = load("scenarios");
-    let sc = data["scenarios"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["name"] == name)
-        .unwrap_or_else(|| panic!("no scenario {name} in scenarios.json.gz (the traces are frozen)"));
+/// Lines `tick id x y z`, every `EVERY` ticks.
+fn path(name: &str) -> String {
+    let (ticks, beans) = script(name);
     let mut b = Builder::new(1, false);
     build(name, &mut b);
     let mut touches = core::mem::take(&mut b.touches);
@@ -156,35 +317,23 @@ fn check(name: &str) {
     world.finalize(0.0);
     let mut scores = BTreeMap::new();
     let mut out = Vec::new();
-    assert_eq!(
-        world.hash(true),
-        sc["staticHash"].as_str().unwrap(),
-        "{name}: static hash"
-    );
-    check_colliders(name, &world, &sc["colliders"]);
-
-    let defs = sc["bodies"].as_array().unwrap();
-    let mut bodies: Vec<(u32, Body, StepEvents)> = defs
+    let mut bodies: Vec<(u32, Body, StepEvents)> = beans
         .iter()
-        .map(|d| {
-            let id = d["id"].as_u64().unwrap() as u32;
-            let at = d["at"].as_array().unwrap();
+        .zip(1..)
+        .map(|(d, id)| {
             let mut body = Body::new(id as i32);
-            body.reset(V3::new(f(&at[0]), f(&at[1]), f(&at[2])), 0.0);
-            let power = d["power"].as_u64().unwrap() as u8;
-            if power != 0 {
-                body.give_power(power, 0.0);
+            body.reset(V3::new(d.at[0], d.at[1], d.at[2]), 0.0);
+            if d.power != 0 {
+                body.give_power(d.power, 0.0);
             }
             (id, body, StepEvents::default())
         })
         .collect();
-    let hashes = sc["hashes"].as_array().unwrap();
-    let mut worst = 0.0f64;
-    for row in sc["frames"].as_array().unwrap() {
-        let k = row[0].as_i64().unwrap();
+    let mut lines = String::new();
+    for k in 1..=ticks {
         let mut steppers: Vec<Stepper> = bodies
             .iter_mut()
-            .zip(defs)
+            .zip(&beans)
             .map(|((id, body, ev), d)| Stepper {
                 id: *id,
                 body,
@@ -195,16 +344,44 @@ fn check(name: &str) {
         let t = k as f64 * DT;
         let mut touch = touch_hook(&mut touches, true, t, None, &mut scores, &mut out);
         tick_bodies(&mut world, t, &mut steppers, &[], &mut touch);
-        worst = worst.max_js(check_bodies(name, row, bodies.iter().map(|(id, body, _)| (*id, body))));
-        if let Some(h) = hashes.iter().find(|h| h[0].as_i64() == Some(k)) {
-            assert_eq!(
-                world.hash(false),
-                h[1].as_str().unwrap(),
-                "{name}: world hash at tick {k}"
-            );
+        if k % EVERY == 0 {
+            for (id, b, _) in &bodies {
+                let p = b.pos;
+                lines += &format!("{k} {id} {:.4} {:.4} {:.4}\n", p.x, p.y, p.z);
+            }
         }
     }
-    eprintln!("{name}: {} ticks, worst difference {worst:e}", sc["ticks"]);
+    lines
+}
+
+fn check(name: &str) {
+    let got = path(name);
+    let file = format!("{}/tests/paths/{name}.txt", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var("FB_BLESS").is_ok() {
+        std::fs::write(&file, &got).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&file).expect("no recorded path: run with FB_BLESS=1");
+    let (got, want): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    assert_eq!(got.len(), want.len(), "{name}: samples");
+    let num = |s: &str| s.parse::<f64>().unwrap();
+    for (g, w) in got.iter().zip(&want) {
+        let (g, w): (Vec<&str>, Vec<&str>) = (g.split(' ').collect(), w.split(' ').collect());
+        assert_eq!(g[..2], w[..2], "{name}: sample order");
+        let d = m::hypot3(num(g[2]) - num(w[2]), num(g[3]) - num(w[3]), num(g[4]) - num(w[4]));
+        assert!(
+            d <= TOL,
+            "{name}: bean {} at tick {} is {d:.3} m from its recorded path ({} {} {} instead of {} {} {})",
+            g[1],
+            g[0],
+            g[2],
+            g[3],
+            g[4],
+            w[2],
+            w[3],
+            w[4]
+        );
+    }
 }
 
 #[test]

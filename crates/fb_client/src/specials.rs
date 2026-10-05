@@ -48,7 +48,7 @@ enum PieceMat {
     Surface(Handle<SurfaceMaterial>),
 }
 
-/// A cylinder as three.js builds it (the first segment faces +z): hexagonal tiles line up.
+/// A cylinder whose first segment faces +z: hexagonal tiles line up.
 pub fn cyl_mesh(r: f32, h: f32, seg: u32) -> Mesh {
     Cylinder::new(r, h)
         .mesh()

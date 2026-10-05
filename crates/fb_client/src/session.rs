@@ -36,9 +36,8 @@ pub struct Session {
     pub mine: Option<String>,
     /// Why entering or creating a room failed (`DenyReason::Pin`: that room asks for its PIN).
     pub denied: Option<Denied>,
-    /// Why the server sent the client away (another window, out of date), and that the game is being updated.
+    /// Why the server sent the client away (another window, out of date).
     pub reject: Option<String>,
-    pub updating: bool,
     /// This room is a practice round of one map, and the room to go back to after it.
     pub practice: bool,
     pub back_to: Option<String>,
@@ -202,20 +201,11 @@ fn receive(
             match msg {
                 ServerMsg::Ready { dev } => {
                     session.dev = dev;
-                    session.updating = false;
                 }
                 ServerMsg::Reject { reason, msg } => {
                     warn!("refused ({reason:?}): {msg}");
                     session.refused = true;
                     session.reject = Some(msg);
-                    if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
-                        crate::net::hang_up(&mut commands, entity);
-                    }
-                }
-                // Back once the new version is up (the session API says when).
-                ServerMsg::Updating => {
-                    warn!("the game is being updated");
-                    session.updating = true;
                     if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
                         crate::net::hang_up(&mut commands, entity);
                     }

@@ -1,8 +1,7 @@
-//! Scoring a round (port of `shared/rules.ts`): placement points by rank, fines for falls and shortcuts.
+//! Scoring a round: placement points by rank, fines for falls and shortcuts.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::game::Genre;
-use crate::m;
 use crate::rng::{Rng, shuffle};
 use serde::{Deserialize, Serialize};
 
@@ -128,7 +127,7 @@ pub fn rank_groups(r: &RoundView, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
                 .collect();
             let mut out: Vec<Vec<u32>> = fin.iter().map(|&id| vec![id]).collect();
             out.extend(bots);
-            out.extend(group_by(&rest, |id| m::round_js((r.progress)(id))));
+            out.extend(group_by(&rest, |id| (r.progress)(id).round()));
             out
         }
         Genre::Survival => {
@@ -149,7 +148,7 @@ pub fn rank_groups(r: &RoundView, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
     }
 }
 
-/// Sorted by key, best first (a stable sort, as JS), equal keys grouped. A NaN key ranks last (as −∞):
+/// Sorted by key, best first (a stable sort), equal keys grouped. A NaN key ranks last (as −∞):
 /// the comparison stays a total order and those players share one group.
 fn group_by(ids: &[u32], key: impl Fn(u32) -> f64) -> Vec<Vec<u32>> {
     let key = |id| {
@@ -178,7 +177,7 @@ pub fn placement_points(groups: &[Vec<u32>]) -> BTreeMap<u32, (usize, i64)> {
         let points = if n <= 1 {
             TOP_POINTS
         } else {
-            m::round_js((TOP_POINTS as f64 * (n as f64 - 1.0 - avg)) / (n as f64 - 1.0)) as i64
+            ((TOP_POINTS as f64 * (n as f64 - 1.0 - avg)) / (n as f64 - 1.0)).round() as i64
         };
         for &id in g {
             out.insert(id, (pos + 1, points));
@@ -228,7 +227,7 @@ pub fn score_round(
         if succeeded(r, id) {
             TOP_POINTS
         } else {
-            m::round_js(TOP_POINTS as f64 / 2.0) as i64
+            (TOP_POINTS as f64 / 2.0).round() as i64
         }
     };
     let mut rows = Vec::new();

@@ -1,4 +1,4 @@
-//! Hats and glasses (port of `client/game/outfit.ts`): trees of simple parts in the bean model's space
+//! Hats and glasses: trees of simple parts in the bean model's space
 //! (head sphere r 0.5 around (0, 1.1, 0), face along +z, eyes at x ±0.115, y 1.23).
 use core::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ const EYE_Y: f32 = 1.235;
 /// Just in front of the eyes (their glints reach z ≈ 0.61).
 const LENS_Z: f32 = 0.63;
 
-/// A mesh by its three.js recipe (the key of the mesh cache).
+/// A mesh by its recipe (the key of the mesh cache).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
     Dome(f32, f32),
@@ -55,7 +55,7 @@ impl Shape {
     }
 }
 
-/// A material by its TS options; `suit` takes the bean's own suit material.
+/// A material by its options; `suit` takes the bean's own suit material.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mat {
     pub color: String,
@@ -406,7 +406,7 @@ fn temples(m: &Mat, r: f32) -> [Part; 2] {
             mid.y,
             mid.z,
         );
-        // As three.js `lookAt` turns a mesh: its +z towards the target.
+        // Its +z towards the target.
         p.tf.look_to(-(to - mid), Vec3::Y);
         p
     })

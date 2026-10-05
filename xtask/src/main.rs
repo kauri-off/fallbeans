@@ -1,5 +1,4 @@
-//! Project tasks: `cargo xtask <check|audit|assets|dev|stress|fuzz-ui|deploy|dist>`.
-mod deploy;
+//! Project tasks: `cargo xtask <check|audit|assets|dev|stress|fuzz-ui|dist>`.
 mod dist;
 mod fuzz;
 mod stress;
@@ -21,7 +20,7 @@ enum Task {
     /// fmt, clippy (warnings are errors), tests.
     Check,
     /// Map and system audits (`fb_audit`): [map…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics]
-    /// [--notes] [--json].
+    /// [--notes] [--json]; `--baseline` / `--bless-baseline`: the game's feel against `baseline.json`.
     Audit {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -34,12 +33,9 @@ enum Task {
     /// Server plus windowed clients on this machine.
     Dev(DevArgs),
     /// Server plus headless clients under a simulated network; checks prediction, traffic and tick cost.
-    /// `--remote`: against a probe server on a server host (`--host`), over the real network.
     Stress(Box<stress::StressArgs>),
     /// The whole client played at random (`fb_client` monkey): seeds in parallel, logs in target/fuzz-ui.
     FuzzUi(fuzz::FuzzArgs),
-    /// Builds the server for Linux and installs it on a server host (`--host`, `--domain`).
-    Deploy(deploy::DeployArgs),
     /// Release package of one kind into dist/.
     Dist(dist::DistArgs),
     /// Claude Code hook: rustfmt on the edited file (hook payload on stdin).
@@ -261,7 +257,6 @@ fn main() -> ExitCode {
         Task::Dev(a) => dev(&a),
         Task::Stress(a) => stress::stress(&a),
         Task::FuzzUi(a) => fuzz::fuzz(&a),
-        Task::Deploy(a) => deploy::deploy(&a),
         Task::Dist(a) => dist::dist(&a),
     };
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }

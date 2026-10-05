@@ -49,7 +49,7 @@ fn one_way(speed: Option<f64>, lift: Option<f64>, open: Option<OpenFn>) -> Porta
 
 /// A stretch of the route that walks into a portal at (x, z) and carries on.
 fn through(x: f64, z: f64) -> [Waypoint; 2] {
-    [Waypoint::w(x, z - 2.4, 0.0), Waypoint::w(x, z + 0.6, 0.0)]
+    [Waypoint::spread(x, z - 2.4, 0.0), Waypoint::spread(x, z + 0.6, 0.0)]
 }
 
 /// Islands over gaps nobody can jump, each swept by a low bar: two one-way portals at the far end of each
@@ -89,10 +89,10 @@ fn portal_islands(n: usize) -> Segment {
                 let route = &mut routes[r];
                 let x = sx * 3.6;
                 if k == 0 {
-                    route.push(Waypoint::w(x, iz + 2.0, 0.0));
+                    route.push(Waypoint::spread(x, iz + 2.0, 0.0));
                 } else {
-                    route.push(Waypoint::w(x, iz + il / 2.0, 0.0).jump_shared(&jump_when));
-                    route.push(Waypoint::w(x, iz + il - 3.9, 0.0).jump_shared(&jump_when));
+                    route.push(Waypoint::spread(x, iz + il / 2.0, 0.0).jump_shared(&jump_when));
+                    route.push(Waypoint::spread(x, iz + il - 3.9, 0.0).jump_shared(&jump_when));
                 }
                 if k == n {
                     continue;
@@ -100,14 +100,14 @@ fn portal_islands(n: usize) -> Segment {
                 let ez = iz + il - 1.5;
                 let (nz, _) = islands[k + 1];
                 s.b.portal(end(x, y, ez), end(x, y, nz + 0.8), ONE_WAY, one_way(None, None, None));
-                route.push(Waypoint::w(x, ez + 0.6, 0.0).jump_shared(&jump_when));
+                route.push(Waypoint::spread(x, ez + 0.6, 0.0).jump_shared(&jump_when));
             }
         }
         let (lz, ll) = islands[n];
         let end_z = lz + ll;
         s.b.bonus(0.0, y, islands[1].0 + 2.0);
         for r in &mut routes {
-            r.push(Waypoint::w(0.0, end_z + 0.5, 1.0));
+            r.push(Waypoint::spread(0.0, end_z + 0.5, 1.0));
         }
         SegOut {
             z: end_z,
@@ -152,12 +152,12 @@ fn blinking_portals() -> Segment {
                 });
             }
             routes.push(vec![
-                Waypoint::w(x, ez - 3.2, 0.0),
-                Waypoint::w(x, ez + 0.6, 0.0).wait(move |bot| {
+                Waypoint::spread(x, ez - 3.2, 0.0),
+                Waypoint::spread(x, ez + 0.6, 0.0).wait(move |bot| {
                     let p = bot.world.portals[pair];
                     !portal_shut(&p, Some(&open), bot.t + 0.15) && !portal_shut(&p, Some(&open), bot.t + 0.5)
                 }),
-                Waypoint::w(0.0, far + 5.0, 1.0),
+                Waypoint::spread(0.0, far + 5.0, 1.0),
             ]);
         }
         s.b.bonus(0.0, y, s.z + 2.5);
@@ -198,10 +198,10 @@ fn portal_wall() -> Segment {
             let land = wz + 9.0;
             let mut route: Vec<Waypoint> = through(x, ez).into();
             route.push(
-                Waypoint::w(x, land, 0.0)
+                Waypoint::spread(x, land, 0.0)
                     .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, y, land, out)),
             );
-            route.push(Waypoint::w(0.0, wz + 13.0, 1.0));
+            route.push(Waypoint::spread(0.0, wz + 13.0, 1.0));
             routes.push(route);
         }
         SegOut {
@@ -244,7 +244,7 @@ fn portal_cannons(n: usize) -> Segment {
                 let yy = ny;
                 routes[r].extend(through(x, ez));
                 routes[r].push(
-                    Waypoint::w(x, land, 0.0)
+                    Waypoint::spread(x, land, 0.0)
                         .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, yy, land, out)),
                 );
             }
@@ -252,7 +252,7 @@ fn portal_cannons(n: usize) -> Segment {
             y = ny;
         }
         for r in &mut routes {
-            r.push(Waypoint::w(0.0, z + len - 0.5, 1.0));
+            r.push(Waypoint::spread(0.0, z + len - 0.5, 1.0));
         }
         SegOut {
             z: z + len,
@@ -278,7 +278,7 @@ fn last_hop() -> Segment {
             one_way(None, None, None),
         );
         let mut route: Vec<Waypoint> = through(0.0, s.z + 4.0).into();
-        route.push(Waypoint::w(0.0, far + 5.0, 0.5));
+        route.push(Waypoint::spread(0.0, far + 5.0, 0.5));
         SegOut {
             z: far + 6.0,
             y,

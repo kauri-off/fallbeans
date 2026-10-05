@@ -3,10 +3,10 @@ use core::marker::PhantomData;
 use std::collections::BTreeMap;
 
 use crate::collider::{ColId, Collider, Shape};
-use crate::m;
 use crate::nodes::{NodeId, Nodes};
 use crate::physics::PORTAL_T;
 use fb_shared::DT;
+use fb_shared::hash::Fnv;
 
 /// State a map keeps besides geometry (tiles that fell, doors that broke): movers read it, map logic
 /// and bot brains get at it through its handle.
@@ -272,20 +272,17 @@ impl World {
         nodes.update_all();
     }
 
-    /// Fingerprint of the collision geometry at the current time (`World.hash` in TS).
+    /// Fingerprint of the collision geometry at the current time.
     pub fn hash(&self, static_only: bool) -> String {
-        let mut h: u32 = 2_166_136_261;
-        let mut mix = |v: f64| {
-            let x = m::to_i32(m::round_js(v * 1e3));
-            h = (h ^ x as u32).wrapping_mul(16_777_619);
-        };
+        let mut h = Fnv::default();
+        let mut mix = |v: f64| h.mix(v, 1e3);
         let mut n = 0;
         for c in &self.colliders {
             if static_only && !c.is_static {
                 continue;
             }
             n += 1;
-            for &e in &c.cur.0 {
+            for e in c.cur.to_cols_array() {
                 mix(e);
             }
             match c.shape {
@@ -296,7 +293,7 @@ impl World {
             mix(if c.enabled { 1.0 } else { 0.0 });
             mix(c.hit + c.bounce * 3.0 + c.pad * 7.0 + c.slip * 11.0);
         }
-        format!("{n}:{h:08x}")
+        format!("{n}:{:016x}", h.finish())
     }
 
     /// Colliders near (x, z): static ones from the grid, then moving ones within reach.

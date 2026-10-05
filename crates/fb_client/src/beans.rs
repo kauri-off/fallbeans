@@ -171,7 +171,7 @@ pub fn spawn_beans(
                     materials.add(StandardMaterial {
                         base_color: hex(c).with_alpha(0.7),
                         unlit: true,
-                        // Light added, as TS (additive, not tone mapped against the scene).
+                        // Light added (additive, not tone mapped against the scene).
                         alpha_mode: AlphaMode::Add,
                         double_sided: true,
                         cull_mode: None,
@@ -364,7 +364,7 @@ pub fn dress_beans(
 
         let suit = tint_of(color.0);
         let template = materials.get(&parts.body_mat).cloned().unwrap_or_default();
-        // Soft plastic with a faint clearcoat (TS also had a sheen, which Bevy's material lacks).
+        // Soft plastic with a faint clearcoat.
         let body = paints.get(format!("body {suit}"), &mut materials, || StandardMaterial {
             base_color: suit_base(suit),
             perceptual_roughness: 0.5,
@@ -516,7 +516,7 @@ pub fn place_beans(
 ) {
     let a = fixed.overstep_fraction();
     // A bean drawn between ticks (or tipped over) may poke into a wall or the floor: out of it, as the
-    // simulation would put it (TS `pushOut`).
+    // simulation would put it.
     let out = |p: Vec3, tilt: f32, dir: f32, size: f32| match map.as_ref() {
         Some(m) => fb_sim::physics::push_out(
             &m.world,

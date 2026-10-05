@@ -1,9 +1,8 @@
-//! The HTTP API on its own thread (axum, port of `server/net/http.ts` and `server/debugApi.ts`): sessions, health, debug.
+//! The HTTP API on its own thread (axum): sessions, health, debug.
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -74,7 +73,6 @@ struct Counts {
 /// What the main loop tells the HTTP API without being asked.
 #[derive(Default)]
 pub struct Shared {
-    pub updating: AtomicBool,
     samples: Mutex<VecDeque<Value>>,
     counts: Mutex<Option<Counts>>,
 }
@@ -334,7 +332,7 @@ fn unix_s() -> u64 {
     SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs()
 }
 
-/// The client's address, and whether it came through nginx (which passes it as X-Real-IP).
+/// The client's address, and whether it came through a reverse proxy (which passes it as X-Real-IP).
 fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> (IpAddr, bool) {
     let real = headers
         .get("x-real-ip")
@@ -447,7 +445,7 @@ pub fn to_text(v: &Value, indent: &str) -> String {
     }
 }
 
-/// Up, its version, and how busy (200 while updating too: the deploy waits for it to know the new server is up).
+/// Up, its version, and how busy.
 /// Anyone may ask, so it reads what the main loop published instead of queueing work for it; a main loop
 /// that stopped publishing is a 503.
 async fn health(State(api): State<Api>) -> Response {
@@ -460,7 +458,6 @@ async fn health(State(api): State<Api>) -> Response {
         "name": api.name,
         "version": PROTOCOL_VERSION,
         "build": &*api.build,
-        "updating": api.shared.updating.load(Ordering::Relaxed),
         "rooms": c.rooms,
         "players": c.players,
         "practice": c.practice,
@@ -491,16 +488,14 @@ async fn session(
         .as_deref()
         .and_then(|t| Some((api.auth.identity(t)?, t.to_string())));
     let (uid, identity) = known.unwrap_or_else(|| api.auth.issue_identity());
-    let updating = api.shared.updating.load(Ordering::Relaxed);
     let mut reply = SessionReply {
         protocol: PROTOCOL_VERSION,
         build: api.build.to_string(),
-        updating,
         identity,
         token: None,
         ws_url: Some(ws_url(&api, &headers, peer.local)),
     };
-    if !updating && req.protocol == PROTOCOL_VERSION {
+    if req.protocol == PROTOCOL_VERSION {
         let host = api
             .public_host
             .or_else(|| host_ip(&headers))
@@ -598,7 +593,6 @@ async fn debug(
                     "pid": std::process::id(),
                     "uptime": api.started.elapsed().as_secs(),
                     "tick": tick,
-                    "updating": api.shared.updating.load(Ordering::Relaxed),
                     "connections": conns,
                     "health": api.shared.samples(1).pop(),
                     "warnings": logbook::warnings(),

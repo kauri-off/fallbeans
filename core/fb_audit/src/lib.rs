@@ -1,16 +1,16 @@
-//! Audits (port of `src/audit`): the game's content and systems checked without a client. Maps (rules,
+//! Audits: the game's content and systems checked without a client. Maps (rules,
 //! spawns, clipping, reachability, balance), physics feel, determinism, input handling and budgets.
 //! Each audit returns findings (problems, by severity) and metrics (numbers worth tracking). Run them
 //! with `cargo xtask audit`, or the quick subset from tests.
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use fb_shared::m;
 use fb_sim::map::MapDef;
 use fb_sim::math::V3;
 use rayon::prelude::*;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
+pub mod baseline;
 pub mod harness;
 pub mod maps;
 pub mod systems;
@@ -236,7 +236,7 @@ fn run_one(a: &Audit, map: Option<&'static dyn MapDef>, ctx: &Ctx) -> AuditResul
     AuditResult {
         audit: a.name,
         map: map.map_or("*".into(), |m| m.meta().id.to_string()),
-        ms: m::round_js(clock.ms()) as u64,
+        ms: clock.ms().round() as u64,
         findings: out.findings,
         metrics: out.metrics,
     }
@@ -328,7 +328,7 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
     Report {
         build: std::env::var("FB_BUILD").unwrap_or_else(|_| "local".into()),
         quick: o.quick,
-        ms: m::round_js(clock.ms()) as u64,
+        ms: clock.ms().round() as u64,
         summary,
         results,
     }
@@ -387,11 +387,11 @@ pub fn format_report(r: &Report, metrics: bool, infos: bool) -> String {
 }
 
 pub fn r3(v: f64) -> f64 {
-    m::round_js(v * 1000.0) / 1000.0
+    (v * 1000.0).round() / 1000.0
 }
 
 pub fn r1(v: f64) -> f64 {
-    m::round_js(v * 10.0) / 10.0
+    (v * 10.0).round() / 10.0
 }
 
 pub fn v3(v: V3) -> [f64; 3] {

@@ -1,4 +1,4 @@
-//! Rooms as plain JSON for the debug API (port of `server/rooms/roomDebug.ts`).
+//! Rooms as plain JSON for the debug API.
 use fb_arena::{JournalEntry, TraceEntry};
 use fb_shared::m;
 use fb_shared::rules::RoundStats;
@@ -93,7 +93,7 @@ pub fn room_state(room: &Room) -> Value {
             "finished": a.finished,
             "out": a.out,
             "scores": a.scores,
-            "events": a.events.len(),
+            "events": a.kept_events,
             "staticHash": a.static_hash,
             "pawns": pawns,
         },

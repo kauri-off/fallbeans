@@ -9,7 +9,6 @@ English. License: AGPL-3.0-or-later.
   f64, no wall clock, no unseeded randomness, no `HashMap`, maths only through `fb_shared::m`.
 - `crates/` (fb_proto, fb_net, fb_server, fb_client) — Bevy/Lightyear code.
 - `docs/state.md` — the handoff between threads: read it first, rewrite it before you stop.
-- `docs/development.md` — how the code works, debugging, releases, deploy.
 
 ## Commands
 
@@ -20,7 +19,6 @@ English. License: AGPL-3.0-or-later.
 - `cargo xtask fuzz-ui` — plays the whole client at random, prints the path to a crash.
 - `cargo xtask assets [--export]` — check models (`--export` needs Blender).
 - `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — build a release package.
-- `cargo xtask deploy --host … --domain …` — only when asked, only to a host the author names.
 
 ## Rules
 

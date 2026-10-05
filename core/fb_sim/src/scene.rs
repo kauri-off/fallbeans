@@ -12,12 +12,12 @@ pub enum PrimKind {
     Sphere,
 }
 
-/// Two-colour palette (base, accent), as `PAL` in TS.
+/// Two-colour palette (base, accent).
 pub type Palette = [&'static str; 2];
 
 pub mod pal {
     use super::Palette;
-    /// One colour for both tones (a hex colour in TS, where a palette is expected).
+    /// One colour for both tones.
     pub const fn hex(c: &'static str) -> Palette {
         [c, c]
     }
@@ -63,7 +63,7 @@ pub enum SceneItem {
     },
 }
 
-/// Shape of a special's part. Flat ones lie in the x/y plane facing +z, as in three.js.
+/// Shape of a special's part. Flat ones lie in the x/y plane facing +z.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Form {
     Box([f64; 3]),
@@ -110,7 +110,7 @@ pub struct Part {
     pub finish: Finish,
     /// Surface of a lit finish (None: plastic), as a primitive's.
     pub surface: Option<&'static str>,
-    /// The palette whose first tone is the first colour, repainted by the round's look (`b.pal` in TS).
+    /// The palette whose first tone is the first colour, repainted by the round's look.
     pub pal: Option<Palette>,
 }
 

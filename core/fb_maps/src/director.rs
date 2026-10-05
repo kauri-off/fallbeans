@@ -1,4 +1,4 @@
-//! The rounds of one game (port of `server/rooms/director.ts`).
+//! The rounds of one game.
 use fb_shared::game::{GameMeta, Genre};
 use fb_shared::rng::{Rng, shuffle};
 use serde::{Deserialize, Serialize};

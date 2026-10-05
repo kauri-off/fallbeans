@@ -76,8 +76,10 @@ Windows и AppImage обновляются сами: при новой верс�
 в connect token, адрес WebSocket — в ответе сессии. `--public-host` нужен, только если UDP-адрес, который видят
 клиенты, отличается от адреса, на который пришёл HTTP-запрос (NAT, прокси).
 
-Сервер за доменом с https и nginx на своём хосте выкладывается командой `cargo xtask deploy` из исходников —
-требования к хосту в [`deploy/README.md`](deploy/README.md).
+За reverse proxy с https на домене: `https://<домен>/fallbeans/` → HTTP API (127.0.0.1:5887, с заголовками
+`X-Real-IP`, `X-Forwarded-Proto` и `Host`), `/fallbeans/ws` → WebSocket (127.0.0.1:5889, тоже с `X-Real-IP`, без
+буферизации и с таймаутом в час); сервер тогда слушает только локально (`--http-addr 127.0.0.1 --ws-addr
+127.0.0.1`). Сертификат нужен публичный: клиент проверяет https по встроенным корневым сертификатам.
 
 ## Сборка из исходников
 
@@ -90,8 +92,7 @@ target/release/fb_server --name "Дома"
 target/release/fb_client
 ```
 
-Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`). Как устроен код, команды, правила,
-отладка и выпуск релизов — [`docs/development.md`](docs/development.md).
+Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`).
 
 ## Известные проблемы
 

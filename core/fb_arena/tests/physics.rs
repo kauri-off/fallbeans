@@ -1,17 +1,17 @@
-//! The bean's physics by its properties (port of `tests/physics.test.ts`): the collider grid, walking,
+//! The bean's physics by its properties: the collider grid, walking,
 //! collision substeps, sweeping arms, dives, ledges, portals, giants.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use fb_arena::{Stepper, tick_bodies, touch_hook};
-use fb_shared::m::MinMaxJs;
+use fb_shared::m::MinMax;
 use fb_shared::rng::Rng;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::{ColliderOpts, Contact};
 use fb_sim::map::Touches;
-use fb_sim::math::{V3, dist_sq};
+use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, StepEvents, power};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
@@ -80,7 +80,7 @@ impl Sim {
         for col in &self.world.colliders {
             for i in 0..2 {
                 if col.sweep && col.contact(self.body.sphere(i), 0.5, &mut hit) {
-                    worst = worst.max_js(hit.depth);
+                    worst = worst.at_least(hit.depth);
                 }
             }
         }
@@ -189,7 +189,7 @@ fn carries_on_from_the_full_body_state() {
         a.tick(i as f64 * DT, input);
         c.tick(i as f64 * DT, input);
     }
-    assert!(m::sqrt(dist_sq(c.body.pos, a.body.pos)) < 1e-9);
+    assert!(m::sqrt(c.body.pos.distance_squared(a.body.pos)) < 1e-9);
 }
 
 #[test]
@@ -250,8 +250,8 @@ fn a_sweeping_arm_knocks_a_bean_over_and_never_passes_through_it() {
     for i in 1..=360 {
         s.tick(i as f64 * DT, IDLE);
         knocked |= s.ev.knocked;
-        drag = drag.max_js(m::sqrt(dist_sq(s.body.pos, start)));
-        overlap = overlap.max_js(s.arm_overlap());
+        drag = drag.at_least(m::sqrt(s.body.pos.distance_squared(start)));
+        overlap = overlap.at_least(s.arm_overlap());
     }
     assert!(knocked);
     // Shoved a few metres, not carried round with the arm.
@@ -269,10 +269,10 @@ fn a_sweeping_arm_tosses_a_lying_bean_up_and_over_itself() {
     for i in 1..=240 {
         s.tick(i as f64 * DT, IDLE);
         if i > 30 {
-            overlap = overlap.max_js(s.arm_overlap());
+            overlap = overlap.at_least(s.arm_overlap());
         }
-        top = top.max_js(s.body.pos.y);
-        drag = drag.max_js(m::hypot(s.body.pos.x - start.x, s.body.pos.z - start.z));
+        top = top.at_least(s.body.pos.y);
+        drag = drag.at_least(m::hypot(s.body.pos.x - start.x, s.body.pos.z - start.z));
     }
     assert!(top > 0.7, "{top}");
     assert!(overlap < 0.35, "{overlap}");
@@ -320,8 +320,8 @@ fn a_dive_lays_the_body_along_its_flight_and_stays_out_of_a_wall() {
     for i in 0..120 {
         s.run((33 + i) as f64 * DT, 1, FORWARD);
         deepest = deepest
-            .max_js(s.body.sphere(1).z + 0.5 - 5.5)
-            .max_js(s.body.pos.z + 0.5 - 5.5);
+            .at_least(s.body.sphere(1).z + 0.5 - 5.5)
+            .at_least(s.body.pos.z + 0.5 - 5.5);
     }
     assert!(deepest < 0.02, "{deepest}");
 }
@@ -409,7 +409,7 @@ fn carries_on_climbing_from_a_full_state_exactly() {
         c.run(t, 1, FORWARD);
         t += DT;
     }
-    assert!(m::sqrt(dist_sq(c.body.pos, a.body.pos)) < 1e-6);
+    assert!(m::sqrt(c.body.pos.distance_squared(a.body.pos)) < 1e-6);
 }
 
 #[test]

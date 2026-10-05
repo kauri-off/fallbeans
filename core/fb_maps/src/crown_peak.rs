@@ -9,7 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, moving_platforms, pick_sections, portal_fork, race_course,
     sliding_gates, timed_doors, tipping_bridge, trampoline_gap, with_rests,
 };
-use fb_sim::m::{self, MinMaxJs};
+use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -97,29 +97,29 @@ fn climb_fork(rise: f64) -> Segment {
         s.b.box_(0.0, y1 - 1.0, top + 5.0, 20.0, 2.0, 10.0, pal::PURPLE, o());
 
         let ramp = |lane: f64| {
-            let mut pts = vec![Waypoint::w(-5.0, z0 + 0.5, 0.0)];
+            let mut pts = vec![Waypoint::spread(-5.0, z0 + 0.5, 0.0)];
             for (i, &zb) in blocks.iter().enumerate() {
                 let lx = -5.0 + (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;
-                pts.push(Waypoint::w(-5.0, zb - 2.3, 0.0));
+                pts.push(Waypoint::spread(-5.0, zb - 2.3, 0.0));
                 let balls = balls.clone();
-                pts.push(Waypoint::w(lx, zb - 0.8, 0.0).wait(move |bot| {
+                pts.push(Waypoint::spread(lx, zb - 0.8, 0.0).wait(move |bot| {
                     !balls.danger(
-                        (-5f64).min_js(lx) - 0.3,
-                        (-5f64).max_js(lx) + 0.3,
+                        (-5f64).at_most(lx) - 0.3,
+                        (-5f64).at_least(lx) + 0.3,
                         zb - 2.5,
                         zb + 2.5,
                         bot.t,
                         0.9,
                     )
                 }));
-                pts.push(Waypoint::w(lx, zb + 0.9, 0.0));
-                pts.push(Waypoint::w(-5.0, zb + 2.3, 0.0));
+                pts.push(Waypoint::spread(lx, zb + 0.9, 0.0));
+                pts.push(Waypoint::spread(-5.0, zb + 2.3, 0.0));
             }
-            pts.push(Waypoint::w(lane, top + 2.0, 0.3));
-            pts.push(Waypoint::w(0.0, top + 5.0, 1.0));
+            pts.push(Waypoint::spread(lane, top + 2.0, 0.3));
+            pts.push(Waypoint::spread(0.0, top + 5.0, 1.0));
             pts
         };
-        let mut step_route = vec![Waypoint::w(5.0, z0 - 0.8, 0.0)];
+        let mut step_route = vec![Waypoint::spread(5.0, z0 - 0.8, 0.0)];
         let mut edge = z0;
         for &(z, _, w, ph) in &steps {
             step_route.push(
@@ -129,8 +129,8 @@ fn climb_fork(rise: f64) -> Segment {
             );
             edge = z + 1.5;
         }
-        step_route.push(Waypoint::w(3.0, top + 2.0, 0.3).jump_when(edge_jump(edge, 1.1)));
-        step_route.push(Waypoint::w(0.0, top + 5.0, 1.0));
+        step_route.push(Waypoint::spread(3.0, top + 2.0, 0.3).jump_when(edge_jump(edge, 1.1)));
+        step_route.push(Waypoint::spread(0.0, top + 5.0, 1.0));
         SegOut {
             z: top + 10.0,
             y: y1,
@@ -183,17 +183,17 @@ fn glove_launch(rise: f64) -> Segment {
         let route = |x: f64| {
             let gloves = gloves.clone();
             vec![
-                Waypoint::w(x, z0 + 2.0, 0.5),
-                Waypoint::w(x, pad_z, 0.0).wait(move |bot| {
+                Waypoint::spread(x, z0 + 2.0, 0.5),
+                Waypoint::spread(x, pad_z, 0.0).wait(move |bot| {
                     [0.0, 0.25, 0.5, 0.75, 1.0]
                         .iter()
                         .all(|dt| gloves.iter().all(|g| g.x_at(bot.t + dt).abs() > 9.0 - 8.5 * 0.3))
                 }),
-                Waypoint::w(0.0, deck_z + 4.5, 0.3).jump_when(move |bot| {
+                Waypoint::spread(0.0, deck_z + 4.5, 0.3).jump_when(move |bot| {
                     let p = bot.body.pos;
                     p.y > deck_y - 0.5 && sweep_eta(p.x, p.z, ang(bot.t), sp, 2, 0.0, deck_z) < 0.15
                 }),
-                Waypoint::w(0.0, deck_z + 7.0, 0.5),
+                Waypoint::spread(0.0, deck_z + 7.0, 0.5),
             ]
         };
         SegOut {
@@ -242,11 +242,11 @@ fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     n.scale = V3::splat(1.6);
     let summit_jump = edge_jump(z0 + 13.5, 1.1);
     let route = vec![
-        Waypoint::w(0.0, z0 + 1.5, 0.3),
+        Waypoint::spread(0.0, z0 + 1.5, 0.3),
         Waypoint::moving(move |t| slide_x(0.0, t), z0 + 5.0).jump_when(edge_jump(z0 + 3.0, 1.1)),
         Waypoint::moving(move |t| slide_x(1.0, t), z0 + 8.5).jump_when(edge_jump(z0 + 6.5, 1.1)),
         Waypoint::moving(move |t| slide_x(2.0, t), z0 + 12.0).jump_when(edge_jump(z0 + 10.0, 1.1)),
-        Waypoint::w(0.0, cz - 1.0, 0.2).jump_when(move |bot| {
+        Waypoint::spread(0.0, cz - 1.0, 0.2).jump_when(move |bot| {
             if bot.body.pos.z < z0 + 14.0 {
                 return summit_jump(bot);
             }

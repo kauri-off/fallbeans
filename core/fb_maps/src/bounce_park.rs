@@ -6,7 +6,7 @@ use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, bumper_ramp, pick_sections, race_course, seesaws, trampoline_gap, with_rests,
 };
-use fb_sim::m::{self, MinMaxJs};
+use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -61,18 +61,18 @@ fn mushroom_forest(n: usize, power: f64) -> Segment {
             }
             z += 5.0 + s.rng() * 1.2;
             let dir = if s.rng() < 0.5 { -1.0 } else { 1.0 };
-            x = (-4f64).max_js(4f64.min_js(x + dir * (1.5 + s.rng() * 1.8)));
+            x = (-4f64).at_least(4f64.at_most(x + dir * (1.5 + s.rng() * 1.8)));
             top += 0.7;
         }
         let land_y = top + 1.2;
         let z0 = z + 3.5;
         s.b.box_(0.0, land_y - 1.0, z0 + 3.5, 12.0, 2.0, 7.0, pal::PINK, o());
         let land = V3::new(0.0, land_y, z0 + 2.5);
-        let key = format!("mf{}", m::round_js(s.z));
+        let key = s.b.note();
         let route = vec![
-            Waypoint::w(0.0, s.z + 2.0, 1.0),
-            Waypoint::w(0.0, land.z, 0.5).drive_boxed(hop_chain(key, hops, land, edge, None)),
-            Waypoint::w(0.0, z0 + 6.0, 1.0),
+            Waypoint::spread(0.0, s.z + 2.0, 1.0),
+            Waypoint::spread(0.0, land.z, 0.5).drive_boxed(hop_chain(key, hops, land, edge, None)),
+            Waypoint::spread(0.0, z0 + 6.0, 1.0),
         ];
         SegOut {
             z: z0 + 7.0,
@@ -166,11 +166,11 @@ fn hover_trampolines(n: usize, power: f64) -> Segment {
         let land = V3::new(0.0, land_y, z0 + 2.5);
         let fx0 = first.expect("a hovering trampoline");
         let ready = Box::new(move |bot: &mut fb_sim::bots::BotView| (fx0(bot.t + 0.55) - bot.body.pos.x).abs() < 1.0);
-        let key = format!("ht{}", m::round_js(s.z));
+        let key = s.b.note();
         let route = vec![
-            Waypoint::w(0.0, s.z + 2.0, 1.0),
-            Waypoint::w(0.0, land.z, 0.5).drive_boxed(hop_chain(key, hops, land, edge, Some(ready))),
-            Waypoint::w(0.0, z0 + 6.0, 1.0),
+            Waypoint::spread(0.0, s.z + 2.0, 1.0),
+            Waypoint::spread(0.0, land.z, 0.5).drive_boxed(hop_chain(key, hops, land, edge, Some(ready))),
+            Waypoint::spread(0.0, z0 + 6.0, 1.0),
         ];
         SegOut {
             z: z0 + 7.0,
@@ -201,16 +201,16 @@ fn pad_catapults(n: usize) -> Segment {
             for (r, x) in [-3.0, 3.0].into_iter().enumerate() {
                 s.b.pad(x, y, pz, 1.4, 16.0, Some((0.0, 8.0)));
                 let land = pz + 9.3;
-                routes[r].push(Waypoint::w(x, pz - 2.0, 0.0));
-                routes[r].push(Waypoint::w(x, pz, 0.0));
+                routes[r].push(Waypoint::spread(x, pz - 2.0, 0.0));
+                routes[r].push(Waypoint::spread(x, pz, 0.0));
                 routes[r].push(
-                    Waypoint::w(x, land, 0.0)
+                    Waypoint::spread(x, land, 0.0)
                         .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, y, land, out)),
                 );
             }
         }
         for r in &mut routes {
-            r.push(Waypoint::w(0.0, s.z + len - 0.5, 1.0));
+            r.push(Waypoint::spread(0.0, s.z + len - 0.5, 1.0));
         }
         let z0 = s.z;
         SegOut {
@@ -272,15 +272,15 @@ fn big_bounce(rise: f64) -> Segment {
             .into_iter()
             .map(|k: f64| {
                 vec![
-                    Waypoint::w(k * 2.8, s.z + 1.5, 0.0),
-                    Waypoint::w(0.0, land.z, 0.5).drive_boxed(hop_chain(
-                        format!("bb{k}"),
+                    Waypoint::spread(k * 2.8, s.z + 1.5, 0.0),
+                    Waypoint::spread(0.0, land.z, 0.5).drive_boxed(hop_chain(
+                        s.b.note(),
                         hops(k > 0.0),
                         land,
                         edge,
                         None,
                     )),
-                    Waypoint::w(0.0, far + 6.0, 1.0),
+                    Waypoint::spread(0.0, far + 6.0, 1.0),
                 ]
             })
             .collect();

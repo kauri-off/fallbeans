@@ -1,4 +1,4 @@
-//! A room's game time (port of `server/rooms/clock.ts`), in ticks: the server's tick, unless a dev
+//! A room's game time, in ticks: the server's tick, unless a dev
 //! command slowed, paused or warped it. Timers and arenas follow game time.
 
 #[derive(Clone, Debug)]

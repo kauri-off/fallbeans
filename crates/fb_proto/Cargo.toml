@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 fb_shared.workspace = true
 fb_maps.workspace = true
+fb_sim.workspace = true
 serde.workspace = true
 
 [lints]

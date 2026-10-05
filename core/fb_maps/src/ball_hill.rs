@@ -9,7 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, pick_sections, pistons, race_course, sliding_gates, tipping_bridge,
     with_rests,
 };
-use fb_sim::m::{self, MinMaxJs};
+use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -138,7 +138,7 @@ fn ice_slope() -> Segment {
         s.b.bonus(0.0, ya(a0z + 20.0), a0z + 20.0);
         s.b.box_(0.0, a1y - 1.0, a1z + 4.0, w, 2.0, 8.0, pal::PURPLE, o());
 
-        let mut path = vec![Waypoint::w(0.0, s.z + 1.0, 1.0)];
+        let mut path = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         type Clear = Box<dyn Fn(f64) -> bool + Send + Sync>;
         for i in 1..carpet.len() {
             let (x0, z0) = carpet[i - 1];
@@ -175,13 +175,13 @@ fn ice_slope() -> Segment {
             }
             stops.sort_by(|a, c| a.0.partial_cmp(&c.0).unwrap_or(core::cmp::Ordering::Equal));
             for (f, clear) in stops {
-                let before = 0f64.max_js(f - 2.4 / seg_len);
-                path.push(Waypoint::w(x0 + (x1 - x0) * before, z0 + (z1 - z0) * before, 0.2));
-                path.push(Waypoint::w(x0 + (x1 - x0) * f, z0 + (z1 - z0) * f, 0.2).wait(move |bot| clear(bot.t)));
+                let before = 0f64.at_least(f - 2.4 / seg_len);
+                path.push(Waypoint::spread(x0 + (x1 - x0) * before, z0 + (z1 - z0) * before, 0.2));
+                path.push(Waypoint::spread(x0 + (x1 - x0) * f, z0 + (z1 - z0) * f, 0.2).wait(move |bot| clear(bot.t)));
             }
-            path.push(Waypoint::w(x1, z1, 0.2));
+            path.push(Waypoint::spread(x1, z1, 0.2));
         }
-        path.push(Waypoint::w(0.0, a1z + 4.0, 1.0));
+        path.push(Waypoint::spread(0.0, a1z + 4.0, 1.0));
         SegOut {
             z: a1z + 8.0,
             y: a1y,
@@ -239,25 +239,25 @@ fn ball_ramp(rise: f64) -> Segment {
             s.b.box_(0.0, yr(zb) + 0.6, zb, 1.8, 1.8, 1.4, p, rot(-ang, 0.0, 0.0));
         }
         s.b.box_(0.0, y + rise - 1.0, z1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, o());
-        let mut pts = vec![Waypoint::w(0.0, z0 + 0.5, 0.0)];
+        let mut pts = vec![Waypoint::spread(0.0, z0 + 0.5, 0.0)];
         for (i, &zb) in blocks.iter().enumerate() {
             let lx = (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;
-            pts.push(Waypoint::w(0.0, zb - 2.3, 0.0));
+            pts.push(Waypoint::spread(0.0, zb - 2.3, 0.0));
             let balls = balls.clone();
-            pts.push(Waypoint::w(lx, zb - 0.8, 0.0).wait(move |bot| {
+            pts.push(Waypoint::spread(lx, zb - 0.8, 0.0).wait(move |bot| {
                 !balls.danger(
-                    lx.min_js(0.0) - 0.3,
-                    lx.max_js(0.0) + 0.3,
+                    lx.at_most(0.0) - 0.3,
+                    lx.at_least(0.0) + 0.3,
                     zb - 2.5,
                     zb + 2.5,
                     bot.t,
                     0.9,
                 )
             }));
-            pts.push(Waypoint::w(lx, zb + 0.9, 0.0));
-            pts.push(Waypoint::w(0.0, zb + 2.3, 0.0));
+            pts.push(Waypoint::spread(lx, zb + 0.9, 0.0));
+            pts.push(Waypoint::spread(0.0, zb + 2.3, 0.0));
         }
-        pts.push(Waypoint::w(0.0, z1 + 3.0, 1.0));
+        pts.push(Waypoint::spread(0.0, z1 + 3.0, 1.0));
         SegOut {
             z: z1 + 6.0,
             y: y + rise,

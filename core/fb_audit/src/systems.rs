@@ -1,12 +1,11 @@
-//! Audits of the systems, not of one map: physics feel, input handling, game rules and planning (port
-//! of `audit/systems.ts`).
+//! Audits of the systems, not of one map: physics feel, input handling, game rules and planning.
 use std::collections::{BTreeMap, BTreeSet};
 
 use fb_arena::{Arena, ArenaKind, Stepper, no_touch, tick_bodies};
 use fb_maps::director::{Mode, Playlist, ROUND_COUNTS, game, plan_game};
 use fb_shared::game::Genre;
 use fb_shared::input::{BTN_JUMP, InputFrame};
-use fb_shared::m::MinMaxJs;
+use fb_shared::m::MinMax;
 use fb_shared::rng::{Rng, shuffle};
 use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS, score_round};
 use fb_shared::{DT, MAX_PLAYERS, m};
@@ -111,7 +110,7 @@ fn never(_: i64, _: &Body, _: &World) -> bool {
 }
 
 /// Measures how the bean handles (accelerate, stop, turn, jump, dive, climb, ice) and flags big changes.
-fn physics(_: &Ctx, out: &mut Out) {
+pub(crate) fn physics(_: &Ctx, out: &mut Out) {
     let mut world = test_world();
     let w = &mut world;
     let fresh = |w: &mut World, x: f64, z: f64| {
@@ -137,7 +136,7 @@ fn physics(_: &Ctx, out: &mut Out) {
     let mut left = false;
     let jump_once = |k: i64, _: &Body| BodyInput { jump: k == 1, ..IDLE };
     let air = run(w, &mut b, 240, jump_once, |_, b, _| {
-        apex = apex.max_js(b.pos.y - y0);
+        apex = apex.at_least(b.pos.y - y0);
         left |= !b.grounded;
         left && b.grounded
     }) as f64
@@ -180,16 +179,16 @@ fn physics(_: &Ctx, out: &mut Out) {
             };
             run(w, &mut lb, 180, climb, |_, b, _| {
                 if b.pos.z.abs() < 2.5 && b.grounded {
-                    top = top.max_js(b.pos.y);
+                    top = top.at_least(b.pos.y);
                 }
                 false
             });
             let on = top > h - 0.2;
             if on && !with_jump {
-                walk = walk.max_js(h);
+                walk = walk.at_least(h);
             }
             if on && with_jump {
-                jump_up = jump_up.max_js(h);
+                jump_up = jump_up.at_least(h);
             }
         }
     }
@@ -200,7 +199,7 @@ fn physics(_: &Ctx, out: &mut Out) {
     });
     let ice_v0 = speed(&b);
     run(w, &mut b, 60, idle, never);
-    let ice_keep = speed(&b) / ice_v0.max_js(0.01);
+    let ice_keep = speed(&b) / ice_v0.at_least(0.01);
 
     // Expected ranges: outside them the controls feel different from what the maps were built for.
     let measured = [

@@ -26,7 +26,6 @@ static META: GameMeta = GameMeta::new(
     150.0,
 );
 
-#[allow(clippy::approx_constant, reason = "6.28 as in TS, not TAU")]
 fn fork() -> Segment {
     Box::new(|s| {
         let y = s.y;
@@ -39,7 +38,7 @@ fn fork() -> Segment {
             .iter()
             .map(|dz| {
                 let w = 1.8 + s.rng() * 0.8;
-                let ph = s.rng() * 6.28;
+                let ph = s.rng() * m::TAU;
                 (z0 + dz, w, ph)
             })
             .collect();
@@ -88,27 +87,27 @@ fn fork() -> Segment {
         s.b.bonus(bx, y, z0 + 15.5);
         s.b.box_(0.0, y - 1.0, z1 + 4.0, 18.0, 2.0, 8.0, pal::PURPLE, o());
 
-        let mut bridge = vec![Waypoint::w(bx, z0 + 0.5, 0.0)];
+        let mut bridge = vec![Waypoint::spread(bx, z0 + 0.5, 0.0)];
         for &(z, w, ph) in &hammers {
-            bridge.push(Waypoint::w(bx, z - 2.6, 0.0));
-            bridge.push(Waypoint::w(bx, z + 2.0, 0.0).wait(move |bot| {
+            bridge.push(Waypoint::spread(bx, z - 2.6, 0.0));
+            bridge.push(Waypoint::spread(bx, z + 2.0, 0.0).wait(move |bot| {
                 [0.0, 0.2, 0.4, 0.6, 0.8]
                     .iter()
                     .all(|dt| (head_x(w, ph, bot.t + dt) - bx).abs() > 2.6)
             }));
         }
-        let mut walls = vec![Waypoint::w(5.0, z0 + 0.5, 0.2)];
+        let mut walls = vec![Waypoint::spread(5.0, z0 + 0.5, 0.2)];
         for (k, &(z, x0, _)) in zig.iter().enumerate() {
             let gx = if x0 > 3.0 { 3.4 } else { 6.6 };
             let (pz, w, ph) = pushers[k];
-            walls.push(Waypoint::w(gx, z - 1.4, 0.0));
-            walls.push(Waypoint::w(gx, z + 1.4, 0.0));
-            walls.push(Waypoint::w(gx, pz + 1.4, 0.0).wait(move |bot| {
+            walls.push(Waypoint::spread(gx, z - 1.4, 0.0));
+            walls.push(Waypoint::spread(gx, z + 1.4, 0.0));
+            walls.push(Waypoint::spread(gx, pz + 1.4, 0.0).wait(move |bot| {
                 (pusher_x(w, ph, bot.t + 0.35) - gx).abs() > 1.6 && (pusher_x(w, ph, bot.t) - gx).abs() > 1.6
             }));
         }
         for r in [&mut bridge, &mut walls] {
-            r.push(Waypoint::w(0.0, z1 + 4.0, 1.0));
+            r.push(Waypoint::spread(0.0, z1 + 4.0, 1.0));
         }
         SegOut {
             z: z1 + 8.0,

@@ -8,7 +8,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
-use fb_sim::math::M4;
+use fb_sim::math::Affine;
 use fb_sim::physics::power;
 use fb_sim::scene::{PrimKind, SceneItem};
 use lightyear::prelude::*;
@@ -107,8 +107,10 @@ pub fn hex(c: &str) -> Color {
         .unwrap_or(Color::WHITE)
 }
 
-fn mat4(m: &M4) -> Mat4 {
-    Mat4::from_cols_array(&m.0.map(|v| v as f32))
+fn mat4(m: &Affine) -> Mat4 {
+    Mat4::from(bevy::math::Affine3A::from_cols_array(
+        &m.to_cols_array().map(|v| v as f32),
+    ))
 }
 
 fn spawn_map(
@@ -276,7 +278,7 @@ pub const PALETTES: [Palette; 9] = [
     pal::TEAL,
 ];
 
-/// What a primitive is painted with (`builder.ts` prim and `view.ts` material): the palette as the
+/// What a primitive is painted with: the palette as the
 /// round's look repaints it with the look's pattern, or a plain colour; and its surface (padded for big
 /// floors, rubber for balls, plastic otherwise).
 pub fn prim_spec(
@@ -349,7 +351,7 @@ fn pose_map(
     }
 }
 
-/// Pops in, bobs and turns; taken: swells and vanishes (`bonus.ts`).
+/// Pops in, bobs and turns; taken: swells and vanishes.
 fn place_bonuses(
     map: Option<Res<Map>>,
     timeline: Res<LocalTimeline>,
@@ -460,7 +462,7 @@ fn spectate(
     }
 }
 
-/// The pad's right stick turns the camera (radians a second at full tilt, as in TS).
+/// The pad's right stick turns the camera (radians a second at full tilt).
 const PAD_YAW: f32 = 3.2;
 const PAD_PITCH: f32 = 2.2;
 

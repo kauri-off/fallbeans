@@ -8,7 +8,6 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use clap::Args;
-use sha2::Digest;
 
 use crate::{Shared, root};
 
@@ -40,36 +39,19 @@ pub struct StressArgs {
     /// Fails when the server's resident memory went above this, MB.
     #[arg(long, default_value_t = 300.0)]
     max_mem: f64,
-    /// Runs the local server as on the 1-vCPU host (Linux): alone on the last core, the clients on the
+    /// Runs the server as on a 1-vCPU host (Linux): alone on the last core, the clients on the
     /// others, and in a systemd scope with `MemoryMax=300M` and no swap.
     #[arg(long)]
     limit_server: bool,
     #[command(flatten)]
     shared: Shared,
-    /// Against a probe server on a server host (`--host`, `--domain`; UDP 5890, wss …/fallbeans/ws-probe)
-    /// instead of a local one: the network between here and there is the real one.
-    #[arg(long)]
-    remote: bool,
-    #[command(flatten)]
-    host: crate::deploy::Host,
     /// Extra flags for every client, e.g. `--client-arg=--sync-max-error=40`.
     #[arg(long, allow_hyphen_values = true)]
     client_arg: Vec<String>,
-    /// WSL distribution the Linux build of `--remote` runs in (Windows only).
-    #[arg(long, default_value = "Ubuntu")]
-    wsl_distro: String,
 }
 
 /// `fb_net::errors::MARK`: a failed system or command in a release build.
 const ECS_ERROR: &str = "ECS ERROR";
-/// Where the probe server of `--remote` lives on the host (the deploy user's home: no root needed).
-const PROBE_DIR: &str = "fb-probe";
-/// Its ports: UDP open in ufw, WebSocket and HTTP behind nginx at /fallbeans/ws-probe and /fallbeans/probe/ (`deploy/`).
-const PROBE_UDP: u16 = 5890;
-const PROBE_WS: u16 = 5891;
-const PROBE_HTTP: u16 = 5892;
-/// Matches only the probe (a server started from PROBE_DIR), never the game's service.
-const PROBE_MATCH: &str = "pgrep -u \"$(id -u)\" -f '^./fb_server --udp-port 5890'";
 
 pub fn stress(a: &StressArgs) -> bool {
     if !a.shared.build() {
@@ -109,66 +91,50 @@ pub fn stress(a: &StressArgs) -> bool {
 
     let pin = match a.limit_server.then(server_cores) {
         None => None,
-        Some(Some(p)) if !a.remote => Some(p),
+        Some(Some(p)) => Some(p),
         Some(_) => {
             eprintln!("--limit-server: a local server on Linux with at least 2 cores only");
             return false;
         }
     };
-    let mut server = None;
-    let mut client_net: Vec<String> = Vec::new();
-    if a.remote {
-        if !a.host.complete() {
-            return false;
+    let mut server_cmd = match &pin {
+        Some(p) => {
+            let mut c = Command::new("systemd-run");
+            c.args([
+                "--user",
+                "--scope",
+                "--quiet",
+                "-p",
+                "MemoryMax=300M",
+                "-p",
+                "MemorySwapMax=0",
+                "--",
+            ])
+            .args(["taskset", "-c", &p.server])
+            .arg(a.shared.bin("fb_server"));
+            c
         }
-        let ip = a.host.public_ip().to_string();
-        if !start_remote(a, &dir, &server_flags("server.trace"), &ip) {
-            return false;
-        }
-        let domain = a.host.domain();
-        let ws_url = format!("wss://{domain}/fallbeans/ws-probe");
-        let http_url = format!("https://{domain}/fallbeans/probe");
-        client_net.extend(["--server", &ip, "--ws-url", &ws_url, "--http-url", &http_url].map(String::from));
-    } else {
-        let mut server_cmd = match &pin {
-            Some(p) => {
-                let mut c = Command::new("systemd-run");
-                c.args([
-                    "--user",
-                    "--scope",
-                    "--quiet",
-                    "-p",
-                    "MemoryMax=300M",
-                    "-p",
-                    "MemorySwapMax=0",
-                    "--",
-                ])
-                .args(["taskset", "-c", &p.server])
-                .arg(a.shared.bin("fb_server"));
-                c
-            }
-            None => Command::new(a.shared.bin("fb_server")),
-        };
-        server_cmd
-            .args(server_flags(&dir.join("server.trace").to_string_lossy()))
-            .stdout(log("server.log"))
-            .stderr(log("server.err.log"));
-        let Ok(mut child) = server_cmd.spawn() else {
-            eprintln!("cannot start the server");
-            return false;
-        };
-        std::thread::sleep(Duration::from_millis(800));
-        // Gone already (a port taken by a server left running, bad flags): the clients would wait for
-        // nothing for the whole run.
-        if let Ok(Some(status)) = child.try_wait() {
-            eprintln!(
-                "stress: the server exited at once ({status}):\n{}",
-                read_log(&dir, "server")
-            );
-            return false;
-        }
-        server = Some(child);
+        None => Command::new(a.shared.bin("fb_server")),
+    };
+    server_cmd
+        .args(server_flags(&dir.join("server.trace").to_string_lossy()))
+        .stdout(log("server.log"))
+        .stderr(log("server.err.log"));
+    let Ok(mut child) = server_cmd.spawn() else {
+        eprintln!("cannot start the server");
+        return false;
+    };
+    std::thread::sleep(Duration::from_millis(800));
+    // Gone already (a port taken by a server left running, bad flags): the clients would wait for
+    // nothing for the whole run.
+    if let Ok(Some(status)) = child.try_wait() {
+        eprintln!(
+            "stress: the server exited at once ({status}):\n{}",
+            read_log(&dir, "server")
+        );
+        return false;
     }
+    let mut server = child;
     let mut clients: Vec<Child> = Vec::new();
     for i in 0..a.clients {
         let room = &rooms[i as usize % rooms.len()];
@@ -190,7 +156,6 @@ pub fn stress(a: &StressArgs) -> bool {
         ])
         .args(a.shared.play_args(room, in_room.count() as u32))
         .args(["--exit-after", &a.secs.to_string()])
-        .args(&client_net)
         .args(a.shared.net_args())
         .args(&a.client_arg)
         .arg("--trace")
@@ -203,7 +168,7 @@ pub fn stress(a: &StressArgs) -> bool {
         }
     }
     eprintln!(
-        "stress: {} clients in {} rooms for {} s over {} at lag {} ms jitter {} ms loss {}{}; logs in {}",
+        "stress: {} clients in {} rooms for {} s over {} at lag {} ms jitter {} ms loss {}; logs in {}",
         a.clients,
         rooms.len(),
         a.secs,
@@ -211,15 +176,11 @@ pub fn stress(a: &StressArgs) -> bool {
         a.shared.lag,
         a.shared.jitter,
         a.shared.loss,
-        if a.remote { " against the host" } else { "" },
         dir.display()
     );
     let deadline = Instant::now() + Duration::from_secs(a.secs + 30);
-    for c in clients.iter_mut().chain(server.as_mut()) {
+    for c in clients.iter_mut().chain([&mut server]) {
         wait_or_kill(c, deadline);
-    }
-    if a.remote && !fetch_remote(a, &dir) {
-        return false;
     }
     report(a, &dir)
 }
@@ -236,83 +197,6 @@ fn server_cores() -> Option<Pin> {
         server: (n - 1).to_string(),
         clients: format!("0-{}", n - 2),
     })
-}
-
-/// The first word of `sha256sum`'s output (on the host).
-fn first_word(out: std::io::Result<std::process::Output>) -> String {
-    out.ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .split(' ')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_default()
-}
-
-/// The probe server on the host: a fresh Linux build of this tree (local clients and the server must
-/// speak the same protocol), uploaded when it differs from the one there, started in the background.
-fn start_remote(a: &StressArgs, dir: &Path, flags: &[String], public_ip: &str) -> bool {
-    let bin = dir.join("fb_server-linux");
-    eprintln!("stress: Linux build of the server for the host");
-    if !crate::deploy::build_linux_server(&a.wsl_distro, &bin) {
-        return false;
-    }
-    // (Hashed here: Windows has no `sha256sum`, and an empty hash would upload the server every run.)
-    let local = fs::read(&bin)
-        .map(|b| {
-            sha2::Sha256::digest(&b)
-                .iter()
-                .map(|x| format!("{x:02x}"))
-                .collect::<String>()
-        })
-        .unwrap_or_default();
-    let there = first_word(
-        a.host
-            .ssh(&format!(
-                "mkdir -p {PROBE_DIR} && (sha256sum {PROBE_DIR}/fb_server 2>/dev/null || true)"
-            ))
-            .output(),
-    );
-    if local.is_empty() || local != there {
-        eprintln!(
-            "stress: uploading the server ({} MB)",
-            fs::metadata(&bin).map_or(0, |m| m.len() >> 20)
-        );
-        if !crate::run(&mut a.host.scp(&bin.to_string_lossy(), &format!(":{PROBE_DIR}/fb_server"))) {
-            return false;
-        }
-    }
-    let args: Vec<String> = flags.iter().map(|f| format!("'{f}'")).collect();
-    // A probe left over from an interrupted run would hold the ports.
-    let script = format!(
-        "cd {PROBE_DIR} && chmod +x fb_server && ({kill} || true) && rm -f server.trace server.log \
-         && (setsid nohup ./fb_server --udp-port {PROBE_UDP} --ws-addr 127.0.0.1 --ws-port {PROBE_WS} \
-         --http-addr 127.0.0.1 --http-port {PROBE_HTTP} --public-host {public_ip} {} \
-         > server.log 2>&1 < /dev/null &) && sleep 1 && {PROBE_MATCH} > /dev/null",
-        args.join(" "),
-        kill = PROBE_MATCH.replacen("pgrep", "pkill", 1),
-    );
-    if !crate::run(&mut a.host.ssh(&script)) {
-        eprintln!("stress: the probe server did not start on the host");
-        let _ = crate::run(&mut a.host.ssh(&format!("tail -20 {PROBE_DIR}/server.log")));
-        return false;
-    }
-    true
-}
-
-/// Waits for the probe server to finish and brings its trace and log here.
-fn fetch_remote(a: &StressArgs, dir: &Path) -> bool {
-    let wait = format!(
-        "for i in $(seq 1 40); do {PROBE_MATCH} > /dev/null || exit 0; sleep 1; done; {}; exit 0",
-        PROBE_MATCH.replacen("pgrep", "pkill", 1)
-    );
-    let to = |f: &str| dir.join(f).to_string_lossy().into_owned();
-    crate::run(&mut a.host.ssh(&wait))
-        && crate::run(&mut a.host.scp(&format!(":{PROBE_DIR}/server.trace"), &to("server.trace")))
-        && crate::run(&mut a.host.scp(&format!(":{PROBE_DIR}/server.log"), &to("server.log")))
 }
 
 fn wait_or_kill(c: &mut Child, deadline: Instant) {

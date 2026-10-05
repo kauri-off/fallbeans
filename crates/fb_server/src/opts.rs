@@ -12,13 +12,13 @@ pub struct Opts {
     pub udp_port: u16,
     #[arg(long, default_value_t = WS_PORT)]
     pub ws_port: u16,
-    /// Address the WebSocket listener binds (production: 127.0.0.1, behind nginx's wss on 443).
+    /// Address the WebSocket listener binds (127.0.0.1 behind a reverse proxy's wss).
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub ws_addr: IpAddr,
     /// Port of the HTTP API: sessions (connect tokens), health, debug.
     #[arg(long, default_value_t = HTTP_PORT)]
     pub http_port: u16,
-    /// Address the HTTP API binds (production: 127.0.0.1, behind nginx's https on 443).
+    /// Address the HTTP API binds (127.0.0.1 behind a reverse proxy's https).
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub http_addr: IpAddr,
     /// The address players reach the UDP port at, put into connect tokens (and checked by netcode). Default:
@@ -51,9 +51,6 @@ pub struct Opts {
     /// Rooms that stay open with nobody in them, by id (stress runs meet in them), e.g. `s1,s2`.
     #[arg(long, value_delimiter = ',')]
     pub open_rooms: Vec<String>,
-    /// While this file exists the game is being updated: everybody is told and disconnected.
-    #[arg(long)]
-    pub maintenance_file: Option<PathBuf>,
     #[command(flatten)]
     pub net: NetSim,
     /// Writes every pawn's input and position per tick here (`cargo xtask stress` compares it with clients').

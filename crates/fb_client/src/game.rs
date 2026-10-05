@@ -15,7 +15,7 @@ use fb_proto::{ArenaInfo, Pid};
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_sim::bonus::{BonusTaken, Bonuses};
-use fb_sim::map::{BeanDeco, MapOut, MapSpec, Value};
+use fb_sim::map::{BeanDeco, MapOut, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
@@ -411,7 +411,7 @@ fn write_input(
             (Some(keys), Some(mouse)) => keyboard(&keys, &mouse, &binds),
             _ => (0.0, 0.0, 0),
         };
-        // The pad's stick wins over the keys while it is pushed (as in TS).
+        // The pad's stick wins over the keys while it is pushed.
         let (stick, grab) = gamepad(&pads);
         if stick != (0.0, 0.0) {
             (f, r) = stick;
@@ -591,7 +591,7 @@ fn receive_map_events(
 }
 
 /// Bonuses about the own bean apply at once (it is drawn ahead), the others' when they are drawn at their
-/// tick. The rest apply as they come, as in TS: a map event changes the world the own bean is predicted in
+/// tick. The rest apply as they come: a map event changes the world the own bean is predicted in
 /// (a tile falls, a portal shuts), and a bean that finished or is out leaves the arena.
 fn apply_map_events(
     map: Option<ResMut<Map>>,
@@ -691,20 +691,14 @@ fn apply_map_events(
                     }
                 }
             }
-            MapEventKind::Map { name, data } => {
-                let Ok(data) = serde_json::from_str::<Value>(data) else {
-                    warn!("map event {name}: bad data");
-                    map.seen.insert(key);
-                    continue;
-                };
+            MapEventKind::Map(ev) => {
                 let mut said = Vec::new();
                 client_event(
                     &mut map.world,
                     &mut map.spec,
                     &mut session.scores,
                     session.me,
-                    name,
-                    &data,
+                    ev,
                     &mut said,
                 );
                 if !loud {
@@ -734,7 +728,7 @@ const EMOTE_KEYS: [KeyCode; 5] = [
     KeyCode::Digit4,
     KeyCode::Digit5,
 ];
-/// The pad's cross: emotes 1–4, as in TS.
+/// The pad's cross: emotes 1–4.
 const EMOTE_PAD: [GamepadButton; 4] = [
     GamepadButton::DPadUp,
     GamepadButton::DPadLeft,

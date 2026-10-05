@@ -1,4 +1,4 @@
-//! The player's interface on bevy_ui (port of `client/ui`): the room list, the Esc menu, the HUD, the chat
+//! The player's interface on bevy_ui: the room list, the Esc menu, the HUD, the chat
 //! and the name tags. A panel is rebuilt whole when what it shows changes (`Section`); text fields live
 //! outside the rebuilt parts, so typing survives. Every button carries an `Action`; one observer turns
 //! presses into `UiAction` messages for the module that owns them.
@@ -45,7 +45,7 @@ pub const RIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.8);
 pub const GROUP: Color = Color::srgba(0.169, 0.102, 0.361, 0.06);
 pub const SHADOW: Color = Color::srgba(0.169, 0.102, 0.361, 0.22);
 
-/// Sizes are in rem as in the TS stylesheet: 16 px at the base scale, which follows the window (`UiScale`).
+/// Sizes are in rem: 16 px at the base scale, which follows the window (`UiScale`, `scale_ui`).
 pub fn rem(x: f32) -> Val {
     px(x * 16.0)
 }
@@ -84,7 +84,7 @@ pub enum MenuTab {
     Dev,
 }
 
-/// What the interface is doing (the TS signals `menuOpen`, `chatOpen`, `needClick`…).
+/// What the interface is doing.
 #[derive(Resource, Default)]
 pub struct Ui {
     /// The Esc menu is open: the mouse is free and the game takes no input.
@@ -97,7 +97,7 @@ pub struct Ui {
     pub need_click: bool,
     /// F3: the network and performance overlay.
     pub debug: bool,
-    /// Folded parts that are open (`<details>` in TS).
+    /// Folded parts that are open.
     pub open: BTreeSet<&'static str>,
     /// The create-room form's "private" box.
     pub create_private: bool,
@@ -586,6 +586,8 @@ pub fn slider(
     range: (f32, f32),
     step: f32,
 ) {
+    let range = SliderRange::new(range.0, range.1);
+    let thumb_left = percent(range.thumb_position(value) * 100.0);
     p.spawn(Node {
         flex_direction: FlexDirection::Column,
         row_gap: rem(0.3),
@@ -609,7 +611,7 @@ pub fn slider(
             knob,
             Slider::default(),
             SliderValue(value),
-            SliderRange::new(range.0, range.1),
+            range,
             SliderStep(step),
             Hovered::default(),
             Node {
@@ -644,7 +646,7 @@ pub fn slider(
                         position_type: PositionType::Absolute,
                         width: rem(1.1),
                         height: rem(1.1),
-                        left: percent(0),
+                        left: thumb_left,
                         border: UiRect::all(px(2)),
                         border_radius: BorderRadius::MAX,
                         ..default()
@@ -669,7 +671,7 @@ pub fn knob_text(knob: Knob, v: f32) -> String {
     }
 }
 
-/// A box of related controls (`.group` in TS).
+/// A box of related controls.
 pub fn group(p: &mut ChildSpawnerCommands, f: impl FnOnce(&mut ChildSpawnerCommands)) -> Entity {
     p.spawn((
         Node {
@@ -857,7 +859,8 @@ pub fn show(node: &mut Node, on: bool) {
     }
 }
 
-/// The interface follows the window as the TS root font size did: clamp(12px, 0.42vw + 0.55vh + 4.5px, 20px).
+/// The interface follows the window: one rem is 12–20 px, growing with its width and height, times the
+/// player's own scale.
 fn scale_ui(windows: Query<&Window, With<PrimaryWindow>>, display: Res<Display>, mut scale: ResMut<UiScale>) {
     let (w, h) = windows.single().map_or((1600.0, 900.0), |w| (w.width(), w.height()));
     let root = (0.0042 * w + 0.0055 * h + 4.5).clamp(12.0, 20.0);

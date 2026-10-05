@@ -107,7 +107,6 @@ pub struct Info {
     pub name: Option<String>,
     pub protocol: u32,
     pub build: String,
-    pub updating: bool,
     pub rooms: u64,
     pub players: u64,
 }
@@ -145,7 +144,6 @@ pub fn check(addr: &str) -> Status {
             name: v["name"].as_str().filter(|s| !s.is_empty()).map(String::from),
             protocol: n("version") as u32,
             build: v["build"].as_str().unwrap_or_default().to_string(),
-            updating: v["updating"].as_bool().unwrap_or(false),
             rooms: n("rooms"),
             players: n("players"),
         });

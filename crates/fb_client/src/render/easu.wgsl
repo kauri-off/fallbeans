@@ -1,4 +1,4 @@
-// AMD FidelityFX Super Resolution 1, EASU (port of fsr.ts; github.com/GPUOpen-Effects/FidelityFX-FSR, MIT):
+// AMD FidelityFX Super Resolution 1, EASU (github.com/GPUOpen-Effects/FidelityFX-FSR, MIT):
 // edge-adaptive spatial upsampling, 12 taps, a Lanczos-like kernel stretched along local edges, deringed.
 // The scene was drawn into the top-left `in_size` of the source; the output fills the whole target.
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput

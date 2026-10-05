@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use fb_net::{BodyFull, FbInput};
 use fb_shared::TICK_RATE;
 use fb_shared::input::InputFrame;
-use fb_sim::math::{V3, len};
+use fb_sim::math::V3;
 use lightyear::input::native::prelude::ActionState;
 use lightyear::prelude::*;
 
@@ -127,7 +127,7 @@ fn check(
         return;
     }
     let by = full.body.pos - last.pos;
-    let d = len(by);
+    let d = by.length();
     if d < NOTICE_M {
         return;
     }

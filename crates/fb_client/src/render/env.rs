@@ -1,6 +1,6 @@
-//! Ambient light without a light source (port of `environment.ts`): a small cube map of the look's sky
-//! and ground colours as a vertical gradient (what a hemisphere light gave) plus a soft even fill (the
-//! studio room TS added), used for image-based lighting. Made on the CPU: no compute shaders (T0).
+//! Ambient light without a light source: a small cube map of the look's sky
+//! and ground colours as a vertical gradient (what a hemisphere light gives) plus a soft even fill
+//! (a studio room), used for image-based lighting. Made on the CPU: no compute shaders (T0).
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::render::render_resource::{

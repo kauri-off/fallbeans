@@ -1,4 +1,4 @@
-//! How the game is drawn (port of `renderer.ts`, `environment.ts`, `postfx.ts`): the camera's pipeline
+//! How the game is drawn: the camera's pipeline
 //! (HDR, PBR Neutral tone mapping, the grade), the sun, fog, sky and ambient light of the round's look,
 //! and the graphics settings: the hardware tier, presets and switches (`quality.rs`).
 mod decor;
@@ -29,7 +29,7 @@ use fb_sim::looks::ResolvedLook;
 use crate::game::Map;
 use crate::view::MainCamera;
 
-/// Lux of the sun per unit of a look's light (three.js intensity), and the exposure that makes one unit
+/// Lux of the sun per unit of a look's light, and the exposure that makes one unit
 /// of light on a white surface come out as one: the look's colours keep their meaning.
 pub const LUX: f32 = 1000.0;
 

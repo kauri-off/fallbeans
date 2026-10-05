@@ -8,7 +8,7 @@ disallowed-methods = [
   { path = "f64::exp", reason = "use fb_shared::m" },
   { path = "f64::powf", reason = "use fb_shared::m" },
   { path = "f64::powi", reason = "use fb_shared::m" },
-  { path = "f64::hypot", reason = "use fb_shared::m::hypot (V8-exact)" },
+  { path = "f64::hypot", reason = "platform libm: use fb_shared::m::hypot" },
   { path = "f64::mul_add", reason = "no FMA in the simulation" },
   { path = "f64::sin_cos", reason = "use fb_shared::m" },
   { path = "f64::asin", reason = "platform libm: add a libm wrapper to fb_shared::m" },
@@ -24,26 +24,25 @@ disallowed-methods = [
   { path = "f64::log2", reason = "platform libm: add a libm wrapper to fb_shared::m" },
   { path = "f64::log10", reason = "platform libm: add a libm wrapper to fb_shared::m" },
   { path = "f64::cbrt", reason = "platform libm: add a libm wrapper to fb_shared::m" },
-  # Same name, other semantics than the JS the maps were written in.
-  { path = "f64::round", reason = "ties away from zero (JS Math.round: towards +∞): use fb_shared::m::round_js" },
-  { path = "f64::max", reason = "±0 tie is unspecified: use fb_shared::m::max/min (JS-exact)" },
-  { path = "f64::min", reason = "±0 tie is unspecified: use fb_shared::m::max/min (JS-exact)" },
-  { path = "f64::signum", reason = "signum(0) is 1 (JS Math.sign(0) is 0): use fb_shared::m::sign" },
-  # glam does these in another order than three.js (the last bits differ): use fb_sim::math.
-  { path = "glam::DVec3::length", reason = "use fb_sim::math::len" },
-  { path = "glam::DVec3::normalize", reason = "use fb_sim::math::normalize" },
-  { path = "glam::DVec3::normalize_or_zero", reason = "use fb_sim::math::normalize" },
-  { path = "glam::DVec3::lerp", reason = "use fb_sim::math::lerp" },
-  { path = "glam::DVec3::distance", reason = "use fb_sim::math::dist_sq / len" },
-  { path = "glam::DVec3::length_recip", reason = "use fb_sim::math::len" },
-  { path = "glam::DQuat::from_euler", reason = "use fb_sim::math::M4::compose (three.js Euler XYZ order)" },
+  # Not the same bits in every build, or not what the simulation means.
+  { path = "f64::max", reason = "±0 tie is unspecified: use fb_shared::m::max/min or .at_least/.at_most" },
+  { path = "f64::min", reason = "±0 tie is unspecified: use fb_shared::m::max/min or .at_least/.at_most" },
+  { path = "f64::signum", reason = "signum(0) is 1: use fb_shared::m::sign" },
+  # glam turns angles into rotations through the platform's sin_cos: use fb_sim::math::euler_xyz.
+  { path = "glam::DQuat::from_euler", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DQuat::from_axis_angle", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DQuat::from_rotation_x", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DQuat::from_rotation_y", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DQuat::from_rotation_z", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DMat3::from_euler", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
+  { path = "glam::DAffine3::from_rotation_y", reason = "platform sin_cos: use fb_sim::math::euler_xyz" },
   { path = "std::time::Instant::now", reason = "no wall clock in the simulation" },
   { path = "std::time::SystemTime::now", reason = "no wall clock in the simulation" },
 ]
 disallowed-types = [
   { path = "std::collections::HashMap", reason = "random iteration order: BTreeMap, IndexMap or Vec" },
   { path = "std::collections::HashSet", reason = "random iteration order: BTreeSet or Vec" },
-  { path = "f32", reason = "the simulation is f64 (as JS numbers); f32 only at the render boundary" },
+  { path = "f32", reason = "the simulation is f64; f32 only at the render boundary" },
   { path = "std::time::Instant", reason = "no wall clock in the simulation" },
   { path = "std::time::SystemTime", reason = "no wall clock in the simulation" },
 ]

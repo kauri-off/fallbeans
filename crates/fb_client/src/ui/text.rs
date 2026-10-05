@@ -1,4 +1,4 @@
-//! Every line the player reads (port of `labels.ts` and the strings of `client/ui`), in Russian.
+//! Every line the player reads, in Russian.
 use fb_shared::outfit::{Glasses, Hat};
 
 pub const LOGO: &str = "Fall Beans";
@@ -10,8 +10,6 @@ pub const TAB_DEV: &str = "Dev";
 
 pub const CONNECTING: &str = "Подключение…";
 pub const RECONNECTING: &str = "Связь потеряна — переподключаемся…";
-pub const UPDATING: &str = "Игра обновляется…";
-pub const UPDATING_MORE: &str = "Подключимся сами, как только новая версия запустится.";
 pub const OUTDATED: &str = "Эта версия игры устарела: скачайте новую.";
 pub const QUIT: &str = "Выйти из игры";
 pub const UPDATE: &str = "Обновить";
@@ -50,7 +48,6 @@ pub const SERVER_BAD: &str = "Не похоже на адрес: IP, домен 
 pub const ADD: &str = "Добавить";
 pub const CHECKING: &str = "проверяем…";
 pub const SERVER_DOWN: &str = "не отвечает";
-pub const SERVER_UPDATING: &str = "обновляется";
 pub const SERVER_OTHER_VERSION: &str = "другая версия игры";
 
 pub fn server_line(players: u64, rooms: u64) -> String {

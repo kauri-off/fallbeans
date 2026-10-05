@@ -23,10 +23,3 @@ rustc-ice-*.txt
 *.blend1
 .DS_Store
 Thumbs.db
-
-# Leftovers of the TS version on old checkouts
-node_modules/
-.build/
-.bench/
-.dev/
-.playwright-mcp/

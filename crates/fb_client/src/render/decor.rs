@@ -1,4 +1,4 @@
-//! The scenery around a map (port of `scenery.ts` and `decor.ts`, client only): drifting clouds kept clear
+//! The scenery around a map (client only): drifting clouds kept clear
 //! of the course, birds circling far out, hot-air balloons on the horizon, floating islands, the set
 //! pieces of the round's look (castle towers, gears, snowmen, planets, tents, neon rings, lighthouses,
 //! cacti, volcanoes, crowns, lollipops…) and the land far below. Visual only: its own random numbers.
@@ -23,7 +23,7 @@ const CLOUD_H: f32 = 2.1;
 /// How far a cloud drifts from its home (m).
 const DRIFT: f32 = 2.5;
 
-/// The scenery's own random numbers (`scenery.ts` rnd: mulberry32 on a seed of its own).
+/// The scenery's own random numbers (mulberry32 on a seed of its own).
 struct Rnd(i32);
 
 impl Rnd {
@@ -132,7 +132,7 @@ fn octahedron() -> Mesh {
     flat(&tris)
 }
 
-/// three's `DodecahedronGeometry(1, 0)`: twelve flat pentagons.
+/// A dodecahedron of radius 1: twelve flat pentagons.
 fn dodecahedron() -> Mesh {
     let t = (1.0 + 5f32.sqrt()) / 2.0;
     let r = 1.0 / t;
@@ -182,7 +182,7 @@ fn dodecahedron() -> Mesh {
     flat(&tris)
 }
 
-/// A torus as three builds it: round the z axis (standing in the x/y plane); `arc` of it.
+/// A torus round the z axis (standing in the x/y plane); `arc` of it.
 fn torus(radius: f32, tube: f32, radial: u32, tubular: u32, arc: f32) -> Mesh {
     let mut pos = Vec::new();
     let mut nrm = Vec::new();
@@ -2195,8 +2195,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rnd_matches_ts() {
-        // `scenery.ts` rnd with seed 1 ^ 0x5eed: its first values.
+    fn rnd_is_stable() {
+        // The first values with seed 1 ^ 0x5eed: the scenery stays where it was.
         let mut r = Rnd(1 ^ 0x5eed);
         let v: Vec<f32> = (0..3).map(|_| r.next()).collect();
         assert!(v.iter().all(|x| (0.0..1.0).contains(x)), "{v:?}");

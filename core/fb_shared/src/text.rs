@@ -1,8 +1,8 @@
-//! Player-typed text as the server passes it on (port of the sanitizers in `shared/protocol.ts`).
+//! Player-typed text as the server passes it on.
 use crate::{CHAT_MAX, NAME_MAX, ROOM_TITLE_MAX};
 
 /// Unicode category C as far as it matters here: controls, format characters (zero-width, bidi
-/// overrides, tags) and private use. Unassigned code points pass (TS dropped them too).
+/// overrides, tags) and private use. Unassigned code points pass.
 pub fn is_other(c: char) -> bool {
     let u = c as u32;
     c.is_control()

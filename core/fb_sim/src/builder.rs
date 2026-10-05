@@ -2,9 +2,10 @@
 //! colliders and movers; the client also gets a `SceneDesc` to draw.
 use std::sync::Arc;
 
+use crate::bots::Note;
 use crate::collider::{ColId, Collider, ColliderOpts, Shape};
-use crate::m::{self, MinMaxJs};
-use crate::map::{Cx, MapOut, Touches, json};
+use crate::m::{self, MinMax};
+use crate::map::{Cx, MapEvent, MapOut, Touches};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
 use crate::physics::{Body, PORTAL_T, StepEvents, Touch};
@@ -97,6 +98,8 @@ pub struct Builder {
     pub touches: Touches,
     /// Look of the map (client only): the pattern its palette materials use by default.
     pub pattern: &'static str,
+    /// Notes in bots' memory made so far.
+    notes: u32,
 }
 
 impl Builder {
@@ -109,7 +112,14 @@ impl Builder {
             bonus_spots: Vec::new(),
             touches: Touches::default(),
             pattern: "stripes",
+            notes: 0,
         }
+    }
+
+    /// A new note for the map's bots to keep in their memory.
+    pub fn note<T>(&mut self) -> Note<T> {
+        self.notes += 1;
+        Note::new(self.notes)
     }
 
     pub fn server(&self) -> bool {
@@ -451,13 +461,12 @@ impl Builder {
     }
 
     /// A bouncy mushroom standing at (x, y, z): its cap throws beans up at `power` m/s; the stem is solid.
-    #[allow(clippy::approx_constant, reason = "6.283 as in TS, not TAU")]
     pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64, tint: Option<&'static str>) -> ColId {
         let mush = self.model_tinted("mushroom", ROOT, tint);
         let n = self.world.nodes.get_mut(mush);
         n.pos = V3::new(x, y, z);
         n.scale = V3::splat(scale);
-        n.rot.y = (x * 1.7 + z * 0.9) % 6.283;
+        n.rot.y = (x * 1.7 + z * 0.9) % m::TAU;
         let stem = self.anchor(x, y + 0.6 * scale, z, ROOT);
         self.collider(
             stem,
@@ -518,7 +527,7 @@ impl Builder {
         for sx in [-0.45, 0.45] {
             self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco.clone());
         }
-        let rungs = m::round_js(h / 0.38).max_js(2.0) as u32;
+        let rungs = (h / 0.38).round().at_least(2.0) as u32;
         for k in 1..rungs {
             self.cyl(
                 0.0,
@@ -729,8 +738,11 @@ impl Builder {
                     // Clients hear of it (it shuts, they show the light); not kept for late joiners.
                     if cx.server {
                         cx.out.push(MapOut::Event {
-                            name: "portal".to_string(),
-                            data: json!({ "pair": k, "from": i, "t": t }),
+                            ev: MapEvent::Portal {
+                                pair: k as u32,
+                                from: i as u32,
+                                t,
+                            },
                             keep: false,
                         });
                     }
@@ -810,7 +822,9 @@ impl Builder {
             let used = if t < pair.at || t >= pair.closed_until {
                 0.0
             } else {
-                ((t - pair.at) / 0.15).min_js((pair.closed_until - t) / 0.2).min_js(1.0)
+                ((t - pair.at) / 0.15)
+                    .at_most((pair.closed_until - t) / 0.2)
+                    .at_most(1.0)
             };
             let shut = if exit_only {
                 0.0

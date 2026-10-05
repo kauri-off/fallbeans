@@ -15,4 +15,4 @@ pub mod scene;
 pub mod world;
 
 pub use fb_shared::m;
-pub use math::{M4, V3};
+pub use math::{Affine, V3};

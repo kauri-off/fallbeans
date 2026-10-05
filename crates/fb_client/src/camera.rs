@@ -1,4 +1,4 @@
-//! The camera (port of `camera.ts` and the shots of `game.ts`): a third-person orbit that pulls in
+//! The camera: a third-person orbit that pulls in
 //! instead of going through walls (the arm stops at `fb_sim` colliders), shakes from hits and hard
 //! landings, flies over the course during a round's intro and circles the podium.
 use bevy::prelude::*;
@@ -88,7 +88,7 @@ fn back(cam: &CameraAngles) -> Vec3 {
     Vec3::new(-cam.yaw.sin() * cp, cam.pitch.sin(), -cam.yaw.cos() * cp)
 }
 
-/// three.js `MathUtils.smoothstep(x, min, max)`.
+/// Smoothstep of x from `min` to `max`.
 fn smoothstep(x: f32, min: f32, max: f32) -> f32 {
     if x <= min {
         return 0.0;

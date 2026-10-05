@@ -1,4 +1,4 @@
-//! What the server signs with its secret (port of `server/auth.ts`). The game is open to everyone:
+//! What the server signs with its secret. The game is open to everyone:
 //!   identities     a random player id the client keeps, so a player is one person across restarts
 //!                  (one room at a time, their own room stays theirs);
 //!   connect tokens netcode's, encrypted with a key derived from the secret, the player id inside;
@@ -208,9 +208,9 @@ pub fn same_key(given: &str, want: &str) -> bool {
     digest(given) == digest(want)
 }
 
-/// A player id and the address their client asked for the token from (behind nginx: `X-Real-IP`) into a
+/// A player id and the address their client asked for the token from (behind a reverse proxy: `X-Real-IP`) into a
 /// connect token's user data: `uid`, NUL, the address. The token is sealed with the server's key, so the
-/// address can be trusted where the link's own cannot (a WebSocket through nginx comes from 127.0.0.1).
+/// address can be trusted where the link's own cannot (a WebSocket through a reverse proxy comes from 127.0.0.1).
 pub fn to_user_data(uid: &str, ip: Option<IpAddr>) -> [u8; 256] {
     let mut data = [0u8; 256];
     let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();

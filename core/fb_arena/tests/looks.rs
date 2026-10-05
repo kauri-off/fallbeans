@@ -3,14 +3,14 @@
 use std::collections::BTreeSet;
 
 use fb_arena::build_map;
-use fb_shared::m::MinMaxJs;
+use fb_shared::m::MinMax;
 use fb_sim::scene::{LookOut, SceneItem};
 
 #[test]
 fn looks_run_through_rounds() {
     let mut kinds = BTreeSet::new();
     for &map in fb_maps::MAPS {
-        let end = map.meta().duration.min_js(150.0);
+        let end = map.meta().duration.at_most(150.0);
         for seed in 1..=4 {
             let (mut b, _) = build_map(map, seed, true, &[1, 2]);
             b.world.finalize(0.0);

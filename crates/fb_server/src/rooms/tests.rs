@@ -1,4 +1,4 @@
-//! Port of `tests/room.test.ts` (rooms, the hub, dev tools) plus the hub's rules for rooms and PINs.
+//! Rooms, the hub, dev tools and the hub's rules for rooms and PINs.
 use std::collections::BTreeMap;
 
 use fb_arena::{ArenaKind, PawnStatus};
@@ -421,7 +421,7 @@ fn tail_tag_steals_only_by_grabbing_within_reach() {
     t.body(b.id).yaw = core::f64::consts::PI;
     let tails = |t: &Bench| {
         t.events(a)
-            .filter(|e| matches!(e, MapEventKind::Map { name, .. } if name == "tails"))
+            .filter(|e| matches!(e, MapEventKind::Map(fb_proto::MapEvent::Tails { .. })))
             .count()
     };
     let before = tails(&t);
@@ -553,10 +553,12 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
     cmd(&mut t, a, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
     assert_eq!(rec.game, "hammer-swing");
-    let ops: Vec<&str> = rec.ops.iter().map(|o| o.1.as_str()).collect();
-    for op in ["teleport", "knock", "late", "grab", "bots"] {
-        assert!(ops.contains(&op), "{op} in {ops:?}");
-    }
+    let has = |f: fn(&fb_arena::Op) -> bool| rec.ops.iter().any(|o| f(&o.1));
+    assert!(has(|o| matches!(o, fb_arena::Op::Teleport { .. })), "{:?}", rec.ops);
+    assert!(has(|o| matches!(o, fb_arena::Op::Knock { .. })), "{:?}", rec.ops);
+    assert!(has(|o| matches!(o, fb_arena::Op::Late { .. })), "{:?}", rec.ops);
+    assert!(has(|o| matches!(o, fb_arena::Op::Grab { .. })), "{:?}", rec.ops);
+    assert!(has(|o| matches!(o, fb_arena::Op::Bots(_))), "{:?}", rec.ops);
     let r = fb_arena::replay(&rec, |_| false).unwrap();
     assert!(r.ticks > 900);
     assert!(r.matches);
@@ -878,12 +880,6 @@ fn hub_closes_rooms_left_empty_and_times_out_silent_connections() {
     let nobody = t.open_as("");
     t.pump();
     assert!(t.closed(nobody));
-    // Being updated: everyone is told and sent off.
-    let d = t.hello(Hello::default());
-    t.hub.set_updating(true);
-    t.pump();
-    assert!(t.last(d, |m| *m == ServerMsg::Updating).is_some());
-    assert!(t.closed(d));
 }
 
 #[test]

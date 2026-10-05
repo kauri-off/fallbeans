@@ -3,10 +3,10 @@
 //! over) in time, or get swept off.
 use std::sync::Arc;
 
-use fb_sim::bots::{HumanOpts, humanize, init_bot, steer};
+use fb_sim::bots::{HumanOpts, Note, humanize, init_bot, steer};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::{ColId, ColliderOpts};
-use fb_sim::m::MinMaxJs;
+use fb_sim::m::MinMax;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
@@ -73,6 +73,9 @@ impl MapDef for WallRush {
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
+        let home_note: Note<f64> = b.note();
+        let wall_note: Note<usize> = b.note();
+        let gap_note: Note<usize> = b.note();
         b.box_(0.0, -1.0, 0.0, W, 2.0, 16.0, pal::BLUE, freq(0.3));
         b.box_(0.0, 0.02, -7.6, W, 0.05, 0.6, pal::RED, deco());
         b.box_(0.0, 0.02, 7.6, W, 0.05, 0.6, pal::RED, deco());
@@ -131,7 +134,7 @@ impl MapDef for WallRush {
                 pieces[0].kind = Kind::Gap;
             }
             // Three times the old pace: from 11 m/s up to about 19.
-            let speed = 11.0 + 8f64.min_js(k as f64 * 0.22) + b.rng.next() * 1.5;
+            let speed = 11.0 + 8f64.at_most(k as f64 * 0.22) + b.rng.next() * 1.5;
             let group = b.anchor(0.0, 0.0, START_Z, ROOT);
             b.world.nodes.get_mut(group).visible = false;
             let p = pals[k % pals.len()];
@@ -171,7 +174,7 @@ impl MapDef for WallRush {
                 group,
                 cols,
             });
-            at += 1.5f64.max_js(3.4 - k as f64 * 0.07) + b.rng.next() * 0.6;
+            at += 1.5f64.at_least(3.4 - k as f64 * 0.07) + b.rng.next() * 0.6;
             k += 1;
         }
         let walls = Arc::new(walls);
@@ -199,20 +202,20 @@ impl MapDef for WallRush {
                 init_bot(bot);
                 let p = bot.body.pos;
                 let t = bot.t;
-                if bot.mem.get("home").is_none() {
+                if bot.mem.get(home_note).is_none() {
                     let home = 1.0 + bot.rng.next() * 4.0;
-                    bot.mem.set("home", home);
+                    bot.mem.set(home_note, home);
                 }
-                let home = bot.mem.get("home").unwrap_or(2.0);
+                let home = bot.mem.get(home_note).unwrap_or(2.0);
                 // The next wall that has not passed us yet (and is on its way).
                 let Some(wi) = walls.iter().position(|w| t >= w.at - 0.5 && w.z(t) < p.z + 0.8) else {
-                    steer(bot, p.x, home, out, bot.mem.spd.unwrap_or(1.0));
+                    steer(bot, p.x, home, out, bot.mem.traits.spd);
                     humanize(bot, out, &HumanOpts::default());
                     return;
                 };
                 let next = &walls[wi];
-                if bot.mem.get("wall") != Some(wi as f64) {
-                    bot.mem.set("wall", wi as f64);
+                if bot.mem.get(wall_note) != Some(wi) {
+                    bot.mem.set(wall_note, wi);
                     let options: Vec<usize> = (0..next.pieces.len())
                         .filter(|&i| next.pieces[i].kind != Kind::Solid)
                         .collect();
@@ -229,19 +232,19 @@ impl MapDef for WallRush {
                     } else {
                         options.first().copied()
                     };
-                    bot.mem.set("seg", choice.unwrap_or(0) as f64);
+                    bot.mem.set(gap_note, choice.unwrap_or(0));
                 }
-                let seg = bot.mem.get("seg").unwrap_or(0.0) as usize;
+                let seg = bot.mem.get(gap_note).unwrap_or(0);
                 let pc = next.pieces.get(seg).unwrap_or(&next.pieces[0]);
-                let tx = (pc.x0 + 0.7).max_js((pc.x1 - 0.7).min_js((pc.x0 + pc.x1) / 2.0));
+                let tx = (pc.x0 + 0.7).at_least((pc.x1 - 0.7).at_most((pc.x0 + pc.x1) / 2.0));
                 let eta = (p.z - next.z(t)) / next.speed;
-                steer(bot, tx, (-5f64).max_js(5f64.min_js(home)), out, 1.0);
+                steer(bot, tx, (-5f64).at_least(5f64.at_most(home)), out, 1.0);
                 // Over a low wall or through a window: jump just before it arrives.
                 let inside = p.x > pc.x0 + 0.4 && p.x < pc.x1 - 0.4;
                 if matches!(pc.kind, Kind::Low | Kind::Window)
                     && inside
                     && bot.body.grounded
-                    && eta < 0.2 + bot.mem.react.unwrap_or(0.2) * 0.3
+                    && eta < 0.2 + bot.mem.traits.react * 0.3
                     && eta > 0.08
                 {
                     out.jump = true;

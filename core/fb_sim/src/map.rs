@@ -1,9 +1,9 @@
-//! What a map is (port of `sim/map.ts`): its build, the spec it returns (spawns, rules, bot brain) and
+//! What a map is: its build, the spec it returns (spawns, rules, bot brain) and
 //! the logic it runs during a round (`tick`, events, grabs, falls, touches), through `Cx`.
 use std::collections::BTreeMap;
 
 pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, can_move, fall_behaviour};
-pub use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 
 use crate::bots::BotBrain;
 use crate::builder::Builder;
@@ -35,13 +35,45 @@ pub struct Finish {
 
 pub type PosTest = Box<dyn Fn(V3) -> bool + Send + Sync>;
 
+/// An authoritative map event: the server decides it, applies it at once and sends it; clients apply it at
+/// its tick.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MapEvent {
+    /// A portal pair was used from its end `from` at `t`: it shuts for a while.
+    Portal { pair: u32, from: u32, t: f64 },
+    /// An event of the course's section `seg`.
+    Seg { seg: u32, ev: SegEvent },
+    /// A floor tile starts to fall at `at`.
+    Tile { i: u32, at: f64 },
+    /// Bean `id` took star `k`.
+    Star { k: u32, id: u32 },
+    /// Bean `from` fell with `n` stars: they go to `to` (who knocked it down), or burn.
+    Drop { from: u32, to: Option<u32>, n: f64 },
+    /// Bean `to` snatched a star from `from`.
+    Snatch { from: u32, to: u32 },
+    /// Who has a tail now; `by` has just got one.
+    Tails { ids: Vec<u32>, by: u32 },
+}
+
+/// An event of one section of a course.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SegEvent {
+    /// Somebody stands on a gate's button (or nobody any more), from `at`.
+    Button { on: bool, at: f64 },
+    /// A door breaks.
+    Door(u32),
+    /// A real pane of a hidden bridge has been stood on: it shows.
+    Safe(u32),
+    /// A fake pane falls from `at`.
+    Fall { i: u32, at: f64 },
+}
+
 /// Something map logic tells the room (server) or the view (client).
 #[derive(Clone, Debug, PartialEq)]
 pub enum MapOut {
     /// An authoritative map event; `keep`: sent again to whoever joins later (a portal trip is not).
     Event {
-        name: String,
-        data: Value,
+        ev: MapEvent,
         keep: bool,
     },
     Score {
@@ -87,7 +119,7 @@ impl Bodies for NoBodies {
     }
 }
 
-pub type OnEvent = Box<dyn FnMut(&mut Cx, &str, &Value) + Send + Sync>;
+pub type OnEvent = Box<dyn FnMut(&mut Cx, &MapEvent) + Send + Sync>;
 pub type OnTick = Box<dyn FnMut(&mut Cx, f64) + Send + Sync>;
 pub type OnGrab = Box<dyn FnMut(&mut Cx, u32, u32) + Send + Sync>;
 pub type OnFall = Box<dyn FnMut(&mut Cx, u32, Option<u32>) + Send + Sync>;
@@ -96,7 +128,7 @@ pub type OnStart = Box<dyn FnMut(&mut Cx) + Send + Sync>;
 /// A collider's touch (or stand-on) handler, run inside the step of the body that touched it.
 pub type TouchFn = Box<dyn FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync>;
 
-/// What map code can do besides building (TS `MapCtx` at run time). On the server `emit` records an
+/// What map code can do besides building. On the server `emit` records an
 /// authoritative event, applies it right away (the spec's `on_event`) and has it sent; on clients it
 /// does nothing, the events come from the server.
 pub struct Cx<'a> {
@@ -116,20 +148,19 @@ pub struct Cx<'a> {
 }
 
 impl Cx<'_> {
-    pub fn emit(&mut self, name: &str, data: Value) {
+    pub fn emit(&mut self, ev: MapEvent) {
         if !self.server {
             return;
         }
         // (Clients would apply a nested event with the handler, the server would not.)
-        debug_assert!(!self.in_event, "an event handler emits {name}");
+        debug_assert!(!self.in_event, "an event handler emits {ev:?}");
         self.out.push(MapOut::Event {
-            name: name.to_string(),
-            data: data.clone(),
+            ev: ev.clone(),
             keep: true,
         });
         if let Some(h) = self.on_event.take() {
             self.in_event = true;
-            h(self, name, &data);
+            h(self, &ev);
             self.in_event = false;
             self.on_event = Some(h);
         }
@@ -155,14 +186,9 @@ impl Cx<'_> {
             self.out.push(MapOut::Decorate { id, deco });
         }
     }
-
-    /// Client: the local player (−1 on the server, as TS `me()`).
-    pub fn me(&self) -> i64 {
-        self.me.map_or(-1, i64::from)
-    }
 }
 
-/// Touch handlers of colliders, by collider (TS `onTouch` and `onGround`).
+/// Touch handlers of colliders, by collider (touched and stood on).
 #[derive(Default)]
 pub struct Touches {
     pub touch: BTreeMap<ColId, TouchFn>,
@@ -205,8 +231,7 @@ pub struct MapSpec {
     pub on_fall: Option<OnFall>,
     /// Client: one line of HUD text (e.g. "Ваши очки: 12").
     pub hud: Option<OnHud>,
-    /// Client: once the map is built (what TS map code does at build time with the client's `ctx`:
-    /// decorations).
+    /// Client: once the map is built (decorations).
     pub on_start: Option<OnStart>,
     pub bot: Option<BotBrain>,
     /// Filled from the builder by `build_map`.

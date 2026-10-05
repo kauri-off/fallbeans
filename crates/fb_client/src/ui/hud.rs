@@ -1,4 +1,4 @@
-//! The HUD over the game (port of `hud/Hud.tsx`): the players' panel, the feed, the intro and countdown,
+//! The HUD over the game: the players' panel, the feed, the intro and countdown,
 //! the timer and the map's line, the round's results, the game's summary, the status of a player out of
 //! play, the controls line and the prompt to click back in.
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -45,7 +45,7 @@ pub enum Part {
     Spectating,
 }
 
-/// What the HUD shows, worked out once a frame (TS `hud` signal).
+/// What the HUD shows, worked out once a frame.
 #[derive(Resource, Default)]
 pub struct Hud {
     pub on: bool,

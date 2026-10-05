@@ -1,11 +1,12 @@
-//! Bot behaviour shared by the maps (port of `sim/bots.ts`): personalities, steering, A* routes,
+//! Bot behaviour shared by the maps: personalities, steering, A* routes,
 //! getting unstuck, dodging, tackles and grabs, and the waypoint and arena brains. Brains run at
 //! 20 Hz on the server; everything random comes from the bot's own `rng`.
 use core::borrow::Borrow;
+use core::marker::PhantomData;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::m::{self, MinMaxJs};
+use crate::m::{self, MinMax};
 use crate::math::V3;
 use crate::nav::{Nav, NavPoint, PathOpts};
 use crate::physics::{Body, BodyState, DIVE_SPEED, GRAVITY, RUN_SPEED};
@@ -64,74 +65,189 @@ pub struct OtherView {
     pub reach: bool,
 }
 
-/// What a bot remembers between decisions (the TS `BotMem` keys; `None` is `undefined`).
-#[derive(Clone, Debug, Default)]
+/// Who a bot is: drawn on its first decision (`init_bot`) and kept for the round.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Traits {
+    /// 0.45…1: how well it judges gaps and timing.
+    pub skill: f64,
+    /// How readily it tackles, shoves and grabs.
+    pub aggro: f64,
+    /// How often it hops for nothing.
+    pub jumpy: f64,
+    /// Reaction time, s.
+    pub react: f64,
+    /// Stick deflection when it runs.
+    pub spd: f64,
+    /// Its side of a wide path, −1…1.
+    pub off: f64,
+    /// Phase of its wandering.
+    pub ph: f64,
+}
+
+impl Default for Traits {
+    fn default() -> Self {
+        Self {
+            skill: 0.7,
+            aggro: 0.3,
+            jumpy: 0.5,
+            react: 0.15,
+            spd: 1.0,
+            off: 0.0,
+            ph: 0.0,
+        }
+    }
+}
+
+/// A map's own note in every bot's memory, made by `Builder::note` while the map is built.
+#[derive(Debug)]
+pub struct Note<T> {
+    id: u32,
+    of: PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for Note<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Note<T> {}
+
+impl<T> Note<T> {
+    pub(crate) fn new(id: u32) -> Self {
+        Self { id, of: PhantomData }
+    }
+}
+
+/// What a note holds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Slot {
+    Num(f64),
+    Index(usize),
+    Bits(u32),
+}
+
+pub trait NoteValue: Copy {
+    fn slot(self) -> Slot;
+    fn of(s: Slot) -> Option<Self>;
+}
+
+impl NoteValue for f64 {
+    fn slot(self) -> Slot {
+        Slot::Num(self)
+    }
+    fn of(s: Slot) -> Option<Self> {
+        if let Slot::Num(v) = s { Some(v) } else { None }
+    }
+}
+
+impl NoteValue for usize {
+    fn slot(self) -> Slot {
+        Slot::Index(self)
+    }
+    fn of(s: Slot) -> Option<Self> {
+        if let Slot::Index(v) = s { Some(v) } else { None }
+    }
+}
+
+impl NoteValue for u32 {
+    fn slot(self) -> Slot {
+        Slot::Bits(self)
+    }
+    fn of(s: Slot) -> Option<Self> {
+        if let Slot::Bits(v) = s { Some(v) } else { None }
+    }
+}
+
+/// What a bot remembers between decisions.
+#[derive(Clone, Debug)]
 pub struct BotMem {
+    /// `traits` has been drawn.
     pub init: bool,
-    pub skill: Option<f64>,
-    pub aggro: Option<f64>,
-    pub jumpy: Option<f64>,
-    pub react: Option<f64>,
-    pub spd: Option<f64>,
-    pub off: Option<f64>,
-    pub ph: Option<f64>,
-    pub stuck: Option<f64>,
-    pub ax: Option<f64>,
-    pub az: Option<f64>,
-    pub tries: Option<f64>,
-    pub sdx: Option<f64>,
-    pub sdz: Option<f64>,
-    pub side_until: Option<f64>,
-    pub dodge_until: Option<f64>,
-    pub dodge_x: Option<f64>,
-    pub dodge_z: Option<f64>,
-    pub dodge_seen: Option<f64>,
+    pub traits: Traits,
+    /// Seconds it has been trying to move without getting anywhere, and where it was then.
+    pub stuck: f64,
+    pub anchor: Option<(f64, f64)>,
+    /// Sidesteps out of a jam so far (they alternate sides), the current one's direction and its end.
+    pub tries: u32,
+    pub side: (f64, f64),
+    pub side_until: f64,
+    /// Dodging a dive: the stick to hold and until when; a dive seen until when.
+    pub dodge: (f64, f64),
+    pub dodge_until: f64,
+    pub dodge_seen: f64,
+    /// The bean it is fighting, until when.
     pub foe: Option<u32>,
-    pub foe_until: Option<f64>,
-    pub dodges: Option<f64>,
-    pub grab_until: Option<f64>,
+    pub foe_until: f64,
+    /// Holding the grab until.
+    pub grab_until: f64,
+    /// This decision's dive is aimed at someone (not smoothed).
     pub aimed: bool,
-    pub counters: Option<f64>,
-    pub shoves: Option<f64>,
-    pub smx: Option<f64>,
-    pub smz: Option<f64>,
+    /// The stick of the last decision (smoothing).
+    pub stick: Option<(f64, f64)>,
+    /// Waypoint brains: the current waypoint, the one it may go on from, and when it got ready to go.
     pub wp: Option<usize>,
     pub go: Option<usize>,
     pub ready_at: Option<f64>,
+    /// Arena brains: preferred distance from the centre, ground height, whom it hunts and until when, the
+    /// next hunt, the spot it heads for and until when, and whether it is there.
     pub pref: Option<f64>,
     pub gy: Option<f64>,
     pub hunt: Option<u32>,
-    pub hunt_until: Option<f64>,
+    pub hunt_until: f64,
     pub next_hunt: Option<f64>,
-    pub tx: Option<f64>,
-    pub tz: Option<f64>,
-    pub until: Option<f64>,
+    pub target: Option<(f64, f64)>,
+    pub until: f64,
     pub arrived: bool,
-    /// Keys of a map's own brain.
-    pub ext: BTreeMap<String, f64>,
+    /// The map's own notes.
+    notes: BTreeMap<u32, Slot>,
+}
+
+impl Default for BotMem {
+    fn default() -> Self {
+        Self {
+            init: false,
+            traits: Traits::default(),
+            stuck: 0.0,
+            anchor: None,
+            tries: 0,
+            side: (1.0, 0.0),
+            side_until: -1.0,
+            dodge: (0.0, 0.0),
+            dodge_until: -1.0,
+            dodge_seen: -1.0,
+            foe: None,
+            foe_until: -1.0,
+            grab_until: -1.0,
+            aimed: false,
+            stick: None,
+            wp: None,
+            go: None,
+            ready_at: None,
+            pref: None,
+            gy: None,
+            hunt: None,
+            hunt_until: 0.0,
+            next_hunt: None,
+            target: None,
+            until: -1e9,
+            arrived: false,
+            notes: BTreeMap::new(),
+        }
+    }
 }
 
 impl BotMem {
-    pub fn get(&self, key: &str) -> Option<f64> {
-        self.ext.get(key).copied()
+    pub fn get<T: NoteValue>(&self, n: Note<T>) -> Option<T> {
+        self.notes.get(&n.id).copied().and_then(T::of)
     }
 
-    pub fn set(&mut self, key: &str, v: f64) {
-        match self.ext.get_mut(key) {
-            Some(x) => *x = v,
-            None => {
-                self.ext.insert(key.to_string(), v);
-            }
-        }
+    pub fn set<T: NoteValue>(&mut self, n: Note<T>, v: T) {
+        self.notes.insert(n.id, v.slot());
     }
 
-    /// The key back to `undefined`.
-    pub fn remove(&mut self, key: &str) {
-        self.ext.remove(key);
-    }
-
-    fn skill(&self) -> f64 {
-        self.skill.unwrap_or(0.7)
+    pub fn remove<T>(&mut self, n: Note<T>) {
+        self.notes.remove(&n.id);
     }
 }
 
@@ -200,8 +316,8 @@ impl Waypoint {
         Self::new(WpX::At(x), z)
     }
 
-    /// `{ x, z, w }` in TS.
-    pub fn w(x: f64, z: f64, w: f64) -> Self {
+    /// A fixed target, bots spread up to `w` to either side of it.
+    pub fn spread(x: f64, z: f64, w: f64) -> Self {
         Self {
             w: Some(w),
             ..Self::at(x, z)
@@ -269,18 +385,27 @@ pub fn init_bot(bot: &mut BotView) {
         return;
     }
     let r = &mut *bot.rng;
+    let skill = 0.45 + r.next() * 0.55;
+    // Most players get stuck in: few bots are entirely peaceful.
+    let aggro = 0.15 + 0.85 * m::pow(r.next(), 1.1);
+    let jumpy = r.next();
+    let react = 0.06 + (1.0 - skill) * 0.25 + r.next() * 0.05;
+    // People hold the stick all the way; only a few ease off.
+    let spd = if r.next() < 0.8 { 1.0 } else { 0.9 + r.next() * 0.1 };
+    let off = r.next() * 2.0 - 1.0;
+    let ph = r.next() * 100.0;
     let mem = &mut *bot.mem;
     mem.init = true;
-    mem.skill = Some(0.45 + r.next() * 0.55);
-    // Most players get stuck in: few bots are entirely peaceful.
-    mem.aggro = Some(0.15 + 0.85 * m::pow(r.next(), 1.1));
-    mem.jumpy = Some(r.next());
-    mem.react = Some(0.06 + (1.0 - mem.skill()) * 0.25 + r.next() * 0.05);
-    // People hold the stick all the way; only a few ease off.
-    mem.spd = Some(if r.next() < 0.8 { 1.0 } else { 0.9 + r.next() * 0.1 });
-    mem.off = Some(r.next() * 2.0 - 1.0);
-    mem.ph = Some(r.next() * 100.0);
-    mem.stuck = Some(0.0);
+    mem.traits = Traits {
+        skill,
+        aggro,
+        jumpy,
+        react,
+        spd,
+        off,
+        ph,
+    };
+    mem.stuck = 0.0;
 }
 
 pub fn steer(bot: &BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f64) -> f64 {
@@ -292,7 +417,7 @@ pub fn steer(bot: &BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f64) ->
         out.mz = 0.0;
         return d;
     }
-    let k = (d / 1.5).min_js(1.0) * speed;
+    let k = (d / 1.5).at_most(1.0) * speed;
     out.mx = (dx / d) * k;
     out.mz = (dz / d) * k;
     d
@@ -304,7 +429,7 @@ pub fn follow(bot: &BotView, tx: f64, tz: f64, out: &mut BotInput) -> f64 {
     let ex = tx - b.pos.x;
     let dz = tz - b.pos.z;
     let mx = (ex * 0.55).clamp(-1.0, 1.0);
-    let mz = m::sign(dz) * (1.0 - mx.abs() * 0.5).min_js(dz.abs() * 0.6);
+    let mz = m::sign(dz) * (1.0 - mx.abs() * 0.5).at_most(dz.abs() * 0.6);
     let l = m::hypot(mx, mz);
     out.mx = if l > 1.0 { mx / l } else { mx };
     out.mz = if l > 1.0 { mz / l } else { mz };
@@ -427,7 +552,7 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
         } else {
             0.0
         };
-        let when = if climb { 1.3 } else { (gap * 0.8 + 0.5).min_js(2.8) };
+        let when = if climb { 1.3 } else { (gap * 0.8 + 0.5).at_most(2.8) };
         if d < when && (along > 2.5 || climb) {
             out.jump = true;
         }
@@ -454,19 +579,18 @@ pub fn unstick(bot: &mut BotView, out: &mut BotInput) {
     let p = b.pos;
     let moving = m::hypot(out.mx, out.mz) > 0.3;
     let mem = &mut *bot.mem;
-    match mem.ax {
-        Some(ax) if moving && m::hypot(p.x - ax, p.z - mem.az.unwrap_or(0.0)) <= 0.6 => {
+    match mem.anchor {
+        Some((ax, az)) if moving && m::hypot(p.x - ax, p.z - az) <= 0.6 => {
             if b.grounded && bot.t > 0.0 {
-                mem.stuck = Some(mem.stuck.unwrap_or(0.0) + BOT_DT);
+                mem.stuck += BOT_DT;
             }
         }
         _ => {
-            mem.ax = Some(p.x);
-            mem.az = Some(p.z);
-            mem.stuck = Some(0.0);
+            mem.anchor = Some((p.x, p.z));
+            mem.stuck = 0.0;
         }
     }
-    let stuck = mem.stuck.unwrap_or(0.0);
+    let stuck = mem.stuck;
     if stuck > 0.45 && b.grounded {
         out.jump = true;
         bot.plan.at = -1e9;
@@ -490,24 +614,22 @@ pub fn unstick(bot: &mut BotView, out: &mut BotInput) {
             }
         }
         let mem = &mut *bot.mem;
-        let tries = mem.tries.unwrap_or(0.0) + 1.0;
-        mem.tries = Some(tries);
-        let flip = if tries % 2.0 == 0.0 { -1.0 } else { 1.0 };
+        mem.tries += 1;
+        let flip = if mem.tries.is_multiple_of(2) { -1.0 } else { 1.0 };
         sx *= flip;
         sz *= flip;
         if bot.nav.is_some_and(|n| !n.safe(p.x + sx * 1.5, p.z + sz * 1.5, p.y)) {
             sx = -sx;
             sz = -sz;
         }
-        mem.sdx = Some(sx);
-        mem.sdz = Some(sz);
-        mem.side_until = Some(bot.t + 0.6);
-        mem.stuck = Some(0.0);
+        mem.side = (sx, sz);
+        mem.side_until = bot.t + 0.6;
+        mem.stuck = 0.0;
     }
-    if bot.mem.side_until.unwrap_or(-1.0) > bot.t {
+    if bot.mem.side_until > bot.t {
         let (hx, hz) = heading(bot, out);
-        let x = bot.mem.sdx.unwrap_or(1.0) + hx * 0.25;
-        let z = bot.mem.sdz.unwrap_or(0.0) + hz * 0.25;
+        let x = bot.mem.side.0 + hx * 0.25;
+        let z = bot.mem.side.1 + hz * 0.25;
         let l = m::hypot(x, z);
         out.mx = x / l;
         out.mz = z / l;
@@ -617,7 +739,7 @@ pub fn smart_dive(bot: &mut BotView, out: &mut BotInput, land: Option<&LandCheck
     if (nav.is_none() && land.is_none()) || b.state != BodyState::Normal || out.dive {
         return;
     }
-    let skill = bot.mem.skill();
+    let skill = bot.mem.traits.skill;
     let (fx, fz) = heading(bot, out);
     if !b.grounded && b.vel.y < 1.5 {
         let fly = |bot: &BotView, vx, vz, vy| match land {
@@ -628,9 +750,9 @@ pub fn smart_dive(bot: &mut BotView, out: &mut BotInput, land: Option<&LandCheck
         if short.is_some_and(|s| s.safe) || (land.is_some() && short.is_none()) {
             return;
         }
-        let along = (b.vel.x * fx + b.vel.z * fz).max_js(0.0);
-        let sp = DIVE_SPEED.max_js(along.min_js(DIVE_SPEED * 1.25));
-        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y.max_js(3.0)) else {
+        let along = (b.vel.x * fx + b.vel.z * fz).at_least(0.0);
+        let sp = DIVE_SPEED.at_least(along.at_most(DIVE_SPEED * 1.25));
+        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y.at_least(3.0)) else {
             return;
         };
         if !far.safe {
@@ -676,7 +798,7 @@ pub fn shove_off(bot: &BotView, o: V3, ok: &dyn Fn(f64, f64) -> bool) -> Option<
     let beyond = [2.0, 3.0, 4.0].iter().any(|&k| !ok(o.x + ux * k, o.z + uz * k));
     let own = [0.8, 1.6]
         .iter()
-        .all(|&k: &f64| ok(b.pos.x + ux * k.min_js(d), b.pos.z + uz * k.min_js(d)));
+        .all(|&k: &f64| ok(b.pos.x + ux * k.at_most(d), b.pos.z + uz * k.at_most(d)));
     (beyond && own).then_some((ux, uz, d))
 }
 
@@ -785,7 +907,7 @@ fn incoming(bot: &BotView) -> Option<Threat> {
             let v = m::sqrt(v2);
             let mut sx = -vz / v;
             let mut sz = vx / v;
-            if sx * mx + sz * mz < 0.0 || (miss < 0.2 && bot.mem.off.unwrap_or(0.0) < 0.0) {
+            if sx * mx + sz * mz < 0.0 || (miss < 0.2 && bot.mem.traits.off < 0.0) {
                 sx = -sx;
                 sz = -sz;
             }
@@ -801,7 +923,7 @@ fn incoming(bot: &BotView) -> Option<Threat> {
         } else if o.reach && d < 2.6 {
             // Somebody about to grab: back off out of reach.
             let closing = (o.vel.x * rx + o.vel.z * rz) / d;
-            let t = (d - 2.1).max_js(0.0) / closing.max_js(1.0);
+            let t = (d - 2.1).at_least(0.0) / closing.at_least(1.0);
             if best.as_ref().is_none_or(|b| t < b.t) {
                 best = Some(Threat {
                     t,
@@ -820,12 +942,11 @@ fn incoming(bot: &BotView) -> Option<Threat> {
 fn dodge(bot: &mut BotView, out: &mut BotInput, safe: Option<&dyn Fn(f64, f64) -> bool>) -> bool {
     let b = bot.body;
     let t = bot.t;
-    if bot.mem.dodge_until.unwrap_or(-1.0) > t {
-        out.mx = bot.mem.dodge_x.unwrap_or(0.0);
-        out.mz = bot.mem.dodge_z.unwrap_or(0.0);
+    if bot.mem.dodge_until > t {
+        (out.mx, out.mz) = bot.mem.dodge;
         return true;
     }
-    if b.state != BodyState::Normal || bot.mem.dodge_seen.unwrap_or(-1.0) > t {
+    if b.state != BodyState::Normal || bot.mem.dodge_seen > t {
         return false;
     }
     let Some(threat) = incoming(bot) else {
@@ -834,11 +955,11 @@ fn dodge(bot: &mut BotView, out: &mut BotInput, safe: Option<&dyn Fn(f64, f64) -
     let mem = &mut *bot.mem;
     // Whoever went for the bot is remembered for a counterattack, dodged or not.
     mem.foe = Some(threat.id);
-    mem.foe_until = Some(t + 3.0);
-    let skill = mem.skill();
-    let react = mem.react.unwrap_or(0.15);
+    mem.foe_until = t + 3.0;
+    let skill = mem.traits.skill;
+    let react = mem.traits.react;
     // One look per attack: whether this bot notices it in time is decided once.
-    mem.dodge_seen = Some(t + 0.3f64.max_js(threat.t + 0.1));
+    mem.dodge_seen = t + 0.3f64.at_least(threat.t + 0.1);
     if threat.t < react * 0.6 || bot.rng.next() > 0.25 + skill * 0.6 {
         return false;
     }
@@ -846,11 +967,9 @@ fn dodge(bot: &mut BotView, out: &mut BotInput, safe: Option<&dyn Fn(f64, f64) -
         .iter()
         .all(|&k| safe.is_none_or(|s| s(b.pos.x + threat.ax * k, b.pos.z + threat.az * k)));
     let mem = &mut *bot.mem;
-    mem.dodges = Some(mem.dodges.unwrap_or(0.0) + 1.0);
     if safe.is_some() && step {
-        mem.dodge_until = Some(t + 0.45f64.min_js(threat.t + 0.2));
-        mem.dodge_x = Some(threat.ax);
-        mem.dodge_z = Some(threat.az);
+        mem.dodge_until = t + 0.45f64.at_most(threat.t + 0.2);
+        mem.dodge = (threat.ax, threat.az);
         out.mx = threat.ax;
         out.mz = threat.az;
         return true;
@@ -882,7 +1001,7 @@ fn retaliate(
         |ux: f64, uz: f64| safe.is_none_or(|s| [2.0, 3.5].iter().all(|&k| s(b.pos.x + ux * k, b.pos.z + uz * k)));
     // Counterattack.
     let foe = match mem.foe {
-        Some(id) if mem.foe_until.unwrap_or(-1.0) > t => bot.others.iter().find(|o| o.id == id),
+        Some(id) if mem.foe_until > t => bot.others.iter().find(|o| o.id == id),
         _ => None,
     };
     if let Some(foe) = foe
@@ -965,8 +1084,8 @@ fn tackle_aim(bot: &BotView, out: &BotInput, safe: Option<&dyn Fn(f64, f64) -> b
 /// shoves and grabs, dives at others.
 pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
     let b = bot.body;
-    let skill = bot.mem.skill();
-    let ph = bot.mem.ph.unwrap_or(0.0);
+    let skill = bot.mem.traits.skill;
+    let ph = bot.mem.traits.ph;
     let t = bot.t;
     smart_dive(bot, out, o.land);
     let nav = bot.nav;
@@ -989,7 +1108,7 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
             if dx < d {
                 d = dx;
                 bot.mem.foe = Some(x.id);
-                bot.mem.foe_until = Some(t + 3.0);
+                bot.mem.foe_until = t + 3.0;
             }
         }
     }
@@ -1017,13 +1136,13 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
     {
         let dx = ao.pos.x - b.pos.x;
         let dz = ao.pos.z - b.pos.z;
-        let side = if bot.mem.off.unwrap_or(0.0) >= 0.0 { 1.0 } else { -1.0 };
+        let side = if bot.mem.traits.off >= 0.0 { 1.0 } else { -1.0 };
         let k = (1.8 - ad) * 0.6;
         out.mx += (-dz / ad) * side * k;
         out.mz += (dx / ad) * side * k;
     }
     if o.rough {
-        let aggro = bot.mem.aggro.unwrap_or(0.3);
+        let aggro = bot.mem.traits.aggro;
         let shove = match (ahead, nav) {
             (Some((ao, ad)), Some(n)) if b.grounded && t > 5.0 && ad > 1.3 && ad < 2.8 => {
                 let oy = ao.pos.y;
@@ -1034,10 +1153,10 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
         // Somebody at the edge right ahead: tackle them over it (the pushy ones, mostly).
         if shove.is_some() && bot.rng.next() < (0.1 + aggro * 0.5) * BOT_DT * 3.0 {
             out.dive = true;
-        } else if bot.mem.grab_until.unwrap_or(-1.0) > t {
+        } else if bot.mem.grab_until > t {
             out.grab = true;
         } else if ahead.is_some_and(|(_, d)| d < 1.35) && b.grounded && bot.rng.next() < aggro * 1.2 * BOT_DT {
-            bot.mem.grab_until = Some(t + 0.4 + bot.rng.next() * 0.9);
+            bot.mem.grab_until = t + 0.4 + bot.rng.next() * 0.9;
             out.grab = true;
         } else if b.grounded && b.state == BodyState::Normal && t > 2.0 {
             let scale = o.attack;
@@ -1052,7 +1171,7 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
                 && bot.rng.next() < rate * BOT_DT
             {
                 if kind == Payback::Space && bot.rng.next() < 0.3 {
-                    bot.mem.grab_until = Some(t + 0.4 + bot.rng.next() * 0.6);
+                    bot.mem.grab_until = t + 0.4 + bot.rng.next() * 0.6;
                     out.grab = true;
                     return;
                 }
@@ -1060,12 +1179,8 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
                 out.mz = uz;
                 out.dive = true;
                 bot.mem.aimed = true;
-                // (Counted for audits and tuning.)
                 if kind == Payback::Counter {
                     bot.mem.foe = None;
-                    bot.mem.counters = Some(bot.mem.counters.unwrap_or(0.0) + 1.0);
-                } else {
-                    bot.mem.shoves = Some(bot.mem.shoves.unwrap_or(0.0) + 1.0);
                 }
                 return;
             }
@@ -1088,7 +1203,7 @@ pub fn humanize(bot: &mut BotView, out: &mut BotInput, o: &HumanOpts) {
         && b.grounded
         && moving
         && m::hypot(b.vel.x, b.vel.z) > 5.0
-        && bot.rng.next() < bot.mem.jumpy.unwrap_or(0.5) * 0.3 * BOT_DT
+        && bot.rng.next() < bot.mem.traits.jumpy * 0.3 * BOT_DT
     {
         out.jump = true;
     }
@@ -1105,17 +1220,14 @@ pub fn smooth_stick(mem: &mut BotMem, out: &mut BotInput) {
     let aimed = out.dive && mem.aimed;
     mem.aimed = false;
     if aimed {
-        mem.smx = Some(out.mx);
-        mem.smz = Some(out.mz);
+        mem.stick = Some((out.mx, out.mz));
         return;
     }
-    let px = mem.smx.unwrap_or(out.mx);
-    let pz = mem.smz.unwrap_or(out.mz);
+    let (px, pz) = mem.stick.unwrap_or((out.mx, out.mz));
     let k = if m::hypot(out.mx, out.mz) < 0.15 { 0.7 } else { 0.5 };
     out.mx = px + (out.mx - px) * k;
     out.mz = pz + (out.mz - pz) * k;
-    mem.smx = Some(out.mx);
-    mem.smz = Some(out.mz);
+    mem.stick = Some((out.mx, out.mz));
 }
 
 /// In the air: steers so that the body comes down on (tx, tz) when it falls to height ty. Returns
@@ -1129,9 +1241,9 @@ pub fn aim_landing(bot: &BotView, tx: f64, ty: f64, tz: f64, out: &mut BotInput)
         steer(bot, tx, tz, out, 1.0);
         return false;
     }
-    let t = 0.08f64.max_js((b.vel.y + m::sqrt(disc)) / GRAVITY);
+    let t = 0.08f64.at_least((b.vel.y + m::sqrt(disc)) / GRAVITY);
     // (Air control: full stick asks for a run, or for the speed the body already flies at.)
-    let top = RUN_SPEED.max_js(m::hypot(b.vel.x, b.vel.z));
+    let top = RUN_SPEED.at_least(m::hypot(b.vel.x, b.vel.z));
     let mut mx = dx / t / top;
     let mut mz = dz / t / top;
     let l = m::hypot(mx, mz);
@@ -1162,7 +1274,7 @@ fn hop_x(h: &Hop, t: f64) -> f64 {
 }
 
 /// Bouncing across pads to a landing spot: a waypoint `drive`. Returns false once on the ground past `edge`.
-pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option<BotTest>) -> Drive {
+pub fn hop_chain(key: Note<usize>, hops: Vec<Hop>, land: V3, edge: f64, ready: Option<BotTest>) -> Drive {
     Box::new(move |bot, out| {
         let b = bot.body;
         let p = b.pos;
@@ -1183,11 +1295,11 @@ pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option
                 if (n.y - p.y).abs() > 1.0 {
                     return false;
                 }
-                bot.mem.set(&key, near as f64);
+                bot.mem.set(key, near);
                 steer(bot, hop_x(n, bot.t), n.z, out, 1.0);
                 return true;
             }
-            bot.mem.set(&key, 0.0);
+            bot.mem.set(key, 0);
             let h = &hops[0];
             if let Some(ready) = &ready
                 && !ready(bot)
@@ -1197,11 +1309,11 @@ pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option
                 let mut hi = f64::NEG_INFINITY;
                 for k in 0..40 {
                     let x = hop_x(h, bot.t + k as f64 * 0.25);
-                    lo = lo.min_js(x);
-                    hi = hi.max_js(x);
+                    lo = lo.at_most(x);
+                    hi = hi.at_least(x);
                 }
                 let wx = if hi - lo > 1.0 {
-                    (hi - 0.5).min_js((lo + 0.5).max_js(p.x))
+                    (hi - 0.5).at_most((lo + 0.5).at_least(p.x))
                 } else {
                     lo
                 };
@@ -1218,7 +1330,7 @@ pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option
         if b.state != BodyState::Normal {
             return false;
         }
-        let mut i = bot.mem.get(&key).unwrap_or(0.0) as usize;
+        let mut i = bot.mem.get(key).unwrap_or(0);
         // Just thrown up by a pad: the next one is the target.
         for (j, h) in hops.iter().enumerate() {
             if b.vel.y > h.power * 0.7
@@ -1228,7 +1340,7 @@ pub fn hop_chain(key: String, hops: Vec<Hop>, land: V3, edge: f64, ready: Option
                 i = i.max(j + 1);
             }
         }
-        bot.mem.set(&key, i as f64);
+        bot.mem.set(key, i);
         let Some(h) = hops.get(i) else {
             aim_landing(bot, land.x, land.y, land.z, out);
             return true;
@@ -1266,7 +1378,7 @@ pub fn bonus_near(bot: &BotView, range: f64, ahead: bool) -> Option<(f64, f64)> 
 fn target_x(bot: &BotView, w: &Waypoint) -> f64 {
     match &w.x {
         WpX::Moving(f) => f(bot.t),
-        WpX::At(x) => x + bot.mem.off.unwrap_or(0.0) * w.w.unwrap_or(1.5),
+        WpX::At(x) => x + bot.mem.traits.off * w.w.unwrap_or(1.5),
     }
 }
 
@@ -1323,7 +1435,7 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
     }
     let moving_x = matches!(wp.x, WpX::Moving(_));
     let precise = wp.w == Some(0.0) || wp.wait.is_some() || moving_x || wp.jump_when.is_some();
-    let skill = bot.mem.skill();
+    let skill = bot.mem.traits.skill;
     // Once a wait is over the bot commits to that waypoint. The less patient ones sometimes just go for it.
     if let Some(wait) = &wp.wait
         && bot.mem.go != Some(i)
@@ -1331,14 +1443,7 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
         let ready = wait(bot);
         let reckless = !ready && bot.rng.next() < (1.0 - skill) * 0.12 * BOT_DT;
         if (ready || reckless) && bot.mem.ready_at.is_none() {
-            bot.mem.ready_at = Some(
-                bot.t
-                    + if reckless {
-                        0.0
-                    } else {
-                        bot.mem.react.unwrap_or(0.15) * 0.5
-                    },
-            );
+            bot.mem.ready_at = Some(bot.t + if reckless { 0.0 } else { bot.mem.traits.react * 0.5 });
         }
         if let Some(at) = bot.mem.ready_at
             && bot.t >= at
@@ -1361,7 +1466,7 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
         if when && b.grounded {
             out.jump = true;
         } else if b.grounded
-            && bot.rng.next() < bot.mem.jumpy.unwrap_or(0.5) * 0.25 * BOT_DT
+            && bot.rng.next() < bot.mem.traits.jumpy * 0.25 * BOT_DT
             && bot.nav.is_some_and(|nav| nav.safe(b.pos.x, b.pos.z, b.pos.y))
         {
             // Impatient hops while waiting, where it is safe to.
@@ -1387,7 +1492,7 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
         tx = bx;
         tz = bz;
     }
-    let speed = wp.speed.unwrap_or(1.0) * if moving_x { 1.0 } else { bot.mem.spd.unwrap_or(1.0) };
+    let speed = wp.speed.unwrap_or(1.0) * if moving_x { 1.0 } else { bot.mem.traits.spd };
     let d = if precise {
         if wp.w == Some(0.0) {
             follow(bot, tx, tz, out)
@@ -1502,7 +1607,7 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
     init_bot(bot);
     let b = bot.body;
     let t = bot.t;
-    let aggro = bot.mem.aggro.unwrap_or(0.3);
+    let aggro = bot.mem.traits.aggro;
     if bot.mem.pref.is_none() {
         bot.mem.pref = Some(opts.radius * (0.25 + bot.rng.next() * 0.45));
     }
@@ -1521,7 +1626,7 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
         .hunt
         .and_then(|id| bot.others.iter().find(|o| o.id == id).copied());
     if let Some(h) = hunt
-        && (t > bot.mem.hunt_until.unwrap_or(0.0) || h.down)
+        && (t > bot.mem.hunt_until || h.down)
     {
         hunt = None;
         bot.mem.hunt = None;
@@ -1548,13 +1653,13 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
             }
             if let Some(h) = hunt {
                 bot.mem.hunt = Some(h.id);
-                bot.mem.hunt_until = Some(t + 3.0 + bot.rng.next() * 3.0);
+                bot.mem.hunt_until = t + 3.0 + bot.rng.next() * 3.0;
             }
         }
     }
-    let expired = t > bot.mem.until.unwrap_or(-1e9);
-    let unsafe_spot = bot.mem.tx.is_some_and(|tx| !ok_at(tx, bot.mem.tz.unwrap_or(0.0)));
-    if hunt.is_none() && (bot.mem.tx.is_none() || (b.grounded && (expired || unsafe_spot))) {
+    let expired = t > bot.mem.until;
+    let unsafe_spot = bot.mem.target.is_some_and(|(tx, tz)| !ok_at(tx, tz));
+    if hunt.is_none() && (bot.mem.target.is_none() || (b.grounded && (expired || unsafe_spot))) {
         bot.mem.arrived = false;
         let mut best = f64::NEG_INFINITY;
         let pois = &opts.pois;
@@ -1574,18 +1679,17 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
             score -= (m::hypot(x - cx, z - cz) - bot.mem.pref.unwrap_or(5.0)).abs() * 0.25;
             let mut crowd: f64 = 9.0;
             for o in bot.others {
-                crowd = crowd.min_js(m::hypot(o.pos.x - x, o.pos.z - z));
+                crowd = crowd.at_most(m::hypot(o.pos.x - x, o.pos.z - z));
             }
-            score += crowd.min_js(4.0) * (0.6 - aggro * 0.5);
+            score += crowd.at_most(4.0) * (0.6 - aggro * 0.5);
             score -= m::hypot(x - b.pos.x, z - b.pos.z) * 0.08;
             score += bot.rng.next() * 1.5;
             if score > best {
                 best = score;
-                bot.mem.tx = Some(x);
-                bot.mem.tz = Some(z);
+                bot.mem.target = Some((x, z));
             }
         }
-        bot.mem.until = Some(t + opts.retarget.unwrap_or(2.0) + bot.rng.next() * 2.5);
+        bot.mem.until = t + opts.retarget.unwrap_or(2.0) + bot.rng.next() * 2.5;
     }
     let bonus = if hunt.is_some() {
         None
@@ -1594,11 +1698,11 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
     };
     let mut tx = match bonus {
         Some((bx, bz)) if ok_at(bx, bz) => bx,
-        _ => bot.mem.tx.unwrap_or(cx),
+        _ => bot.mem.target.map_or(cx, |t| t.0),
     };
     let mut tz = match bonus {
         Some((bx, bz)) if ok_at(bx, bz) => bz,
-        _ => bot.mem.tz.unwrap_or(cz),
+        _ => bot.mem.target.map_or(cz, |t| t.1),
     };
     // Shoving: from the inside, towards the edge. Not lined up yet: get round to the inside first.
     let shove = hunt.and_then(|h| shove_off(bot, h.pos, &ok_at));
@@ -1616,7 +1720,7 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
     let speed = if hunt.is_some() {
         1.0
     } else {
-        0.85 + bot.mem.spd.unwrap_or(1.0) * 0.15
+        0.85 + bot.mem.traits.spd * 0.15
     };
     let d = nav_to(bot, tx, tz, out, speed, if hunt.is_some() { 1.1 } else { 0.9 });
     if let (Some(_), Some((ux, uz, sd))) = (hunt, shove) {
@@ -1634,7 +1738,7 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
         let pd = m::hypot(px, pz);
         if hd < 1.4 {
             out.grab = true;
-            bot.mem.grab_until = Some(t + 0.3);
+            bot.mem.grab_until = t + 0.3;
         } else if pd > 1.6
             && pd < 3.2
             && b.grounded
@@ -1652,7 +1756,7 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
     } else if d < (if bot.mem.arrived { 1.8 } else { 1.0 }) {
         // There: potter about round the spot instead of freezing.
         bot.mem.arrived = true;
-        let w = t * 0.5 + bot.mem.ph.unwrap_or(0.0);
+        let w = t * 0.5 + bot.mem.traits.ph;
         let px = tx + m::sin(w) * 0.6;
         let pz = tz + m::cos(w * 1.3) * 0.6;
         if ok_at(px, pz) {

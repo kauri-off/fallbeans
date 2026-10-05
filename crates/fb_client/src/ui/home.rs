@@ -1,6 +1,5 @@
-//! The first screen: the player's servers, then on one of them (port of `home/Home.tsx`) the player's name,
-//! the rooms to enter, a room of one's own, practice; the options; and the screens of the connection
-//! (connecting, updating, refused).
+//! The first screen: the player's servers, then on one of them the player's name, the rooms to enter, a
+//! room of one's own, practice; the options; and the screens of the connection (connecting, refused).
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
@@ -398,8 +397,6 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
             let same = i.protocol == fb_shared::PROTOCOL_VERSION;
             let line = if !same {
                 format!("{} ({})", text::SERVER_OTHER_VERSION, i.build)
-            } else if i.updating {
-                text::SERVER_UPDATING.to_string()
             } else {
                 text::server_line(i.players, i.rooms)
             };
@@ -726,8 +723,6 @@ fn banner(
         Show::Card(text::LOGO, Some(msg.clone()), true)
     } else if session.refused {
         Show::Outdated(newer)
-    } else if session.updating {
-        Show::Card(text::UPDATING, Some(text::UPDATING_MORE.into()), false)
     } else if !online && ever {
         Show::Line(text::RECONNECTING)
     } else if !online || (session.room.is_none() && session.rooms.is_none()) {

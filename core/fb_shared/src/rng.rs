@@ -1,4 +1,4 @@
-/// mulberry32, bit for bit as in `shared/rng.ts`.
+/// mulberry32: a small seeded generator, the same sequence on every platform.
 #[derive(Clone, Debug)]
 pub struct Rng {
     a: u32,
@@ -24,7 +24,7 @@ impl Rng {
     }
 }
 
-/// Fisher–Yates as `shuffle` in TS (the same draws in the same order).
+/// Fisher–Yates, drawing from the end down.
 pub fn shuffle<T>(a: &mut [T], rng: &mut Rng) {
     for i in (1..a.len()).rev() {
         let j = (rng.next() * (i + 1) as f64).floor() as usize;

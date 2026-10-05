@@ -1,4 +1,4 @@
-//! Portal pictures (port of `swirlTexture`, `ringsTexture` and the exit arrow in `builder.ts`): the discs
+//! Portal pictures: the discs
 //! carry a spiral (the way in) or rings flowing out (a one-way exit) in the portal's colour.
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};

@@ -36,7 +36,6 @@ lightyear_transport = { version = "=0.30.1", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
-flate2 = "1.1"
 getrandom = "0.3"
 glam = { version = "0.32", default-features = false, features = ["std", "serde"] }
 hmac = "0.12"
@@ -76,7 +75,7 @@ type_complexity = "allow"
 # A byte index into a str panics inside a character (Cyrillic, emoji): `get`, `split_once`, `char_indices`.
 string_slice = "warn"
 
-# Local fixes to dependencies, each to drop once upstream has it (docs/development.md, «Известные проблемы»).
+# Local fixes to dependencies, each to drop once upstream has it.
 [patch.crates-io]
 # The WebSocket server leaves Nagle's algorithm on (only the client can turn it off): +15 ms RTT on wss.
 aeronet_websocket = { path = "vendor/aeronet_websocket" }

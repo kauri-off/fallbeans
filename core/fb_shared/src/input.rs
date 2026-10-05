@@ -39,8 +39,8 @@ impl InputFrame {
         if len2(mx, mz) > MAX {
             let (x, z) = (f64::from(mx), f64::from(mz));
             let s = 127.0 / crate::m::hypot(x, z);
-            mx = crate::m::round_js(x * s).clamp(-127.0, 127.0) as i8;
-            mz = crate::m::round_js(z * s).clamp(-127.0, 127.0) as i8;
+            mx = (x * s).round().clamp(-127.0, 127.0) as i8;
+            mz = (z * s).round().clamp(-127.0, 127.0) as i8;
             while len2(mx, mz) > MAX {
                 if mx.unsigned_abs() >= mz.unsigned_abs() {
                     mx -= mx.signum();
@@ -68,7 +68,7 @@ impl InputFrame {
 }
 
 pub fn quantize_axis(v: f64) -> i8 {
-    let q = crate::m::round_js(v * 127.0);
+    let q = (v * 127.0).round();
     if q.is_nan() { 0 } else { q.clamp(-127.0, 127.0) as i8 }
 }
 

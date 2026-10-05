@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::time::Duration;
 
 use bevy::prelude::*;
 use fb_arena::PawnStatus;
@@ -19,7 +18,6 @@ use lightyear::prelude::input::InputBuffer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use crate::http::HttpShared;
 use crate::opts::Opts;
 use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
@@ -73,7 +71,7 @@ impl Plugin for PlayPlugin {
         // Every frame: Lightyear drops the messages nobody read in the frame they came in, and half the
         // frames run no tick.
         app.add_systems(PreUpdate, receive.after(MessageSystems::Receive));
-        app.add_systems(Update, (close_links, measure_rtt, watch_update_flag));
+        app.add_systems(Update, (close_links, measure_rtt));
     }
 }
 
@@ -553,28 +551,5 @@ fn measure_rtt(
         if let Some(r) = rooms.hub.rooms.get_mut(&key) {
             r.set_rtt(id, rtt);
         }
-    }
-}
-
-/// `--maintenance-file`: while it exists the game is being updated (the deploy makes it).
-fn watch_update_flag(
-    opts: Res<Opts>,
-    time: Res<Time<Real>>,
-    mut last: Local<f64>,
-    rooms: Option<ResMut<Rooms>>,
-    shared: Res<HttpShared>,
-) {
-    let (Some(flag), Some(mut rooms)) = (&opts.maintenance_file, rooms) else {
-        return;
-    };
-    let now = time.elapsed_secs_f64();
-    if now - *last < Duration::from_millis(500).as_secs_f64() {
-        return;
-    }
-    *last = now;
-    let on = flag.exists();
-    if on != rooms.hub.updating() {
-        rooms.hub.set_updating(on);
-        shared.0.updating.store(on, core::sync::atomic::Ordering::Relaxed);
     }
 }

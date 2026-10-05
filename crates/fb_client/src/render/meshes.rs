@@ -1,5 +1,4 @@
-//! Meshes of map primitives as `view.ts` built them: boxes with rounded edges (three's
-//! `RoundedBoxGeometry`), cylinders whose first segment faces +z, UV spheres; each level of detail
+//! Meshes of map primitives: boxes with rounded edges, cylinders whose first segment faces +z, UV spheres; each level of detail
 //! with fewer segments, and a millimetre lift so primitives sharing a top face never z-fight.
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
@@ -7,7 +6,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use fb_sim::scene::PrimKind;
 
-/// Levels of detail (M0…M6, `lod.ts`).
+/// Levels of detail (M0…M6).
 pub const LEVELS: usize = 7;
 const SPHERE_SEG: [(u32, u32); LEVELS] = [(32, 20), (26, 16), (20, 12), (16, 10), (12, 8), (10, 7), (8, 6)];
 const CYL_SEG: [u32; LEVELS] = [48, 36, 24, 18, 14, 10, 8];
@@ -18,7 +17,7 @@ const BOX_ROUND: [f32; LEVELS] = [1.0, 1.0, 0.75, 0.5, 0.0, 0.0, 0.0];
 pub const LIFT: f32 = 0.0025;
 pub const LIFTS: u32 = 6;
 
-/// A box with rounded edges and corners (three's `RoundedBoxGeometry`): `segments` per rounded edge.
+/// A box with rounded edges and corners: `segments` per rounded edge.
 pub fn rounded_box(size: Vec3, segments: u32, radius: f32) -> Mesh {
     if segments == 0 || radius <= 0.0 {
         return Cuboid::from_size(size).into();
@@ -70,7 +69,7 @@ pub fn rounded_box(size: Vec3, segments: u32, radius: f32) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-/// A cylinder as three.js builds it (the first segment faces +z): hexagonal tiles line up.
+/// A cylinder whose first segment faces +z: hexagonal tiles line up.
 pub fn cylinder(r: f32, h: f32, seg: u32) -> Mesh {
     Cylinder::new(r, h)
         .mesh()

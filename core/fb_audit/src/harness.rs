@@ -3,7 +3,7 @@
 use fb_arena::{Arena, ArenaEvent, ArenaKind, PawnStatus};
 use fb_shared::input::InputFrame;
 use fb_shared::{DT, TICK_RATE};
-use fb_sim::map::{MapDef, Value};
+use fb_sim::map::{MapDef, MapEvent};
 use fb_sim::math::V3;
 
 #[derive(Clone, Debug)]
@@ -18,7 +18,8 @@ pub struct Fall {
     pub pos: V3,
 }
 
-pub const INTRO: i64 = 61;
+/// Intro before the start in the audits' rounds: half a second.
+pub const INTRO: i64 = 60;
 
 pub struct Opts {
     pub seed: u32,
@@ -27,7 +28,7 @@ pub struct Opts {
     /// Which of them are bots (the others stand idle).
     pub bots: fn(u32) -> bool,
     pub kind: ArenaKind,
-    /// Intro before t = 0, in ticks (TS: 500 ms, which its clock makes 61 ticks).
+    /// Intro before t = 0, in ticks.
     pub intro: i64,
 }
 
@@ -49,7 +50,7 @@ pub struct Harness {
     pub ids: Vec<u32>,
     pub finishes: Vec<(u32, f64)>,
     pub falls: Vec<Fall>,
-    pub events: Vec<(String, Value)>,
+    pub events: Vec<MapEvent>,
 }
 
 impl Harness {
@@ -87,7 +88,7 @@ impl Harness {
                         pos: ko.pos,
                     });
                 }
-                ArenaEvent::Event { name, data, .. } => self.events.push((name, data)),
+                ArenaEvent::Event { ev, .. } => self.events.push(ev),
                 _ => {}
             }
         }

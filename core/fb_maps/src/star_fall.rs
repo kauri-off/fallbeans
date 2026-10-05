@@ -7,13 +7,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use fb_sim::bots::{
-    ArenaOpts, BOT_DT, BotInput, BotView, HumanOpts, aim_landing, arena_brain, humanize, init_bot, nav_to, steer,
+    ArenaOpts, BOT_DT, BotInput, BotView, HumanOpts, Note, aim_landing, arena_brain, humanize, init_bot, nav_to, steer,
     unstick,
 };
 use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
-use fb_sim::m::{self, MinMaxJs};
-use fb_sim::map::{BeanDeco, GameMeta, Genre, MapCtx, MapDef, MapSpec, json};
+use fb_sim::m::{self, MinMax};
+use fb_sim::map::{BeanDeco, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::BodyState;
@@ -121,6 +121,9 @@ impl MapDef for StarFall {
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
+        let fly_note: Note<f64> = b.note();
+        let star_note: Note<usize> = b.note();
+        let star_until: Note<f64> = b.note();
         b.cyl(0.0, -1.0, 0.0, ARENA_R, 2.0, pal::PURPLE, freq(0.3));
         b.cyl(0.0, 0.03, 0.0, ARENA_R + 0.05, 0.1, pal::YELLOW, deco());
         let ring = PrimOpts {
@@ -308,15 +311,15 @@ impl MapDef for StarFall {
                         continue;
                     };
                     let got = got_at(s.k);
-                    let fall = (s.at - t).max_js(0.0) / 0.5;
-                    let pop = got.map_or(0.0, |at| ((t - at) / 0.3).min_js(1.0));
-                    let fade = ((s.until - t) / 1.5).min_js(1.0);
+                    let fall = (s.at - t).at_least(0.0) / 0.5;
+                    let pop = got.map_or(0.0, |at| ((t - at) / 0.3).at_most(1.0));
+                    let fade = ((s.until - t) / 1.5).at_most(1.0);
                     let size = if sp.value > 1.0 { 1.0 + sp.value * 0.25 } else { 1.1 };
                     let fi = i as f64;
                     let y = sp.y + 0.35 + fall * fall * 9.0 + m::sin(t * 2.6 + fi) * 0.12;
                     let star = Piece::at(0, sp.x, y, sp.z).rot(0.0, t * 2.0 + fi, 0.0);
                     out.pieces
-                        .push(star.scale(size * (fade * (1.0 + pop * 0.8) * (1.0 - pop)).max_js(0.01)));
+                        .push(star.scale(size * (fade * (1.0 + pop * 0.8) * (1.0 - pop)).at_least(0.01)));
                     if fall <= 0.0 && got.is_none() {
                         let ring = Piece::at(if sp.value > 1.0 { 2 } else { 1 }, sp.x, sp.y + 0.05, sp.z);
                         let ring = ring.rot(-m::PI / 2.0, 0.0, 0.0);
@@ -334,7 +337,7 @@ impl MapDef for StarFall {
                 return false;
             }
             let eta = arm_contact_eta(p, ang(bot.t), omega(bot.t), 2, 0.0, 0.0, 0.36);
-            eta > 0.1 && eta < 0.15 + bot.mem.react.unwrap_or(0.2) * 0.3
+            eta > 0.1 && eta < 0.15 + bot.mem.traits.react * 0.3
         };
         let mut opts = ArenaOpts::new(11.0);
         opts.safe = Some(Box::new(|x, z, _| {
@@ -417,7 +420,7 @@ impl MapDef for StarFall {
                         if m::hypot(body.pos.x - sp.x, body.pos.z - sp.z) > REACH + 0.3 * body.size {
                             continue;
                         }
-                        cx.emit("star", json!({ "k": s.k, "id": id }));
+                        cx.emit(MapEvent::Star { k: s.k as u32, id });
                         let v = cx.score(id) + s.value;
                         cx.set_score(id, v);
                         break;
@@ -431,14 +434,11 @@ impl MapDef for StarFall {
                 }
                 let to = by.filter(|&by| by != id && cx.bodies.get(by).is_some());
                 cx.set_score(id, 0.0);
-                match to {
-                    Some(to) => {
-                        let v = cx.score(to) + n;
-                        cx.set_score(to, v);
-                        cx.emit("drop", json!({ "from": id, "to": to, "n": n }));
-                    }
-                    None => cx.emit("drop", json!({ "from": id, "n": n })),
+                if let Some(to) = to {
+                    let v = cx.score(to) + n;
+                    cx.set_score(to, v);
                 }
+                cx.emit(MapEvent::Drop { from: id, to, n });
             })),
             on_grab: Some(Box::new(move |cx, actor, target| {
                 let t = cx.t;
@@ -458,36 +458,32 @@ impl MapDef for StarFall {
                 let (vt, va) = (cx.score(target) - 1.0, cx.score(actor) + 1.0);
                 cx.set_score(target, vt);
                 cx.set_score(actor, va);
-                cx.emit("snatch", json!({ "from": target, "to": actor }));
+                cx.emit(MapEvent::Snatch {
+                    from: target,
+                    to: actor,
+                });
             })),
-            on_event: Some(Box::new(move |cx, name, data| {
-                let me = cx.me();
+            on_event: Some(Box::new(move |cx, ev| {
+                let me = cx.me;
                 let t = cx.t;
-                let int = |k: &str| data[k].as_i64();
+                let is_me = |id: u32| me == Some(id);
                 let say = |cx: &mut fb_sim::map::Cx, text: String| {
                     cx.world.st_mut(st).flash = Some((text, t + 3.0));
                 };
-                match name {
-                    "star" => {
-                        let (Some(k), Some(id)) = (data["k"].as_u64(), int("id")) else {
-                            return;
-                        };
+                match *ev {
+                    MapEvent::Star { k, id } => {
                         let k = k as usize;
                         let s = cx.world.st_mut(st);
                         if k >= sky2.stars.len() || s.taken.contains_key(&k) {
                             return;
                         }
-                        s.taken.insert(k, (id as u32, t));
-                        if id == me {
+                        s.taken.insert(k, (id, t));
+                        if is_me(id) {
                             cx.sfx("pickup");
                         }
                     }
-                    "drop" => {
-                        let (Some(from), Some(n)) = (int("from"), data["n"].as_f64()) else {
-                            return;
-                        };
-                        let to = int("to");
-                        if from == me {
+                    MapEvent::Drop { from, to, n } => {
+                        if is_me(from) {
                             cx.sfx("steal");
                             let text = if to.is_some() {
                                 format!("Вас сбили: {n} ⭐ у соперника!")
@@ -495,20 +491,17 @@ impl MapDef for StarFall {
                                 format!("Вы упали: {n} ⭐ сгорели!")
                             };
                             say(cx, text);
-                        } else if to == Some(me) {
+                        } else if to.is_some_and(is_me) {
                             cx.sfx("steal");
                             say(cx, format!("+{n} ⭐ со сбитого соперника!"));
                         }
                     }
-                    "snatch" => {
-                        let (Some(from), Some(to)) = (int("from"), int("to")) else {
-                            return;
-                        };
-                        cx.world.st_mut(st).immune.insert(from as u32, t + IMMUNE);
-                        if from == me {
+                    MapEvent::Snatch { from, to } => {
+                        cx.world.st_mut(st).immune.insert(from, t + IMMUNE);
+                        if is_me(from) {
                             cx.sfx("steal");
                             say(cx, "У вас выхватили звезду!".to_string());
-                        } else if to == me {
+                        } else if is_me(to) {
                             cx.sfx("pickup");
                             say(cx, "+1 ⭐ — выхватили!".to_string());
                         }
@@ -551,7 +544,7 @@ impl MapDef for StarFall {
                     return;
                 }
                 // Thrown up by a trampoline: land on the island.
-                let fly = bot.mem.get("fly");
+                let fly = bot.mem.get(fly_note);
                 if !bot.body.grounded
                     && let Some(fly) = fly
                     && bot.body.state == BodyState::Normal
@@ -560,10 +553,10 @@ impl MapDef for StarFall {
                     return;
                 }
                 if bot.body.grounded {
-                    bot.mem.remove("fly");
+                    bot.mem.remove(fly_note);
                 } else if p.x.abs() > TRAMP_X - 2.0 && p.z.abs() < 2.0 && bot.body.vel.y > 12.0 {
                     let fly = m::sign(p.x);
-                    bot.mem.set("fly", fly);
+                    bot.mem.set(fly_note, fly);
                     aim_landing(bot, fly * ISLAND_X, ISLAND_Y, 0.0, out);
                     return;
                 }
@@ -585,7 +578,7 @@ impl MapDef for StarFall {
                             out.jump = true;
                         }
                     } else {
-                        let a = bot.mem.ph.unwrap_or(0.0);
+                        let a = bot.mem.traits.ph;
                         steer(bot, m::cos(a) * 6.0, m::sin(a) * 6.0, out, 1.0);
                     }
                     let opts = HumanOpts {
@@ -604,7 +597,7 @@ impl MapDef for StarFall {
                     return;
                 }
                 // Somebody with a pile of stars close by: go and take it off them (the pushy ones).
-                let aggro = bot.mem.aggro.unwrap_or(0.3);
+                let aggro = bot.mem.traits.aggro;
                 let mut hunt = None;
                 if aggro > 0.45 && mine < 4.0 && t > 4.0 {
                     let mut best = 2.0;
@@ -639,19 +632,19 @@ impl MapDef for StarFall {
                     return;
                 }
                 // The best star for the effort (a careful bot with a pile keeps off the rim and the islands).
-                let mut target = bot.mem.get("tk").map(|k| k as usize).and_then(|k| sky.stars.get(k));
-                if target.is_none_or(|s| !taken.live(s, t) || t > bot.mem.get("tkUntil").unwrap_or(0.0)) {
+                let mut target = bot.mem.get(star_note).and_then(|k| sky.stars.get(k));
+                if target.is_none_or(|s| !taken.live(s, t) || t > bot.mem.get(star_until).unwrap_or(0.0)) {
                     target = None;
                     let mut best = 0.0;
                     for s in &sky.stars[taken.first..] {
                         if s.at > t + 0.3 {
                             break;
                         }
-                        if !taken.live(s, t.max_js(s.at)) {
+                        if !taken.live(s, t.at_least(s.at)) {
                             continue;
                         }
                         let sp = &sky.spots[s.spot];
-                        if sp.at == Where::Island && (mine > 2.0 || bot.mem.skill.unwrap_or(0.7) < 0.55) {
+                        if sp.at == Where::Island && (mine > 2.0 || bot.mem.traits.skill < 0.55) {
                             continue;
                         }
                         if mine >= 4.0 && m::hypot(sp.x, sp.z) > 11.5 && sp.at == Where::Ground {
@@ -671,11 +664,11 @@ impl MapDef for StarFall {
                         }
                     }
                     match target {
-                        Some(s) => bot.mem.set("tk", s.k as f64),
-                        None => bot.mem.remove("tk"),
+                        Some(s) => bot.mem.set(star_note, s.k),
+                        None => bot.mem.remove(star_note),
                     }
                     let until = t + 2.0 + bot.rng.next() * 1.5;
-                    bot.mem.set("tkUntil", until);
+                    bot.mem.set(star_until, until);
                 }
                 let Some(target) = target else {
                     wander(bot, out);

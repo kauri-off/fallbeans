@@ -1,12 +1,11 @@
-//! Navigation for bots (port of `sim/nav.ts`): a grid over the static part of a map with up to a few
+//! Navigation for bots: a grid over the static part of a map with up to a few
 //! walkable layers per cell, linked by walking, stepping, jumping up, dropping down and jumping gaps.
-//! A* finds routes on it; moving parts are left to the map's bot logic. Heights and costs are kept as
-//! f32 (`m::fround`), as the TS `Float32Array`s.
+//! A* finds routes on it; moving parts are left to the map's bot logic.
 use std::sync::Mutex;
 
 use crate::collider::{ColId, Collider, Shape};
-use crate::m::{self, MinMaxJs};
-use crate::math::{V3, dot, len_sq, normalize};
+use crate::m::{self, MinMax};
+use crate::math::V3;
 use crate::world::World;
 
 pub const NAV_CELL: f64 = 0.5;
@@ -47,8 +46,8 @@ struct Span {
 
 /// Where a downward ray enters and leaves a collider (world y), with the entry normal's y.
 fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
-    let o = c.inv.apply_point(V3::new(x, top, z));
-    let d = c.inv.transform_dir(DOWN);
+    let o = c.inv.transform_point3(V3::new(x, top, z));
+    let d = c.inv.transform_vector3(DOWN).normalize_or_zero();
     let mut t0 = f64::NEG_INFINITY;
     let mut t1 = f64::INFINITY;
     let mut n;
@@ -79,7 +78,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                     axis = i as i32;
                     sign = sg;
                 }
-                t1 = t1.min_js(b);
+                t1 = t1.at_most(b);
                 if t0 > t1 {
                     return None;
                 }
@@ -123,8 +122,8 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                 side_a = (-b - q) / (2.0 * a);
                 side_b = (-b + q) / (2.0 * a);
             }
-            t0 = cap_a.max_js(side_a);
-            t1 = cap_b.min_js(side_b);
+            t0 = cap_a.at_least(side_a);
+            t1 = cap_b.at_most(side_b);
             if t0 > t1 {
                 return None;
             }
@@ -132,12 +131,12 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                 let s = -m::sign(d.y);
                 V3::new(0.0, if s == 0.0 || s.is_nan() { 1.0 } else { s }, 0.0)
             } else {
-                normalize(V3::new(o.x + d.x * t0, 0.0, o.z + d.z * t0))
+                V3::new(o.x + d.x * t0, 0.0, o.z + d.z * t0).normalize_or_zero()
             };
         }
         Shape::Sphere { r } => {
-            let b = dot(o, d);
-            let cc = len_sq(o) - r * r;
+            let b = o.dot(d);
+            let cc = o.length_squared() - r * r;
             let disc = b * b - cc;
             if disc < 0.0 {
                 return None;
@@ -145,15 +144,15 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
             let q = m::sqrt(disc);
             t0 = -b - q;
             t1 = -b + q;
-            n = normalize(V3::new(d.x * t0 + o.x, d.y * t0 + o.y, d.z * t0 + o.z));
+            n = V3::new(d.x * t0 + o.x, d.y * t0 + o.y, d.z * t0 + o.z).normalize_or_zero();
         }
     }
     if t1 < 0.0 {
         return None;
     }
-    n = c.cur.transform_dir(n);
+    n = c.cur.transform_vector3(n).normalize_or_zero();
     Some(Span {
-        hi: top - t0.max_js(0.0),
+        hi: top - t0.at_least(0.0),
         lo: top - t1,
         ny: n.y,
         col: c.index,
@@ -285,11 +284,11 @@ impl NavGrid {
         for c in world.colliders.iter().filter(|c| solid(c)) {
             any = true;
             let (ex, ez) = c.extent_xz();
-            x0 = x0.min_js(c.center.x - ex);
-            x1 = x1.max_js(c.center.x + ex);
-            z0 = z0.min_js(c.center.z - ez);
-            z1 = z1.max_js(c.center.z + ez);
-            top = top.max_js(c.center.y + c.radius);
+            x0 = x0.at_most(c.center.x - ex);
+            x1 = x1.at_least(c.center.x + ex);
+            z0 = z0.at_most(c.center.z - ez);
+            z1 = z1.at_least(c.center.z + ez);
+            top = top.at_least(c.center.y + c.radius);
         }
         if !any {
             x0 = -1.0;
@@ -298,8 +297,8 @@ impl NavGrid {
             z1 = 1.0;
             top = 1.0;
         }
-        let nx = (((x1 - x0) / NAV_CELL).ceil() + 2.0).max_js(1.0) as usize;
-        let nz = (((z1 - z0) / NAV_CELL).ceil() + 2.0).max_js(1.0) as usize;
+        let nx = (((x1 - x0) / NAV_CELL).ceil() + 2.0).at_least(1.0) as usize;
+        let nz = (((z1 - z0) / NAV_CELL).ceil() + 2.0).at_least(1.0) as usize;
         let mut nav = NavGrid::new(x0 - NAV_CELL, z0 - NAV_CELL, nx, nz);
         let mut spans: Vec<Vec<Span>> = Vec::with_capacity(nx * nz);
         let mut near = Vec::new();
@@ -318,7 +317,7 @@ impl NavGrid {
                         list.push(sp);
                     }
                 }
-                // (`hi` is never NaN for a finite top; were it, JS's comparator would call it equal.)
+                // (`hi` is never NaN for a finite top; were it, it would compare equal.)
                 list.sort_by(|a, b| b.hi.partial_cmp(&a.hi).unwrap_or(core::cmp::Ordering::Equal));
                 let cell = iz * nx + ix;
                 let mut layer = 0;
@@ -351,7 +350,7 @@ impl NavGrid {
                     if forbidden.is_some_and(|f| f(V3::new(x, y + 0.05, z))) {
                         continue;
                     }
-                    nav.ys[cell * LAYERS + layer] = m::fround(y);
+                    nav.ys[cell * LAYERS + layer] = y;
                     nav.cols[cell * LAYERS + layer] = s.col as i64;
                     layer += 1;
                 }
@@ -387,7 +386,7 @@ impl NavGrid {
                     }
                     let p =
                         (if wall > 0 { 1.5 } else { 0.0 }) + (if edge > 0 { 1.0 + edge as f64 * 0.25 } else { 0.0 });
-                    nav.pen[id] = m::fround(p);
+                    nav.pen[id] = p;
                 }
             }
         }
@@ -405,7 +404,7 @@ impl NavGrid {
                         let cell = (iz as i64 + dz) * nx as i64 + ix as i64 + dx;
                         let o = nav.layer_near(world, cell, y, STEP);
                         if o >= 0 && pen2[o as usize] >= 1.0 {
-                            nav.pen[id] = m::fround(0.4);
+                            nav.pen[id] = 0.4;
                             break;
                         }
                     }
@@ -494,7 +493,7 @@ impl<'a> Nav<'a> {
         Self { grid, world }
     }
 
-    /// Ground height under (x, z) within `tol` of height y (TS defaulted `tol` to 1.2), or None.
+    /// Ground height under (x, z) within `tol` of height y, or None.
     pub fn ground_at(&self, x: f64, z: f64, y: f64, tol: f64) -> Option<f64> {
         let g = self.grid;
         let id = g.layer_near(self.world, g.cell_of(x, z), y, tol);
@@ -567,7 +566,7 @@ impl<'a> Nav<'a> {
             return None;
         }
         let start = start as usize;
-        let radius = NAV_CELL.max_js(opts.radius.unwrap_or(0.8));
+        let radius = NAV_CELL.at_least(opts.radius.unwrap_or(0.8));
         let max_nodes = opts.max_nodes.unwrap_or(6000);
         let mut guard = g.search.lock().unwrap_or_else(|e| e.into_inner());
         let s = &mut *guard;
@@ -615,7 +614,7 @@ impl<'a> Nav<'a> {
                 return;
             }
             s.seen[to] = gen_now;
-            s.g[to] = m::fround(gv);
+            s.g[to] = gv;
             s.from[to] = from as i64;
             s.how[to] = u8::from(jump);
             s.heap.push(to, gv + h(to));

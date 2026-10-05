@@ -90,7 +90,7 @@ fn on_connected(
     let (Ok((remote, addr, data)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };
-    // The address the link came from: a player's own, a VPN's exit, or nginx's for a WebSocket. Through a
+    // The address the link came from: a player's own, a VPN's exit, or a reverse proxy's for a WebSocket. Through a
     // local proxy, the address the client asked for its token from (in the sealed token) stands for the
     // player: otherwise every WebSocket player would share 127.0.0.1, and its PIN guesses.
     let (uid, asked_from) = data.map(|d| from_user_data(&d.0)).unwrap_or_default();

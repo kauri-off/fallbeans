@@ -3,9 +3,9 @@
 //! there too). Only falling out of a drum ends your round.
 use std::collections::BTreeSet;
 
-use fb_sim::bots::{HumanOpts, humanize, init_bot};
+use fb_sim::bots::{HumanOpts, Note, humanize, init_bot};
 use fb_sim::builder::{Builder, PrimOpts};
-use fb_sim::m::{self, MinMaxJs};
+use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -56,6 +56,8 @@ impl MapDef for RollOut {
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
+        let hop_mx: Note<f64> = b.note();
+        let hop_until: Note<f64> = b.note();
         let mut rings = Vec::new();
         let mut groups = Vec::new();
         for (z, dir, p) in [(-9.0, 1.0, pal::PINK), (0.0, -1.0, pal::BLUE), (9.0, 1.0, pal::YELLOW)] {
@@ -163,12 +165,12 @@ impl MapDef for RollOut {
                 let inside = p.y < CY;
                 let rs = if inside { R - 0.5 } else { R };
                 let mirror = if inside { -1.0 } else { 1.0 };
-                let t = bot.t.max_js(0.0);
+                let t = bot.t.at_least(0.0);
                 let omega = if t > 0.0 { ring.dir * (0.35 + 0.004 * t) } else { 0.0 };
                 // The top of the drum carries us sideways at −ω·R; "up" is against it.
                 let carry = -omega * rs * mirror;
                 let up = if carry == 0.0 { 0.0 } else { -m::sign(carry) };
-                let lane = ring.z + ((bot.id % 3) as f64 - 1.0) * 1.5 + bot.mem.off.unwrap_or(0.0) * 0.4;
+                let lane = ring.z + ((bot.id % 3) as f64 - 1.0) * 1.5 + bot.mem.traits.off * 0.4;
                 // Holes as intervals along the surface, in metres towards "up" from the bot.
                 let theta = ring.angle(t);
                 let phi = m::atan2(p.x, p.y - CY);
@@ -186,7 +188,7 @@ impl MapDef for RollOut {
                             ahead = Some((near, far));
                         }
                     } else if far <= -0.2 {
-                        behind = behind.min_js(-far);
+                        behind = behind.at_most(-far);
                     }
                 }
                 // On the ground: hold our place against the carry and drift back to the crest, but never
@@ -195,12 +197,12 @@ impl MapDef for RollOut {
                 let to_top = -p.x;
                 let into_behind = up != 0.0 && m::sign(to_top) == -up && behind < 2.8;
                 if !into_behind {
-                    mx += (-0.45f64).max_js(0.45f64.min_js(to_top * 0.35));
+                    mx += (-0.45f64).at_least(0.45f64.at_most(to_top * 0.35));
                 }
-                let mz = (-1f64).max_js(1f64.min_js((lane - p.z) * 0.6));
+                let mz = (-1f64).at_least(1f64.at_most((lane - p.z) * 0.6));
                 // A hole coming at us: hop when its near edge reaches our feet. Worse players jump a little
                 // early or late.
-                let slop = (1.0 - bot.mem.skill.unwrap_or(0.7)) * 0.5;
+                let slop = (1.0 - bot.mem.traits.skill) * 0.5;
                 let late = (bot.rng.next() - 0.5) * slop;
                 let grounded = bot.body.grounded;
                 if let Some((near, far)) = ahead
@@ -210,22 +212,22 @@ impl MapDef for RollOut {
                     && near > -0.3
                 {
                     // Clear the near edge, the hole and a body length, minus what the drum brings us.
-                    let span = far - near.max_js(0.0) + 1.6;
+                    let span = far - near.at_least(0.0) + 1.6;
                     out.jump = true;
                     // …but never so far that it lands on the steep side of the drum.
-                    let room = 0.2f64.max_js((3.2 - up * p.x * mirror) / 6.4);
+                    let room = 0.2f64.at_least((3.2 - up * p.x * mirror) / 6.4);
                     mx = up
                         * 1f64
-                            .min_js(room)
-                            .min_js(0.2f64.max_js((span - carry.abs() * 0.75) / 0.75 / 8.5));
-                    bot.mem.set("hopMx", mx);
-                    bot.mem.set("hopUntil", bot.t + 0.7);
-                } else if !grounded && bot.mem.get("hopUntil").unwrap_or(-1.0) > bot.t {
-                    mx = bot.mem.get("hopMx").unwrap_or(mx);
+                            .at_most(room)
+                            .at_most(0.2f64.at_least((span - carry.abs() * 0.75) / 0.75 / 8.5));
+                    bot.mem.set(hop_mx, mx);
+                    bot.mem.set(hop_until, bot.t + 0.7);
+                } else if !grounded && bot.mem.get(hop_until).unwrap_or(-1.0) > bot.t {
+                    mx = bot.mem.get(hop_mx).unwrap_or(mx);
                 }
                 let l = m::hypot(mx, mz);
                 let l = if l == 0.0 { 1.0 } else { l };
-                let k = l.min_js(1.0);
+                let k = l.at_most(1.0);
                 out.mx = (mx / l) * k;
                 out.mz = (mz / l) * k;
                 humanize(

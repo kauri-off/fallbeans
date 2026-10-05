@@ -1,4 +1,4 @@
-//! Surfaces (port of `materials.ts`): every map material gets fine detail from a procedural, tileable
+//! Surfaces: every map material gets fine detail from a procedural, tileable
 //! texture per kind of surface (normal from a height map in RG, the height in B, a roughness mask in A),
 //! mapped triplanar in the object's own space (the models have no UVs), so detail keeps its size on any
 //! primitive and stays glued to moving parts. Palette materials also carry the look's pattern
@@ -177,7 +177,7 @@ fn def(k: Kind) -> Def {
     }
 }
 
-// ---------------------------------------------------------------- the detail textures (as TS)
+// ---------------------------------------------------------------- the detail textures
 
 fn hash(x: i64, y: i64, seed: i64) -> f32 {
     let h = (x * 374_761_393 + y * 668_265_263 + seed * 2_147_483_647) as i32;
@@ -659,8 +659,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hash_matches_ts() {
-        // Values of `hash` in materials.ts.
+    fn hash_is_stable() {
+        // Fixed values: the detail textures stay as they are.
         for (x, y, seed, want) in [
             (1, 2, 3, 0.5767206135205925),
             (255, 0, 22, 0.08044512826018035),

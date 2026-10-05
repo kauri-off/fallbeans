@@ -1,9 +1,10 @@
-//! Messages between client and server besides replication and input (port of `shared/protocol.ts`):
+//! Messages between client and server besides replication and input:
 //! the room list, rooms and their lobby, game flow, chat, dev commands, map events. Everything a client
-//! sends passes `ClientMsg::check` (the bounds zod checked in TS) before the server looks at it.
+//! sends passes `ClientMsg::check` (bounds and shapes) before the server looks at it.
 use fb_shared::game::ArenaKind;
 use fb_shared::rules::RoundRow;
 use fb_shared::{CHAT_MAX, COLORS, EMOTES, ROOM_PIN_DIGITS};
+pub use fb_sim::map::MapEvent;
 use serde::{Deserialize, Serialize};
 
 pub use fb_maps::director::{Mode, Playlist};
@@ -31,12 +32,11 @@ pub struct SessionRequest {
     pub transport: String,
 }
 
-/// The player's identity to keep and a connect token (base64) for one attempt; none while updating or on another protocol.
+/// The player's identity to keep and a connect token (base64) for one attempt; none on another protocol.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SessionReply {
     pub protocol: u32,
     pub build: String,
-    pub updating: bool,
     pub identity: String,
     pub token: Option<String>,
     /// Where the WebSocket fallback is (`ws://host:port`, or `wss://domain/fallbeans/ws` behind a proxy).
@@ -419,8 +419,6 @@ pub enum ServerMsg {
         reason: RejectReason,
         msg: String,
     },
-    /// The game is being updated: the connection closes.
-    Updating,
     /// The room list, sent while the player is in no room; `mine` is the room they created, if it still exists.
     Rooms {
         rooms: Vec<RoomInfo>,
@@ -501,11 +499,8 @@ pub enum MapEventKind {
         cause: String,
         shortcut: bool,
     },
-    /// A map's own event; `data` is JSON (maps describe their events freely).
-    Map {
-        name: String,
-        data: String,
-    },
+    /// A map's own event.
+    Map(MapEvent),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

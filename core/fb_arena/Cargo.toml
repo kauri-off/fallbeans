@@ -11,9 +11,6 @@ fb_shared.workspace = true
 fb_sim.workspace = true
 fb_maps.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
-flate2.workspace = true
 serde_json.workspace = true
 
 [lints]

@@ -1,4 +1,4 @@
-//! `--brp`: Bevy Remote Protocol with the game's own `fb/*` methods (methods: `docs/development.md`, «Отладка»).
+//! `--brp`: Bevy Remote Protocol with the game's own `fb/*` methods.
 use bevy::prelude::*;
 use bevy::remote::http::RemoteHttpPlugin;
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, error_codes};

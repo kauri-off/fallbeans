@@ -1,5 +1,4 @@
-//! Meshes built as three.js builds its geometries (the same vertex layout, orientation and winding), so
-//! that parts ported from the TS client keep their numbers.
+//! Meshes of simple shapes (vertex layout, orientation and winding fixed: outfit parts are placed by them).
 use core::f32::consts::{PI, TAU};
 
 use bevy::asset::RenderAssetUsages;
@@ -31,7 +30,8 @@ impl Build {
     }
 }
 
-/// `SphereGeometry(r, ws, hs, phiStart, phiLength, thetaStart, thetaLength)`.
+/// A sphere of `ws` × `hs` segments, or a part of one: `phi` (start, length) round the y axis, `theta` (start,
+/// length) down from the top.
 pub fn sphere(r: f32, ws: u32, hs: u32, phi: (f32, f32), theta: (f32, f32)) -> Mesh {
     let mut b = Build::default();
     let theta_end = (theta.0 + theta.1).min(PI);
@@ -66,12 +66,13 @@ pub fn ball(r: f32) -> Mesh {
     sphere(r, 16, 12, (0.0, TAU), (0.0, PI))
 }
 
-/// The top half of a sphere squashed to height `h` (TS `dome`).
+/// The top half of a sphere squashed to height `h`.
 pub fn dome(r: f32, h: f32) -> Mesh {
     sphere(r, 28, 12, (0.0, TAU), (0.0, PI / 2.0)).scaled_by(Vec3::new(1.0, h / r, 1.0))
 }
 
-/// `CylinderGeometry(rt, rb, h, radial, 1, open, thetaStart, thetaLength)`.
+/// A cylinder (or a cone frustum: top radius `rt`, bottom `rb`) centred on the origin, `radial` segments; `open`
+/// leaves out the caps, `theta` (start, length) is the part of the round it covers.
 pub fn cylinder(rt: f32, rb: f32, h: f32, radial: u32, open: bool, theta: (f32, f32)) -> Mesh {
     let mut b = Build::default();
     let half = h / 2.0;
@@ -132,7 +133,7 @@ pub fn cone(r: f32, h: f32, radial: u32) -> Mesh {
     cylinder(0.0, r, h, radial, false, (0.0, TAU))
 }
 
-/// `TorusGeometry(radius, tube, radial, tubular)`: the ring lies in the xy plane.
+/// A ring of `radius` and tube radius `tube`, lying in the xy plane.
 pub fn torus(radius: f32, tube: f32, radial: u32, tubular: u32) -> Mesh {
     let mut b = Build::default();
     for j in 0..=radial {
@@ -165,7 +166,7 @@ pub fn torus(radius: f32, tube: f32, radial: u32, tubular: u32) -> Mesh {
     b.mesh()
 }
 
-/// `LatheGeometry(points, segments)`: the profile (x = radius, y = height) turned round the y axis.
+/// The profile (x = radius, y = height) turned round the y axis in `segments` steps.
 pub fn lathe(points: &[(f32, f32)], segments: u32) -> Mesh {
     let mut b = Build::default();
     let n = points.len();
@@ -191,7 +192,7 @@ pub fn lathe(points: &[(f32, f32)], segments: u32) -> Mesh {
     b.mesh()
 }
 
-/// `CircleGeometry(r, segments)`: a disc in the xy plane facing +z.
+/// A disc in the xy plane facing +z.
 pub fn circle(r: f32, segments: u32) -> Mesh {
     let mut b = Build::default();
     b.vert(Vec3::ZERO, Vec3::Z, Vec2::splat(0.5));
@@ -215,7 +216,7 @@ fn bezier(a: Vec2, b: Vec2, c: Vec2, d: Vec2, t: f32) -> Vec2 {
     a * k * k * k + b * 3.0 * k * k * t + c * 3.0 * k * t * t + d * t * t * t
 }
 
-/// The heart of the heart glasses, extruded `depth` along +z (TS `heart()` through `ExtrudeGeometry`).
+/// The heart of the heart glasses, extruded `depth` along +z.
 pub fn heart(depth: f32) -> Mesh {
     let v = Vec2::new;
     let curves = [

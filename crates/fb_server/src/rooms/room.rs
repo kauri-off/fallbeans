@@ -1,4 +1,4 @@
-//! A lobby and the games played from it (port of `server/rooms/room.ts`): players and bots, the host,
+//! A lobby and the games played from it: players and bots, the host,
 //! rounds, scores, chat, dev commands. Time is in server ticks; the arena runs on the room's game clock.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -13,8 +13,8 @@ use fb_shared::rng::{Rng, shuffle};
 use fb_shared::rules::{RoundView, is_round_over, score_round};
 use fb_shared::text::{sanitize_chat, sanitize_name};
 use fb_shared::*;
-use fb_sim::map::json;
 use fb_sim::math::V3;
+use serde_json::json;
 
 use super::awards::{GameStats, compute_awards};
 use super::clock::GameClock;
@@ -1295,13 +1295,7 @@ impl Room {
                     }
                 }
                 ArenaEvent::Emote { id, e } => self.broadcast(ServerMsg::Emote { id, e: e as u8 }),
-                ArenaEvent::Event { name, data, keep } => {
-                    let ev = MapEventKind::Map {
-                        name,
-                        data: data.to_string(),
-                    };
-                    self.map_event(tick, ev, keep);
-                }
+                ArenaEvent::Event { ev, keep } => self.map_event(tick, MapEventKind::Map(ev), keep),
                 ArenaEvent::Score { id, v } => self.broadcast(ServerMsg::Scores(vec![(id, v)])),
             }
         }

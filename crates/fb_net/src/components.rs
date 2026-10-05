@@ -82,7 +82,7 @@ pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
         || x.climb_to != y.climb_to
 }
 
-/// What a bean is doing, for its animation (TS `ANIM`).
+/// What a bean is doing, for its animation.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Anim {
     #[default]
@@ -119,7 +119,7 @@ impl Anim {
         Anim::Ladder,
     ];
 
-    /// As TS `animFor`: the body's state first, then in the air, then what the hands do.
+    /// The body's state first, then in the air, then what the hands do.
     pub fn of(b: &Body, grabbing: bool, reaching: bool) -> Anim {
         match b.state {
             BodyState::Portal => Anim::Portal,
@@ -147,8 +147,7 @@ pub struct Hold {
     pub reaching: bool,
 }
 
-/// What everybody else sees of a bean (interpolated). On the wire about 20 bytes (TS:
-/// `REMOTE_BYTES` = 22): position and velocity in centimetres, angles in u16/u8.
+/// What everybody else sees of a bean (interpolated). On the wire about 20 bytes: position and velocity in centimetres, angles in u16/u8.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 #[serde(from = "crate::wire::Pose", into = "crate::wire::Pose")]
 pub struct RemotePose {

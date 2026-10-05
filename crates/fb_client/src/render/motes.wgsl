@@ -1,4 +1,4 @@
-// Specks drifting in the air around the camera (port of renderer.ts motes): each a small billboard whose
+// Specks drifting in the air around the camera: each a small billboard whose
 // place is a function of time and its seed, wrapped in a box that follows the camera; added light.
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 
@@ -41,7 +41,7 @@ fn vertex(v: Vertex) -> Out {
     let p = q - b * floor(q / b) - b * 0.5 + c;
     var mv = view.view_from_world * vec4(p, 1.0);
     let d = -mv.z;
-    // A constant size in the world (TS: points of 36 px at a metre, scaled by distance).
+    // A constant size in the world.
     let r = 0.028 * (0.8 + seed * 1.6);
     mv = vec4(mv.xy + v.corner * r, mv.z, 1.0);
     var out: Out;
@@ -57,6 +57,5 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
     let c = in.corner * 0.5;
     let r = dot(c, c);
     let a = smoothstep(0.25, 0.0, r) * in.alpha;
-    // (Added light: TS blended the colour by its alpha on top.)
     return vec4(m.tint.rgb * a * a * 0.55, 0.0);
 }

@@ -1,5 +1,5 @@
-use crate::m::{self, MinMaxJs};
-use crate::math::{M4, V3, add_scaled, div_s, dot, len, len_sq};
+use crate::m::{self, MinMax};
+use crate::math::{Affine, V3};
 use crate::nodes::{NodeId, Nodes};
 
 pub type ColId = u32;
@@ -22,7 +22,7 @@ pub struct ColliderOpts {
     pub tag: Option<&'static str>,
     /// Ice: 0 normal grip, 1 almost none.
     pub slip: f64,
-    /// Touches are reported to the map (the TS `onTouch` callback).
+    /// Touches are reported to the map.
     pub on_touch: bool,
     pub on_ground: bool,
     pub nav_skip: bool,
@@ -63,9 +63,9 @@ pub struct Collider {
     pub trigger: bool,
     pub ladder: bool,
     pub launch: Option<V3>,
-    pub cur: M4,
-    pub prev: M4,
-    pub inv: M4,
+    pub cur: Affine,
+    pub prev: Affine,
+    pub inv: Affine,
     pub center: V3,
     pub radius: f64,
     synced: bool,
@@ -100,9 +100,9 @@ impl Collider {
             trigger: o.trigger || o.ladder,
             ladder: o.ladder,
             launch: o.launch,
-            cur: M4::IDENTITY,
-            prev: M4::IDENTITY,
-            inv: M4::IDENTITY,
+            cur: Affine::IDENTITY,
+            prev: Affine::IDENTITY,
+            inv: Affine::IDENTITY,
             center: V3::ZERO,
             radius,
             synced: false,
@@ -119,32 +119,36 @@ impl Collider {
         let w = nodes.get(self.node).world;
         self.prev = if self.synced { self.cur } else { w };
         self.cur = w;
-        self.inv = w.invert();
-        self.degenerate = self.inv.0.iter().all(|&x| x == 0.0) || self.inv.0.iter().any(|x| !x.is_finite());
-        self.center = w.position();
+        self.inv = w.inverse();
+        self.degenerate = w.matrix3.determinant() == 0.0 || !self.inv.is_finite();
+        self.center = w.translation;
         self.synced = true;
     }
 
     /// Half extents of the world-space AABB in x and z (for the static grid).
     pub fn extent_xz(&self) -> (f64, f64) {
-        let e = &self.cur.0;
+        let (x, y, z) = (
+            self.cur.matrix3.x_axis,
+            self.cur.matrix3.y_axis,
+            self.cur.matrix3.z_axis,
+        );
         let (hx, hy, hz) = match self.shape {
             Shape::Box { hx, hy, hz } => (hx, hy, hz),
             Shape::Cyl { r, hh } => (r, hh, r),
             Shape::Sphere { r } => (r, r, r),
         };
         (
-            e[0].abs() * hx + e[4].abs() * hy + e[8].abs() * hz,
-            e[2].abs() * hx + e[6].abs() * hy + e[10].abs() * hz,
+            x.x.abs() * hx + y.x.abs() * hy + z.x.abs() * hz,
+            x.z.abs() * hx + y.z.abs() * hy + z.z.abs() * hz,
         )
     }
 
     pub fn contact(&self, center: V3, r: f64, out: &mut Contact) -> bool {
         let reach = self.radius + r;
-        if self.degenerate || crate::math::dist_sq(center, self.center) > reach * reach {
+        if self.degenerate || center.distance_squared(self.center) > reach * reach {
             return false;
         }
-        let l = self.inv.apply_point(center);
+        let l = self.inv.transform_point3(center);
         let mut q;
         let n;
         let depth;
@@ -152,12 +156,12 @@ impl Collider {
             Shape::Box { hx, hy, hz } => {
                 q = V3::new(m::clamp(l.x, -hx, hx), m::clamp(l.y, -hy, hy), m::clamp(l.z, -hz, hz));
                 let d0 = l - q;
-                let d = len(d0);
+                let d = d0.length();
                 if d > 1e-6 {
                     if d >= r {
                         return false;
                     }
-                    n = div_s(d0, d);
+                    n = d0 / d;
                     depth = r - d;
                 } else {
                     let dx = hx - l.x.abs();
@@ -210,27 +214,27 @@ impl Collider {
                     let k = if in_r { 1.0 } else { cr / rl };
                     q = V3::new(l.x * k, m::clamp(l.y, -hh, hh), l.z * k);
                     let d0 = l - q;
-                    let d = len(d0);
+                    let d = d0.length();
                     if d >= r || d < 1e-9 {
                         return false;
                     }
-                    n = div_s(d0, d);
+                    n = d0 / d;
                     depth = r - d;
                 }
             }
             Shape::Sphere { r: sr } => {
-                let d = len(l);
+                let d = l.length();
                 if d >= sr + r {
                     return false;
                 }
-                n = if d < 1e-6 { V3::new(0.0, 1.0, 0.0) } else { div_s(l, d) };
+                n = if d < 1e-6 { V3::new(0.0, 1.0, 0.0) } else { l / d };
                 q = V3::new(n.x * sr, n.y * sr, n.z * sr);
                 depth = sr + r - d;
             }
         }
         out.local = q;
-        out.point = self.cur.apply_point(q);
-        out.normal = self.cur.transform_dir(n);
+        out.point = self.cur.transform_point3(q);
+        out.normal = self.cur.transform_vector3(n).normalize_or_zero();
         out.depth = depth;
         true
     }
@@ -240,8 +244,8 @@ impl Collider {
         if self.degenerate {
             return -1.0;
         }
-        let o = self.inv.apply_point(origin);
-        let d = self.inv.transform_dir(dir);
+        let o = self.inv.transform_point3(origin);
+        let d = self.inv.transform_vector3(dir).normalize_or_zero();
         let t;
         let mut nl = V3::ZERO;
         match self.shape {
@@ -269,7 +273,7 @@ impl Collider {
                         t0 = ta;
                         axis = a as i32;
                     }
-                    t1 = t1.min_js(tb);
+                    t1 = t1.at_most(tb);
                     if t0 > t1 {
                         return -1.0;
                     }
@@ -321,8 +325,8 @@ impl Collider {
                 t = best;
             }
             Shape::Sphere { r } => {
-                let b = dot(o, d);
-                let c = len_sq(o) - r * r;
+                let b = o.dot(d);
+                let c = o.length_squared() - r * r;
                 if c <= 0.0 {
                     return -1.0;
                 }
@@ -335,17 +339,17 @@ impl Collider {
                     return -1.0;
                 }
                 t = tt;
-                nl = div_s(add_scaled(o, d, t), r);
+                nl = (o + d * t) / r;
             }
         }
-        *normal = self.cur.transform_dir(nl);
+        *normal = self.cur.transform_vector3(nl).normalize_or_zero();
         t
     }
 
     pub fn surface_velocity(&self, local: V3, dt: f64) -> V3 {
-        let p = self.cur.apply_point(local);
-        let w = self.prev.apply_point(local);
-        div_s(p - w, dt.max_js(1e-4))
+        let p = self.cur.transform_point3(local);
+        let w = self.prev.transform_point3(local);
+        (p - w) / (dt.at_least(1e-4))
     }
 }
 

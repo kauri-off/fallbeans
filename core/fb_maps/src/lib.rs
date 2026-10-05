@@ -1,4 +1,4 @@
-//! Every map (port of `src/games`): one module per map, and the registry.
+//! Every map: one module per map, and the registry.
 use fb_sim::map::MapDef;
 
 pub mod ball_hill;
@@ -23,7 +23,7 @@ pub mod tail_tag;
 mod util;
 pub mod wall_rush;
 
-/// Every game map, in the order of `src/games/index.ts` (the lobby and the podium are not games).
+/// Every game map, in the order of the list in the menu (the lobby and the podium are not games).
 pub static GAMES: &[&dyn MapDef] = &[
     &door_dash::DoorDash,
     &hammer_swing::HammerSwing,

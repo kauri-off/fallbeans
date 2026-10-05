@@ -1,4 +1,4 @@
-//! FSR 1 upscaling (port of `fsr.ts`): the main pass draws at a lower resolution
+//! FSR 1 upscaling: the main pass draws at a lower resolution
 //! (`MainPassResolutionOverride`), EASU brings it to the full one before the post-processing, and Bevy's
 //! robust contrast-adaptive sharpening (RCAS, the second half of FSR 1) restores the detail.
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;

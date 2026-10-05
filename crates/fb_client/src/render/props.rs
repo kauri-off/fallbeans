@@ -1,5 +1,5 @@
-//! The map's models (props of `builder.ts`): their materials get surfaces by material name (a flag's
-//! pennant and a mushroom's cap take the map's tint), and the props move as in TS: pennants sway, fans
+//! The map's models: their materials get surfaces by material name (a flag's
+//! pennant and a mushroom's cap take the map's tint), and the props move: pennants sway, fans
 //! spin, stars twirl and bob over the finish, mushroom caps squash like jelly.
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use super::surface::{Kind, SurfaceMaterial, Surfaces};
 use crate::game::Map;
 use crate::view::frame_tick;
 
-/// A map model: what it is, its tint, and the phase of its motion (from where it stands, as TS).
+/// A map model: what it is, its tint, and the phase of its motion (from where it stands).
 #[derive(Component)]
 pub struct Prop {
     pub name: &'static str,
@@ -28,7 +28,7 @@ pub struct Prop {
 
 impl Prop {
     pub fn new(name: &'static str, tint: Option<&'static str>, x: f64, z: f64) -> Self {
-        // (`builder.ts` takes x and z of the placement: the node's own position.)
+        // (x and z of the placement: the node's own position.)
         let phase = if name == "mushroom" {
             ((x * 3.1 + z * 1.3) % core::f64::consts::TAU) as f32
         } else {

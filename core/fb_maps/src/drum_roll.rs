@@ -7,7 +7,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, pick_sections, race_course, rotor_decks, trampoline_gap,
     with_rests,
 };
-use fb_sim::m::{self, MinMaxJs};
+use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
@@ -112,7 +112,7 @@ struct Pulse {
 
 impl Pulse {
     fn angle(self, t: f64) -> f64 {
-        let tt = t.max_js(0.0);
+        let tt = t.at_least(0.0);
         self.base * tt - (self.amp / self.w) * (m::cos(tt * self.w + self.ph) - m::cos(self.ph))
     }
 }
@@ -169,28 +169,28 @@ fn drum_stairs() -> Segment {
 
         let z0 = s.z;
         let stairs_route = || {
-            let mut route = vec![Waypoint::w(0.0, z0 + 1.5, 1.0)];
+            let mut route = vec![Waypoint::spread(0.0, z0 + 1.5, 1.0)];
             for &(x, z, _, _) in &stairs {
                 route.push(
-                    Waypoint::w(if x > 0.0 { 1.3 } else { -1.3 }, z, 0.15)
+                    Waypoint::spread(if x > 0.0 { 1.3 } else { -1.3 }, z, 0.15)
                         .speed(0.9)
                         .jump_when(move |bot| bot.body.pos.z > z - 5.6 && bot.body.pos.z < z - 4.4),
                 );
             }
             route.push(
-                Waypoint::w(0.0, end_z + 1.5, 0.5)
+                Waypoint::spread(0.0, end_z + 1.5, 0.5)
                     .jump_when(move |bot| bot.body.pos.z > last_z + 0.3 && bot.body.pos.z < end_z),
             );
-            route.push(Waypoint::w(0.0, end_z + 3.0, 1.0));
+            route.push(Waypoint::spread(0.0, end_z + 3.0, 1.0));
             route
         };
         let beam_route = vec![
-            Waypoint::w(6.5, z0 + 2.5, 0.0),
-            Waypoint::w(9.5, z0 + 3.4, 0.0),
-            Waypoint::w(9.5, beam_z0 + 2.0, 0.0),
-            Waypoint::w(9.5, end_z - 0.5, 0.0),
-            Waypoint::w(5.0, end_z + 2.0, 0.3),
-            Waypoint::w(0.0, end_z + 3.0, 1.0),
+            Waypoint::spread(6.5, z0 + 2.5, 0.0),
+            Waypoint::spread(9.5, z0 + 3.4, 0.0),
+            Waypoint::spread(9.5, beam_z0 + 2.0, 0.0),
+            Waypoint::spread(9.5, end_z - 0.5, 0.0),
+            Waypoint::spread(5.0, end_z + 2.0, 0.3),
+            Waypoint::spread(0.0, end_z + 3.0, 1.0),
         ];
         SegOut {
             z: end_z + 6.0,
@@ -211,7 +211,7 @@ fn log_run(n: u32) -> Segment {
         let l = 9.0;
         let mut zz = s.z + 2.0;
         s.b.box_(0.0, y - 1.0, s.z + 1.0, 12.0, 2.0, 2.0, pal::PURPLE, o());
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 1.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         let mut edge = s.z + 2.0;
         for i in 0..n {
             let c = zz + 1.4 + l / 2.0;
@@ -247,10 +247,10 @@ fn log_run(n: u32) -> Segment {
             );
             let e = edge;
             route.push(
-                Waypoint::w(0.0, c - l / 2.0 + 1.2, 0.1)
+                Waypoint::spread(0.0, c - l / 2.0 + 1.2, 0.1)
                     .jump_when(move |bot| bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2),
             );
-            route.push(Waypoint::w(0.0, c + l / 2.0 - 2.2, 0.0));
+            route.push(Waypoint::spread(0.0, c + l / 2.0 - 2.2, 0.0));
             edge = c + l / 2.0;
             zz = c + l / 2.0;
         }
@@ -259,7 +259,8 @@ fn log_run(n: u32) -> Segment {
         s.b.box_(0.0, y - 1.0, zz + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
         let e = edge;
         route.push(
-            Waypoint::w(0.0, zz + 3.0, 1.0).jump_when(move |bot| bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2),
+            Waypoint::spread(0.0, zz + 3.0, 1.0)
+                .jump_when(move |bot| bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2),
         );
         SegOut {
             z: zz + 6.0,
@@ -278,14 +279,14 @@ fn peg_drums(n: u32) -> Segment {
         let r = 2.2;
         let mut zz = s.z + 2.0;
         s.b.box_(0.0, y - 1.0, s.z + 1.0, 12.0, 2.0, 2.0, pal::PURPLE, o());
-        let mut route = vec![Waypoint::w(0.0, s.z + 1.0, 1.0)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         for i in 0..n {
             // Room for the pegs (they stand 0.4 m proud) between drums and platforms.
             let c = zz + 0.55 + r;
             let w = -(0.55 + s.rng() * 0.25);
             let ph = s.rng() * 6.0;
             let pegs = 3;
-            let ang = move |t: f64| ph + t.max_js(0.0) * w;
+            let ang = move |t: f64| ph + t.at_least(0.0) * w;
             drum(s.b, 0.0, y + 0.2, c, r, 9.0, ang, PALS[i as usize % 4], false, pegs);
             // Pegs sit at angle β = offset + ang(t) on the drum (β = 0 on top, growing towards +z) and
             // come round to the bot at |w| rad/s: jump just before one reaches it.
@@ -312,12 +313,12 @@ fn peg_drums(n: u32) -> Segment {
             let gap_at = c - r - 0.55;
             let edge = edge_jump(gap_at, 0.8);
             let jw = jump_when.clone();
-            route.push(Waypoint::w(0.0, c - 0.5, 0.2).jump_when(move |bot| jw(bot) || edge(bot)));
-            route.push(Waypoint::w(0.0, c + r - 0.3, 0.2).jump_shared(&jump_when));
+            route.push(Waypoint::spread(0.0, c - 0.5, 0.2).jump_when(move |bot| jw(bot) || edge(bot)));
+            route.push(Waypoint::spread(0.0, c + r - 0.3, 0.2).jump_shared(&jump_when));
             zz = c + r + 0.55;
         }
         s.b.box_(0.0, y - 1.0, zz + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
-        route.push(Waypoint::w(0.0, zz + 3.0, 1.0).jump_when(edge_jump(zz, 1.2)));
+        route.push(Waypoint::spread(0.0, zz + 3.0, 1.0).jump_when(edge_jump(zz, 1.2)));
         SegOut {
             z: zz + 6.0,
             y,
@@ -345,7 +346,7 @@ fn roller_bridge(n: u32) -> Segment {
                 c,
                 r,
                 7.0,
-                move |t| t.max_js(0.0) * sp,
+                move |t| t.at_least(0.0) * sp,
                 PALS[i as usize % 4],
                 false,
                 0,
@@ -360,8 +361,8 @@ fn roller_bridge(n: u32) -> Segment {
             z: end + 6.0,
             y,
             routes: vec![vec![
-                Waypoint::w(0.0, s.z + 2.0 + n as f64 * pitch * 0.5, 0.5),
-                Waypoint::w(0.0, end + 3.0, 1.0),
+                Waypoint::spread(0.0, s.z + 2.0 + n as f64 * pitch * 0.5, 0.5),
+                Waypoint::spread(0.0, end + 3.0, 1.0),
             ]],
             checkpoint: Some((end + 0.5, V3::new(0.0, y + 0.1, end + 3.0))),
             ..Default::default()

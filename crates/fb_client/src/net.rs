@@ -26,9 +26,8 @@ use crate::settings::{Me, Player};
 pub const UDP_TRY_S: f32 = 2.0;
 /// How often `auto` on WebSocket checks whether UDP works.
 const PROBE_EVERY_S: f32 = 60.0;
-/// Waits before asking the HTTP API again: after a failed request, and while the game is being updated.
+/// Wait before asking the HTTP API again after a failed request.
 const RETRY_S: f32 = 2.0;
-const UPDATING_RETRY_S: f32 = 5.0;
 
 type Asked = Mutex<Receiver<Result<SessionReply, String>>>;
 
@@ -126,7 +125,7 @@ fn despawn_closed(mut commands: Commands, closing: Query<Entity, (With<Closing>,
 
 fn setup_prediction(mut commands: Commands) {
     let mut manager = PredictionManager::default();
-    // A second, as the TS client keeps: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
+    // A second: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
     manager.rollback_policy.max_rollback_ticks = 120;
     commands.insert_resource(manager);
 }
@@ -390,12 +389,8 @@ fn receive_session(
         return;
     }
     let Some(token) = token_of(&reply) else {
-        if reply.updating {
-            info!("the game is being updated: waiting");
-        } else {
-            warn!("session: no connect token");
-        }
-        conn.next_try = Some(now + if reply.updating { UPDATING_RETRY_S } else { RETRY_S });
+        warn!("session: no connect token");
+        conn.next_try = Some(now + RETRY_S);
         return;
     };
     match spawn_client(&mut commands, &opts, &conn, token, now) {

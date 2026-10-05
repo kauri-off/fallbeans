@@ -1,4 +1,4 @@
-//! What the player keeps between runs (port of `settings.ts`): identity, name and look, controls, sound,
+//! What the player keeps between runs: identity, name and look, controls, sound,
 //! display. One file per profile in the system's settings directory; `--profile b` is a second player on
 //! the same machine. Flags (`--name`, `--token`, `--color`) win over the file for the run and are not saved.
 use core::time::Duration;
@@ -23,7 +23,7 @@ const APP: &str = "io.github.kauri-off.fallbeans";
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "player")]
 pub struct Player {
-    /// The identity token the server gave: the same player next time (`fb_id` in TS).
+    /// The identity token the server gave: the same player next time.
     pub identity: String,
     pub name: String,
     /// The suit colour picked last (index into `COLORS`, -1 none yet): rooms give it when it is free.

@@ -54,7 +54,7 @@ fn ledge_steps(n: u32, rise: f64) -> Segment {
                 let x = -4.0 + s.rng() * 8.0;
                 s.b.box_(x, y + 0.4, z + d / 2.0, 2.4, 0.8, 1.2, pal::WHITE, rock());
             }
-            route.push(Waypoint::w(0.0, z + d / 2.0, 2.0));
+            route.push(Waypoint::spread(0.0, z + d / 2.0, 2.0));
             z += d;
         }
         s.b.bonus(3.0, s.y + rise, s.z + 5.7);
@@ -70,7 +70,6 @@ fn ledge_steps(n: u32, rise: f64) -> Segment {
 
 /// A cliff face with ladders up it, and a pendulum swinging along the face at mid height: wait for it to
 /// pass (or hang on and let it go by), then up.
-#[allow(clippy::approx_constant, reason = "6.28 as in TS, not TAU")]
 fn ladder_wall(h: f64) -> Segment {
     Box::new(move |s| {
         let w = 14.0;
@@ -98,7 +97,7 @@ fn ladder_wall(h: f64) -> Segment {
         }
         s.b.box_(0.0, py + 0.4, pz, 15.6, 0.8, 1.2, pal::PINK, o());
         let sp = 1.1 + s.rng() * 0.4;
-        let ph = s.rng() * 6.28;
+        let ph = s.rng() * m::TAU;
         s.b.hammer(0.0, py, pz, sp, ph, 1.0, false);
         let head_x = move |t: f64| 6.0 * m::sin(m::sin(t * sp + ph));
         let top = s.y + h;
@@ -109,8 +108,8 @@ fn ladder_wall(h: f64) -> Segment {
                 .iter()
                 .map(|&lx| {
                     vec![
-                        Waypoint::w(lx, wf - 4.0, 0.0),
-                        Waypoint::w(lx, wf + 1.2, 0.0).wait(move |bot| {
+                        Waypoint::spread(lx, wf - 4.0, 0.0),
+                        Waypoint::spread(lx, wf + 1.2, 0.0).wait(move |bot| {
                             let mut dt = 0.1;
                             while dt <= 1.5 {
                                 if (head_x(bot.t + dt) - lx).abs() < 2.4 {
@@ -120,7 +119,7 @@ fn ladder_wall(h: f64) -> Segment {
                             }
                             true
                         }),
-                        Waypoint::w(0.0, wf + 5.0, 1.0),
+                        Waypoint::spread(0.0, wf + 5.0, 1.0),
                     ]
                 })
                 .collect(),
@@ -151,7 +150,7 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
         let z0 = z - 0.4;
         s.b.box_(0.0, y + rise - 1.0, z0 + 3.5, 12.0, 2.0, 7.0, pal::PINK, o());
         let top_y = y + rise;
-        let mut route = vec![Waypoint::w(0.0, s.z + 3.0, 0.5)];
+        let mut route = vec![Waypoint::spread(0.0, s.z + 3.0, 0.5)];
         let mut hops = shelves;
         hops.push((0.0, top_y, z0 + 1.5));
         // Jump from the edge of the shelf the bot stands on (it runs at the middle of the next one).
@@ -159,7 +158,7 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
         let last = hops.len() - 1;
         for (k, &(hx, hy, hz)) in hops.iter().enumerate() {
             let (fx, fy, fhx, fz1) = from;
-            route.push(Waypoint::w(hx, hz, 0.0).jump_when(move |bot| {
+            route.push(Waypoint::spread(hx, hz, 0.0).jump_when(move |bot| {
                 let p = bot.body.pos;
                 if !bot.body.grounded || (p.y - fy).abs() > 0.4 {
                     return false;
@@ -168,7 +167,7 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
             }));
             from = (hx, hy, 2.0, hz + 1.5);
             if k == last {
-                route.push(Waypoint::w(0.0, z0 + 5.0, 1.0));
+                route.push(Waypoint::spread(0.0, z0 + 5.0, 1.0));
             }
         }
         SegOut {
@@ -205,8 +204,8 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
                 let lx = sx * spread;
                 let color = if k % 2 == 1 { "#ffb347" } else { "#f4f1ff" };
                 s.b.ladder(lx, y - rise, face, y, m::PI, color);
-                routes[r].push(Waypoint::w(lx, face - 2.6, 0.0).jump_shared(&jump_when));
-                routes[r].push(Waypoint::w(lx, face + 1.2, 0.0));
+                routes[r].push(Waypoint::spread(lx, face - 2.6, 0.0).jump_shared(&jump_when));
+                routes[r].push(Waypoint::spread(lx, face + 1.2, 0.0));
             }
             jump_when = never.clone();
             if k < levels {
@@ -229,7 +228,7 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
             top = y;
         }
         for r in &mut routes {
-            r.push(Waypoint::w(0.0, end - 2.0, 1.0));
+            r.push(Waypoint::spread(0.0, end - 2.0, 1.0));
         }
         SegOut {
             z: end,

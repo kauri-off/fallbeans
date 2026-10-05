@@ -1,4 +1,4 @@
-//! Someone in a room (port of `server/rooms/players.ts`).
+//! Someone in a room.
 use fb_proto::{Outfit, Pid};
 
 use super::ConnId;

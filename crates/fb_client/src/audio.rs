@@ -1,5 +1,4 @@
-//! Sound effects (port of `client/game/audio.ts`): each one synthesized into a PCM buffer at start as the
-//! TS client's oscillators made it (frequency and gain sliding exponentially), played on what happens
+//! Sound effects: each one synthesized into a PCM buffer at start from oscillators (frequency and gain sliding exponentially), played on what happens
 //! with a little variation in pitch. Other beans' sounds come from where they are (panned, fainter
 //! with distance); the volume is the player's setting. No music.
 use std::collections::HashMap;

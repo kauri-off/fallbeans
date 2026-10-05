@@ -1,4 +1,4 @@
-//! The bean's procedural animation (port of `client/game/bean.ts`): damped springs on the limbs and the
+//! The bean's procedural animation: damped springs on the limbs and the
 //! body, poses by what the bean is doing, emotes, podium poses, arms reaching for whom it holds, the
 //! tumble's spin, squash and stretch, and the eyes (blinking, opening by expression). The mouth and brows
 //! (`face.rs`) follow the expression and eye opening set here.
@@ -827,7 +827,7 @@ fn podium(p: Podium, t: f32) -> Targets {
     tg
 }
 
-/// The pose on the podium by the place in the game (TS `podiumPose`).
+/// The pose on the podium by the place in the game.
 pub fn podium_pose(place: Option<usize>, n: usize) -> Podium {
     let place = place.unwrap_or(98);
     if place == 0 {

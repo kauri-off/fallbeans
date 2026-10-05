@@ -1,4 +1,4 @@
-//! The Esc menu (port of `menu/*`): the room (players, access, the host's game setup), the player's name
+//! The Esc menu: the room (players, access, the host's game setup), the player's name
 //! and look, the options, dev tools; and who has the mouse: the game (captured) or the interface.
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::input_focus::InputFocus;
@@ -149,7 +149,7 @@ fn capture(cursor: &mut CursorOptions, on: bool) {
     }
 }
 
-/// Who has the mouse, and when the menu opens and closes (as `game.ts`): it opens on entering a room and
+/// Who has the mouse, and when the menu opens and closes: it opens on entering a room and
 /// with Esc; a round's start, Esc again or a click on the field close it and capture the mouse.
 fn menu_flow(
     mut ui: ResMut<Ui>,
@@ -223,7 +223,7 @@ fn menu_flow(
     }
 }
 
-/// A player without a name of their own keeps the one the room gave them (as TS).
+/// A player without a name of their own keeps the one the room gave them.
 fn adopt_name(session: Res<Session>, mut player: ResMut<Player>, opts: Res<crate::opts::Opts>, mut commands: Commands) {
     if !player.name.is_empty() || !opts.name.is_empty() || !session.is_changed() {
         return;

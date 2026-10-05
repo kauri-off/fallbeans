@@ -1,4 +1,4 @@
-//! The bean's mouth and brows (port of `face.ts`). The mouth is drawn into a texture per expression and
+//! The bean's mouth and brows. The mouth is drawn into a texture per expression and
 //! shown on a thin patch laid over the front of the model (visor and body), so nothing sticks out of it
 //! or cuts into it; the brows are small solid strokes lying on the visor above the eyes, which squint,
 //! widen and roll with them. The eyes and tears are animated in `bean.rs`/`beans.rs`.
@@ -291,7 +291,7 @@ fn m(d: f32) -> f32 {
 const INK: &str = "#3a0f22";
 const TONGUE: &str = "#ff6f8f";
 
-/// The mouth of an expression, as `face.ts` draws it on its canvas.
+/// The mouth of an expression, drawn into a texture.
 fn draw(e: Expr) -> Image {
     let mut g = Canvas::new();
     let ink = rgba(INK, 1.0);

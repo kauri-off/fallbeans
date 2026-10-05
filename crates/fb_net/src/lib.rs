@@ -24,7 +24,7 @@ pub use input::FbInput;
 pub use stats::{NetStats, NetStatsPlugin};
 pub use visibility::{InRoom, OthersOnly, OwnerOnly, RoomTag, add_server_filters};
 
-/// The game's version, with the commit when the build had `FB_COMMIT` (releases, deploys).
+/// The game's version, with the commit when the build had `FB_COMMIT` (releases).
 pub fn build() -> String {
     let v = env!("CARGO_PKG_VERSION");
     match option_env!("FB_COMMIT") {
@@ -35,13 +35,13 @@ pub fn build() -> String {
 
 pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
 pub const UDP_PORT: u16 = 5888;
-/// The HTTP API (session, health, debug); production: behind nginx at https://…/fallbeans/.
+/// The HTTP API (session, health, debug); behind a reverse proxy at https://…/fallbeans/.
 pub const HTTP_PORT: u16 = 5887;
 pub const WS_PORT: u16 = 5889;
 pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / TICK_RATE as u64);
-/// Snapshots at 30 Hz, as the TS server.
-pub const SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
-/// Inputs go out at 60 Hz, as from the TS client (two ticks a message). Lightyear's default, every frame,
+/// Snapshots at 60 Hz: other beans move smoother and closer to the present than at 30.
+pub const SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
+/// Inputs go out at 60 Hz (two ticks a message). Lightyear's default, every frame,
 /// cost 56 KB/s up from a client running at 1000 frames and as many acks back from the server.
 pub const INPUT_SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// A jump or dive that reaches the server up to this many ticks after its tick still happens, on the next

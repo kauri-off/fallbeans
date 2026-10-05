@@ -1,8 +1,8 @@
-//! How a map looks (port of `sim/looks.ts`): its colours (the palettes its parts are painted with), the
+//! How a map looks: its colours (the palettes its parts are painted with), the
 //! patterns on them, the sky, sun, fog and ambient light, the land far below and the scenery around it.
 //! Each map has a few looks (the first is its signature); a round picks one by its seed and shifts the
 //! colours a little. Visual only: nothing here touches colliders or the map's layout.
-use fb_shared::m::{self, MinMaxJs};
+use fb_shared::m::{self, MinMax};
 use fb_shared::rng::Rng;
 
 /// The palettes maps paint with, in the order of `scene::pal`.
@@ -870,15 +870,15 @@ fn parse_hex(hex: &str) -> [f64; 3] {
 }
 
 fn to_hex(c: [f64; 3]) -> String {
-    let b = c.map(|x| m::round_js(m::clamp(linear_to_srgb(x) * 255.0, 0.0, 255.0)) as u32);
+    let b = c.map(|x| m::clamp(linear_to_srgb(x) * 255.0, 0.0, 255.0).round() as u32);
     format!("#{:02x}{:02x}{:02x}", b[0], b[1], b[2])
 }
 
-/// three.js `Color.getHSL` (in its linear working space).
+/// Hue, saturation and lightness of a linear colour.
 fn hsl(c: [f64; 3]) -> [f64; 3] {
     let [r, g, b] = c;
-    let max = r.max_js(g).max_js(b);
-    let min = r.min_js(g).min_js(b);
+    let max = r.at_least(g).at_least(b);
+    let min = r.at_most(g).at_most(b);
     let l = (min + max) / 2.0;
     if min == max {
         return [0.0, 0.0, l];
@@ -918,7 +918,7 @@ fn hue2rgb(p: f64, q: f64, mut t: f64) -> f64 {
     p
 }
 
-/// three.js `Color.setHSL`.
+/// A linear colour from hue, saturation and lightness.
 fn from_hsl(h: f64, s: f64, l: f64) -> [f64; 3] {
     let h = ((h % 1.0) + 1.0) % 1.0;
     let s = m::clamp(s, 0.0, 1.0);
@@ -935,7 +935,7 @@ fn from_hsl(h: f64, s: f64, l: f64) -> [f64; 3] {
     ]
 }
 
-/// three.js `Color.offsetHSL` on a hex colour.
+/// A hex colour shifted in hue, saturation and lightness.
 pub fn shift(hex: &str, dh: f64, ds: f64, dl: f64) -> String {
     let [h, s, l] = hsl(parse_hex(hex));
     to_hex(from_hsl(h + dh, s + ds, l + dl))
