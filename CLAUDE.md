@@ -1,9 +1,9 @@
 # Fall Beans — notes for Claude
 
 Fall Beans is a party game (up to 8 beans, races / survival / points rounds, 120 Hz authoritative server): a native
-Rust + Bevy 0.19 + Lightyear 0.30 client and server (branch `rogue/port-to-rust`). It started as a browser game in
-TypeScript; that version is gone from this branch (it stays on `master` and in git history) — its golden traces in
-`core/fb_arena/tests/golden/` are frozen fixtures that can no longer be re-recorded. Version: `0.1.0-alpha`. There is
+Rust + Bevy 0.19 + Lightyear 0.30 client and server. It started as a browser game in TypeScript; that version is gone
+(tag `ts-final` and git history) — its golden traces in `core/fb_arena/tests/golden/` are frozen fixtures that can no
+longer be re-recorded. License: AGPL-3.0-or-later (`LICENSE`). Version: `0.1.0-alpha`. There is
 no production server: players run their own (`.deb`/`.rpm` from the releases, or a build) and add it to the
 client's server list. Player-facing text and the docs are Russian; code, comments and tool output are English.
 
@@ -18,17 +18,16 @@ identity token (`fb_id`).
   started and not finished; what is broken; the plan being worked through, if any. Rewritten whole, never appended.
   Changes not yet committed get a section written as the commit message they will become (a title line, then `-`
   bullets: what changed and why, file by file where it helps, as the repo's commits): a new thread resumes from it
-  without reading the diff. The section goes once they are committed.
-- `docs/decisions.md` — everything decided or found that the code does not explain: deviations, workarounds,
-  temporary hacks (with "Пересмотреть"), rejected options. Entries appended at the bottom, never rewritten; a
-  dropped decision gets "→ отменено: date".
-- **Start of a thread:** read `docs/state.md`, then what it points to (`README.md`, decisions).
+  without reading the diff. The section goes once they are committed. Why something was decided goes into the
+  commit message, or a one-line comment next to the code; there is no decisions log.
+- **Start of a thread:** read `docs/state.md`, then what it points to (`docs/development.md`).
 - **Before a thread ends** (task done, the user stops, or the context is getting long) — without being asked:
-  rewrite `docs/state.md` and add a `docs/decisions.md` entry for anything new.
+  rewrite `docs/state.md`.
 - **Do not track completion.** No "done" lists or ✓ marks: the code, tests and git show what is done. There are no
   phases any more.
-- `README.md` describes the code as it is (layout, commands, rules, releases, known issues); `deploy/README.md` —
-  what a server host needs for `cargo xtask deploy`.
+- `README.md` is for players and server hosts (install, controls, own server, build, player-visible issues,
+  license); `docs/development.md` describes the code as it is (layout, commands, rules, debugging, releases,
+  deploy, internal known issues); `deploy/README.md` — what a server host needs for `cargo xtask deploy`.
 
 ## Rules
 
@@ -42,7 +41,7 @@ identity token (`fb_id`).
 - Line endings are LF (`.gitattributes`). rustfmt formats every edited `.rs` (hook in `.claude/settings.json` →
   `cargo xtask format-hook`); files changed by scripts need `cargo fmt --all`.
 - Deploy only when asked, and only to a host the author names: `cargo xtask deploy --host … --domain …`
-  (`README.md`, "Деплой"); there are no default hosts. The repository is public: no private hosts, addresses or
+  (`docs/development.md`, «Деплой»); there are no default hosts. The repository is public: no private hosts, addresses or
   keys in committed files.
 - The simulation must stay deterministic: `core/` uses no wall clock, no unseeded randomness, no `HashMap`, maths
   only through `fb_shared::m` (`core/clippy.toml` enforces it).
@@ -54,15 +53,15 @@ identity token (`fb_id`).
   fb_client) is Bevy/Lightyear code.
 - Verify with `cargo xtask check` (fmt, clippy -D warnings, tests: golden traces, recorded determinism hashes,
   rollback replay, the quick audits with 0 errors and 0 warnings). A change that intentionally alters the
-  simulation re-blesses `determinism.txt` and, if it breaks a golden trace on purpose, narrows that trace with a
-  `docs/decisions.md` entry and a Rust-side test instead.
+  simulation re-blesses `determinism.txt` and, if it breaks a golden trace on purpose, narrows that trace (why — in
+  the commit message) and adds a Rust-side test instead.
 - Audits: `cargo xtask audit [map…] [--quick] [--only a,b] [--metrics]`. Models: `cargo xtask assets [--export]`
   (`--export` needs Blender; never on GitHub — the glb in `assets/models` are committed).
 - A new map goes into `fb_maps::GAMES`/`MAPS` and gets audits and Rust tests.
 - Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` (server + headless
   clients, predictions compared with the server tick by tick); over the real network: `cargo xtask stress --remote
   --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto`.
-- Look at a running build without a window: `fb_client --offscreen` (`README.md`, «Отладка»); drive a client with
+- Look at a running build without a window: `fb_client --offscreen` (`docs/development.md`, «Отладка»); drive a client with
   `--brp` (`fb/state`, `fb/send`, `fb/dev`, `fb/input`, `fb/ui`); read `stats:`/`metrics:` logs.
 - Changing a replicated component or message: bump `PROTOCOL_VERSION` (`core/fb_shared/src/consts.rs`).
 - Servers: the client keeps a list (`servers.rs`); a player types a domain, IP or `host:port`, the client finds

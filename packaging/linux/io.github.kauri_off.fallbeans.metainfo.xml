@@ -4,6 +4,7 @@
   <name>Fall Beans</name>
   <summary>Party game for up to 8 beans</summary>
   <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
   <description>
     <p>Races, survival and points rounds on a server of your own.</p>
   </description>

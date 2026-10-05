@@ -17,6 +17,7 @@ modules:
     build-commands:
       - install -Dm755 fb_client /app/bin/fb_client
       - cp -r assets /app/bin/assets
+      - install -Dm644 LICENSE /app/share/licenses/io.github.kauri_off.fallbeans/LICENSE
       - install -Dm644 io.github.kauri_off.fallbeans.desktop /app/share/applications/io.github.kauri_off.fallbeans.desktop
       - install -Dm644 io.github.kauri_off.fallbeans.metainfo.xml /app/share/metainfo/io.github.kauri_off.fallbeans.metainfo.xml
       - install -Dm644 fallbeans-256.png /app/share/icons/hicolor/256x256/apps/io.github.kauri_off.fallbeans.png

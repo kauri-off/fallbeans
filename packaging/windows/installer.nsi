@@ -60,6 +60,7 @@ Section
   RMDir /r "$INSTDIR\assets"
   File "${SRC}\fb_client.exe"
   File "${SRC}\fallbeans.ico"
+  File "${SRC}\LICENSE"
   File /r "${SRC}\assets"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -87,6 +88,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$INSTDIR\fb_client.exe"
   Delete "$INSTDIR\fallbeans.ico"
+  Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\assets"
   RMDir "$INSTDIR"

@@ -12,7 +12,7 @@ pub fn f(v: &Value) -> f64 {
 /// A trace recorded by the TS version (gzipped JSON).
 pub fn load(name: &str) -> Value {
     let path = format!("{}/tests/golden/{name}.json.gz", env!("CARGO_MANIFEST_DIR"));
-    // (Frozen: the TS version that recorded them is gone from this branch, see README.md.)
+    // (Frozen: the TS version that recorded them is gone; it is tagged `ts-final`.)
     let file =
         std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path}: {e} (golden traces cannot be re-recorded)"));
     serde_json::from_reader(std::io::BufReader::new(flate2::read::GzDecoder::new(file))).unwrap()

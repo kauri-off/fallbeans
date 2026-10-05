@@ -1,5 +1,5 @@
 # Bevy/Lightyear crates (clippy reads the nearest clippy.toml above a crate). Every API that has crashed the
-# game in a way the types do not show goes here with what to use instead (docs/decisions.md).
+# game in a way the types do not show goes here with what to use instead.
 # `allow-invalid`: not every crate here has these APIs; where one is used, an `#[expect]` proves the ban still works.
 disallowed-methods = [
   { path = "bevy::text::EditableText::clear", allow-invalid = true, reason = "leaves the cursor past the end (panic on the next edit): use ui::set_field_text" },

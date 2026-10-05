@@ -25,4 +25,5 @@ Windows и AppImage обновляются сами: при новой верс�
 списке серверов, `FB_ARGS` — флаги `fb_server --help`), затем `sudo systemctl restart fallbeans`. Логи —
 `journalctl -u fallbeans`.
 
-Контрольные суммы — `SHA256SUMS`.
+Контрольные суммы — `SHA256SUMS`. Лицензия — GNU AGPL v3 или новее (`LICENSE` в каждом пакете); исходный код этой
+версии — архивы «Source code» ниже. Кто меняет сервер и пускает на него игроков, обязан дать им свои исходники.

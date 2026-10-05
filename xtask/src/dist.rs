@@ -91,6 +91,7 @@ fn client_into(dir: &Path) -> bool {
     let exe = format!("fb_client{}", std::env::consts::EXE_SUFFIX);
     copy(Path::new("target/dist").join(&exe), dir.join(&exe));
     copy_dir(&root().join("assets"), &dir.join("assets"));
+    copy("LICENSE", dir.join("LICENSE"));
     true
 }
 

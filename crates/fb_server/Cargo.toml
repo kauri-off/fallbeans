@@ -3,6 +3,7 @@ name = "fb_server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "Fall Beans game server"
 
@@ -44,12 +45,13 @@ assets = [
     ["../../packaging/server/fallbeans.service", "usr/lib/systemd/system/", "644"],
     ["../../packaging/server/setup.sh", "usr/lib/fallbeans/", "755"],
     ["../../packaging/server/remove.sh", "usr/lib/fallbeans/", "755"],
+    ["../../LICENSE", "usr/share/doc/fallbeans-server/", "644"],
 ]
 
 [package.metadata.generate-rpm]
 name = "fallbeans-server"
 summary = "Fall Beans game server"
-license = "Proprietary"
+license = "AGPL-3.0-or-later"
 post_install_script = "/usr/lib/fallbeans/setup.sh"
 pre_uninstall_script = "if [ $1 -eq 0 ]; then /usr/lib/fallbeans/remove.sh; fi"
 post_uninstall_script = "if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi"
@@ -58,4 +60,5 @@ assets = [
     { source = "../../packaging/server/fallbeans.service", dest = "/usr/lib/systemd/system/fallbeans.service", mode = "644" },
     { source = "../../packaging/server/setup.sh", dest = "/usr/lib/fallbeans/setup.sh", mode = "755" },
     { source = "../../packaging/server/remove.sh", dest = "/usr/lib/fallbeans/remove.sh", mode = "755" },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/fallbeans-server/LICENSE", mode = "644", doc = true },
 ]

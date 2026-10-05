@@ -9,7 +9,7 @@ exclude = ["vendor/*"]
 version = "0.1.0-alpha"
 edition = "2024"
 rust-version = "1.95"
-license = "UNLICENSED"
+license = "AGPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]
@@ -19,7 +19,7 @@ fb_maps = { path = "core/fb_maps" }
 fb_arena = { path = "core/fb_arena" }
 fb_net = { path = "crates/fb_net" }
 fb_proto = { path = "crates/fb_proto" }
-# Engine and networking: pinned exactly, they move together (docs/decisions.md).
+# Engine and networking: pinned exactly, they move together.
 bevy = { version = "=0.19.1", default-features = false }
 bevy_render = { version = "=0.19.1", default-features = false }
 # The wgpu types Bevy 0.19.1 builds on (adapter info: backend, device type).
@@ -76,7 +76,7 @@ type_complexity = "allow"
 # A byte index into a str panics inside a character (Cyrillic, emoji): `get`, `split_once`, `char_indices`.
 string_slice = "warn"
 
-# Local fixes to dependencies, each to drop once upstream has it (README.md, «Известные проблемы»).
+# Local fixes to dependencies, each to drop once upstream has it (docs/development.md, «Известные проблемы»).
 [patch.crates-io]
 # The WebSocket server leaves Nagle's algorithm on (only the client can turn it off): +15 ms RTT on wss.
 aeronet_websocket = { path = "vendor/aeronet_websocket" }
