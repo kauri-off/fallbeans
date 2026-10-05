@@ -439,7 +439,7 @@ impl Hub {
             };
             let ip = self.sessions[&conn].ip.clone();
             let now = self.real_ms();
-            if !self.guesses.allow(&ip, now) {
+            if !self.guesses.allow(&ip, id, now) {
                 return self.deny(
                     conn,
                     Some(id),
@@ -448,6 +448,7 @@ impl Hub {
                 );
             }
             if !same_key(pin, &want) {
+                self.guesses.failed(&ip, id, now);
                 warn!(room = id, ip, "wrong room pin");
                 return self.deny(conn, Some(id), DenyReason::Pin, "Неверный PIN-код");
             }

@@ -33,12 +33,30 @@ pub fn is_other(c: char) -> bool {
         )
 }
 
+/// Drops `is_other` characters (control characters become `control`), but keeps a zero-width joiner
+/// between two symbols: it is what holds emoji sequences like 👨‍👩‍👧 together.
+fn visible(raw: &str, control: Option<char>) -> String {
+    let symbol = |c: Option<&char>| c.is_some_and(|&c| !c.is_alphanumeric() && !c.is_whitespace() && !is_other(c));
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{200d}' && symbol(out.chars().next_back().as_ref()) && symbol(chars.peek()) {
+            out.push(c);
+        } else if c.is_control() {
+            out.extend(control);
+        } else if !is_other(c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn collapse_spaces(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn sanitize_name(raw: &str) -> String {
-    let s: String = raw.chars().filter(|&c| !is_other(c) && c != '<' && c != '>').collect();
+    let s: String = visible(raw, None).chars().filter(|&c| c != '<' && c != '>').collect();
     s.trim()
         .chars()
         .take(NAME_MAX)
@@ -48,7 +66,7 @@ pub fn sanitize_name(raw: &str) -> String {
 }
 
 pub fn sanitize_title(raw: &str) -> String {
-    let s: String = raw.chars().filter(|&c| !is_other(c) && c != '<' && c != '>').collect();
+    let s: String = visible(raw, None).chars().filter(|&c| c != '<' && c != '>').collect();
     collapse_spaces(&s)
         .chars()
         .take(ROOM_TITLE_MAX)
@@ -57,9 +75,9 @@ pub fn sanitize_title(raw: &str) -> String {
         .to_string()
 }
 
-/// One line, no control characters, at most CHAT_MAX characters.
+/// One line, no control or invisible characters (bidi overrides, zero-width), at most CHAT_MAX characters.
 pub fn sanitize_chat(raw: &str) -> String {
-    let s: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let s = visible(raw, Some(' '));
     collapse_spaces(&s).chars().take(CHAT_MAX).collect()
 }
 
@@ -75,5 +93,10 @@ mod tests {
         assert_eq!(sanitize_chat("привет\n\nвсем  \u{1}!"), "привет всем !");
         assert_eq!(sanitize_chat(&"я".repeat(500)).chars().count(), CHAT_MAX);
         assert_eq!(sanitize_chat("  \n "), "");
+        assert_eq!(sanitize_chat("a\u{202e}b\u{200b}c\u{2066}d"), "abcd");
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        assert_eq!(sanitize_chat(family), family);
+        assert_eq!(sanitize_name(&format!("Аня{family}")), format!("Аня{family}"));
+        assert_eq!(sanitize_name("Bo\u{200d}b"), "Bob");
     }
 }

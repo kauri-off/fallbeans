@@ -245,6 +245,22 @@ fn only_the_host_starts_and_only_with_enough_players() {
 }
 
 #[test]
+fn start_and_abort_spam_builds_at_most_one_arena_a_second() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    t.hello("B", "ub");
+    t.ctl(a, ClientMsg::Start);
+    assert_eq!(t.room.phase, Phase::Round);
+    t.ctl(a, ClientMsg::Abort);
+    assert_eq!(t.room.phase, Phase::Lobby);
+    t.ctl(a, ClientMsg::Start);
+    assert_eq!(t.room.phase, Phase::Lobby);
+    t.advance(1.0);
+    t.ctl(a, ClientMsg::Start);
+    assert_eq!(t.room.phase, Phase::Round);
+}
+
+#[test]
 fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     let mut t = Bench::new(opts());
     let a = t.hello("A", "ua");

@@ -27,6 +27,8 @@ const MSG_RATE: u32 = 60;
 const CHAT_GAP_S: f64 = 0.7;
 /// Ticks the arena may fall behind before it skips ahead instead of catching up.
 const MAX_CATCHUP: i64 = 60;
+/// Shortest time between two starts by the host (s): building a round's arena costs the shared tick up to ≈6 ms.
+const START_GAP_S: f64 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct Practice {
@@ -156,6 +158,8 @@ pub struct Room {
     pub max: usize,
     next_id: Pid,
     arena_seq: u32,
+    /// Real tick of the host's last start.
+    started_at: Option<u64>,
     timer: Option<(f64, Timer)>,
     rng: Rng,
     /// Dev: seed of the next round's map.
@@ -204,6 +208,7 @@ impl Room {
             max: opts.max_players.min(MAX_PLAYERS),
             next_id: 1,
             arena_seq: 1,
+            started_at: None,
             timer: None,
             rng: Rng::new(opts.seed.unwrap_or_else(random_u32)),
             next_seed: None,
@@ -406,7 +411,11 @@ impl Room {
                 }
             }
             ClientMsg::Start => {
-                if host && lobby && self.roster().len() >= self.opts.min_players {
+                let early = self
+                    .started_at
+                    .is_some_and(|at| real.saturating_sub(at) < ticks(START_GAP_S));
+                if host && lobby && !early && self.roster().len() >= self.opts.min_players {
+                    self.started_at = Some(real);
                     self.start_game();
                 }
             }

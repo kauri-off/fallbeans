@@ -136,7 +136,7 @@ version = "0.8.0"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.tokio]
 version = "1.39.2"
-features = ["rt-multi-thread"]
+features = ["rt-multi-thread", "time"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.tokio-rustls]
 version = "0.26.2"

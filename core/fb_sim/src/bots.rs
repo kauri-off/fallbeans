@@ -98,7 +98,6 @@ pub struct BotMem {
     pub wp: Option<usize>,
     pub go: Option<usize>,
     pub ready_at: Option<f64>,
-    pub route: Option<usize>,
     pub pref: Option<f64>,
     pub gy: Option<f64>,
     pub hunt: Option<u32>,
@@ -1272,10 +1271,6 @@ fn target_x(bot: &BotView, w: &Waypoint) -> f64 {
 }
 
 /// Follows waypoints along a course (by z), with waits, timed jumps, detours and special stretches.
-pub fn path_brain(points: Vec<Waypoint>, dive_chance: f64) -> BotBrain {
-    Box::new(move |bot, out| path_step(&points, dive_chance, bot, out))
-}
-
 pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut BotView, out: &mut BotInput) {
     init_bot(bot);
     let b = bot.body;
@@ -1437,27 +1432,6 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
         },
     );
     unstick(bot, out);
-}
-
-/// Several routes (e.g. one per safe lane); each bot takes the one starting nearest to it.
-pub fn routes_brain(routes: Vec<(f64, Vec<Waypoint>)>) -> BotBrain {
-    Box::new(move |bot, out| {
-        let route = match bot.mem.route {
-            Some(r) => r,
-            None => {
-                let x = bot.body.pos.x;
-                let mut best = 0;
-                for (i, r) in routes.iter().enumerate() {
-                    if (r.0 - x).abs() < (routes[best].0 - x).abs() {
-                        best = i;
-                    }
-                }
-                bot.mem.route = Some(best);
-                best
-            }
-        };
-        path_step(&routes[route].1, 0.0, bot, out);
-    })
 }
 
 pub struct ArenaOpts {

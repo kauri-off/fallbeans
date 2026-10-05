@@ -40,7 +40,9 @@ chmod 755 fb_server # (packed on Windows: tar keeps no mode bits)
 ./fb_server --help >/dev/null || fail "fb_server не запускается на этом хосте"
 command -v nginx >/dev/null || fail "nginx не установлен"
 [ -d $APPS ] || fail "нет $APPS: сайт $DOMAIN в nginx должен подключать $APPS/*.conf"
-grep -rqs "apps.d/\*.conf" /etc/nginx/ || fail "nginx не подключает $APPS/*.conf (include в server-блоке сайта $DOMAIN)"
+# (From the configuration nginx actually loads: a commented-out include does not count. Not a pipe: with
+# pipefail, grep -q leaving early would fail it.)
+grep -Eq '^[[:space:]]*include[[:space:]]+[^#;]*apps\.d/\*\.conf' <(nginx -T 2>/dev/null) || fail "nginx не подключает $APPS/*.conf (include в server-блоке сайта $DOMAIN)"
 for port in 5888 5890; do
   if ss -Hlnu "sport = :$port" | grep -q . && ! systemctl is-active --quiet fallbeans; then
     fail "UDP $port уже занят: $(ss -Hlnup "sport = :$port")"

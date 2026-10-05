@@ -110,11 +110,12 @@ impl Auth {
     }
 }
 
-/// Rate limit for guesses: 5 attempts per minute per address, 30 per minute in total.
+/// Rate limit for wrong guesses: 5 a minute per address, 30 a minute per target (a room's PIN, the debug key).
+/// Right guesses do not count, and one target's guessers cannot lock the others.
 #[derive(Default)]
 pub struct Limiter {
     per_ip: BTreeMap<String, Vec<u64>>,
-    global: Vec<u64>,
+    per_target: BTreeMap<String, Vec<u64>>,
 }
 
 /// Who a guess is counted against: the address, or for IPv6 its /64 (one subscriber's network has
@@ -170,21 +171,29 @@ impl Budget {
 }
 
 impl Limiter {
-    /// `now` in milliseconds (any monotonic origin).
-    pub fn allow(&mut self, ip: &str, now: u64) -> bool {
+    /// Whether `ip` may guess at `target` now; `now` in milliseconds (any monotonic origin).
+    pub fn allow(&mut self, ip: &str, target: &str, now: u64) -> bool {
         let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
-        let mine = self.per_ip.entry(guesser(ip)).or_default();
-        mine.retain(fresh);
-        self.global.retain(fresh);
-        if mine.len() >= 5 || self.global.len() >= 30 {
-            return false;
-        }
-        mine.push(now);
-        self.global.push(now);
+        let full = |m: &mut BTreeMap<String, Vec<u64>>, key: &str, cap: usize| {
+            m.get_mut(key).is_some_and(|v| {
+                v.retain(fresh);
+                v.len() >= cap
+            })
+        };
+        !full(&mut self.per_ip, &guesser(ip), 5) && !full(&mut self.per_target, target, 30)
+    }
+
+    /// Counts a wrong guess.
+    pub fn failed(&mut self, ip: &str, target: &str, now: u64) {
+        self.per_ip.entry(guesser(ip)).or_default().push(now);
+        self.per_target.entry(target.to_string()).or_default().push(now);
+        let fresh = |v: &Vec<u64>| v.last().is_some_and(|t| now.saturating_sub(*t) < 60_000);
         if self.per_ip.len() > 10_000 {
-            self.per_ip.clear();
+            self.per_ip.retain(|_, v| fresh(v));
         }
-        true
+        if self.per_target.len() > 10_000 {
+            self.per_target.retain(|_, v| fresh(v));
+        }
     }
 }
 
@@ -238,20 +247,39 @@ mod tests {
     fn rate_limits_guessing() {
         let mut l = Limiter::default();
         let mut now = 1_000_000;
+        let guess = |l: &mut Limiter, ip: &str, target: &str, now: u64| {
+            let ok = l.allow(ip, target, now);
+            if ok {
+                l.failed(ip, target, now);
+            }
+            ok
+        };
         for _ in 0..5 {
-            assert!(l.allow("a", now));
+            assert!(guess(&mut l, "a", "r1", now));
         }
-        assert!(!l.allow("a", now));
-        assert!(l.allow("b", now));
+        assert!(!guess(&mut l, "a", "r1", now));
+        assert!(!guess(&mut l, "a", "r2", now));
+        assert!(guess(&mut l, "b", "r1", now));
         now += 61_000;
-        assert!(l.allow("a", now));
+        assert!(guess(&mut l, "a", "r1", now));
         // One IPv6 network is one guesser, whichever of its addresses it uses.
         for i in 0..5 {
-            assert!(l.allow(&format!("2001:db8:1:2::{i}"), now));
+            assert!(guess(&mut l, &format!("2001:db8:1:2::{i}"), "r1", now));
         }
-        assert!(!l.allow("2001:db8:1:2:ffff::9", now));
-        assert!(l.allow("2001:db8:1:3::1", now));
+        assert!(!guess(&mut l, "2001:db8:1:2:ffff::9", "r1", now));
+        assert!(guess(&mut l, "2001:db8:1:3::1", "r1", now));
         assert_eq!(guesser("::ffff:10.0.0.1"), "::ffff:10.0.0.1");
+        // Right guesses do not count.
+        for _ in 0..10 {
+            assert!(l.allow("c", "r1", now));
+        }
+        // Many guessers lock one target only.
+        for i in 0..30 {
+            l.allow(&format!("10.0.1.{i}"), "r3", now);
+            l.failed(&format!("10.0.1.{i}"), "r3", now);
+        }
+        assert!(!l.allow("10.0.2.1", "r3", now));
+        assert!(l.allow("10.0.2.1", "r4", now));
     }
 
     #[test]

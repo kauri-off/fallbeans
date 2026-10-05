@@ -213,6 +213,12 @@ impl World {
             self.colliders[i].sync(&self.nodes);
             let c = &self.colliders[i];
             if c.is_static {
+                // (A non-finite extent would make the grid loop over cells for ever.)
+                let (ex, ez) = c.extent_xz();
+                assert!(
+                    c.center.is_finite() && ex.is_finite() && ez.is_finite(),
+                    "collider {i} is not finite"
+                );
                 self.grid.insert(c);
             } else {
                 self.dynamic.push(c.index);

@@ -113,6 +113,10 @@ fn nsis() -> bool {
     };
     run(tool("MAKENSIS", default)
         .arg(format!("-DVERSION={}", version()))
+        .arg(format!(
+            "-DVI_VERSION={}.0",
+            version().split('-').next().unwrap_or("0.0.0")
+        ))
         .arg(format!("-DSRC={}", s.display()))
         .arg(format!("-DOUT={}", out.display()))
         .arg(root().join("packaging/windows/installer.nsi")))

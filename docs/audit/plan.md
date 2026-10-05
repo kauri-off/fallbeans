@@ -53,7 +53,7 @@ Then I (the main thread):
 3. Bounded runtime smoke: server + headless clients via `cargo xtask stress` (short, `--release`), and
    `fb_client --offscreen --exit-after` if useful.
 4. Write `docs/audit/report.md` (all findings, what was fixed) and `docs/audit/proposals.md` (bigger changes with
-   variants); rewrite `docs/state.md`; append to `docs/decisions.md`.
+   variants); rewrite `docs/state.md`; append to `docs/decisions.md` (that tree's decisions log; the repository has none).
 
 ## Never let anything run endlessly or get stuck (hard limit: 30 minutes per run)
 

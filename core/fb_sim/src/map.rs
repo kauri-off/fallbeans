@@ -111,6 +111,8 @@ pub struct Cx<'a> {
     pub out: &'a mut Vec<MapOut>,
     /// The spec's handler, for `emit` (taken while it runs: an event handler does not emit).
     pub on_event: Option<&'a mut OnEvent>,
+    /// The spec's handler is running.
+    pub in_event: bool,
 }
 
 impl Cx<'_> {
@@ -118,13 +120,17 @@ impl Cx<'_> {
         if !self.server {
             return;
         }
+        // (Clients would apply a nested event with the handler, the server would not.)
+        debug_assert!(!self.in_event, "an event handler emits {name}");
         self.out.push(MapOut::Event {
             name: name.to_string(),
             data: data.clone(),
             keep: true,
         });
         if let Some(h) = self.on_event.take() {
+            self.in_event = true;
             h(self, name, &data);
+            self.in_event = false;
             self.on_event = Some(h);
         }
     }

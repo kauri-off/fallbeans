@@ -25,6 +25,15 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "Russian"
 
+; Shown in the properties of setup.exe (the numeric form has four parts: 0.1.0-alpha → 0.1.0.0).
+VIProductVersion "${VI_VERSION}"
+VIFileVersion "${VI_VERSION}"
+VIAddVersionKey "ProductName" "${APP}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "FileDescription" "Установка ${APP}"
+VIAddVersionKey "LegalCopyright" "AGPL-3.0-or-later"
+
 Var Update
 
 Function .onInit

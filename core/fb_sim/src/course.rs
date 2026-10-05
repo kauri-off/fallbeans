@@ -540,7 +540,7 @@ const GATE_RATE: f64 = 2.2;
 impl Gate {
     fn held(&self, t: f64) -> f64 {
         if self.pressed {
-            1f64.min_js(self.level0 + (t - self.at) * GATE_RATE)
+            1f64.min_js(self.level0 + 0f64.max_js(t - self.at) * GATE_RATE)
         } else {
             0f64.max_js(self.level0 - 0f64.max_js(t - self.at) * GATE_RATE)
         }

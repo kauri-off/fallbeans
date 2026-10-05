@@ -108,7 +108,7 @@ it was kept. Sources: docs.rs and upstream source (Bevy 0.19.1, Lightyear 0.30.1
 - **`SHA256SUMS` would not match the server packages**: GitHub renames `~` to `.` in uploaded names
   (`0.1.0~alpha`). The release job renames before hashing.
 - **GitHub Actions**: least-privilege token (only the release job writes); Node 20 actions bumped (upload-artifact v6,
-  download-artifact v7); CI cancels superseded runs.
+  download-artifact v7); CI cancels superseded runs (the CI workflow was removed later: only `release.yml` is left).
 - **xtask**: shell injection through `--domain` / an `--host` starting with `-` (ssh option) in deploy; ssh/scp could
   hang forever on a dead link (keep-alives added); a server that died at start went unnoticed in `stress`/`dev`;
   `stress --remote` hashed the binary with `sha256sum` (absent on Windows → re-upload every run) → hashed in Rust.
@@ -147,10 +147,15 @@ those pinned to Bevy 0.19 (Bevy 0.20 is only rc.2; Lightyear has no release for 
 (steamworks, lockfile only — never compiled), unmaintained `paste`, `rustls-pemfile` (lockfile only), `ttf-parser`
 (Linux client via winit Wayland decorations — upstream).
 
+## Validation (2026-10-05, in the git repository after PR #11)
+Every "Fixed" item above and every approved follow-up was found in the code; `cargo xtask check` passed (171 tests,
+0 warnings, quick audits clean). Every open proposal still described the code. The quick ones were then applied (marked
+in `proposals.md`): 1.2, 1.3, 1.4, 1.7, 1.8, 2.4, 2.5, 2.7, 2.8 (finiteness), 2.10, 3.2, 5.11 (wording), 7.3 (without
+`<releases>`), 7.7, 7.9, 7.10 (version info).
+
 ## Known remaining issues
-See `proposals.md` — the most important still open: PIN entry lockable server-wide (1.2), Start/Abort spam (1.3), the
-WebSocket handshake without a timeout in the vendored aeronet (1.4), no gamepad/keyboard menu navigation (5.6),
-`appimagetool` unpinned (7.2).
+See `proposals.md` — the most important still open: no gamepad/keyboard menu navigation (5.6), `appimagetool`
+unpinned (7.2), corrupt settings file (4.2), replays after a catch-up skip (2.2), IPv4-only UDP (1.10).
 
 ## Stress note
 Both stress runs report, per client, exactly one "unexplained divergence" ≈190–265 ticks after the start (1.4 per

@@ -664,15 +664,12 @@ async fn debug(
 /// `login?key=FB_DEBUG_KEY`: the debug cookie, for a week.
 fn login(api: &Api, ip: IpAddr, proxied: bool, key: &str) -> Response {
     let now_ms = api.started.elapsed().as_millis() as u64;
-    let allowed = api
-        .guesses
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .allow(&ip.to_string(), now_ms);
-    if !allowed {
+    let mut guesses = api.guesses.lock().unwrap_or_else(|e| e.into_inner());
+    if !guesses.allow(&ip.to_string(), "debug", now_ms) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();
     }
     if !api.debug_key.as_deref().is_some_and(|want| same_key(key, want)) {
+        guesses.failed(&ip.to_string(), "debug", now_ms);
         warn!(%ip, "bad debug key");
         return (StatusCode::FORBIDDEN, "wrong key").into_response();
     }

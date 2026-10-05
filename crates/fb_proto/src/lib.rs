@@ -176,8 +176,9 @@ fn ensure(ok: bool, what: &'static str) -> Result<(), &'static str> {
     if ok { Ok(()) } else { Err(what) }
 }
 
+// (No upper bound: a room's ids start at 1 and only grow, past 65535 after heavy bot churn.)
 fn check_pid(id: Pid) -> Result<(), &'static str> {
-    ensure(id <= 65535, "player id")
+    ensure(id != 0, "player id")
 }
 
 fn check_games(games: &[String]) -> Result<(), &'static str> {

@@ -28,6 +28,9 @@ use {
     tracing::{Instrument, debug, debug_span},
 };
 
+/// fallbeans patch: how long a connection may take to finish the TLS and WebSocket handshakes.
+const HANDSHAKE_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
+
 pub async fn start(
     config: ServerConfig,
     tx_next: oneshot::Sender<ToOpen>,
@@ -136,29 +139,36 @@ async fn handle_session(
     }
     debug!("Performing session handshake");
 
-    let stream = if let Some(tls_acceptor) = tls_acceptor {
-        tls_acceptor
-            .accept(stream)
-            .await
-            .map(MaybeTlsStream::Rustls)
-            .map_err(ServerError::TlsHandshake)?
-    } else {
-        MaybeTlsStream::Plain(stream)
+    // fallbeans patch: a client that connects and never finishes the handshake would hold its session
+    // (entity, task, socket) for ever.
+    let handshake = async {
+        let stream = if let Some(tls_acceptor) = tls_acceptor {
+            tls_acceptor
+                .accept(stream)
+                .await
+                .map(MaybeTlsStream::Rustls)
+                .map_err(ServerError::TlsHandshake)?
+        } else {
+            MaybeTlsStream::Plain(stream)
+        };
+        tokio_tungstenite::accept_hdr_async_with_config(
+            stream,
+            #[expect(
+                clippy::result_large_err,
+                reason = "this `Result` is what `tokio_tungstenite` asks for"
+            )]
+            |req: &Request, resp: Response| match &handshake_handler {
+                Some(h) => h.handle(req, resp),
+                None => Ok(resp),
+            },
+            Some(socket_config),
+        )
+        .await
+        .map_err(ServerError::AcceptClient)
     };
-    let stream = tokio_tungstenite::accept_hdr_async_with_config(
-        stream,
-        #[expect(
-            clippy::result_large_err,
-            reason = "this `Result` is what `tokio_tungstenite` asks for"
-        )]
-        |req: &Request, resp: Response| match &handshake_handler {
-            Some(h) => h.handle(req, resp),
-            None => Ok(resp),
-        },
-        Some(socket_config),
-    )
-    .await
-    .map_err(ServerError::AcceptClient)?;
+    let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake)
+        .await
+        .map_err(|_| ServerError::AcceptConnection(std::io::ErrorKind::TimedOut.into()))??;
 
     let (frontend, backend) = crate::session::backend::native::split(stream);
     let connected = ToConnected {

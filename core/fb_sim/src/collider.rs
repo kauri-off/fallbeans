@@ -69,6 +69,8 @@ pub struct Collider {
     pub center: V3,
     pub radius: f64,
     synced: bool,
+    /// Scaled to nothing (no inverse): touches nothing instead of poisoning beans with NaN depths.
+    degenerate: bool,
 }
 
 impl Collider {
@@ -104,6 +106,7 @@ impl Collider {
             center: V3::ZERO,
             radius,
             synced: false,
+            degenerate: false,
         }
     }
 
@@ -117,6 +120,7 @@ impl Collider {
         self.prev = if self.synced { self.cur } else { w };
         self.cur = w;
         self.inv = w.invert();
+        self.degenerate = self.inv.0.iter().all(|&x| x == 0.0) || self.inv.0.iter().any(|x| !x.is_finite());
         self.center = w.position();
         self.synced = true;
     }
@@ -137,7 +141,7 @@ impl Collider {
 
     pub fn contact(&self, center: V3, r: f64, out: &mut Contact) -> bool {
         let reach = self.radius + r;
-        if crate::math::dist_sq(center, self.center) > reach * reach {
+        if self.degenerate || crate::math::dist_sq(center, self.center) > reach * reach {
             return false;
         }
         let l = self.inv.apply_point(center);
@@ -233,6 +237,9 @@ impl Collider {
 
     /// Distance along a ray (unit `dir`) to where it enters the shape, or −1; `normal` gets the world normal.
     pub fn raycast(&self, origin: V3, dir: V3, max_t: f64, normal: &mut V3) -> f64 {
+        if self.degenerate {
+            return -1.0;
+        }
         let o = self.inv.apply_point(origin);
         let d = self.inv.transform_dir(dir);
         let t;
@@ -346,4 +353,39 @@ impl Collider {
 fn sign_or_one(x: f64) -> f64 {
     let s = m::sign(x);
     if s == 0.0 || s.is_nan() { 1.0 } else { s }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::{Nodes, ROOT};
+
+    #[test]
+    fn a_collider_scaled_to_nothing_touches_nothing() {
+        let mut nodes = Nodes::default();
+        let n = nodes.add(ROOT, V3::ZERO);
+        let mut c = Collider::new(
+            n,
+            Shape::Box {
+                hx: 1.0,
+                hy: 1.0,
+                hz: 1.0,
+            },
+            ColliderOpts::default(),
+        );
+        nodes.update_all();
+        c.sync(&nodes);
+        let mut hit = Contact::default();
+        let mut normal = V3::ZERO;
+        assert!(c.contact(V3::new(0.0, 1.2, 0.0), 0.5, &mut hit));
+        assert!(c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0, &mut normal) > 0.0);
+        nodes.get_mut(n).scale = V3::ZERO;
+        nodes.update_all();
+        c.sync(&nodes);
+        assert!(!c.contact(V3::new(0.0, 0.2, 0.0), 0.5, &mut hit));
+        assert_eq!(
+            c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0, &mut normal),
+            -1.0
+        );
+    }
 }

@@ -3,44 +3,23 @@
 Перезаписывается целиком в конце каждого треда. Только то, чего не видно в коде и git: где остановились, что
 начато и не закончено, что сломано, с чего начать.
 
-**5 октября 2026**, ветка `master`, последний коммит `95801a0`; поверх него — незакоммиченная переделка логов (ниже).
-Версия `0.1.0-alpha`. Последний TS-коммит помечен тегом `ts-final`.
+**5 октября 2026**, ветка `master`, последний коммит — «Validate the audit and apply its quick proposals» (поверх
+`7f1becb`, логи и F8). Версия `0.1.0-alpha`. Последний TS-коммит помечен тегом `ts-final`.
 
 Постоянного сервера нет: игроки добавляют свой сервер в список на главном экране (`README.md`, «Свой сервер»).
 У автора сервер стоит из `.deb` (systemd, логи в journald).
 
-## Незакоммиченные изменения
-
-Логи переделаны под вопрос «что пошло не так» (автор: «постоянно телепортирует назад», «если краш — где логи»).
-Предлагаемое сообщение коммита:
-
-```
-Logs that explain what went wrong, on disk and in F8 reports
-
-- client: a log file a run in the profile's logs/ (newest 10), crash reports there too (crash-<time>.txt),
-  a GPU error (DeviceLost) writes one as well; settings and the crash note open the folder
-- client: `stats:` only with --stats-every (headless: every second, stress reads it); a `net:` summary a
-  minute, and lines at once for corrections of the own bean (rubber-banding), unpredicted respawns, clock
-  jumps, long frames, loss and slow round trips, each with the connection's state
-- client: F8 saves report-<time>.txt (connection, corrections, the bean's last 10 s by tick, log tail)
-- client: the same connection failure is logged once and then every tenth time; disconnect reasons
-- server: `input gap` per player (with how late the newest input was), `still no input`, disconnect reason
-  and RTT, panics with a backtrace, room crashes with phase/tick/players; no `metrics:` while empty
-- dist: strip only debuginfo, so backtraces name functions
-```
-
-Проверено: `cargo xtask check`; сервер и `--headless`-клиент с `--lag/--jitter/--loss` (строки `input gap`, `clock
-set`, `packet loss`, `slow round trip`; детектор поправок — с временно нулевыми порогами); файл лога —
-`fb_client --offscreen --profile logtest` (профиль удалён). Окно, кнопка «Открыть папку с логами» и F8 вживую не
-проверялись (автор смотрит сам).
+Не проверено вживую: окно, «Открыть папку с логами» и F8 (автор смотрит сам); `cargo xtask dist nsis` с новой
+информацией о версии (`VIProductVersion`, нет makensis на Linux); `remote-install.sh` с проверкой `nginx -T` на хосте.
 
 ## Начать с
 
 1. Дальше гонять `cargo xtask fuzz-ui --secs 600 --jobs 4`; упавшее зерно → сценарий в `scenarios.rs` →
    исправление. Геймпада в monkey нет (стенд не шлёт его событий).
 2. Автообновление вживую — на втором релизе (`version` → `0.1.0-alpha.2`, `release` по просьбе автора).
-3. `docs/audit/` автор пока не трогает (там же нерешённые предложения: 1.2 PIN по комнате, 1.3 спам Start, 5.6
-   геймпад в меню).
+3. Открытые предложения аудита (`docs/audit/proposals.md`; сделанные помечены «Applied»): 5.6 геймпад в меню,
+   7.2 закрепить `appimagetool`, 4.2 битый `settings.toml`, 2.2 повторы после пропуска тиков, 1.10 UDP по IPv6,
+   1.5 ключ отладки не в URL.
 
 ## План: падения ловятся до запуска
 

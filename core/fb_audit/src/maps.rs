@@ -320,7 +320,7 @@ fn spawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 }
 
 fn respawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
-    let mut a = built(map, ctx.seed);
+    let a = built(map, ctx.seed);
     let times = if ctx.quick {
         vec![10.0]
     } else {
@@ -333,6 +333,8 @@ fn respawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             for &t0 in &times {
                 // Same place the arena respawns at (± the per-player jitter).
                 let p = V3::new(cp.x + dx, cp.y + 0.5, cp.z);
+                // A fresh arena each time: map state (used portals, timers) must not carry over between tests.
+                let mut a = built(map, ctx.seed);
                 let r = stand_test(&mut a, p, t0, 1.5);
                 tests += 1;
                 let side = format!("x{}{dx}", if dx >= 0.0 { "+" } else { "" });

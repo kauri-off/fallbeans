@@ -307,14 +307,22 @@ impl Game {
         self.step();
     }
 
-    /// The text field on screen that holds `which`.
+    /// The text field on screen that holds `which` (waits up to 5 s: the UI draws a frame after the state it shows).
     pub fn field(&mut self, which: Field) -> Entity {
-        let w = self.client().world_mut();
-        w.query::<(Entity, &Field, &InheritedVisibility)>()
-            .iter(w)
-            .find(|(_, f, v)| **f == which && v.get())
-            .map(|(e, ..)| e)
-            .unwrap_or_else(|| panic!("no field {which:?} on screen"))
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let w = self.client().world_mut();
+            let found = w
+                .query::<(Entity, &Field, &InheritedVisibility)>()
+                .iter(w)
+                .find(|(_, f, v)| **f == which && v.get())
+                .map(|(e, ..)| e);
+            if let Some(e) = found {
+                return e;
+            }
+            assert!(Instant::now() < end, "no field {which:?} on screen within 5 s");
+            self.step();
+        }
     }
 
     pub fn text(&mut self, which: Field) -> String {

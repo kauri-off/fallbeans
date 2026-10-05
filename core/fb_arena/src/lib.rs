@@ -271,6 +271,7 @@ pub fn touch_hook<'a>(
             scores: &mut *scores,
             out: &mut *out,
             on_event: None,
+            in_event: false,
         };
         h(&mut cx, body, ev, tc);
     }
@@ -306,6 +307,7 @@ pub fn client_event(
         scores,
         out,
         on_event: None,
+        in_event: false,
     };
     h(&mut cx, name, data);
 }
@@ -328,6 +330,7 @@ pub fn client_start(
         scores,
         out,
         on_event: None,
+        in_event: false,
     };
     h(&mut cx);
 }
@@ -350,6 +353,7 @@ pub fn client_hud(
         scores,
         out: &mut out,
         on_event: None,
+        in_event: false,
     };
     h(&cx)
 }
@@ -786,6 +790,7 @@ impl Arena {
                     scores,
                     out,
                     on_event: on_event.as_mut(),
+                    in_event: false,
                 };
                 h(&mut cx, body, ev, tc);
             };
@@ -845,6 +850,7 @@ impl Arena {
             scores: &mut self.scores,
             out: &mut self.map_out,
             on_event: on_event.as_mut(),
+            in_event: false,
         };
         let r = f(spec, &mut cx);
         spec.on_event = on_event;

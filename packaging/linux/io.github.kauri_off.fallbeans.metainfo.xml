@@ -5,8 +5,11 @@
   <summary>Party game for up to 8 beans</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="io.github.kauri_off">
+    <name>Kauri</name>
+  </developer>
   <description>
-    <p>Races, survival and points rounds on a server of your own.</p>
+    <p>A party game for up to 8 beans: races, survival and points rounds, played on a server of your own.</p>
   </description>
   <launchable type="desktop-id">io.github.kauri_off.fallbeans.desktop</launchable>
   <url type="homepage">https://github.com/kauri-off/fallbeans</url>

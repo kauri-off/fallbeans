@@ -1,5 +1,8 @@
 # Audit 2026-10-05 — proposals (changes not applied)
 
+> Validated against the repository on 2026-10-05 (after PR #11): every open problem below was still in the code;
+> the quick ones were then fixed and are marked "Applied … (validation pass)".
+
 Everything here was found by the total audit (`docs/audit/plan.md`, results in `docs/audit/report.md`) and **not**
 applied because it changes the simulation (golden traces / determinism hashes), gameplay rules, the network
 protocol or tuning, the look of the game, or needs a decision, a measurement or a run on real hardware / a real host.
@@ -44,6 +47,8 @@ hello are closed only after 5 s).
 (LAN party behind one NAT, a VPN exit): the numbers need the author's choice.
 
 ### 1.2 🟠 PIN entry can be locked server-wide
+> **Applied 2026-10-05 (validation pass):** variant 1. `auth::Limiter` counts only wrong guesses, 5/min per address and 30/min per target (a room's id, `"debug"` for the debug key); test `rate_limits_guessing`.
+
 **Problem.** `auth::Limiter` has a global cap of 30 guesses/min for the whole server, and correct PINs count too. Six
 addresses guessing lock every private-room join on the server; the debug-login limiter can be exhausted the same way.
 **Variants.** 1) Second bucket per room (`allow(ip, scope, now)`), count only failed guesses. 2) Keep a global cap but
@@ -51,6 +56,8 @@ only for failures and much higher (e.g. 300/min).
 **Recommendation.** 1 (with a test in `rooms/tests.rs`).
 
 ### 1.3 🟠 Start/Abort (and Access) spam stalls the shared tick
+> **Applied 2026-10-05 (validation pass):** variant 1 with a 1 s gap (`START_GAP_S` in `room.rs`; 2 s would trip the client scenario that aborts and starts again): a Start sooner than that is ignored. Test `start_and_abort_spam_builds_at_most_one_arena_a_second`. Access toggling left as is.
+
 **Problem.** `Start` builds the round's arena inside the tick (up to ≈6 ms); Start and Abort are allowed at the room's
 60 msg/s. A host alternating them costs ≈180 ms per second of the single-threaded loop that all rooms share. Toggling
 `Access` (new PIN each time) is similar but cheap.
@@ -59,6 +66,8 @@ only for failures and much higher (e.g. 300/min).
 **Recommendation.** 1, with a test.
 
 ### 1.4 🟠 WebSocket handshake without timeout (vendored aeronet)
+> **Applied 2026-10-05 (validation pass):** variant 1: TLS + WebSocket handshake under a 10 s `tokio::time::timeout` in `vendor/aeronet_websocket/src/server/backend.rs` (tokio `time` feature in its manifest). No cap on sessions; not sent upstream.
+
 **Problem.** `vendor/aeronet_websocket/src/server/backend.rs` spawns a session entity and task on every TCP accept,
 before the WebSocket handshake, and the handshake has no timeout. On a directly exposed 5889 (LAN packages, no nginx)
 silent TCP connections pile up entities, tasks and file descriptors. `max_write_buffer_size` is `usize::MAX`.
@@ -77,12 +86,16 @@ the body (or `Authorization: Bearer`), keep `GET` only under `--dev`, update REA
 budget for these messages.
 
 ### 1.7 🟢 Chat keeps invisible / bidi characters
+> **Applied 2026-10-05 (validation pass):** chat, names and room titles go through `text::visible`: `is_other` characters dropped, a ZWJ kept between two symbols (emoji sequences). Tests in `text.rs`.
+
 `fb_shared::text::sanitize_chat` only replaces control characters: bidi overrides, zero-width and tag characters reach
 everyone's chat (names and titles already drop them with `is_other`). Separately, names lose the ZWJ, which breaks
 emoji sequences (👨‍👩‍👧). Filter `is_other` in chat except ZWJ between emoji; allow ZWJ in names the same way.
 Player-visible: author's call.
 
 ### 1.8 🟢 Bean ids above 65535
+> **Applied 2026-10-05 (validation pass):** `check_pid` only rejects 0 (ids start at 1).
+
 `check_pid` caps ids at 65535, `Room::next_id` only grows: after heavy bot churn the host can no longer remove those
 bots or hand the host role. Only the abusing room is affected. Drop the bound in `check_pid` (ids are `u32` on the
 wire) or reuse ids.
@@ -90,7 +103,7 @@ wire) or reuse ids.
 ### 1.9 🟢 `PROTOCOL_VERSION` bump to check
 > **Applied 2026-10-05 (approved by the author):** bumped to 19 (it also covers the `history` flag of 4.1).
 
-`docs/decisions.md` records the bump to 18 with the respawn entry; the later entries adding `Hold` and the animation
+(The audited tree's `docs/decisions.md`, gone since: the repository keeps no decisions log.) It recorded the bump to 18 with the respawn entry; the later entries adding `Hold` and the animation
 code in `RemotePose` record none. This tree has no git history to check: run `git log -S PROTOCOL_VERSION` on the branch
 and bump to 19 before the first release if 18 predates them. (Since nothing is released yet, bumping anyway is free.)
 
@@ -134,14 +147,18 @@ have `replay` apply it. No golden change.
 Collision contacts and raycasts work in the collider's local units and the broad-phase radius ignores scale; the only
 scaled collider is the rolling ball, so ball hits are slightly off while a ball grows in or shrinks out (TS-faithful,
 in the goldens). Variants: 1) debug-assert that collider nodes are unscaled (balls allowed) and leave it; 2) scale a
-child model node instead of the collider (re-bless ball maps + `decisions.md` entry). Recommendation: 1 now.
+child model node instead of the collider (re-bless ball maps; why — in the commit message). Recommendation: 1 now.
 
 ### 2.4 🟢 Degenerate (scale 0) colliders
+> **Applied 2026-10-05 (validation pass):** as proposed, but the check is "inverse is all zeros or not finite": `M4::invert` returns a zero matrix for det = 0, which is finite. Test in `collider.rs`. Goldens unchanged.
+
 A collider scaled to 0 inverts to a zero matrix; `contact` then reports a hit with a NaN depth and poisons the bean.
 No map does it. Mark the collider degenerate in `Collider::sync` when its inverse is not finite (`contact` → false,
 `raycast` → −1). No re-bless.
 
 ### 2.5 🟢 `course::Gate::held` while pressed lacks the `max(0, t − at)` clamp
+> **Applied 2026-10-05 (validation pass):** clamp added. Goldens and rollback replay unchanged.
+
 The released branch clamps, the pressed one does not: during client rollback at `t < at` the gate is misplaced
 (server unaffected). Add the clamp; check the rollback-replay test and stress.
 
@@ -152,9 +169,13 @@ bot decision. A `StepScratch` buffer passed by the caller (signature change in `
 `thread_local` is unsafe because touch handlers run inside `step`). Measure first with `xtask audit --metrics`.
 
 ### 2.7 🟢 Nested `Cx::emit` inside an event handler
+> **Applied 2026-10-05 (validation pass):** `Cx::in_event` + `debug_assert!` in `emit`.
+
 Clients would apply the nested event, the server not. Add an `in_event` flag with a `debug_assert`.
 
 ### 2.8 🟢 Unbounded grids from bad map data
+> **Applied 2026-10-05 (validation pass):** partly: `World::finalize` asserts every static collider is finite (so a bad map fails in tests and audits instead of looping). No size limit for the nav grid.
+
 A non-finite collider extent makes the static grid loop effectively forever; a 1 km floor makes the nav grid allocate
 ≈650 MB. Add finiteness and size checks to `spec_problems` (and an audit).
 
@@ -163,6 +184,8 @@ A non-finite collider extent makes the static grid loop effectively forever; a 1
 `sweep_eta` with ω = 0: add `assert!`s at construction so they fail in tests/audits, not in a room.
 
 ### 2.10 🟢 Unused public bot helpers
+> **Applied 2026-10-05 (validation pass):** removed (and `BotMem::route`, only they used it).
+
 `path_brain` and `routes_brain` (`fb_sim/src/bots.rs`) have no callers; `routes_brain` panics on an empty list.
 Remove, or keep as TS-port helpers with an empty-list guard.
 
@@ -180,6 +203,8 @@ durations 1e6, empty descriptions, no bot brain on the podium). Add a small audi
 spec (without meta / genre / bot rules).
 
 ### 3.2 🟢 Map audits reuse one arena across stand tests
+> **Applied 2026-10-05 (validation pass):** a fresh arena for every respawn stand test.
+
 In the `respawn` audit time goes 5 → 20 → 0.6·duration → 5 and `world.portal_used` persists between tests. Build a
 fresh arena for each `respawn` test.
 
@@ -239,7 +264,7 @@ Sources: `K:\GameDevLibrary\books` (image-pipeline, iquilezles).
 | 5.8 | 🟢 | **`props::dress` parent walk** (≤12 parents per mesh per frame) → a "not a prop" marker; verify glTF scenes are fully parented when first seen. | needs a run |
 | 5.9 | 🟢 | **LOD levels copy the full vertex buffer 6×** (`lod.rs`) → `meshopt::optimize_vertex_fetch` per level. | 19 models |
 | 5.10 | 🟢 | **SMAA preset on Medium** (iGPU default) is `High`; SMAA ≈3× FXAA → try `SmaaPreset::Medium` after measuring on HD 520 / Vega 3. | measure |
-| 5.11 | 🟢 | **Wording**: «Отдать хоста» → «Сделать хостом»; «Качание камеры…» → «Тряска камеры…»; move hard-coded strings in `hud.rs` (keys line) and the dev tab in `ui/menu.rs` into `text.rs`. | — |
+| 5.11 | 🟢 | **Applied 2026-10-05 (validation pass), the two wordings only.** **Wording**: «Отдать хоста» → «Сделать хостом»; «Качание камеры…» → «Тряска камеры…»; move hard-coded strings in `hud.rs` (keys line) and the dev tab in `ui/menu.rs` into `text.rs`. | — |
 
 ---
 
@@ -248,9 +273,9 @@ Sources: `K:\GameDevLibrary\books` (image-pipeline, iquilezles).
 | # | Prio | Proposal |
 |---|---|---|
 | 6.1 | 🟢 | **Bevy 0.20 / Lightyear**: wait. Bevy 0.20 is rc.2 (2026-09-28); Lightyear's port (PR #1760) and replicon's (#768) are open. The move is one step for Bevy, Lightyear, replicon, aeronet 0.22, wgpu 30, glam 0.33. Breaking areas that hit this code: UI Em/Rem units and `TextFont` default size, `BorderRadius`, deprecated `Button`/`Interaction`, flat pointer events, `Font::from_bytes`, `Tonemapping` moved, WESL instead of naga_oil (FSR and surface WGSL), `ViewDepthTexture`, generic `Extract`, exclusive systems, observer generics, query iterators returning `Result`, `NextState::set_if_neq` renamed. glam 0.33 changed scalar paths (`FloatExt::lerp`, recip→division): bump glam first and run `cargo xtask check`. Large effort. |
-| 6.3 | 🟢 | `cargo audit` in CI with `--ignore RUSTSEC-2026-0121` (steamworks, lockfile-only via Lightyear's optional Steam) and a reason. Other lockfile-only/unmaintained: paste, rustls-pemfile; ttf-parser (Linux client, via winit Wayland decorations — upstream). |
+| 6.3 | 🟢 | (There is no CI any more — every check runs locally: this would be a `cargo xtask` step.) `cargo audit` with `--ignore RUSTSEC-2026-0121` (steamworks, lockfile-only via Lightyear's optional Steam) and a reason. Other lockfile-only/unmaintained: paste, rustls-pemfile; ttf-parser (Linux client, via winit Wayland decorations — upstream). |
 | 6.4 | 🟢 | One TLS crypto library: aws-lc-rs comes only from the vendored aeronet's rustls defaults, ring from ureq/rcgen. Give rustls only `ring` in the vendor crate and install the ring provider in `session/mod.rs` → aws-lc-sys and `cmake` leave both builds (musl server jobs need cmake only for it). Test `cargo xtask stress --remote --transport ws`. |
-| 6.5 | 🟢 | CI job on the MSRV (`rust-version = 1.95`); CI builds only on stable. |
+| 6.5 | 🟢 | A check on the MSRV (`rust-version = 1.95`), locally (`cargo +1.95 check --workspace`) or in `release.yml`'s `check` job: only stable is built now. |
 | 6.6 | 🟢 | hmac 0.13 / sha2 0.11 — hold until tungstenite moves to digest 0.11 (else two digest stacks); sysinfo 0.39 with 6.1; `wgpu-types` pin could relax to `"29"`. |
 
 ---
@@ -261,11 +286,11 @@ Sources: `K:\GameDevLibrary\books` (image-pipeline, iquilezles).
 |---|---|---|
 | 7.1 | ✅ | **Applied 2026-10-05:** `runs-on: ubuntu-latest` + `container: ubuntu:22.04` (bare image: the job installs ca-certificates, curl, git, build-essential, pkg-config first). Not run yet — check on the next release run. Was: **AppImage job on `ubuntu-22.04`**: GitHub retires the image (brownouts since 2026-09-17, removed 2027-04-17). Build on `ubuntu-latest` with `container: ubuntu:22.04` (same glibc baseline); alternatives: `debian:bookworm` container, or accept 24.04's glibc. |
 | 7.2 | 🟠 | **`appimagetool` unpinned and unverified** (downloaded from `continuous`); it also aborts if an AppStream validator is installed and the metadata fails → pin a release + sha256; `--no-appstream` or 7.3. |
-| 7.3 | 🟢 | **Metainfo** lacks `<developer>`, `<releases>`, `<project_license>` (licence: author's choice), first paragraph < 80 chars. |
+| 7.3 | 🟢 | **Applied 2026-10-05 (validation pass), except `<releases>`:** `<developer>` added, first paragraph longer; `<project_license>` was already there; `appstreamcli validate --pedantic` passes with only `releases-info-missing` (a release list must be kept up to date by each release: author's call). Was: **Metainfo** lacks `<developer>`, `<releases>`, `<project_license>`, first paragraph < 80 chars. |
 | 7.4 | 🟢 | **Flatpak runtime 25.08** (supported to ≈2027-09); 26.08 has newer Mesa (new GPUs) — needs a local build and launch check. |
 | 7.5 | 🟢 | **systemd hardening** for both units: `SystemCallFilter=@system-service ~@privileged @resources`, `SystemCallErrorNumber=EPERM`, `ProtectProc=invisible`, `UMask=0077`, `PrivateUsers=yes`; check whether `AF_NETLINK` is needed. Verify with `systemd-analyze security` and a stress run on a host. |
 | 7.6 | 🟢 | **Pin packaging tools** (`cargo-deb`, `cargo-generate-rpm`, NSIS from choco) or use `taiki-e/install-action`. |
-| 7.7 | 🟢 | **Licence files of the vendored crate**: `vendor/aeronet_websocket` (MIT/Apache) is published without its LICENSE files → copy them from upstream. |
-| 7.9 | 🟢 | **`remote-install.sh` nginx check** passes on a commented-out include → check the output of `nginx -T`. |
-| 7.10 | 🟢 | **Installer**: no version info on `setup.exe` (`VIProductVersion`/`VIAddVersionKey`); uninstall keeps the settings folder (document it); after the new 30 s wait for the game to close: carry on (current) or abort silently. |
-| 7.11 | 🟢 | **CI**: `push` + `pull_request` both run → PR branches build twice (filter `push` to the main branches); if the smoke stress run on the dev build flakes, give it `--release` or a looser tick limit. |
+| 7.7 | ✅ | **Applied 2026-10-05 (validation pass):** `LICENSE-MIT` and `LICENSE-APACHE` copied from upstream `aecsocket/aeronet`. Was: **Licence files of the vendored crate**: `vendor/aeronet_websocket` (MIT/Apache) is published without its LICENSE files → copy them from upstream. |
+| 7.9 | ✅ | **Applied 2026-10-05 (validation pass):** greps `nginx -T` for an uncommented `include …apps.d/*.conf` (process substitution, not a pipe: the script runs with `pipefail`). Not run on a host. Was: **`remote-install.sh` nginx check** passes on a commented-out include → check the output of `nginx -T`. |
+| 7.10 | 🟢 | **Version info applied 2026-10-05 (validation pass):** `VIProductVersion`/`VIFileVersion` (`VI_VERSION` from xtask, `0.1.0-alpha` → `0.1.0.0`) and `VIAddVersionKey`; not built here (no makensis on Linux) — check with `cargo xtask dist nsis`. The other two points stay open. Was: **Installer**: no version info on `setup.exe` (`VIProductVersion`/`VIAddVersionKey`); uninstall keeps the settings folder (document it); after the new 30 s wait for the game to close: carry on (current) or abort silently. |
+| 7.11 | — | **Obsolete:** the CI workflow was removed; GitHub only runs `release.yml` on dispatch. |
