@@ -18,7 +18,7 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle};
+use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit};
 use bevy::ui::{InteractionDisabled, Pressed};
 use bevy::ui_widgets::{Activate, Slider, SliderRange, SliderStep, SliderThumb, SliderValue, ValueChange};
 use bevy::window::PrimaryWindow;
@@ -552,6 +552,15 @@ pub fn field_with_hint(
         ));
     });
     field_e
+}
+
+/// Replaces a field's text; `EditableText::clear` alone leaves the cursor past the end of the empty text.
+pub fn set_field_text(t: &mut EditableText, s: &str) {
+    t.clear();
+    t.queue_edit(TextEdit::SelectAll);
+    if !s.is_empty() {
+        t.queue_edit(TextEdit::Insert(s.into()));
+    }
 }
 
 pub fn field_text(fields: &Query<(&Field, &EditableText)>, which: Field) -> String {

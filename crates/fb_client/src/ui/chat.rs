@@ -100,13 +100,13 @@ fn open_close(
         let lost = focus.get() != Some(field);
         if !can || keys.just_pressed(KeyCode::Escape) || lost {
             ui.chat = false;
-            t.clear();
+            super::set_field_text(&mut t, "");
         } else if enter && !t.is_composing() {
             let line = fb_shared::text::sanitize_chat(&t.value().to_string());
             if !line.is_empty() {
                 crate::session::send(&mut senders, ClientMsg::Chat(line));
             }
-            t.clear();
+            super::set_field_text(&mut t, "");
             ui.chat = false;
         }
         if !ui.chat && focus.get() == Some(field) {

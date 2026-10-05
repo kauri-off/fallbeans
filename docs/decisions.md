@@ -684,3 +684,10 @@ NaN отбрасывается, как раньше у `f64::max`) и метод
 минимальная. Задача `appimage` — `runs-on: ubuntu-latest`, `container: ubuntu:22.04`; голый образ сначала ставит
 ca-certificates, curl, git, build-essential, pkg-config и `LINUX_PACKAGES` (шаги идут от root, без sudo). Проверится
 первым запуском release.
+
+### 2026-10-05 — Текст поля меняется только через `ui::set_field_text`
+
+**Почему:** `EditableText::clear` (bevy_text 0.19.1) зовёт parley `set_text`, а тот не сбрасывает курсор: следующая
+вставка шла по старому байтовому индексу за концом пустой строки — паника `is_char_boundary` в `apply_text_edits`
+(«Сохранить» ника в dev-лобби, следующий ввод в чат после отправки). `set_field_text` после `clear` ставит
+`SelectAll`, затем `Insert`. Пересмотреть: когда bevy/parley станут сбрасывать выделение в `set_text`.

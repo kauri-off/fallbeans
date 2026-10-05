@@ -4,7 +4,7 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::input_focus::InputFocus;
 use bevy::picking::events::{Pointer, Press};
 use bevy::prelude::*;
-use bevy::text::{EditableText, TextEdit};
+use bevy::text::EditableText;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
@@ -252,8 +252,7 @@ fn sync_names(
     let focused = focus.get();
     for (e, f, mut t) in &mut fields {
         if matches!(f, Field::MenuName | Field::Name) && Some(e) != focused && t.value().to_string() != name {
-            t.clear();
-            t.queue_edit(TextEdit::Insert(name.as_str().into()));
+            set_field_text(&mut t, &name);
         }
     }
 }
