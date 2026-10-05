@@ -684,30 +684,34 @@ fn attach(mut commands: Commands, kit: Option<Res<FaceKit>>, rigs: Query<(Entity
         if !rig.ready() {
             continue;
         }
-        let patch = commands
-            .spawn((
-                Mesh3d(kit.patch.clone()),
-                MeshMaterial3d(kit.mouths[&Expr::Smile].clone()),
-                Transform::default(),
-                NotShadowCaster,
-                ChildOf(rig.model),
-            ))
-            .id();
-        let brows = [0, 1].map(|_| {
-            commands
-                .spawn((
-                    Mesh3d(kit.brow.clone()),
-                    MeshMaterial3d(kit.brow_mat.clone()),
+        let model = rig.model;
+        let patch = (kit.patch.clone(), kit.mouths[&Expr::Smile].clone());
+        let brow = (kit.brow.clone(), kit.brow_mat.clone());
+        // (On the bean itself: an arena change may despawn it before this frame's commands are applied.)
+        commands.entity(e).queue_silenced(move |mut bean: EntityWorldMut| {
+            let part = |w: &mut World, (mesh, mat): (Handle<Mesh>, Handle<StandardMaterial>)| {
+                w.spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(mat),
                     Transform::default(),
                     NotShadowCaster,
-                    ChildOf(rig.model),
+                    ChildOf(model),
                 ))
                 .id()
-        });
-        commands.entity(e).insert(FaceParts {
-            patch,
-            brows,
-            shown: Expr::Smile,
+            };
+            let parts = bean.world_scope(|w| {
+                w.get_entity(model).is_ok().then(|| {
+                    let patch = part(w, patch);
+                    (patch, [part(w, brow.clone()), part(w, brow)])
+                })
+            });
+            if let Some((patch, brows)) = parts {
+                bean.insert(FaceParts {
+                    patch,
+                    brows,
+                    shown: Expr::Smile,
+                });
+            }
         });
     }
 }
@@ -762,6 +766,36 @@ mod tests {
             let img = draw(e).try_into_dynamic().unwrap();
             img.save(format!("/tmp/mouth-{e:?}.png")).unwrap();
         }
+    }
+
+    /// Found by `practice_and_back` under load: an arena change despawned a bean in the frame its scene came in,
+    /// and the face's `insert` hit the despawned entity.
+    #[test]
+    fn a_bean_gone_in_the_frame_its_face_is_attached() {
+        let mut app = App::new();
+        app.insert_resource(FaceKit {
+            patch: Handle::default(),
+            brow: Handle::default(),
+            brow_mat: Handle::default(),
+            surface: Surface {
+                z: Vec::new(),
+                n: Vec::new(),
+            },
+            mouths: HashMap::from([(Expr::Smile, Handle::default())]),
+        });
+        let bean = app.world_mut().spawn_empty().id();
+        let model = app.world_mut().spawn(ChildOf(bean)).id();
+        app.world_mut().entity_mut(bean).insert(Rig::ready_for_tests(model));
+        let despawn = |mut commands: Commands, rigs: Query<Entity, With<Rig>>| {
+            for e in &rigs {
+                commands.entity(e).despawn();
+            }
+        };
+        // (No sync point between them: the despawn is applied first, then what `attach` queued.)
+        app.add_systems(Update, (despawn, attach).chain_ignore_deferred());
+        app.update();
+        let w = app.world_mut();
+        assert_eq!(w.query::<&Mesh3d>().iter(w).count(), 0, "face parts left behind");
     }
 
     #[test]

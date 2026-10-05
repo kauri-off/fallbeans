@@ -62,6 +62,32 @@ impl Rig {
     }
 }
 
+#[cfg(test)]
+impl Rig {
+    /// A rig whose scene is in, with no parts behind it.
+    pub fn ready_for_tests(model: Entity) -> Self {
+        let e = Entity::PLACEHOLDER;
+        Self {
+            pivot: e,
+            model,
+            aura: e,
+            tears: [e; 4],
+            parts: Some(Parts {
+                limbs: [(e, Vec3::ZERO); 4],
+                hands: [e; 2],
+                eyes: [e; 2],
+                pupils: [(e, Vec3::ZERO); 2],
+                body: Vec::new(),
+                belly: Vec::new(),
+                shoes: Vec::new(),
+                body_mat: Handle::default(),
+                belly_mat: Handle::default(),
+                shoe_mat: Handle::default(),
+            }),
+        }
+    }
+}
+
 /// What the bean wears now, and the entities of it.
 #[derive(Component, Default)]
 pub struct Dress {

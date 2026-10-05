@@ -62,6 +62,10 @@ pub struct Opts {
     /// Seconds between metric lines in the log (0: none).
     #[arg(long, default_value_t = 5.0)]
     pub metrics_every: f64,
+    /// Seconds of silence before a connection is given up, both transports (default: 3 UDP, 10 WebSocket). The
+    /// client's test harness steps server and clients in one thread: a busy test machine stalls both at once.
+    #[arg(long, hide = true)]
+    pub link_timeout: Option<i32>,
     /// Quits after this many seconds (stress runs).
     #[arg(long)]
     pub exit_after: Option<f64>,

@@ -60,6 +60,8 @@ pub struct StressArgs {
     wsl_distro: String,
 }
 
+/// `fb_net::errors::MARK`: a failed system or command in a release build.
+const ECS_ERROR: &str = "ECS ERROR";
 /// Where the probe server of `--remote` lives on the host (the deploy user's home: no root needed).
 const PROBE_DIR: &str = "fb-probe";
 /// Its ports: UDP open in ufw, WebSocket and HTTP behind nginx at /fallbeans/ws-probe and /fallbeans/probe/ (`deploy/`).
@@ -473,20 +475,20 @@ fn read_log(dir: &Path, name: &str) -> String {
 
 /// The number right after `key` in `line`.
 fn num_after(line: &str, key: &str) -> Option<f64> {
-    let rest = &line[line.find(key)? + key.len()..];
+    let rest = line.get(line.find(key)? + key.len()..)?;
     let end = rest
         .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
         .unwrap_or(rest.len());
-    rest[..end].parse().ok()
+    rest.get(..end)?.parse().ok()
 }
 
 /// The number right before `key` in `line`.
 fn num_before(line: &str, key: &str) -> Option<f64> {
-    let head = &line[..line.find(key)?];
+    let head = line.get(..line.find(key)?)?;
     let start = head
         .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
         .map_or(0, |i| i + 1);
-    head[start..].parse().ok()
+    head.get(start..)?.parse().ok()
 }
 
 fn report(a: &StressArgs, dir: &Path) -> bool {
@@ -539,8 +541,8 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
         let shifts: Vec<&str> = stat_lines
             .iter()
             .filter_map(|l| {
-                let rest = &l[l.find("shifts [")? + 8..];
-                Some(&rest[..rest.find(']')?])
+                let (_, rest) = l.split_once("shifts [")?;
+                Some(rest.split_once(']')?.0)
             })
             .filter(|s| !s.is_empty())
             .skip(1)
@@ -591,11 +593,21 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
         if log.contains("panicked") {
             failures.push(format!("client {i}: panicked (see client-{i}.err.log)"));
         }
+        if log.contains(ECS_ERROR) {
+            failures.push(format!(
+                "client {i}: {ECS_ERROR} (a failed system or command; release builds log it)"
+            ));
+        }
     }
 
     let slog = read_log(dir, "server");
     if slog.contains("panicked") {
         failures.push("server panicked (see server.err.log)".into());
+    }
+    if slog.contains(ECS_ERROR) {
+        failures.push(format!(
+            "server: {ECS_ERROR} (a failed system or command; release builds log it)"
+        ));
     }
     // Steady state: metric lines once everybody is in.
     let metrics: Vec<&str> = slog

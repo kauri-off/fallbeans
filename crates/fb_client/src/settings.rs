@@ -305,6 +305,18 @@ pub fn save_now(commands: &mut Commands) {
     commands.queue(SaveSettings::IfChanged);
 }
 
+fn store_name(profile: Option<&str>) -> String {
+    match profile {
+        Some(p) => format!("{APP}/profile-{p}"),
+        None => APP.to_string(),
+    }
+}
+
+/// The profile's directory in the system's settings directory (where its `settings.toml` is).
+pub fn dir(profile: Option<&str>) -> Option<std::path::PathBuf> {
+    bevy::platform::dirs::preferences_dir().map(|d| d.join(store_name(profile)))
+}
+
 pub struct ClientSettingsPlugin {
     pub profile: Option<String>,
     /// Without a file (headless clients of stress runs): defaults, nothing written.
@@ -321,11 +333,7 @@ impl Plugin for ClientSettingsPlugin {
             .register_type::<Graphics>()
             .register_type::<crate::servers::Servers>();
         if self.stored {
-            let name = match &self.profile {
-                Some(p) => format!("{APP}/profile-{p}"),
-                None => APP.to_string(),
-            };
-            app.add_plugins(SettingsPlugin::new(&name));
+            app.add_plugins(SettingsPlugin::new(&store_name(self.profile.as_deref())));
             app.add_systems(Last, save_on_exit);
         }
         app.init_resource::<Player>()

@@ -3437,6 +3437,7 @@ dependencies = [
  "fb_maps",
  "fb_net",
  "fb_proto",
+ "fb_server",
  "fb_shared",
  "fb_sim",
  "lightyear",
@@ -3450,6 +3451,7 @@ dependencies = [
  "sha2",
  "swash",
  "ureq",
+ "wgpu",
  "wgpu-types",
  "winresource",
 ]

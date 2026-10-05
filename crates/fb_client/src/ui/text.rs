@@ -31,6 +31,9 @@ pub fn downloading(got: u64, total: u64) -> String {
 pub fn update_failed(e: &str) -> String {
     format!("Не удалось обновиться: {e}")
 }
+pub fn crashed(report: &str) -> String {
+    format!("В прошлый раз игра упала. Отчёт: {report}")
+}
 pub const TO_SERVERS: &str = "‹ К серверам";
 pub const SERVERS: &str = "Серверы";
 pub const NO_SERVERS: &str = "Добавьте сервер: его адрес скажет тот, кто его запустил.";

@@ -209,7 +209,7 @@ fn receive(
                     session.refused = true;
                     session.reject = Some(msg);
                     if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
-                        commands.trigger(Disconnect { entity });
+                        crate::net::hang_up(&mut commands, entity);
                     }
                 }
                 // Back once the new version is up (the session API says when).
@@ -217,7 +217,7 @@ fn receive(
                     warn!("the game is being updated");
                     session.updating = true;
                     if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
-                        commands.trigger(Disconnect { entity });
+                        crate::net::hang_up(&mut commands, entity);
                     }
                 }
                 ServerMsg::Rooms { rooms, mine } => {

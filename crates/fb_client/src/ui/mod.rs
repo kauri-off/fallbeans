@@ -555,6 +555,10 @@ pub fn field_with_hint(
 }
 
 /// Replaces a field's text; `EditableText::clear` alone leaves the cursor past the end of the empty text.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the one place that clears, with the cursor reset after it"
+)]
 pub fn set_field_text(t: &mut EditableText, s: &str) {
     t.clear();
     t.queue_edit(TextEdit::SelectAll);
@@ -792,6 +796,8 @@ impl Plugin for UiPlugin {
                 ui_actions,
             ),
         );
+        // (After the sections redrawn this frame, before the next frame's keys.)
+        app.add_systems(PostUpdate, keep_focus);
         app.add_plugins((
             home::HomePlugin,
             menu::MenuPlugin,
@@ -1298,6 +1304,39 @@ pub fn rebind(
             return;
         }
     }
+}
+
+/// A field redrawn while it had the keyboard (a wrong address, a wrong PIN) keeps it in its new self; a hidden
+/// one (the menu closed by a round's start, the room list left with Enter) gives it back to the game.
+fn keep_focus(
+    mut focus: ResMut<InputFocus>,
+    fields: Query<(Entity, &Field)>,
+    nodes: Query<(&Node, Option<&ChildOf>)>,
+    mut had: Local<Option<(Entity, Field)>>,
+) {
+    if let Some((old, kind)) = *had
+        && focus.get().is_none_or(|e| e == old)
+        && !fields.contains(old)
+        && let Some((e, _)) = fields.iter().find(|(e, f)| **f == kind && !hidden(*e, &nodes))
+    {
+        focus.set(e, bevy::input_focus::FocusCause::Navigated);
+    }
+    if focus.get().is_some_and(|e| fields.contains(e) && hidden(e, &nodes)) {
+        focus.clear();
+    }
+    *had = focus.get().and_then(|e| fields.get(e).ok()).map(|(e, f)| (e, *f));
+}
+
+/// The node or one of its ancestors is not displayed.
+fn hidden(mut e: Entity, nodes: &Query<(&Node, Option<&ChildOf>)>) -> bool {
+    while let Ok((node, parent)) = nodes.get(e) {
+        if node.display == bevy::ui::Display::None {
+            return true;
+        }
+        let Some(p) = parent else { break };
+        e = p.parent();
+    }
+    false
 }
 
 /// The keyboard belongs to a text field.

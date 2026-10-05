@@ -8,7 +8,7 @@ Lightyear. **С чего продолжать — [`docs/state.md`](docs/state.m
 ## Что нужно
 
 - Rust stable ≥ 1.95 (`rustup`), компоненты `rustfmt` и `clippy`.
-- Linux: `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev` (как в CI).
+- Linux: `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev` (как в `release.yml`).
 - Blender — только для `cargo xtask assets --export` (переэкспорт моделей из `blender/`).
 - Пакеты (`cargo xtask dist`): `makensis` (NSIS), `appimagetool`, `flatpak-builder`, `cargo-deb`,
   `cargo-generate-rpm` с целью `x86_64-unknown-linux-musl`, `musl-tools` и `cmake` — так их ставит `release.yml`.
@@ -33,12 +33,16 @@ Lightyear. **С чего продолжать — [`docs/state.md`](docs/state.m
     fb_audit       аудиты карт и систем (порт src/audit), harness безголовых раундов; бинарник fb_audit; rayon
       tests/       quick.rs (быстрые аудиты: 0 ошибок и 0 предупреждений)
   crates/          всё на Bevy и Lightyear
+    clippy.toml    запрещённые API, которые уже роняли игру (действуют на crates/*)
     fb_proto       управляющие сообщения (ClientMsg/ServerMsg с проверкой границ), события карты; без Bevy
     fb_net         протокол Lightyear: компоненты, ввод, каналы, форматы передачи (wire.rs),
-                   фильтры видимости (комната, владелец), NetSim (флаги имитации сети), NetStats (трафик)
-    fb_server      rooms/ (Hub, Room, GameClock, награды, debug — обычный Rust, тесты без сети), auth,
+                   фильтры видимости (комната, владелец), NetSim (флаги имитации сети), NetStats (трафик),
+                   logbook (последние строки лога: debug API сервера, отчёты о падении клиента), errors (что Bevy
+                   делает с ошибкой системы: паника в debug, `ECS ERROR` в логе в release)
+    fb_server      библиотека (`fb_server::app`: тесты клиента поднимают настоящий сервер у себя) и тонкий main;
+                   rooms/ (Hub, Room, GameClock, награды, debug — обычный Rust, тесты без сети), auth,
                    play (хаб в ECS: сообщения, ввод, сущности комнат и бобов), net (транспорты, вход),
-                   http (axum в своём потоке: сессия и connect token, health, debug API), logbook, metrics, opts
+                   http (axum в своём потоке: сессия и connect token, health, debug API), metrics, opts
     fb_client      servers (список серверов игрока, адрес → HTTP API, проверка /health), update (обновление из релизов
                    GitHub), net (сессия по HTTP, подключение, переподключение, фолбэк на WS), probe (проверка UDP с WS
                    своим соединением netcode), clock (опережение часов), diag
@@ -49,7 +53,8 @@ Lightyear. **С чего продолжать — [`docs/state.md`](docs/state.m
                    и брови, порт face.ts), outfit + shapes (шляпы и очки из мешей как у three.js), audio (синтез звуков,
                    громкость, панорама), specials (особые элементы сцены: куски их `Look`, подкраска примитивов),
                    settings (файл настроек на профиль), keys (переназначение клавиш), hud (отладочный оверлей F3),
-                   brp (BRP-probe), stats, assets, opts
+                   crash (отчёт о падении), brp (BRP-probe), stats, assets, opts; harness + scenarios + monkey (только
+                   в тестах: весь клиент без GPU против сервера в том же процессе, пути игрока, случайная игра)
       ui/          интерфейс на bevy_ui: home (серверы, список комнат, обновление, экраны соединения), menu (меню Esc: комната, облик,
                    настройки, dev-вкладка), hud (панель игроков, лента, интро, таймер, итоги), chat, tags (имена над
                    бобами), text (все строки игрока)
@@ -93,6 +98,7 @@ cargo xtask stress --release --limit-server --clients 32 --rooms 4 --secs 100 --
 cargo xtask stress --transport auto --secs 110 --client-arg=--udp-blocked=20   # UDP → WS при входе и обратно на UDP
 cargo xtask stress --transport ws --lag 75 --jitter 15   # по WebSocket (потери не задавать: TCP не теряет)
 cargo xtask stress --remote --host … --domain … --clients 8 --secs 100 --transport udp|ws|auto   # через реальную сеть до хоста
+cargo xtask fuzz-ui --secs 300 [--seed n] [--jobs 4]   # случайная игра клиента (monkey) по зёрнам; логи в target/fuzz-ui
 cargo xtask audit [карта…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics] [--notes] [--json]
 cargo xtask assets [--export]     # проверить загрузку моделей в Bevy; --export — сначала переэкспорт из Blender
 cargo xtask dist nsis|appimage|flatpak|deb|rpm   # пакет релиза в dist/ (см. «Релизы»)
@@ -134,6 +140,34 @@ Q / ПКМ — захват, 1–5 — эмоции, Esc — меню, Enter —
 профили `dev-a`, `dev-b`.
 
 ## Правила
+
+**Падения ловятся до запуска.** Каждое падение превращается в барьер, который срабатывает до игры: API
+библиотеки, уронившее игру, — в `crates/clippy.toml` с заменой; срез строки по байтам запрещён везде
+(`clippy::string_slice`: `get`, `split_once`, `char_indices`). Клиент при панике пишет отчёт в каталог профиля
+(«Отладка»). GitHub только собирает релизы: `cargo xtask check` и `stress` гоняются локально.
+
+Клиент целиком выполняется в `cargo test` (`fb_client/src/harness.rs`): все плагины, как у игрока, кроме окна,
+звука и обновления; вместо видеокарты — noop-устройство wgpu (мир рендера работает, шейдеры проходят naga,
+пайплайны собираются; тип устройства задаёт уровень T0–T2, пресет фиксирован), рядом — настоящий сервер
+`--dev --solo` в том же процессе; клиентов может быть несколько (`add_peer`, `as_peer`). Тест жмёт кнопки
+(`Activate` на `Act`, неактивные пропускает), печатает в поля (`KeyboardInput` при фокусе), двигает слайдеры
+(`ValueChange`), шлёт dev-команды, ждёт арен и может «выключить» сервер на время (`server_away`). Тест падает на
+панике, на выходе клиента с ошибкой (ошибки wgpu) и на пайплайне, который не собрался. `scenarios.rs`: чат, ник,
+список серверов, своя комната (открытая и с PIN, неверный PIN, второй игрок, передача хоста), уход хозяина из
+лобби, новичок, вошедший в идущий раунд (смотрит, следующую игру играет), «Прервать игру» посреди раунда, выход
+из комнаты и возврат (в раунде, с подиума), тренировка с главного экрана и из комнаты, все настройки и
+переназначение клавиши посреди раунда (пресеты графики на лету), переподключение после пропажи сервера, раунд
+каждой карты до подиума на T2 и раунд на T0; новая карта без своего раунда роняет `every_map_has_a_round_test`.
+Исправление падения начинается со сценария, который его воспроизводит. Прогон всех сценариев — около минуты
+(`cargo test -p fb_client scenarios`).
+
+`monkey.rs` — случайная игра на том же стенде: два клиента на одном сервере жмут видимые кнопки (кроме «Выйти»
+и кнопок обновления), клавиши (короткие и зажатые), печатают в поля кириллицу, эмодзи с ZWJ и флаги, составные
+символы, RTL, невидимые символы и строки длиннее поля (по символу и одним куском, как IME), двигают слайдеры,
+мышь, шлют dev-команды хоста и изредка «выключают» сервер. Действия — по зерну (splitmix64); что на экране,
+зависит от времени, поэтому зерно повторяет путь лишь примерно. Падение печатает зерно и последние 300 действий —
+из них пишется сценарий. В `check` — два зерна по 25 с; долгий поиск — `cargo xtask fuzz-ui` (по умолчанию 4
+зерна по 300 с параллельно, логи в `target/fuzz-ui/<зерно>.log`).
 
 **Ядро (`core/`) детерминировано.** Одинаковые входы дают одинаковые биты на Windows и Linux, клиент и сервер
 считают одно и то же.
@@ -202,6 +236,11 @@ Q / ПКМ — захват, 1–5 — эмоции, Esc — меню, Enter —
   "debug":true}`; вкладки `game|settings|dev`, у списка комнат `rooms|home-settings`; без окна меню открывается
   только так): `curl -d '{"jsonrpc":"2.0","id":1,"method":"fb/state"}' 127.0.0.1:15702`.
 
+- **Падение клиента.** Паника пишет `crashes/crash-<unix-время>.txt` в каталог профиля (рядом с `settings.toml`;
+  на Linux `~/.config/io.github.kauri-off.fallbeans/`): версия, ОС, поток, сообщение и место, backtrace, последние
+  200 строк лога; хранятся 10 последних. Следующий запуск показывает путь к отчёту под версией на главном экране.
+  В релизных сборках (`strip`) backtrace без имён функций — место паники есть всегда. `--headless` отчёты не
+  пишет.
 - **Предсказание.** `cargo xtask stress` пишет трассы (`target/stress/server.trace`, `client-N.trace`: тик, id,
   ввод, позиция) и логи. Таблица показывает по каждому клиенту опоздавший ввод и расхождения по причинам;
   «прочие» печатаются тиками — смотреть строки этих тиков в трассах сервера и клиента.
@@ -335,6 +374,10 @@ WS 5891 и HTTP 5892 за nginx, `--public-host` — адрес хоста) на
   `ALSA lib pcm_dmix… unable to open slave` и берёт следующее устройство (`pulse`/`pipewire`).
 - API выбирается флагом или в настройках и действует со следующего запуска: перезапуска на другом API при падении
   инициализации нет.
+- Intel Gen9 (UHD 620/630, Comet Lake) на Vulkan с Mesa 26.2 (anv): через ~5 с раунда GPU зависает (`GPU HANG`
+  в журнале ядра, клиент выходит с `DeviceLost`). Обход: запускать с `INTEL_DEBUG=reemit` (`docs/decisions.md`).
+- `--backend gl` на Wayland падает в `create_surfaces` («Fallback system failed to choose present mode»,
+  Bevy #22220): GL работает только через XWayland (без `WAYLAND_DISPLAY`).
 - Окно не в фокусе на машине автора рисуется на 20 FPS (композитор): кадр мерить с окном на переднем плане.
 - Золотые следы — снимок TS: переснять их нечем, новое поведение карт с TS уже не сверить (`jump-club` сид 1
   отличается от TS на 5,6e-17 — не разобрано).

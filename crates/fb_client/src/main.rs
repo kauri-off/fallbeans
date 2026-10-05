@@ -1,5 +1,5 @@
 //! Native client: connects, enters a room, predicts its bean, interpolates the others, draws the map.
-//! `--headless` runs the same game without a window or GPU (stress runs, CI).
+//! `--headless` runs the same game without a window or GPU (stress runs).
 mod assets;
 mod audio;
 mod bean;
@@ -8,16 +8,23 @@ mod beans;
 mod brp;
 mod camera;
 mod clock;
+mod crash;
 mod diag;
 mod face;
 mod game;
+#[cfg(test)]
+mod harness;
 mod hud;
 mod keys;
+#[cfg(test)]
+mod monkey;
 mod net;
 mod opts;
 mod outfit;
 mod probe;
 mod render;
+#[cfg(test)]
+mod scenarios;
 mod servers;
 mod session;
 mod settings;
@@ -87,12 +94,21 @@ fn wgpu_settings(backend: Option<Backend>) -> WgpuSettings {
 }
 
 fn main() -> AppExit {
-    let opts = Opts::parse();
     let mut app = App::new();
+    build(&mut app, Opts::parse(), None);
+    app.run()
+}
+
+/// The whole client. `noop`: tests, with wgpu's noop device and a window nothing opens; they step the app.
+fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
+    let test = noop.is_some();
     // (First: the graphics API may come from the settings.)
     app.add_plugins(settings::ClientSettingsPlugin {
         profile: opts.profile.clone(),
-        stored: !opts.headless,
+        stored: !opts.headless && !test,
+    });
+    app.add_plugins(crash::CrashPlugin {
+        dir: settings::dir(opts.profile.as_deref()).filter(|_| !opts.headless && !test),
     });
     if opts.headless {
         app.add_plugins((
@@ -132,7 +148,7 @@ fn main() -> AppExit {
             })
             .set(WindowPlugin {
                 primary_window: window,
-                exit_condition: if opts.offscreen {
+                exit_condition: if opts.offscreen || test {
                     ExitCondition::DontExit
                 } else {
                     ExitCondition::OnPrimaryClosed
@@ -140,14 +156,24 @@ fn main() -> AppExit {
                 ..default()
             })
             .set(RenderPlugin {
-                render_creation: RenderCreation::Automatic(Box::new(wgpu_settings(backend))),
+                render_creation: noop.unwrap_or_else(|| RenderCreation::Automatic(Box::new(wgpu_settings(backend)))),
                 ..default()
             })
             .set(LogPlugin {
                 filter: LOG_FILTER.into(),
+                custom_layer: fb_net::logbook::layer,
                 ..default()
             });
-        if opts.offscreen {
+        if test {
+            // (Silent: tests must not play through the speakers. The render world on the main thread: tests
+            // read its pipelines.)
+            app.add_plugins(
+                plugins
+                    .disable::<bevy::winit::WinitPlugin>()
+                    .disable::<bevy::audio::AudioPlugin>()
+                    .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>(),
+            );
+        } else if opts.offscreen {
             // No window at all: the frames go to an image (`--screenshot`, `fb/shot`).
             app.add_plugins((
                 plugins.disable::<bevy::winit::WinitPlugin>(),
@@ -160,7 +186,7 @@ fn main() -> AppExit {
         }
         if opts.check_assets {
             app.add_plugins(assets::CheckAssetsPlugin);
-            return app.run();
+            return;
         }
         app.add_plugins((
             view::ViewPlugin,
@@ -171,13 +197,13 @@ fn main() -> AppExit {
             render::GfxPlugin,
             face::FacePlugin,
         ));
-        if !opts.offscreen {
+        if !opts.offscreen && !test {
             app.add_plugins((audio::AudioPlugin, update::UpdatePlugin));
         }
         app.add_systems(Update, screenshot);
     }
     app.add_plugins(ClientPlugins { tick_duration: TICK });
-    app.add_plugins((ProtocolPlugin, NetStatsPlugin));
+    app.add_plugins((ProtocolPlugin, NetStatsPlugin, fb_net::errors::ErrorPolicyPlugin));
     app.add_plugins((
         net::NetPlugin,
         clock::ClockPlugin,
@@ -194,7 +220,6 @@ fn main() -> AppExit {
     app.insert_resource(servers::Target(opts.direct()));
     app.init_resource::<servers::States>();
     app.insert_resource(opts);
-    app.run()
 }
 
 fn exit_after(opts: Res<Opts>, time: Res<Time<Real>>, mut exit: MessageWriter<AppExit>) {

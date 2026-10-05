@@ -112,7 +112,7 @@ pub struct Opts {
     /// Graphics API (default: wgpu's choice, or WGPU_BACKEND).
     #[arg(long, value_enum)]
     pub backend: Option<Backend>,
-    /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs, CI).
+    /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs).
     #[arg(long)]
     pub headless: bool,
     /// Drawn to an image instead of a window (`--screenshot`, `fb/shot`): checks of the graphics that put

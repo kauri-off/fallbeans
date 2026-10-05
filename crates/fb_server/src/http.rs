@@ -30,11 +30,11 @@ use tokio::time::Sleep;
 use crate::auth::{
     Auth, Budget, DEBUG_COOKIE, DEBUG_TTL_S, Limiter, random_bytes, read_cookie, same_key, to_user_data,
 };
-use crate::logbook;
 use crate::opts::Opts;
 use crate::play::Rooms;
 use crate::rooms::debug::{room_state, room_trace};
 use crate::rooms::room::Room;
+use fb_net::logbook;
 
 const BASE: &str = "/fallbeans";
 /// A connect token is good for one connection attempt this soon.
@@ -122,6 +122,7 @@ struct Api {
     public_host: Option<IpAddr>,
     public_ws_url: Option<String>,
     name: Option<String>,
+    link_timeout: Option<i32>,
     udp_port: u16,
     ws_port: u16,
     guesses: Arc<Mutex<Limiter>>,
@@ -145,6 +146,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<H
         public_host: opts.public_host,
         public_ws_url: opts.public_ws_url.clone(),
         name: opts.name.clone(),
+        link_timeout: opts.link_timeout,
         udp_port: opts.udp_port,
         ws_port: opts.ws_port,
         guesses: Arc::default(),
@@ -364,7 +366,7 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, Guar
 fn host_name(headers: &HeaderMap) -> Option<&str> {
     let host = headers.get(header::HOST)?.to_str().ok()?;
     if host.starts_with('[') {
-        return host.find(']').map(|i| &host[..=i]);
+        return host.find(']').and_then(|i| host.get(..=i));
     }
     Some(host.rsplit_once(':').map_or(host, |(h, _)| h))
 }
@@ -504,11 +506,11 @@ async fn session(
             .or_else(|| host_ip(&headers))
             .or_else(|| peer.local.map(|a| a.ip()).filter(|ip| !ip.is_unspecified()))
             .unwrap_or(Ipv4Addr::LOCALHOST.into());
-        let timeout = if req.transport == "ws" {
+        let timeout = api.link_timeout.unwrap_or(if req.transport == "ws" {
             WS_TIMEOUT_S
         } else {
             UDP_TIMEOUT_S
-        };
+        });
         let id = u64::from_le_bytes(random_bytes::<8>()).max(1);
         let token = ConnectToken::build(
             SocketAddr::new(host, api.udp_port),

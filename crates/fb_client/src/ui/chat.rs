@@ -112,7 +112,7 @@ fn open_close(
         if !ui.chat && focus.get() == Some(field) {
             focus.clear();
         }
-    } else if can && enter && !ui.menu && focus.get().is_none() {
+    } else if can && enter && !ui.menu && !focus.get().is_some_and(|e| fields.contains(e)) {
         ui.chat = true;
         focus.set(field, bevy::input_focus::FocusCause::Navigated);
     }

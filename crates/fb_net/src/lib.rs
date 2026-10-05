@@ -8,8 +8,10 @@ use lightyear::prelude::*;
 
 mod components;
 mod conditioner;
+pub mod errors;
 mod events;
 mod input;
+pub mod logbook;
 mod stats;
 mod visibility;
 mod wire;

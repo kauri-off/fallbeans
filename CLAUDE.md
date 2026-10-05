@@ -15,7 +15,10 @@ identity token (`fb_id`).
 ## State: read it first, save it before you stop
 
 - `docs/state.md` — the handoff: date, branch, last commit; **where to start** (1–3 concrete next steps); work
-  started and not finished; what is broken. Rewritten whole, never appended.
+  started and not finished; what is broken; the plan being worked through, if any. Rewritten whole, never appended.
+  Changes not yet committed get a section written as the commit message they will become (a title line, then `-`
+  bullets: what changed and why, file by file where it helps, as the repo's commits): a new thread resumes from it
+  without reading the diff. The section goes once they are committed.
 - `docs/decisions.md` — everything decided or found that the code does not explain: deviations, workarounds,
   temporary hacks (with "Пересмотреть"), rejected options. Entries appended at the bottom, never rewritten; a
   dropped decision gets "→ отменено: date".
@@ -30,7 +33,12 @@ identity token (`fb_id`).
 ## Rules
 
 - Git: the repo is on GitHub (kauri-off/fallbeans). Do not commit, push, open PRs or run the `release` workflow
-  unless asked.
+  unless asked. GitHub only builds releases (`release.yml`, by dispatch): no workflows on push or PR; every check
+  runs locally.
+- Crashes are caught before the game runs: a crash fix starts with a test that reproduces it (client:
+  `fb_client/src/scenarios.rs` on the `harness` — the whole client on wgpu's noop device against an in-process
+  server; `cargo xtask fuzz-ui` plays it at random by seed and prints the path to a crash); a library API that crashed the game goes into `crates/clippy.toml` with what to use instead; no byte
+  slicing of strings (`clippy::string_slice`). Tests make no sound and open no windows.
 - Line endings are LF (`.gitattributes`). rustfmt formats every edited `.rs` (hook in `.claude/settings.json` →
   `cargo xtask format-hook`); files changed by scripts need `cargo fmt --all`.
 - Deploy only when asked, and only to a host the author names: `cargo xtask deploy --host … --domain …`
@@ -49,7 +57,7 @@ identity token (`fb_id`).
   simulation re-blesses `determinism.txt` and, if it breaks a golden trace on purpose, narrows that trace with a
   `docs/decisions.md` entry and a Rust-side test instead.
 - Audits: `cargo xtask audit [map…] [--quick] [--only a,b] [--metrics]`. Models: `cargo xtask assets [--export]`
-  (`--export` needs Blender; never in CI — the glb in `assets/models` are committed).
+  (`--export` needs Blender; never on GitHub — the glb in `assets/models` are committed).
 - A new map goes into `fb_maps::GAMES`/`MAPS` and gets audits and Rust tests.
 - Network changes: `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` (server + headless
   clients, predictions compared with the server tick by tick); over the real network: `cargo xtask stress --remote

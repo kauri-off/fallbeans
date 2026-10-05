@@ -1,7 +1,8 @@
-//! The last log lines in memory, for `/api/debug/logs` (a tracing layer next to Bevy's console output).
+//! The last log lines in memory: the server's `/api/debug/logs`, the client's crash reports (a tracing layer
+//! next to Bevy's console output).
 use std::collections::VecDeque;
 use std::fmt::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, TryLockError};
 use std::time::SystemTime;
 
 use bevy::log::BoxedLayer;
@@ -40,6 +41,17 @@ pub fn recent(level: Option<&str>, n: usize) -> Vec<LogLine> {
         .collect();
     lines.reverse();
     lines
+}
+
+/// The newest `n` lines, oldest first; nothing when the book is busy (a panic while a line was being written).
+pub fn tail(n: usize) -> Vec<LogLine> {
+    let book = match book().try_lock() {
+        Ok(b) => b,
+        Err(TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(TryLockError::WouldBlock) => return Vec::new(),
+    };
+    let skip = book.len().saturating_sub(n);
+    book.iter().skip(skip).cloned().collect()
 }
 
 pub fn warnings() -> usize {

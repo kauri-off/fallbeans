@@ -32,6 +32,11 @@ lightyear_sync.workspace = true
 lightyear_transport.workspace = true
 lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
 
+[dev-dependencies]
+# The client's tests: a real server in their process, drawing on wgpu's noop device.
+fb_server = { path = "../fb_server" }
+wgpu = { workspace = true, features = ["noop"] }
+
 [build-dependencies]
 winresource = "0.1"
 

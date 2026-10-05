@@ -9,6 +9,7 @@ use fb_proto::{ClientMsg, DenyReason, Phase, RoomInfo};
 use fb_shared::{NAME_MAX, ROOM_PIN_DIGITS, ROOM_TITLE_MAX};
 
 use super::*;
+use crate::crash::LastCrash;
 use crate::net::Conn;
 use crate::opts::Opts;
 use crate::servers::{Servers, States, Status, Target};
@@ -303,6 +304,7 @@ fn head(
 fn update_box(
     mut q: Query<(Entity, &mut Section), With<UpdateBox>>,
     update: Option<Res<Update>>,
+    crash: Res<LastCrash>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
@@ -313,11 +315,20 @@ fn update_box(
         UpdateState::Downloading(got, total) => key_of(&("downloading", (got * 100).checked_div(*total))),
         s => key_of(s),
     };
-    if !sec.stale(key) {
+    if !sec.stale(key_of(&(key, &crash.0))) {
         return;
     }
     let f = &*f;
-    rebuild(&mut commands, e, |p| match &state {
+    rebuild(&mut commands, e, |p| {
+        update_state(p, f, &state);
+        if let Some(path) = &crash.0 {
+            rich(p, f, &text::crashed(&path.display().to_string()), 13.0, RED_INK);
+        }
+    });
+}
+
+fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState) {
+    match state {
         UpdateState::Idle => {
             muted(p, f, &text::version(&fb_net::build()));
         }
@@ -345,7 +356,7 @@ fn update_box(
         UpdateState::Restarting => {
             label(p, f, text::RESTARTING);
         }
-    });
+    }
 }
 
 /// The player's servers, each with what it said last.

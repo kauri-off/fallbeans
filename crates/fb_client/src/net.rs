@@ -81,16 +81,42 @@ impl Plugin for NetPlugin {
             Update,
             (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
         );
+        app.add_systems(First, disconnect_hung_up);
         app.add_systems(Last, despawn_closed);
     }
 }
 
-/// A link left for good: it lives until its disconnect packets went out (`PostUpdate`), so that the server
-/// lets the player go at once instead of keeping them in the room until the connection times out.
+/// A link to disconnect at the start of the next frame. What the server sent (beans, the map) goes with the link,
+/// and other systems may have commands queued on it this frame: an `insert` on a despawned bean panics.
+#[derive(Component)]
+struct HangUp;
+
+pub fn hang_up(commands: &mut Commands, link: Entity) {
+    commands.entity(link).insert(HangUp);
+}
+
+fn disconnect_hung_up(mut commands: Commands, links: Query<(Entity, Has<Closing>), With<HangUp>>) {
+    for (entity, closing) in &links {
+        commands.entity(entity).remove::<HangUp>();
+        commands.trigger(Disconnect { entity });
+        if closing {
+            commands.queue(|world: &mut World| {
+                let mut q =
+                    world.query_filtered::<Entity, With<bevy_replicon::client::confirm_history::ConfirmHistory>>();
+                for e in q.iter(world).collect::<Vec<_>>() {
+                    world.despawn(e);
+                }
+            });
+        }
+    }
+}
+
+/// A link left or down: it lives until its disconnect packets went out (`PostUpdate`), so that the server lets
+/// the player go at once instead of keeping them in the room until the connection times out.
 #[derive(Component)]
 struct Closing;
 
-fn despawn_closed(mut commands: Commands, closing: Query<Entity, With<Closing>>) {
+fn despawn_closed(mut commands: Commands, closing: Query<Entity, (With<Closing>, Without<HangUp>)>) {
     for e in &closing {
         commands.entity(e).despawn();
     }
@@ -108,7 +134,7 @@ fn default_ws(http: &str, port: u16) -> String {
     let rest = http.split_once("://").map_or(http, |(_, r)| r);
     let authority = rest.split('/').next().unwrap_or(rest);
     let host = match authority.rfind(']') {
-        Some(i) => &authority[..=i],
+        Some(i) => authority.get(..=i).unwrap_or(authority),
         None => authority.split(':').next().unwrap_or(authority),
     };
     format!("ws://{host}:{port}")
@@ -195,7 +221,7 @@ fn spike_link(
 pub fn restart(commands: &mut Commands, conn: &mut Conn) {
     if let Some(entity) = conn.entity {
         conn.restart = true;
-        commands.trigger(Disconnect { entity });
+        hang_up(commands, entity);
     }
 }
 
@@ -312,16 +338,10 @@ pub fn open(commands: &mut Commands, opts: &Opts, identity: Option<String>, http
 /// Leaves the server: the link goes, and with it everything the server sent.
 pub fn close(commands: &mut Commands, conn: &Conn) {
     if let Some(entity) = conn.entity {
-        commands.trigger(Disconnect { entity });
+        hang_up(commands, entity);
         commands.entity(entity).insert(Closing);
     }
     commands.remove_resource::<Conn>();
-    commands.queue(|world: &mut World| {
-        let mut q = world.query_filtered::<Entity, With<bevy_replicon::client::confirm_history::ConfirmHistory>>();
-        for e in q.iter(world).collect::<Vec<_>>() {
-            world.despawn(e);
-        }
-    });
 }
 
 /// The HTTP API's answer: connect, wait (the game is being updated), or give up (this client is out of date).
@@ -420,7 +440,8 @@ fn watch_link(
         return;
     }
     let was = core::mem::take(&mut conn.connected);
-    commands.entity(entity).despawn();
+    // (Its disconnect packets go out first: hung up in `First`, it is despawned in `Last`.)
+    commands.entity(entity).insert(Closing);
     conn.entity = None;
     (conn.probe, conn.next_probe, conn.udp_works) = (None, None, false);
     if session.refused {
@@ -520,7 +541,7 @@ fn back_to_udp(
             .is_some_and(|l| matches!(l.phase, Phase::Results | Phase::Podium));
     if conn.udp_works && calm {
         conn.moving = true;
-        commands.trigger(Disconnect { entity });
+        hang_up(&mut commands, entity);
     }
 }
 
