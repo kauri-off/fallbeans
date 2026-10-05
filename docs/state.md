@@ -3,46 +3,28 @@
 Перезаписывается целиком в конце каждого треда. Только то, чего не видно в коде и git: где остановились, что
 начато и не закончено, что сломано, с чего начать.
 
-**5 октября 2026**, ветка `rogue/port-to-rust` (PR #11 в `master`, сливает автор руками), последний коммит
-`8e65c0a` (стенд клиента, сценарии, fuzz-ui, отчёты о падениях), поверх него — незакоммиченная подготовка к слиянию
-(ниже). Версия `0.1.0-alpha`. Последний TS-коммит `master` помечен тегом `ts-final` (запушен).
+**5 октября 2026**, ветка `master`, последний коммит `740f3b5` (PR #11 слит), поверх него — незакоммиченная правка
+релиза (ниже). Версия `0.1.0-alpha`. Последний TS-коммит помечен тегом `ts-final`.
 
 Постоянного сервера нет: игроки добавляют свой сервер в список на главном экране (`README.md`, «Свой сервер»).
 
 ## Незакоммиченные изменения
 
-Автор просил не коммитить; сообщение готово:
-
 ```
-Split README, drop the decisions log, license under AGPL-3.0-or-later
+Install file in the AppImage container
 
-- README.md: rewritten for players and server hosts (install, controls, own server, build from
-  source, player-visible known issues, license); the developer manual moves to docs/development.md
-  (layout, commands, rules, debugging, releases, deploy, internal known issues)
-- docs/decisions.md removed (in git history): why something was decided goes into the commit
-  message or a one-line comment; CLAUDE.md, development.md and comments no longer point to it;
-  the emoji font rebuild command moves into assets/fonts/emoji.txt
-- LICENSE: GNU AGPL v3 text from gnu.org; license = "AGPL-3.0-or-later" in [workspace.package],
-  inherited by every crate; fb_server rpm license; metainfo project_license
-- Packages carry LICENSE: client staging (NSIS installs and uninstalls it, AppImage, Flatpak in
-  /app/share/licenses), deb in /usr/share/doc/fallbeans-server, rpm as a doc file;
-  release-notes.md names the license and the source archives
-- The TS version is referred to by tag ts-final instead of the master branch (CLAUDE.md,
-  development.md, golden trace loader comment, deploy/README.md)
+- release.yml: the appimage job installs `file`; the continuous appimagetool now refuses to run
+  without it, and the bare ubuntu:22.04 image lacks it (first release run 37338557063 failed there;
+  check, nsis, flatpak, deb and rpm passed)
 ```
-
-`cargo xtask check` после правок проходит; `dist deb|rpm|nsis|flatpak` с LICENSE локально не собирались
-(нет `cargo-deb`, `cargo-generate-rpm`, `makensis`, `flatpak-builder`, musl-цели) — проверятся первым релизом.
 
 ## Начать с
 
-1. Автор сливает PR #11 руками. После слияния: в `state.md` убрать ветку, CLAUDE.md уже не называет ветку.
-2. Первый релиз `0.1.0-alpha` с `master` — только по просьбе автора (`release.yml` целиком ещё не запускался; не
-   проверены на раннерах NSIS, `choco install nsis`, `sysctl` для bubblewrap, AppImage в `ubuntu:22.04`, LICENSE в
-   пакетах). Автообновление вживую — только на втором релизе (`0.1.0-alpha.2` против `0.1.0-alpha`).
-3. `docs/audit/` автор пока не трогает (там же нерешённые предложения: 1.2 PIN по комнате, 1.3 спам Start, 5.6
+1. Закоммитить правку и перезапустить `release` (по просьбе автора): первый прогон упал только на AppImage, релиз
+   не создан. Автообновление вживую — только на втором релизе (`0.1.0-alpha.2` против `0.1.0-alpha`).
+2. `docs/audit/` автор пока не трогает (там же нерешённые предложения: 1.2 PIN по комнате, 1.3 спам Start, 5.6
    геймпад в меню).
-4. Погонять `cargo xtask fuzz-ui --secs 600 --jobs 4` подольше; упавшее зерно → сценарий в `scenarios.rs` →
+3. Погонять `cargo xtask fuzz-ui --secs 600 --jobs 4` подольше; упавшее зерно → сценарий в `scenarios.rs` →
    исправление. Геймпада в monkey нет (стенд не шлёт его событий).
 
 ## План: падения ловятся до запуска

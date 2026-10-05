@@ -66,10 +66,10 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      # (The bare image: what the runner images have and the steps below need. Steps run as root here.)
+      # (The bare image: what the runner images have and the steps below need, `file` for appimagetool. Steps run as root here.)
       - run: >-
           apt-get update && apt-get install -y --no-install-recommends
-          ca-certificates curl git build-essential pkg-config $LINUX_PACKAGES
+          ca-certificates curl git build-essential pkg-config file $LINUX_PACKAGES
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
