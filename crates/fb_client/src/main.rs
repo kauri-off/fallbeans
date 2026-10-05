@@ -16,6 +16,7 @@ mod game;
 mod harness;
 mod hud;
 mod keys;
+mod logs;
 #[cfg(test)]
 mod monkey;
 mod net;
@@ -23,6 +24,7 @@ mod opts;
 mod outfit;
 mod probe;
 mod render;
+mod report;
 #[cfg(test)]
 mod scenarios;
 mod servers;
@@ -34,6 +36,7 @@ mod stats;
 mod ui;
 mod update;
 mod view;
+mod watch;
 
 use core::time::Duration;
 use std::path::PathBuf;
@@ -107,9 +110,12 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         profile: opts.profile.clone(),
         stored: !opts.headless && !test,
     });
-    app.add_plugins(crash::CrashPlugin {
-        dir: settings::dir(opts.profile.as_deref()).filter(|_| !opts.headless && !test),
-    });
+    app.insert_resource(logs::Logs(
+        settings::dir(opts.profile.as_deref())
+            .filter(|_| !opts.headless && !test)
+            .map(|d| d.join("logs")),
+    ));
+    app.add_plugins(crash::CrashPlugin);
     if opts.headless {
         app.add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps))),
@@ -161,7 +167,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             })
             .set(LogPlugin {
                 filter: LOG_FILTER.into(),
-                custom_layer: fb_net::logbook::layer,
+                custom_layer: logs::layer,
                 ..default()
             });
         if test {
@@ -184,6 +190,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_plugins(plugins);
             app.insert_resource(WinitSettings::continuous());
         }
+        app.insert_resource(bevy::render::error_handler::RenderErrorHandler(crash::render_failed));
         if opts.check_assets {
             app.add_plugins(assets::CheckAssetsPlugin);
             return;
@@ -192,6 +199,8 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             view::ViewPlugin,
             beans::BeansPlugin,
             hud::HudPlugin,
+            logs::LogsPlugin,
+            report::ReportPlugin,
             ui::UiPlugin,
             camera::CameraPlugin,
             render::GfxPlugin,
@@ -211,6 +220,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         session::SessionPlugin,
         game::GamePlugin,
         stats::StatsPlugin,
+        watch::WatchPlugin,
     ));
     #[cfg(feature = "brp")]
     if let Some(port) = opts.brp {

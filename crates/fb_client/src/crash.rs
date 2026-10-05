@@ -1,30 +1,31 @@
-//! A panic leaves a report in the profile's `crashes/`; the next start shows where it is.
+//! A panic, or a GPU that stops answering, leaves a report in the profile's `logs/`; the next start shows
+//! where it is.
 use std::backtrace::Backtrace;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Write as _;
 use std::panic::PanicHookInfo;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
 
 use bevy::prelude::*;
+use bevy::render::error_handler::{RenderError, RenderErrorPolicy};
 
-const KEEP: usize = 10;
+use crate::logs::{self, Logs};
+
 const LOG_LINES: usize = 200;
 /// Holds the path of a report the player has not been told about yet.
-const MARKER: &str = "last";
+const MARKER: &str = "last-crash";
 
-/// The report of the previous run's panic, if there was one.
+/// The report of the previous run's crash, if there was one.
 #[derive(Resource, Default)]
 pub struct LastCrash(pub Option<PathBuf>);
 
-pub struct CrashPlugin {
-    pub dir: Option<PathBuf>,
-}
+pub struct CrashPlugin;
 
 impl Plugin for CrashPlugin {
     fn build(&self, app: &mut App) {
-        let Some(dir) = self.dir.clone().map(|d| d.join("crashes")) else {
+        let Some(dir) = app.world().resource::<Logs>().0.clone() else {
             app.init_resource::<LastCrash>();
             return;
         };
@@ -32,9 +33,19 @@ impl Plugin for CrashPlugin {
         let next = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             next(info);
-            write_report(&dir, info);
+            write_report(&dir, &panic_text(info));
         }));
     }
+}
+
+/// `RenderErrorHandler`: Bevy's (quit), with a report first. A lost device (a driver reset, a GPU hang) is
+/// the usual one.
+pub fn render_failed(error: &RenderError, main: &mut World, _: &mut World) -> RenderErrorPolicy {
+    if let Some(dir) = main.get_resource::<Logs>().and_then(|l| l.0.clone()) {
+        write_report(&dir, &format!("GPU error ({:?}): {}\n", error.ty, error.description));
+    }
+    main.write_message(AppExit::error());
+    RenderErrorPolicy::StopRendering
 }
 
 fn take_marker(dir: &Path) -> Option<PathBuf> {
@@ -44,22 +55,22 @@ fn take_marker(dir: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(path.trim()))
 }
 
-fn write_report(dir: &Path, info: &PanicHookInfo) {
-    // (Only the first panic: the others are usually its consequences.)
+fn write_report(dir: &Path, what: &str) {
+    // (Only the first: the others are usually its consequences.)
     static WRITTEN: AtomicBool = AtomicBool::new(false);
-    if WRITTEN.swap(true, Ordering::Relaxed) || fs::create_dir_all(dir).is_err() {
+    if WRITTEN.swap(true, Ordering::Relaxed) {
         return;
     }
-    let now = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default();
-    let path = dir.join(format!("crash-{}.txt", now.as_secs()));
-    if fs::write(&path, report(info, now.as_secs())).is_ok() {
+    let Some((mut file, path)) = logs::create(dir, "crash", "txt") else {
+        return;
+    };
+    if file.write_all(report(what).as_bytes()).is_ok() {
         let _ = fs::write(dir.join(MARKER), path.to_string_lossy().as_bytes());
         eprintln!("crash report: {}", path.display());
     }
-    prune(dir);
 }
 
-fn report(info: &PanicHookInfo, at: u64) -> String {
+fn panic_text(info: &PanicHookInfo) -> String {
     let msg = info
         .payload()
         .downcast_ref::<&str>()
@@ -68,40 +79,33 @@ fn report(info: &PanicHookInfo, at: u64) -> String {
         .unwrap_or_else(|| "(not a string)".into());
     let place = info.location().map_or("?".into(), |l| l.to_string());
     let thread = std::thread::current().name().unwrap_or("?").to_string();
+    format!(
+        "thread: {thread}\npanic: {msg}\nat: {place}\n\nbacktrace:\n{}\n",
+        Backtrace::force_capture()
+    )
+}
+
+fn report(what: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "Fall Beans {} crashed", fb_net::build());
-    let _ = writeln!(s, "time: {at}");
+    let _ = writeln!(s, "time: {} UTC", logs::stamp(logs::now_secs()));
     let _ = writeln!(s, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH);
-    let _ = writeln!(s, "thread: {thread}");
-    let _ = writeln!(s, "panic: {msg}");
-    let _ = writeln!(s, "at: {place}");
-    let _ = writeln!(s, "\nbacktrace:\n{}", Backtrace::force_capture());
-    let _ = writeln!(s, "log (last {LOG_LINES} lines):");
+    if let Some(log) = logs::file() {
+        let _ = writeln!(s, "log: {}", log.display());
+    }
+    s.push_str(what);
+    let _ = writeln!(s, "\nlog (last {LOG_LINES} lines):");
     for l in fb_net::logbook::tail(LOG_LINES) {
-        let _ = writeln!(
-            s,
-            "{}.{:03} {} {}: {}",
-            l.at / 1000,
-            l.at % 1000,
-            l.level,
-            l.target,
-            l.msg
-        );
+        let _ = writeln!(s, "{}", line(&l));
     }
     s
 }
 
-/// Keeps the newest `KEEP` reports (their names sort by time).
-fn prune(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    let mut reports: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("crash-")))
-        .collect();
-    reports.sort();
-    for old in reports.iter().rev().skip(KEEP) {
-        let _ = fs::remove_file(old);
-    }
+/// A logbook line as in the reports: `19:03:20.123 WARN target: message` (UTC).
+pub fn line(l: &fb_net::logbook::LogLine) -> String {
+    let t = logs::stamp(l.at / 1000);
+    let clock = t.split_once('_').map_or(t.as_str(), |(_, c)| c).replace('-', ":");
+    format!("{clock}.{:03} {} {}: {}", l.at % 1000, l.level, l.target, l.msg)
 }
 
 #[cfg(test)]
@@ -119,22 +123,13 @@ mod tests {
     }
 
     #[test]
-    fn prune_keeps_the_newest() {
-        let dir = std::env::temp_dir().join(format!("fb-prune-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        for i in 0..KEEP + 3 {
-            fs::write(dir.join(format!("crash-{}.txt", 1_000_000 + i)), "").unwrap();
-        }
-        fs::write(dir.join(MARKER), "").unwrap();
-        prune(&dir);
-        let mut left: Vec<String> = fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        left.sort();
-        assert_eq!(left.len(), KEEP + 1);
-        assert_eq!(left[0], "crash-1000003.txt");
-        assert_eq!(left[KEEP], MARKER);
-        fs::remove_dir_all(&dir).unwrap();
+    fn lines_read_as_a_clock() {
+        let l = fb_net::logbook::LogLine {
+            at: 1_759_691_000_042,
+            level: "WARN",
+            target: "fb_client::net".into(),
+            msg: "lost".into(),
+        };
+        assert_eq!(line(&l), "19:03:20.042 WARN fb_client::net: lost");
     }
 }

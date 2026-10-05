@@ -9,7 +9,7 @@ use bevy::prelude::{KeyCode, World};
 use crate::harness::Game;
 use crate::keys::Bind;
 use crate::session::Session;
-use crate::ui::{Action, Field, HomeTab, Knob, MenuTab, Ui};
+use crate::ui::{Action, Field, HomeTab, Knob, MenuTab, Ui, UiAction};
 
 /// In the dev room's lobby, where the menu opens by itself on entry.
 fn in_lobby(g: &mut Game) {
@@ -528,6 +528,32 @@ fn the_server_list() {
         move |a| matches!(a, Action::Connect(s) if *s == h),
     );
     on_room_list(&mut g);
+}
+
+/// fuzz-ui seed 22: a second click on «Играть» in the frame the button went, after the first press had its link:
+/// two links connected and replicon panicked.
+#[test]
+fn connect_pressed_twice() {
+    let mut g = Game::new(&[]);
+    on_room_list(&mut g);
+    g.press(5.0, "К серверам", |a| matches!(a, Action::LeaveServer));
+    let here = format!("127.0.0.1:{}", g.http_port());
+    g.focus(Field::Server);
+    g.type_text(&here);
+    g.blur();
+    g.press(2.0, "Добавить", |a| matches!(a, Action::AddServer));
+    let h = here.clone();
+    g.press(
+        10.0,
+        "Играть на этом сервере",
+        move |a| matches!(a, Action::Connect(s) if *s == h),
+    );
+    g.until(5.0, "the link", |w| {
+        w.get_resource::<crate::net::Conn>().is_some_and(|c| c.entity.is_some())
+    });
+    g.client().world_mut().write_message(UiAction(Action::Connect(here)));
+    on_room_list(&mut g);
+    g.frames(120);
 }
 
 /// Practice from the room list and its end; practice from a room's menu and back into that room.

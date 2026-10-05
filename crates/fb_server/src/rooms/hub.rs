@@ -154,7 +154,15 @@ impl Hub {
     /// A room panicked: it closes, and whoever was in it is back at the room list.
     fn crashed(&mut self, key: u32) {
         let Some(room) = self.rooms.remove(&key) else { return };
-        error!(room = room.id, arena = room.arena.map.meta().id, "room crashed: closed");
+        // (The panic, its place and backtrace are in the log just above: `panic` in `main.rs`.)
+        error!(
+            room = room.id,
+            arena = room.arena.map.meta().id,
+            phase = ?room.phase,
+            tick = room.arena.tick,
+            players = ?room.players.iter().map(|p| p.id).collect::<Vec<_>>(),
+            "room crashed: closed"
+        );
         self.empty_since.remove(&key);
         let members: Vec<(ConnId, bool)> = self
             .sessions

@@ -323,6 +323,7 @@ fn update_box(
         update_state(p, f, &state);
         if let Some(path) = &crash.0 {
             rich(p, f, &text::crashed(&path.display().to_string()), 13.0, RED_INK);
+            button(p, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         }
     });
 }
@@ -964,6 +965,7 @@ fn server_actions(
     time: Res<Time>,
     mut commands: Commands,
 ) {
+    let mut opened = false;
     for UiAction(a) in actions.read() {
         match a {
             Action::AddServer => {
@@ -979,6 +981,10 @@ fn server_actions(
                 crate::settings::save_soon(&mut commands);
             }
             Action::Connect(addr) => {
+                // (A second click on the button in the frame it goes would open a second link.)
+                if conn.is_some() || opened {
+                    continue;
+                }
                 let base = match states.get(addr) {
                     Status::Up(i) => Some(i.base),
                     _ => crate::servers::candidates(addr).into_iter().next(),
@@ -993,6 +999,7 @@ fn server_actions(
                 *session = Session::default();
                 target.0 = Some(base.clone());
                 crate::net::open(&mut commands, &opts, identity, base, time.elapsed_secs());
+                opened = true;
             }
             Action::LeaveServer => {
                 if let Some(c) = &conn {

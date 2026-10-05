@@ -1,6 +1,7 @@
-//! What stress runs measure on the server, logged as one `metrics:` line every `--metrics-every` s:
-//! the rooms' tick cost (all rooms), the longest frame (a stalled server reads inputs late), ticks run without a player's
-//! input in time, traffic out, process CPU (share of one core over the window) and resident memory.
+//! What stress runs measure on the server, logged as one `metrics:` line every `--metrics-every` s (with
+//! nobody playing, only the first): the rooms' tick cost (all rooms), the longest frame (a stalled server
+//! reads inputs late), ticks run without a player's input in time, traffic out, process CPU (share of one
+//! core over the window) and resident memory.
 use std::time::Instant;
 
 use bevy::prelude::*;
@@ -35,6 +36,8 @@ struct TickTimes {
     last_bytes: u64,
     last_packets: u64,
     frame_max: f64,
+    /// The last line had nobody playing: the next empty ones are not logged.
+    idle: bool,
 }
 
 #[derive(Resource)]
@@ -129,6 +132,10 @@ fn report(
         "outBps": bytes.round(), "packetsPerS": packets.round(),
         "cpu": (cpu * 10.0).round() / 10.0, "memMb": mem.round(),
     }));
+    let idle = players == 0;
+    if core::mem::replace(&mut t.idle, idle) && idle {
+        return;
+    }
     info!(
         "metrics: players {players} bots {bots} rooms {open} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {:.1}% mem {:.0} MB",
         pct(0.5),

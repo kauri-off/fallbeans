@@ -227,7 +227,7 @@ fn receive(
                         .iter()
                         .map(|r| format!("{} «{}» {}+{}/{}", r.id, r.title, r.players, r.bots, r.max))
                         .collect();
-                    info!("rooms: [{}] mine {mine:?}", list.join(", "));
+                    debug!("rooms: [{}] mine {mine:?}", list.join(", "));
                     session.rooms = Some(rooms);
                     session.mine = mine;
                 }

@@ -3,38 +3,44 @@
 Перезаписывается целиком в конце каждого треда. Только то, чего не видно в коде и git: где остановились, что
 начато и не закончено, что сломано, с чего начать.
 
-**5 октября 2026**, ветка `master`, последний коммит `740f3b5` (PR #11 слит), поверх него — незакоммиченная правка
-релиза (ниже). Версия `0.1.0-alpha`. Последний TS-коммит помечен тегом `ts-final`.
+**5 октября 2026**, ветка `master`, последний коммит `95801a0`; поверх него — незакоммиченная переделка логов (ниже).
+Версия `0.1.0-alpha`. Последний TS-коммит помечен тегом `ts-final`.
 
 Постоянного сервера нет: игроки добавляют свой сервер в список на главном экране (`README.md`, «Свой сервер»).
+У автора сервер стоит из `.deb` (systemd, логи в journald).
 
 ## Незакоммиченные изменения
 
-```
-Install file in the AppImage container
-
-- release.yml: the appimage job installs `file`; the continuous appimagetool now refuses to run
-  without it, and the bare ubuntu:22.04 image lacks it (first release run 37338557063 failed there;
-  check, nsis, flatpak, deb and rpm passed)
-```
-
-Отдельно (отдельным коммитом), `crates/fb_client/src/audio.rs`:
+Логи переделаны под вопрос «что пошло не так» (автор: «постоянно телепортирует назад», «если краш — где логи»).
+Предлагаемое сообщение коммита:
 
 ```
-Play the finish jingle once when the finish ends the round
+Logs that explain what went wrong, on disk and in F8 reports
 
-- the own Finish and RoundEnd come in one server tick, and both played Qualify (each at its own pitch);
-  a jingle (Qualify, Out, Win) asked for again within a second is skipped
+- client: a log file a run in the profile's logs/ (newest 10), crash reports there too (crash-<time>.txt),
+  a GPU error (DeviceLost) writes one as well; settings and the crash note open the folder
+- client: `stats:` only with --stats-every (headless: every second, stress reads it); a `net:` summary a
+  minute, and lines at once for corrections of the own bean (rubber-banding), unpredicted respawns, clock
+  jumps, long frames, loss and slow round trips, each with the connection's state
+- client: F8 saves report-<time>.txt (connection, corrections, the bean's last 10 s by tick, log tail)
+- client: the same connection failure is logged once and then every tenth time; disconnect reasons
+- server: `input gap` per player (with how late the newest input was), `still no input`, disconnect reason
+  and RTT, panics with a backtrace, room crashes with phase/tick/players; no `metrics:` while empty
+- dist: strip only debuginfo, so backtraces name functions
 ```
+
+Проверено: `cargo xtask check`; сервер и `--headless`-клиент с `--lag/--jitter/--loss` (строки `input gap`, `clock
+set`, `packet loss`, `slow round trip`; детектор поправок — с временно нулевыми порогами); файл лога —
+`fb_client --offscreen --profile logtest` (профиль удалён). Окно, кнопка «Открыть папку с логами» и F8 вживую не
+проверялись (автор смотрит сам).
 
 ## Начать с
 
-1. Закоммитить правку и перезапустить `release` (по просьбе автора): первый прогон упал только на AppImage, релиз
-   не создан. Автообновление вживую — только на втором релизе (`0.1.0-alpha.2` против `0.1.0-alpha`).
-2. `docs/audit/` автор пока не трогает (там же нерешённые предложения: 1.2 PIN по комнате, 1.3 спам Start, 5.6
-   геймпад в меню).
-3. Погонять `cargo xtask fuzz-ui --secs 600 --jobs 4` подольше; упавшее зерно → сценарий в `scenarios.rs` →
+1. Дальше гонять `cargo xtask fuzz-ui --secs 600 --jobs 4`; упавшее зерно → сценарий в `scenarios.rs` →
    исправление. Геймпада в monkey нет (стенд не шлёт его событий).
+2. Автообновление вживую — на втором релизе (`version` → `0.1.0-alpha.2`, `release` по просьбе автора).
+3. `docs/audit/` автор пока не трогает (там же нерешённые предложения: 1.2 PIN по комнате, 1.3 спам Start, 5.6
+   геймпад в меню).
 
 ## План: падения ловятся до запуска
 
@@ -72,7 +78,10 @@ Play the finish jingle once when the finish ends the round
 - Стенд: в логе тестов клиента `Could not set global logger` (ERROR) у всех клиентов процесса, кроме первого,
   `server_late_input_mismatch` от lightyear_debug и `Settings registry not found` — безвредно. Сервер стенда нельзя
   перезапустить в том же процессе (HTTP-поток держит порт): только `server_away`.
-- Отчёт о падении в релизной сборке — без имён функций в backtrace (`strip = true` в `dist`).
+- Отчёт о падении в релизной сборке — с именами функций, но без строк (`strip = "debuginfo"` в `dist`); на Windows
+  имена берутся из PDB, которого в установщике нет, — там, вероятно, по-прежнему без имён.
+- Пороги в логах подобраны на глаз (`watch.rs`: поправка от 0,5 м; `stats.rs`: кадр от 250 мс, потери от 5%,
+  RTT от 250 мс; сервер: разрыв ввода от 0,2 с) — подправить по первым реальным логам.
 - Логи и трассы пишутся синхронно из главного цикла.
 - `pkill -f fb_client` убивает и вызывающую оболочку: гасить `pkill -x fb_client` / `pkill -x fb_server`.
 - Лицензия AGPL: сервер не показывает игрокам ссылку на свои исходники (§13 обязывает того, кто изменил сервер);

@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use fb_arena::PawnStatus;
 use fb_net::*;
 use fb_proto::Pid;
-use fb_shared::INPUT_HOLD;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
+use fb_shared::{INPUT_HOLD, TICK_RATE};
 use lightyear::connection::client::Disconnecting;
 use lightyear::input::native::prelude::{ActionState, NativeStateSequence};
 use lightyear::input::server::{InputValidationAppExt, authorize_controlled_targets};
@@ -69,7 +69,7 @@ impl Plugin for PlayPlugin {
         // message into whatever entity it names, so a modified client could drive another player's bean
         // (or hang input buffers on any entity). The check is opt-in in Lightyear 0.30.
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<FbInput>>);
-        app.add_systems(FixedUpdate, tick_rooms.in_set(RoomTick));
+        app.add_systems(FixedUpdate, (tick_rooms.in_set(RoomTick), watch_inputs.after(RoomTick)));
         // Every frame: Lightyear drops the messages nobody read in the frame they came in, and half the
         // frames run no tick.
         app.add_systems(PreUpdate, receive.after(MessageSystems::Receive));
@@ -115,6 +115,12 @@ type InputBuf = InputBuffer<ActionState<FbInput>, FbInput>;
 
 /// Jump and dive: one tick per press (the client sends them so).
 const PRESSES: u8 = BTN_JUMP | BTN_DIVE;
+/// Input gaps shorter than this are not logged, ticks (0.2 s).
+const GAP_MIN: u32 = TICK_RATE / 5;
+/// After an `input gap` line, a player's further gaps are only counted for this long, s.
+const QUIET_S: u32 = 10;
+/// A gap still going is logged every this many seconds.
+const STILL_S: u32 = 5;
 
 /// What the room keeps of a player's input between ticks.
 #[derive(Component, Debug)]
@@ -131,6 +137,14 @@ pub struct InputState {
     used: Option<(u32, InputFrame)>,
     /// Ticks run without the player's input since the last `metrics:` line (after their first input).
     pub missed: u32,
+    /// The current run of ticks without input, and how far the newest input was behind the tick at worst.
+    gap: u32,
+    behind: u32,
+    /// A run just over: (ticks, worst behind), for `watch_inputs`.
+    ended: Option<(u32, u32)>,
+    /// No `input gap` line before this tick; runs in between are only counted (number, ticks).
+    quiet_until: u32,
+    hushed: (u32, u32),
 }
 
 impl InputState {
@@ -142,6 +156,11 @@ impl InputState {
             late_seen: now.0,
             used: None,
             missed: 0,
+            gap: 0,
+            behind: 0,
+            ended: None,
+            quiet_until: 0,
+            hushed: (0, 0),
         }
     }
 }
@@ -161,7 +180,16 @@ fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> Inpu
         }
     }
     let input = buffer.and_then(|b| b.get(tick));
-    st.missed = st.missed.saturating_add(u32::from(input.is_none() && buffer.is_some()));
+    if let Some(b) = buffer {
+        if input.is_none() {
+            st.missed = st.missed.saturating_add(1);
+            st.gap += 1;
+            let newest = b.end_tick().map_or(0, |t| t.0);
+            st.behind = st.behind.max(k.saturating_sub(newest));
+        } else if st.gap > 0 {
+            st.ended = Some((core::mem::take(&mut st.gap), core::mem::take(&mut st.behind)));
+        }
+    }
     let frame = match input {
         Some(s) => {
             st.ack = k;
@@ -177,6 +205,45 @@ fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> Inpu
     InputFrame {
         buttons: frame.buttons | core::mem::take(&mut st.late),
         ..frame
+    }
+}
+
+/// The server's side of a bean that snaps back: runs of ticks it had to play without the player's input.
+/// `behind`: how many ticks the newest input that had come was behind the tick at worst (0: later ticks' input
+/// came, these were lost; a few: input comes, but late; as long as the gap: nothing came at all).
+fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Query<&mut InputState, With<Pawn>>) {
+    let now = timeline.tick().0;
+    let rate = TICK_RATE;
+    let ms = |ticks: u32| ticks * 1000 / rate;
+    for (&(key, id), pe) in &rooms.pawns {
+        let Ok(mut st) = inputs.get_mut(pe.entity) else {
+            continue;
+        };
+        let st = &mut *st;
+        let room = rooms.hub.rooms.get(&key).map_or("?", |r| r.id.as_str());
+        if st.gap > 0 && st.gap % (STILL_S * rate) == 0 {
+            warn!(
+                room,
+                id,
+                secs = st.gap / rate,
+                behind = st.behind,
+                "still no input from the player"
+            );
+        }
+        if let Some((ticks, behind)) = st.ended.take().filter(|&(t, _)| t >= GAP_MIN) {
+            if now < st.quiet_until {
+                st.hushed.0 += 1;
+                st.hushed.1 += ticks;
+            } else {
+                warn!(room, id, ms = ms(ticks), behind, "input gap");
+                st.quiet_until = now + QUIET_S * rate;
+            }
+        }
+        if st.hushed.0 > 0 && now >= st.quiet_until {
+            let (n, ticks) = core::mem::take(&mut st.hushed);
+            warn!(room, id, n, ms = ms(ticks), "more input gaps in {QUIET_S} s");
+            st.quiet_until = now + QUIET_S * rate;
+        }
     }
 }
 

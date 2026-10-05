@@ -62,10 +62,10 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 
-# Release packages (`cargo xtask dist`).
+# Release packages (`cargo xtask dist`). Symbols stay: crash reports name the functions in their backtrace.
 [profile.dist]
 inherits = "release"
-strip = true
+strip = "debuginfo"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -3,7 +3,7 @@ use core::net::{Ipv4Addr, SocketAddr};
 
 use bevy::prelude::*;
 use fb_net::*;
-use lightyear::connection::client::Connected;
+use lightyear::connection::client::{Connected, Disconnected};
 use lightyear::netcode::{NetcodeServer, TokenUserData};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
@@ -108,7 +108,16 @@ fn on_connected(
 }
 
 /// A client is gone (it left, timed out, or was let go of).
-fn on_disconnected(trigger: On<Remove, Connected>, rooms: Option<ResMut<Rooms>>) {
+fn on_disconnected(
+    trigger: On<Remove, Connected>,
+    links: Query<(&RemoteId, Option<&Disconnected>, Option<&Link>), With<ClientOf>>,
+    rooms: Option<ResMut<Rooms>>,
+) {
+    if let Ok((remote, gone, link)) = links.get(trigger.entity) {
+        let reason = gone.map_or("?".into(), |d| d.reason.to_string());
+        let rtt = link.map_or(0, |l| l.stats.rtt.as_millis());
+        info!("disconnected: {:?} ({reason}), rtt {rtt} ms", remote.0);
+    }
     if let Some(mut rooms) = rooms {
         rooms.hub.close(conn_of(trigger.entity));
     }

@@ -128,6 +128,9 @@ pub struct Opts {
     /// Writes the own bean's input and position per predicted tick here (`cargo xtask stress` reads it).
     #[arg(long)]
     pub trace: Option<PathBuf>,
+    /// Seconds between `stats:` lines in the log (default: 1 with `--headless`, which stress reads; else none).
+    #[arg(long, hide = true)]
+    pub stats_every: Option<f32>,
     /// Saves a screenshot a second before `--exit-after`.
     #[arg(long)]
     pub screenshot: Option<PathBuf>,

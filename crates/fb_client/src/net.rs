@@ -62,6 +62,8 @@ pub struct Conn {
     pub fallback: Option<(Fallback, f32)>,
     /// The last UDP check on WebSocket: when, and whether UDP worked.
     pub udp_check: Option<(f32, bool)>,
+    /// The last failure to connect, and how many times in a row (`again`).
+    failing: Option<(String, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,6 +332,7 @@ pub fn open(commands: &mut Commands, opts: &Opts, identity: Option<String>, http
         ever: false,
         fallback: None,
         udp_check: None,
+        failing: None,
     };
     ask(&mut conn, now);
     commands.insert_resource(conn);
@@ -368,11 +371,7 @@ fn receive_session(
     conn.asking = None;
     let reply = match reply {
         Ok(r) => r,
-        Err(e) => {
-            warn!("session: {e}");
-            conn.next_try = Some(now + RETRY_S);
-            return;
-        }
+        Err(e) => return failed(&mut conn, e, now),
     };
     conn.identity = Some(reply.identity.clone());
     if reply.ws_url.is_some() {
@@ -405,10 +404,34 @@ fn receive_session(
             conn.started = now;
         }
         // (A token netcode does not take: ask for another one, as after any failed request.)
-        Err(e) => {
-            warn!("session: {e}");
-            conn.next_try = Some(now + RETRY_S);
+        Err(e) => failed(&mut conn, e, now),
+    }
+}
+
+/// A session request failed.
+fn failed(conn: &mut Conn, e: String, now: f32) {
+    conn.next_try = Some(now + RETRY_S);
+    if let Some(n) = again(&mut conn.failing, format!("session: {e}")) {
+        warn!("session: {e}{n}");
+    }
+}
+
+/// The same failure over and over (the server is down): said the first time, then every tenth time.
+fn again(slot: &mut Option<(String, u32)>, what: String) -> Option<String> {
+    let n = match slot {
+        Some((last, n)) if *last == what => {
+            *n += 1;
+            *n
         }
+        s => {
+            *s = Some((what, 1));
+            1
+        }
+    };
+    match n {
+        1 => Some(String::new()),
+        n if n % 10 == 0 => Some(format!(" ({n} times)")),
+        _ => None,
     }
 }
 
@@ -419,17 +442,19 @@ fn watch_link(
     time: Res<Time>,
     session: Res<Session>,
     conn: Option<ResMut<Conn>>,
-    links: Query<(Has<Connected>, Has<Disconnected>)>,
+    links: Query<(Has<Connected>, Option<&Disconnected>)>,
 ) {
     let Some(mut conn) = conn else { return };
     let now = time.elapsed_secs();
     let Some(entity) = conn.entity else { return };
-    let Ok((connected, down)) = links.get(entity) else {
+    let Ok((connected, gone)) = links.get(entity) else {
         return;
     };
+    let down = gone.is_some();
     if connected && !conn.connected {
         conn.connected = true;
         conn.ever = true;
+        conn.failing = None;
         info!("connected over {:?}", conn.transport);
         if opts.transport == Transport::Auto && conn.transport == Transport::Ws {
             conn.next_probe = Some(now + PROBE_EVERY_S);
@@ -458,10 +483,14 @@ fn watch_link(
         ask(&mut conn, now);
         return;
     }
+    let reason = gone.map_or(String::new(), |d| d.reason.to_string());
     if was {
-        warn!("connection lost over {:?}", conn.transport);
+        warn!("connection lost over {:?}: {reason}", conn.transport);
     } else {
-        warn!("no connection over {:?}", conn.transport);
+        let what = format!("no connection over {:?}: {reason}", conn.transport);
+        if let Some(n) = again(&mut conn.failing, what.clone()) {
+            warn!("{what}{n}");
+        }
     }
     if opts.transport == Transport::Auto && conn.transport == Transport::Udp {
         conn.transport = Transport::Ws;

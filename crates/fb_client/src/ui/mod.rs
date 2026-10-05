@@ -172,6 +172,7 @@ pub enum Action {
     Rebind(crate::keys::Bind),
     ResetKeys,
     Gfx(GfxPick),
+    OpenLogs,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -1186,6 +1187,10 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             }
             muted(k, f, text::KEYS_NOTE);
             button(k, f, text::RESET_KEYS, Look::Tiny, Action::ResetKeys);
+        });
+        fold(c, f, ui, "problems", text::PROBLEMS, |k| {
+            muted(k, f, text::PROBLEMS_NOTE);
+            button(k, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         });
     });
 }

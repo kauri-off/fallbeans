@@ -34,6 +34,13 @@ pub fn update_failed(e: &str) -> String {
 pub fn crashed(report: &str) -> String {
     format!("В прошлый раз игра упала. Отчёт: {report}")
 }
+pub const OPEN_LOGS: &str = "Открыть папку с логами";
+pub const PROBLEMS: &str = "Если что-то сломалось";
+pub const PROBLEMS_NOTE: &str = "F8 в игре сохраняет отчёт: что было с сетью и вашим бобом в последние секунды. \
+Нажмите сразу, как заметили странное, и пришлите отчёт с логом из этой папки.";
+pub fn report_saved(path: &str) -> String {
+    format!("Отчёт сохранён: {path}")
+}
 pub const TO_SERVERS: &str = "‹ К серверам";
 pub const SERVERS: &str = "Серверы";
 pub const NO_SERVERS: &str = "Добавьте сервер: его адрес скажет тот, кто его запустил.";
