@@ -7,12 +7,12 @@ use std::collections::BTreeMap;
 use bevy::log::{error, info, warn};
 use fb_maps::director;
 use fb_proto::*;
-use fb_shared::text::{sanitize_name, sanitize_title};
+use fb_shared::text::{sanitize_person_name, sanitize_title};
 use fb_shared::*;
 
 use super::room::{Practice, Room, RoomOptions, Who, make_pin};
 use super::{ConnId, Inputs, Out, random_u32, ticks};
-use crate::auth::{Limiter, address_key, same_key};
+use crate::auth::{GUESSES_PER_TARGET, Limiter, address_key, same_key};
 
 /// A connection that sent no hello within this long is closed (s).
 const HELLO_TIMEOUT_S: f64 = 5.0;
@@ -26,6 +26,15 @@ const ID_LENGTH: usize = 5;
 pub(super) const SESSIONS_PER_ADDRESS: usize = 16;
 const ROOMS_PER_ADDRESS: usize = 3;
 const PRACTICE_PER_ADDRESS: usize = 1;
+/// Rooms open at once by default (`--max-rooms`). The target host is one core for 4 rooms of 8 players
+/// (rounds with bots cost most); lobbies are cheap, so twice that, and never more than `MAX_ROOMS`.
+pub const DEFAULT_MAX_ROOMS: usize = 8;
+/// The room list goes out to the players at it at most this often (s): every join, leave and host change
+/// in any room changes it.
+const LIST_EVERY_S: f64 = 0.5;
+/// A practice room nobody has pressed anything in for this long closes (s): there are only
+/// MAX_PRACTICE_ROOMS on the server.
+const PRACTICE_IDLE_S: f64 = 300.0;
 
 /// A player behind a connection: at the room list (`room` None) or in a room.
 #[derive(Clone, Debug)]
@@ -72,6 +81,13 @@ pub struct Hub {
     empty_since: BTreeMap<u32, u64>,
     /// The room list as last sent, to skip changes that do not show in it.
     sent: String,
+    /// The room list may have changed since it last went out (at real tick `list_sent`).
+    list_due: bool,
+    list_sent: u64,
+    /// Listed rooms open at once at most (`--max-rooms`).
+    pub max_rooms: usize,
+    /// PRACTICE_IDLE_S (tests wait less).
+    pub(super) practice_idle_s: f64,
     guesses: Limiter,
     real: u64,
     pub out: Vec<Out>,
@@ -87,6 +103,10 @@ impl Hub {
             live: BTreeMap::new(),
             empty_since: BTreeMap::new(),
             sent: String::new(),
+            list_due: false,
+            list_sent: 0,
+            max_rooms: DEFAULT_MAX_ROOMS,
+            practice_idle_s: PRACTICE_IDLE_S,
             guesses: Limiter::default(),
             real,
             out: Vec::new(),
@@ -246,7 +266,7 @@ impl Hub {
         // (The name, colour and outfit travel with the player from room to room.)
         match &m {
             ClientMsg::Name(name) => {
-                let name = sanitize_name(name);
+                let name = sanitize_person_name(name);
                 if !name.is_empty() {
                     member.name = name;
                 }
@@ -257,7 +277,11 @@ impl Hub {
         }
         if let Some(key) = room {
             if m == ClientMsg::Leave {
-                self.leave(conn);
+                // Counted with the room list's messages: leaving and joining again over and over is a lobby
+                // and a welcome to everybody each time.
+                if self.allow(conn) {
+                    self.leave(conn);
+                }
             } else {
                 self.with_room(key, |r| r.control(id, conn, &m));
             }
@@ -306,7 +330,7 @@ impl Hub {
     fn enter(&mut self, conn: ConnId, uid: String, h: Hello) {
         let m = Member {
             uid: uid.clone(),
-            name: sanitize_name(&h.name),
+            name: sanitize_person_name(&h.name),
             color: h.color,
             outfit: h.outfit.unwrap_or_default(),
             room: None,
@@ -385,7 +409,7 @@ impl Hub {
                 "С этого адреса открыто слишком много комнат — зайдите в одну из них",
             );
         }
-        if self.listed().count() >= MAX_ROOMS {
+        if self.listed().count() >= self.max_rooms.min(MAX_ROOMS) {
             return self.deny(
                 conn,
                 None,
@@ -439,6 +463,12 @@ impl Hub {
             if !same_key(pin, &want) {
                 self.guesses.failed(&ip, id, now);
                 warn!(room = id, ip, "wrong room pin");
+                // Somebody is going through the PINs (from many addresses: each one is limited): the room
+                // takes a new one, and what they ruled out no longer helps.
+                if self.guesses.misses_at(id, now) >= GUESSES_PER_TARGET {
+                    self.guesses.forget_target(id);
+                    self.with_room(key, Room::new_pin);
+                }
                 return self.deny(conn, Some(id), DenyReason::Pin, "Неверный PIN-код");
             }
         }
@@ -514,10 +544,61 @@ impl Hub {
         }
         if real.is_multiple_of(ticks(1.0)) {
             self.sweep();
+            self.close_idle_practice();
         }
         let keys: Vec<u32> = self.rooms.keys().copied().collect();
         for key in keys {
             self.with_room(key, |r| r.update(real, &mut *inputs));
+        }
+        if self.list_due && real.saturating_sub(self.list_sent) >= ticks(LIST_EVERY_S) {
+            self.list_due = false;
+            self.list_sent = real;
+            self.send_list();
+        }
+    }
+
+    /// Practice rooms nobody has pressed anything in for PRACTICE_IDLE_S: their player is let go.
+    fn close_idle_practice(&mut self) {
+        let real = self.real;
+        let idle: Vec<u32> = self
+            .rooms
+            .iter()
+            .filter(|(_, r)| r.practice() && real.saturating_sub(r.active_at()) > ticks(self.practice_idle_s))
+            .map(|(k, _)| *k)
+            .collect();
+        for key in idle {
+            self.rooms.remove(&key);
+            info!("practice closed: nobody played in it");
+            let members: Vec<ConnId> = self
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.member.as_ref().is_some_and(|m| m.room == Some(key)))
+                .map(|(c, _)| *c)
+                .collect();
+            for c in members {
+                if let Some(m) = self.member_mut(c) {
+                    m.room = None;
+                }
+                self.refuse(
+                    c,
+                    RejectReason::Busy,
+                    "Тренировка закрылась: в ней давно ничего не нажимали",
+                );
+            }
+        }
+    }
+
+    /// The server is going down: everyone is told and goes back to the room list (their games reconnect to
+    /// it once it is up again).
+    pub fn shutdown(&mut self, msg: &str) {
+        let conns: Vec<ConnId> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.member.as_ref().is_some_and(|m| !m.gone))
+            .map(|(c, _)| *c)
+            .collect();
+        for c in conns {
+            self.send(c, ServerMsg::Home { msg: msg.into() });
         }
     }
 
@@ -725,8 +806,13 @@ impl Hub {
         self.send(conn, ServerMsg::Rooms { rooms, mine });
     }
 
-    /// Tells everyone at the room list when it changed.
+    /// The room list may have changed: it goes out with the next update, at most every LIST_EVERY_S.
     fn changed(&mut self) {
+        self.list_due = true;
+    }
+
+    /// Tells everyone at the room list when it changed.
+    fn send_list(&mut self) {
         let rooms = self.directory();
         let ids: Vec<&str> = self.listed().map(|(_, r)| r.id.as_str()).collect();
         let key = format!("{rooms:?}{ids:?}");

@@ -12,6 +12,7 @@ use fb_proto::Pid;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::{INPUT_HOLD, TICK_RATE};
 use lightyear::connection::client::Disconnecting;
+use lightyear::input::input_message::InputMessage;
 use lightyear::input::native::prelude::{ActionState, NativeStateSequence};
 use lightyear::input::server::{InputValidationAppExt, authorize_controlled_targets};
 use lightyear::prelude::input::InputBuffer;
@@ -21,7 +22,7 @@ use lightyear::prelude::*;
 use crate::opts::Opts;
 use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
-use crate::rooms::{ConnId, Inputs, Out, ticks};
+use crate::rooms::{Backoff, ConnId, Inputs, Out, ticks};
 
 /// A bean in play in a room (`RoomTag`, `PlayerId`).
 #[derive(Component, Clone, Copy, Debug)]
@@ -45,6 +46,85 @@ pub struct Rooms {
     in_room: BTreeMap<ConnId, u32>,
     /// Links to let go of once what was sent to them has gone out (server time, s).
     closing: Vec<(Entity, f64)>,
+    real: RealTick,
+}
+
+/// The server tick as a count that does not wrap: Lightyear's is a u32, which at 120 Hz wraps after ~414 days,
+/// and the rooms' timers would stop at the wrap.
+#[derive(Debug, Default)]
+struct RealTick {
+    last: Option<u32>,
+    wraps: u64,
+}
+
+impl RealTick {
+    fn of(&mut self, tick: u32) -> u64 {
+        if let Some(last) = self.last
+            && tick < last
+            && last - tick > u32::MAX / 2
+        {
+            self.wraps += 1;
+        }
+        self.last = Some(tick);
+        (self.wraps << 32) | u64::from(tick)
+    }
+}
+
+/// How far from the server's tick Lightyear takes an input message (`end_tick − tick`, its
+/// `MAX_INPUT_PAST_TICKS` and `MAX_INPUT_LOOKAHEAD_TICKS`): it drops the others without a word.
+const INPUT_WINDOW: core::ops::RangeInclusive<i32> = -64..=64;
+
+/// Input messages Lightyear is about to drop for being too far from the server's tick: a client that leads
+/// by more than ~0.5 s (a slow VPN) and whose bean then stands still. Counted for a warning that backs off.
+#[derive(Resource, Default)]
+struct FarInputs {
+    count: u64,
+    /// The farthest one since the last warning (ticks, signed).
+    worst: i32,
+    log: Backoff,
+}
+
+fn count_far_inputs(
+    timeline: Res<LocalTimeline>,
+    mut far: ResMut<FarInputs>,
+    mut receivers: Query<
+        (
+            &RemoteId,
+            &mut MessageReceiver<InputMessage<NativeStateSequence<FbInput>>>,
+        ),
+        With<Connected>,
+    >,
+) {
+    let tick = timeline.tick();
+    let far = &mut *far;
+    for (remote, mut r) in &mut receivers {
+        let mut n = 0;
+        r.retain_messages(|m| {
+            let d = m.end_tick - tick;
+            if !INPUT_WINDOW.contains(&d) {
+                n += 1;
+                if d.abs() > far.worst.abs() {
+                    far.worst = d;
+                }
+            }
+            true
+        });
+        if n == 0 {
+            continue;
+        }
+        far.count += n;
+        if let Some(hushed) = far.log.hit(u64::from(tick.0)) {
+            warn!(
+                client = ?remote.0,
+                dropped = far.count,
+                worst = far.worst,
+                hushed,
+                "input messages too far from the server tick: Lightyear drops them"
+            );
+            far.count = 0;
+            far.worst = 0;
+        }
+    }
 }
 
 /// `--trace`: one line per pawn per tick, `S tick room id mx mz buttons x y z`.
@@ -67,6 +147,8 @@ impl Plugin for PlayPlugin {
         // message into whatever entity it names, so a modified client could drive another player's bean
         // (or hang input buffers on any entity). The check is opt-in in Lightyear 0.30.
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<FbInput>>);
+        app.init_resource::<FarInputs>();
+        app.add_input_validator(count_far_inputs);
         app.add_systems(FixedUpdate, (tick_rooms.in_set(RoomTick), watch_inputs.after(RoomTick)));
         // Every frame: Lightyear drops the messages nobody read in the frame they came in, and half the
         // frames run no tick.
@@ -84,7 +166,9 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         eliminate: !opts.respawn,
         ..default()
     };
-    let mut hub = Hub::new(base, u64::from(timeline.tick().0));
+    let mut real = RealTick::default();
+    let mut hub = Hub::new(base, real.of(timeline.tick().0));
+    hub.max_rooms = opts.max_rooms.clamp(1, fb_shared::MAX_ROOMS);
     for id in &opts.open_rooms {
         hub.open_permanent(id, id);
     }
@@ -94,6 +178,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         rounds: BTreeMap::new(),
         in_room: BTreeMap::new(),
         closing: Vec::new(),
+        real,
     });
     if let Some(path) = &opts.trace {
         let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
@@ -193,7 +278,8 @@ fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> Inpu
             st.ack = k;
             s.0.into()
         }
-        None if k.saturating_sub(st.ack) > INPUT_HOLD => InputFrame::IDLE,
+        // (As a signed difference: across the u32 tick's wrap the last input is a few ticks old, not none.)
+        None if (k.wrapping_sub(st.ack) as i32) > INPUT_HOLD as i32 => InputFrame::IDLE,
         None => InputFrame {
             buttons: st.last.buttons & !PRESSES,
             ..st.last
@@ -219,7 +305,9 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
         };
         let st = &mut *st;
         let room = rooms.hub.rooms.get(&key).map_or("?", |r| r.id.as_str());
-        if st.gap > 0 && st.gap % (STILL_S * rate) == 0 {
+        // After STILL_S, then 2, 4, 8 … times that: a player gone for minutes is a few lines, not one every 5 s.
+        let still = STILL_S * rate;
+        if st.gap > 0 && st.gap.is_multiple_of(still) && (st.gap / still).is_power_of_two() {
             warn!(
                 room,
                 id,
@@ -292,8 +380,9 @@ fn tick_rooms(
         .values()
         .filter_map(|p| Some((p.owner?, p.entity)))
         .collect();
+    let real = rooms.real.of(tick.0);
     rooms.hub.update(
-        u64::from(tick.0),
+        real,
         &mut LinkInputs {
             owners: &owners,
             pawns: &mut inputs,
@@ -384,33 +473,57 @@ fn publish(
     });
     let mut live = Vec::new();
     for (&key, room) in &hub.rooms {
-        let round = Round {
+        let map = room.arena.map.meta().id;
+        let zero_tick = room.zero_tick();
+        // Compared field by field: a new `Round` (two Strings) only when something changed, not every tick.
+        let same = |r: &Round| {
+            r.arena == room.arena_id
+                && r.kind == room.arena.kind
+                && r.map == map
+                && r.seed == room.arena.seed
+                && r.zero_tick == zero_tick
+                && r.fall == room.arena.fall
+                && r.static_hash == room.arena.static_hash
+        };
+        let round = || Round {
             arena: room.arena_id,
             kind: room.arena.kind,
-            map: room.arena.map.meta().id.into(),
+            map: map.into(),
             seed: room.arena.seed,
-            zero_tick: room.zero_tick(),
+            zero_tick,
             fall: room.arena.fall,
             static_hash: room.arena.static_hash.clone(),
         };
-        match rounds.get(&key).map(|e| round_q.get_mut(*e)) {
+        let existing = rounds.get(&key).copied();
+        let fresh = match existing.map(|e| round_q.get_mut(e)) {
             Some(Ok(mut r)) => {
-                if *r != round {
-                    *r = round;
+                if !same(&*r) {
+                    *r = round();
                 }
+                false
             }
-            Some(Err(_)) => {}
-            None => {
-                let e = commands
-                    .spawn((
-                        Name::new(format!("room {}", room.id)),
-                        round,
-                        RoomTag(key),
-                        Replicate::to_clients(NetworkTarget::All),
-                    ))
-                    .id();
-                rounds.insert(key, e);
+            // Its entity is gone (or lost its `Round`): clients would keep an old arena; replicate it again.
+            Some(Err(_)) => {
+                warn!(room = %room.id, "the room's round entity is gone: a new one");
+                if let Some(old) = existing
+                    && let Ok(mut e) = commands.get_entity(old)
+                {
+                    e.despawn();
+                }
+                true
             }
+            None => true,
+        };
+        if fresh {
+            let e = commands
+                .spawn((
+                    Name::new(format!("room {}", room.id)),
+                    round(),
+                    RoomTag(key),
+                    Replicate::to_clients(NetworkTarget::All),
+                ))
+                .id();
+            rounds.insert(key, e);
         }
         for p in room.arena.pawns.iter().filter(|p| p.status == PawnStatus::Play) {
             // (A link already gone counts as nobody: the room hears of it in a moment.)

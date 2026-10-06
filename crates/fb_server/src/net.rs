@@ -1,5 +1,7 @@
 //! Listening on UDP and WebSocket, and turning connections into pawns.
-use core::net::{Ipv4Addr, SocketAddr};
+use core::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
 use fb_net::*;
@@ -22,9 +24,37 @@ pub struct NetPlugin;
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start_server);
+        app.add_systems(Update, (reap_links, watch_server, shut_down));
         app.add_observer(on_link);
         app.add_observer(on_connected);
         app.add_observer(on_disconnected);
+    }
+}
+
+/// A link that has not connected this long after its first packet is let go of (s; at least the link timeout).
+const LINK_CONNECT_S: f64 = 6.0;
+/// Links not connected (yet) at most: beyond it the oldest go first.
+const MAX_PENDING_LINKS: usize = 256;
+/// After telling the players, the server stops its transports (netcode's disconnect packets go out), then exits (s).
+const SHUTDOWN_TELL_S: f64 = 0.5;
+const SHUTDOWN_STOP_S: f64 = 0.2;
+
+/// When a link came (server time, s).
+#[derive(Component, Clone, Copy, Debug)]
+struct LinkedAt(f64);
+
+/// SIGTERM, SIGINT or SIGHUP (`exit_on_signals`): the server goes down, telling the players first.
+#[derive(Resource, Default)]
+pub struct Shutdown {
+    pub signal: Arc<AtomicBool>,
+    /// Server time the players were told, and the transports were stopped.
+    told: Option<f64>,
+    stopped: Option<f64>,
+}
+
+impl Shutdown {
+    fn going(&self) -> bool {
+        self.told.is_some() || self.signal.load(Ordering::Relaxed)
     }
 }
 
@@ -34,7 +64,7 @@ impl Plugin for NetPlugin {
 /// and Lightyear's topology is a valid `Server` (with a server per transport it was `Invalid`,
 /// lightyear#1693, and the systems that need one server stayed off).
 fn start_server(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>) {
-    let udp_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), opts.udp_port);
+    let udp_addr = SocketAddr::new(opts.udp_addr, opts.udp_port);
     let ws_addr = SocketAddr::new(opts.ws_addr, opts.ws_port);
     // A client sends one netcode packet (about a kilobyte) per message: tungstenite's defaults (16 MB frames,
     // 64 MB messages) would let anyone who opens the port make the server buffer that much per connection.
@@ -73,11 +103,106 @@ fn start_server(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>) {
     );
 }
 
-/// A new link (not yet authenticated): it may receive replication once connected.
-fn on_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
+/// A new link, not yet authenticated: any UDP packet from a new address makes one (`reap_links`).
+fn on_link(trigger: On<Add, LinkOf>, time: Res<Time<Real>>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
-        .insert((ReplicationSender, Name::new("client")));
+        .insert((LinkedAt(time.elapsed_secs_f64()), Name::new("client")));
+}
+
+/// Links that never connect go after LINK_CONNECT_S, and the oldest beyond MAX_PENDING_LINKS: UDP makes one
+/// per source address before any token is checked (spoofed packets, scanners), WebSocket one per finished
+/// handshake, and neither ever lets go of one that stays silent.
+fn reap_links(
+    time: Res<Time<Real>>,
+    opts: Res<Opts>,
+    links: Query<(Entity, &LinkedAt), (With<LinkOf>, Without<Connected>)>,
+    mut pending: Local<Vec<(f64, Entity)>>,
+    mut reaped: Local<(usize, f64)>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs_f64();
+    let wait = LINK_CONNECT_S.max(opts.link_timeout.map_or(0.0, f64::from));
+    pending.clear();
+    let mut gone = 0;
+    for (link, at) in &links {
+        if now - at.0 > wait {
+            commands.entity(link).try_despawn();
+            gone += 1;
+        } else {
+            pending.push((at.0, link));
+        }
+    }
+    if pending.len() > MAX_PENDING_LINKS {
+        pending.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let extra = pending.len() - MAX_PENDING_LINKS;
+        for &(_, link) in pending.iter().take(extra) {
+            commands.entity(link).try_despawn();
+        }
+        gone += extra;
+    }
+    // A line a minute at most (a flood would fill the log).
+    reaped.0 += gone;
+    if reaped.0 > 0 && now - reaped.1 >= 60.0 {
+        info!("let go of {} links that never connected", reaped.0);
+        *reaped = (0, now);
+    }
+}
+
+/// The server's transports gave up: an accept error closes the WebSocket listener, and with it the one
+/// `Server` UDP is on too (every link let go of). The process exits with an error, and systemd starts it
+/// again (`Restart=always`).
+fn watch_server(
+    servers: Query<(Has<Started>, Has<Stopped>, Option<&Unlinked>), With<NetcodeServer>>,
+    shutdown: Res<Shutdown>,
+    mut started: Local<bool>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for (on, stopped, unlinked) in &servers {
+        *started |= on;
+        if *started && (stopped || unlinked.is_some()) && !shutdown.going() {
+            let reason = unlinked.map(|u| u.reason.to_string()).unwrap_or_default();
+            error!("the server stopped listening ({reason}): exiting");
+            exit.write(AppExit::from_code(1));
+            *started = false;
+        }
+    }
+}
+
+/// A signal (`Shutdown`): everyone is told the server is restarting, the transports are stopped, then the
+/// process exits.
+fn shut_down(
+    time: Res<Time<Real>>,
+    mut shutdown: ResMut<Shutdown>,
+    rooms: Option<ResMut<Rooms>>,
+    servers: Query<Entity, With<NetcodeServer>>,
+    mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !shutdown.signal.load(Ordering::Relaxed) {
+        return;
+    }
+    let now = time.elapsed_secs_f64();
+    match (shutdown.told, shutdown.stopped) {
+        (None, _) => {
+            info!("shutting down: telling the players");
+            if let Some(mut rooms) = rooms {
+                rooms.hub.shutdown("Сервер перезапускается");
+            }
+            shutdown.told = Some(now);
+        }
+        (Some(told), None) if now - told >= SHUTDOWN_TELL_S => {
+            for server in &servers {
+                commands.trigger(Stop { entity: server });
+            }
+            shutdown.stopped = Some(now);
+        }
+        (Some(_), Some(stopped)) if now - stopped >= SHUTDOWN_STOP_S => {
+            info!("shut down");
+            exit.write(AppExit::Success);
+        }
+        _ => {}
+    }
 }
 
 /// A client is in, as the player of its connect token: the hub waits for its hello.
@@ -85,8 +210,12 @@ fn on_connected(
     trigger: On<Add, Connected>,
     links: Query<(&RemoteId, Option<&PeerAddr>, Option<&TokenUserData>), With<ClientOf>>,
     rooms: Option<ResMut<Rooms>>,
+    mut commands: Commands,
 ) {
     let link = trigger.entity;
+    // Replication only to links that connected (Lightyear admits a link that gets its sender late): links
+    // that never do (`reap_links`) cost the replication systems nothing.
+    commands.entity(link).insert(ReplicationSender);
     let (Ok((remote, addr, data)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };

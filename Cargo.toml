@@ -36,6 +36,8 @@ lightyear_transport = { version = "=0.30.1", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
+# SIGTERM and SIGHUP too (`termination`): the server shuts down gracefully on `systemctl stop`.
+ctrlc = { version = "3.4", features = ["termination"] }
 getrandom = "0.3"
 glam = { version = "0.32", default-features = false, features = ["std", "serde"] }
 hmac = "0.12"
@@ -84,5 +86,6 @@ string_slice = "warn"
 
 # Local fixes to dependencies, each to drop once upstream has it.
 [patch.crates-io]
-# The WebSocket server leaves Nagle's algorithm on (only the client can turn it off): +15 ms RTT on wss.
+# The WebSocket server: Nagle off (only the client could turn it off: +15 ms RTT on wss), a handshake timeout,
+# accept errors that do not end the server, connection caps, a small tokio runtime ("fallbeans patch" in the code).
 aeronet_websocket = { path = "vendor/aeronet_websocket" }

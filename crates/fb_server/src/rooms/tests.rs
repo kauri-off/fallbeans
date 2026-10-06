@@ -208,6 +208,8 @@ fn keeps_the_wished_colour_when_free_and_passes_outfits_on() {
         shoes: Some(fb_shared::outfit::Tint::Black),
     };
     t.ctl(a, ClientMsg::Outfit(o));
+    // (Profile changes go out with the next tick.)
+    t.tick();
     assert_eq!(t.lobby(b).players.iter().find(|p| p.id == a.id).unwrap().outfit, o);
 }
 
@@ -535,7 +537,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
                     v: [2.0, 5.0, -3.0],
                 },
             ),
-            80 => cmd(&mut t, b, DevCmd::Bot { n: None, near: true }),
+            80 => cmd(&mut t, a, DevCmd::Bot { n: None, near: true }),
             100 => cmd(
                 &mut t,
                 a,
@@ -545,7 +547,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
                     s: Some(1.0),
                 },
             ),
-            120 => cmd(&mut t, b, DevCmd::Bots { on: false }),
+            120 => cmd(&mut t, a, DevCmd::Bots { on: false }),
             _ => {}
         }
         t.advance(0.05);
@@ -871,7 +873,8 @@ fn hub_closes_rooms_left_empty_and_times_out_silent_connections() {
     t.hub.close(c);
     t.advance(10.0);
     assert_eq!(t.hub.listed().count(), 2);
-    t.advance(31.0);
+    // (The owner keeps their place LOBBY_GRACE_S, then the empty room waits ROOM_EMPTY_S.)
+    t.advance(36.0);
     assert_eq!(t.hub.listed().count(), 1);
     let silent = t.open();
     t.advance(6.0);
@@ -975,4 +978,319 @@ fn one_address_cannot_take_the_whole_server() {
         let c = t.open_from("127.0.0.1", &format!("l{i}"));
         assert!(!t.closed(c), "local connection {i}");
     }
+}
+
+// ------------------------------------------------------------------ hardening
+
+#[test]
+fn keeps_a_lobby_place_a_while_after_the_connection_drops() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    let b = t.hello("B", "ub");
+    t.room.leave(b.id, b.conn);
+    t.pump();
+    let seen = |t: &Bench| t.lobby(a).players.iter().find(|p| p.id == b.id).map(|p| p.connected);
+    assert_eq!(seen(&t), Some(false));
+    // Back within the grace: the same player.
+    let b2 = t.hello("B", "ub");
+    assert_eq!(b2.id, b.id);
+    t.room.leave(b2.id, b2.conn);
+    t.advance(11.0);
+    assert!(t.room.player(b.id).is_none());
+}
+
+#[test]
+fn an_owner_who_handed_the_host_role_over_does_not_take_it_back() {
+    let mut t = Bench::new(RoomOptions {
+        owner: Some("ua".into()),
+        ..opts()
+    });
+    let a = t.hello("A", "ua");
+    let b = t.hello("B", "ub");
+    assert_eq!(t.room.host, Some(a.id));
+    t.ctl(a, ClientMsg::Host(b.id));
+    t.room.leave(a.id, a.conn);
+    let a2 = t.hello("A", "ua");
+    assert_eq!(t.room.host, Some(b.id));
+    // Given back, it is the owner's again, also the next time they come back.
+    t.ctl(b, ClientMsg::Host(a2.id));
+    assert_eq!(t.room.host, Some(a2.id));
+    t.room.leave(a2.id, a2.conn);
+    assert_eq!(t.room.host, Some(b.id));
+    let a3 = t.hello("A", "ua");
+    assert_eq!(t.room.host, Some(a3.id));
+}
+
+#[test]
+fn only_an_owned_room_can_be_made_private() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    t.ctl(a, ClientMsg::Access { private: true });
+    assert!(t.room.pin.is_none());
+    let mut t = Bench::new(RoomOptions {
+        owner: Some("ua".into()),
+        ..opts()
+    });
+    let a = t.hello("A", "ua");
+    t.ctl(a, ClientMsg::Access { private: true });
+    assert!(t.room.pin.is_some());
+}
+
+#[test]
+fn dev_commands_are_the_hosts_and_warps_are_capped() {
+    let mut t = Bench::new(RoomOptions { dev: true, ..opts() });
+    let a = t.hello("A", "ua");
+    let b = t.hello("B", "ub");
+    t.ctl(
+        b,
+        ClientMsg::Dev {
+            q: Some(1),
+            cmd: DevCmd::Warp { s: 1.0 },
+        },
+    );
+    assert!(t.msgs(b).any(|m| matches!(
+        m,
+        ServerMsg::DevAck {
+            q: Some(1),
+            ok: false,
+            ..
+        }
+    )));
+    let before = t.room.arena.tick;
+    t.ctl(
+        a,
+        ClientMsg::Dev {
+            q: Some(2),
+            cmd: DevCmd::Warp { s: 120.0 },
+        },
+    );
+    let capped =
+        |m: &ServerMsg| matches!(m, ServerMsg::DevAck { q: Some(2), ok: true, msg } if msg.contains("at most"));
+    assert!(t.msgs(a).any(capped));
+    let warped = t.room.arena.tick - before;
+    assert!(warped > 0 && warped <= ticks(30.0) as i64 + 6, "{warped}");
+}
+
+#[test]
+fn names_are_unique_in_a_room_and_people_are_not_bots() {
+    let mut t = Bench::new(RoomOptions {
+        max_players: 4,
+        ..opts()
+    });
+    let a = t.hello("Аня", "u1");
+    let b = t.hello("аня", "u2");
+    let c = t.hello("Бот Кекс", "u3");
+    let name = |t: &Bench, id: Pid| t.room.player(id).unwrap().name.clone();
+    assert_eq!(name(&t, a.id), "Аня");
+    assert_eq!(name(&t, b.id), "аня 2");
+    assert_eq!(name(&t, c.id), format!("Боб {}", c.id));
+    t.ctl(c, ClientMsg::Name("Аня".into()));
+    assert_eq!(name(&t, c.id), "Аня 3");
+    t.ctl(c, ClientMsg::Name("Бот Шмель".into()));
+    assert_eq!(name(&t, c.id), "Аня 3");
+}
+
+#[test]
+fn name_colour_and_outfit_changes_go_out_together_and_not_too_often() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    let b = t.hello("B", "ub");
+    t.tick();
+    t.mail.clear();
+    let lobbies = |t: &Bench| t.msgs(b).filter(|m| matches!(m, ServerMsg::Lobby(_))).count();
+    for i in 0..10 {
+        t.ctl(a, ClientMsg::Name(format!("Имя {i}")));
+    }
+    assert_eq!(lobbies(&t), 0);
+    t.tick();
+    assert_eq!(lobbies(&t), 1);
+    assert_eq!(t.lobby(b).players.iter().find(|p| p.id == a.id).unwrap().name, "Имя 9");
+    for i in 0..10 {
+        t.ctl(a, ClientMsg::Name(format!("Ещё {i}")));
+        t.tick();
+    }
+    assert_eq!(lobbies(&t), 1);
+    t.advance(0.5);
+    assert_eq!(lobbies(&t), 2);
+    assert_eq!(t.lobby(b).players.iter().find(|p| p.id == a.id).unwrap().name, "Ещё 9");
+}
+
+#[test]
+fn a_survival_round_with_one_player_left_is_played_not_won_at_once() {
+    let mut t = Bench::new(opts());
+    let a = t.hello("A", "ua");
+    let b = t.hello("B", "ub");
+    t.room.playlist = Playlist {
+        mode: Mode::Custom,
+        games: vec!["jump-club".into(), "hex-a-gone".into()],
+        rounds: 5,
+    };
+    t.ctl(a, ClientMsg::Start);
+    t.room.quit(b.id);
+    t.pump();
+    t.until(15.0, |t| t.room.arena.map.meta().id == "hex-a-gone", |_| {});
+    // Still in the intro: "the last bean standing" used to end it on its first tick.
+    t.advance(0.5);
+    assert_eq!(t.room.phase, Phase::Round);
+    assert!(t.room.round.as_ref().is_some_and(|r| !r.over));
+}
+
+#[test]
+fn backs_off_a_warning_that_keeps_coming() {
+    let mut b = super::Backoff::default();
+    let s = ticks(1.0);
+    assert_eq!(b.hit(1000), Some(0));
+    assert_eq!(b.hit(1001), None);
+    assert_eq!(b.hit(1000 + s), Some(1));
+    // Now two seconds.
+    assert_eq!(b.hit(1000 + 2 * s), None);
+    assert_eq!(b.hit(1000 + 3 * s), Some(1));
+    // Quiet for long: from the start again.
+    assert_eq!(b.hit(1000 + 100 * s), Some(0));
+    assert_eq!(b.hit(1000 + 101 * s), Some(0));
+}
+
+#[test]
+fn hub_changes_a_rooms_pin_while_it_is_being_guessed() {
+    let mut t = HubBench::new(false);
+    let host = t.hello(Hello {
+        name: "h".into(),
+        ..Default::default()
+    });
+    t.send(
+        host,
+        ClientMsg::Create {
+            title: String::new(),
+            private: true,
+        },
+    );
+    let Some(ServerMsg::Lobby(lobby)) = t.last(host, |m| matches!(m, ServerMsg::Lobby(_))) else {
+        panic!("no lobby");
+    };
+    let pin = lobby.pin.expect("the host's PIN");
+    let room = lobby.room.id;
+    let wrong = if pin == "0000" { "1111" } else { "0000" };
+    for i in 0..30 {
+        let c = t.open_from(&format!("198.51.100.{i}"), &format!("g{i}"));
+        t.send(c, ClientMsg::Hello(Hello::default()));
+        t.send(
+            c,
+            ClientMsg::Join {
+                room: room.clone(),
+                pin: Some(wrong.into()),
+            },
+        );
+    }
+    assert!(t.last(host, |m| matches!(m, ServerMsg::Chat { id: 0, .. })).is_some());
+    let new_pin = t.hub.listed().next().unwrap().1.pin.clone().expect("still private");
+    // The right PIN still gets in, from an address nobody guessed from.
+    let friend = t.open_from("192.0.2.7", "friend");
+    t.send(friend, ClientMsg::Hello(Hello::default()));
+    t.send(
+        friend,
+        ClientMsg::Join {
+            room,
+            pin: Some(new_pin),
+        },
+    );
+    assert!(t.last(friend, |m| matches!(m, ServerMsg::Welcome { .. })).is_some());
+}
+
+#[test]
+fn hub_closes_a_practice_nobody_plays() {
+    let mut t = HubBench::new(false);
+    t.hub.practice_idle_s = 2.0;
+    let p = t.hello(Hello {
+        practice: Some("hex-a-gone".into()),
+        ..Default::default()
+    });
+    assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 1);
+    t.advance(4.0);
+    assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 0);
+    assert!(t.closed(p));
+}
+
+#[test]
+fn hub_counts_leaving_against_the_message_budget() {
+    let mut t = HubBench::new(false);
+    let host = t.hello(Hello::default());
+    t.send(
+        host,
+        ClientMsg::Create {
+            title: String::new(),
+            private: false,
+        },
+    );
+    let room = t.hub.listed().next().unwrap().1.id.clone();
+    let guest = t.hello(Hello::default());
+    for _ in 0..30 {
+        t.send(guest, ClientMsg::Leave);
+        t.send(
+            guest,
+            ClientMsg::Join {
+                room: room.clone(),
+                pin: None,
+            },
+        );
+    }
+    let homes = t.mail[&guest]
+        .iter()
+        .filter(|o| matches!(o, Out::Msg(_, ServerMsg::Home { .. })))
+        .count();
+    assert!(homes <= 10, "{homes}");
+}
+
+#[test]
+fn hub_sends_the_room_list_at_most_twice_a_second() {
+    let mut t = HubBench::new(false);
+    let watcher = t.hello(Hello::default());
+    t.mail.clear();
+    let lists = |t: &HubBench| {
+        t.mail
+            .get(&watcher)
+            .into_iter()
+            .flatten()
+            .filter(|o| matches!(o, Out::Msg(_, ServerMsg::Rooms { .. })))
+            .count()
+    };
+    let host = t.hello(Hello::default());
+    t.send(
+        host,
+        ClientMsg::Create {
+            title: String::new(),
+            private: false,
+        },
+    );
+    let room = t.hub.listed().next().unwrap().1.id.clone();
+    for _ in 0..3 {
+        let g = t.hello(Hello::default());
+        t.send(
+            g,
+            ClientMsg::Join {
+                room: room.clone(),
+                pin: None,
+            },
+        );
+    }
+    assert_eq!(lists(&t), 0);
+    t.advance(0.01);
+    assert_eq!(lists(&t), 1);
+    let g = t.hello(Hello::default());
+    t.send(g, ClientMsg::Join { room, pin: None });
+    t.advance(0.1);
+    assert_eq!(lists(&t), 1);
+    t.advance(0.5);
+    assert_eq!(lists(&t), 2);
+}
+
+#[test]
+fn hub_tells_everyone_when_the_server_goes_down() {
+    let mut t = HubBench::new(false);
+    let c = t.hello(Hello::default());
+    t.hub.shutdown("Сервер перезапускается");
+    t.pump();
+    assert!(
+        t.last(c, |m| matches!(m, ServerMsg::Home { msg } if !msg.is_empty()))
+            .is_some()
+    );
 }

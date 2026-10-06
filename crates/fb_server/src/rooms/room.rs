@@ -11,7 +11,7 @@ use fb_shared::input::InputFrame;
 use fb_shared::outfit::bot_outfit;
 use fb_shared::rng::{Rng, shuffle};
 use fb_shared::rules::{RoundView, is_round_over, score_round};
-use fb_shared::text::{sanitize_chat, sanitize_name};
+use fb_shared::text::{sanitize_chat, sanitize_person_name};
 use fb_shared::*;
 use fb_sim::math::V3;
 use serde_json::json;
@@ -29,6 +29,12 @@ const CHAT_GAP_S: f64 = 0.7;
 const MAX_CATCHUP: i64 = 60;
 /// Shortest time between two starts by the host (s): building a round's arena costs the shared tick up to ≈6 ms.
 const START_GAP_S: f64 = 1.0;
+/// Name, colour and outfit changes go out in a lobby at most this often (s): each one is a lobby to everybody.
+const PROFILE_EVERY_S: f64 = 0.5;
+/// A player whose connection dropped in the lobby keeps their place (and crowns) this long (s).
+const LOBBY_GRACE_S: f64 = 10.0;
+/// The longest dev warp (s): it simulates every tick at once, and the tick is every room's.
+const WARP_MAX_S: f64 = 30.0;
 
 #[derive(Clone, Debug)]
 pub struct Practice {
@@ -87,7 +93,7 @@ pub struct Session {
     pub plan: Vec<&'static str>,
     /// Rounds started so far.
     pub index: usize,
-    /// Players the game started with (for solo detection).
+    /// Players the game started with (bots too; the debug API shows it).
     pub started: usize,
 }
 
@@ -142,6 +148,8 @@ pub struct Room {
     /// The acting host: the owner whenever they are in the room; while they are away (or after they handed
     /// the role over) another connected player.
     pub host: Option<Pid>,
+    /// The owner handed the host role over (`Host`): coming back they do not take it back.
+    handed_over: bool,
     pub phase: Phase,
     pub session: Option<Session>,
     pub round: Option<RoundInfo>,
@@ -173,6 +181,11 @@ pub struct Room {
     pub out: Vec<Out>,
     /// Something the room list shows changed (players, host, phase, access).
     pub changed: bool,
+    /// A name, colour or outfit changed since the last lobby; and the real tick that change last went out.
+    lobby_due: bool,
+    profile_sent: u64,
+    /// Real tick of the last input from a person that was not idle (practice rooms close without one).
+    active_at: u64,
     opts: RoomOptions,
 }
 
@@ -196,6 +209,7 @@ impl Room {
             admitted: BTreeSet::new(),
             players: Vec::new(),
             host: None,
+            handed_over: false,
             phase: Phase::Lobby,
             session: None,
             round: None,
@@ -217,8 +231,16 @@ impl Room {
             history: Vec::new(),
             out: Vec::new(),
             changed: false,
+            lobby_due: false,
+            profile_sent: 0,
+            active_at: real,
             opts,
         }
+    }
+
+    /// Real tick of the last input from a person that was not idle (or of the room's opening).
+    pub fn active_at(&self) -> u64 {
+        self.active_at
     }
 
     pub fn practice(&self) -> bool {
@@ -303,15 +325,17 @@ impl Room {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let name = Some(sanitize_name(&who.name))
+        let name = Some(sanitize_person_name(&who.name))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Боб {id}"));
+        let name = self.unique_name(id, name);
         let color = self.free_color(who.color);
         let mut p = Player::new(id, name, color, who.outfit.unwrap_or_default());
         p.uid = who.uid.clone();
         p.bot = false;
         p.conn = Some(conn);
         p.spectator = self.phase != Phase::Lobby;
+        self.active_at = self.clock.real();
         info!(room = %self.id, id, name = p.name, practice = self.practice(), "player joined");
         self.players.push(p);
         if !who.uid.is_empty() {
@@ -340,7 +364,8 @@ impl Room {
         Some(id)
     }
 
-    /// The connection of player `id` is gone: out of the lobby at once, out of a game after the grace period.
+    /// The connection of player `id` is gone: they keep their place a while to come back to (LOBBY_GRACE_S in
+    /// the lobby, RECONNECT_GRACE_S in a game; `update`).
     pub fn leave(&mut self, id: Pid, conn: ConnId) {
         let real = self.clock.real();
         let Some(p) = self.player_mut(id).filter(|p| p.conn == Some(conn)) else {
@@ -349,10 +374,6 @@ impl Room {
         p.conn = None;
         p.disconnected_at = real.max(1);
         info!(room = %self.id, id, "player disconnected");
-        if self.phase == Phase::Lobby && !self.practice() {
-            self.remove_player(id);
-            return;
-        }
         self.update_host();
         self.send_lobby();
     }
@@ -378,8 +399,10 @@ impl Room {
         }
         p.msg_count += 1;
         let count = p.msg_count;
-        if count == MSG_RATE + 1 {
-            warn!(room = %self.id, id, "rate limited");
+        // (Once a second at most while it lasts, and less often the longer it goes on.)
+        let hushed = (count == MSG_RATE + 1).then(|| p.rate_log.hit(real)).flatten();
+        if let Some(hushed) = hushed {
+            warn!(room = %self.id, id, hushed, "rate limited");
         }
         if count > MSG_RATE {
             return;
@@ -389,25 +412,29 @@ impl Room {
         match m {
             // Handled before a message reaches the room (see Hub).
             ClientMsg::Hello(_) | ClientMsg::Create { .. } | ClientMsg::Join { .. } | ClientMsg::Leave => {}
+            // Name, colour and outfit change at once and go out together, at most every PROFILE_EVERY_S (`update`).
             ClientMsg::Name(name) => {
-                let name = sanitize_name(name);
-                if let Some(p) = self.player_mut(id).filter(|_| !name.is_empty()) {
-                    p.name = name;
-                    self.send_lobby();
+                let name = sanitize_person_name(name);
+                if !name.is_empty() {
+                    let name = self.unique_name(id, name);
+                    if let Some(p) = self.player_mut(id).filter(|p| p.name != name) {
+                        p.name = name;
+                        self.lobby_due = true;
+                    }
                 }
             }
             ClientMsg::Color(c) => {
                 if lobby && !self.players.iter().any(|o| o.id != id && o.color == *c) {
-                    if let Some(p) = self.player_mut(id) {
+                    if let Some(p) = self.player_mut(id).filter(|p| p.color != *c) {
                         p.color = *c;
+                        self.lobby_due = true;
                     }
-                    self.send_lobby();
                 }
             }
             ClientMsg::Outfit(o) => {
                 if let Some(p) = self.player_mut(id).filter(|p| p.outfit != *o) {
                     p.outfit = *o;
-                    self.send_lobby();
+                    self.lobby_due = true;
                 }
             }
             ClientMsg::Start => {
@@ -456,7 +483,9 @@ impl Room {
                 }
             }
             ClientMsg::Access { private } => {
-                if host && !self.practice() && self.pin.is_some() != *private {
+                // Not in a room nobody owns (the dev room, `--open-rooms`): its stand-in host could lock it and
+                // leave, and nobody would know the PIN until a restart.
+                if host && !self.practice() && self.owner.is_some() && self.pin.is_some() != *private {
                     self.pin = private.then(make_pin);
                     // A new PIN: whoever is here stays welcome, those who left need it.
                     self.admitted = self.players.iter().filter(|h| !h.bot).map(|h| h.uid.clone()).collect();
@@ -467,6 +496,13 @@ impl Room {
             ClientMsg::Host(to) => {
                 // The host hands the role over to another connected player (any phase).
                 if host && *to != id && self.player(*to).is_some_and(|t| !t.bot && t.conn.is_some()) {
+                    // Given away by the owner, it stays given when they reconnect; given back, it is theirs again.
+                    if self.is_owner(id) {
+                        self.handed_over = true;
+                    }
+                    if self.is_owner(*to) {
+                        self.handed_over = false;
+                    }
                     self.host = Some(*to);
                     self.send_lobby();
                 }
@@ -487,13 +523,20 @@ impl Room {
                 self.broadcast(ServerMsg::Chat { id, name, text });
             }
             ClientMsg::Dev { q, cmd } => {
-                if !self.dev() {
+                let refused = if !self.dev() {
+                    Some("dev commands are off")
+                } else if !host {
+                    Some("dev commands are the host's")
+                } else {
+                    None
+                };
+                if let Some(why) = refused {
                     self.send_to(
                         id,
                         ServerMsg::DevAck {
                             q: *q,
                             ok: false,
-                            msg: "dev commands are off".into(),
+                            msg: why.into(),
                         },
                     );
                     return;
@@ -533,8 +576,16 @@ impl Room {
                 Ok(format!("skipped {:.0} ms", left * 1000.0 / TICK_RATE as f64))
             }
             DevCmd::Warp { s } => {
-                self.warp((s * TICK_RATE as f64).round());
-                Ok(format!("warped {s} s"))
+                if !s.is_finite() || *s <= 0.0 {
+                    return Err("warp by some seconds".into());
+                }
+                let capped = s.min(WARP_MAX_S);
+                self.warp((capped * TICK_RATE as f64).round());
+                Ok(if capped < *s {
+                    format!("warped {capped} s (at most {WARP_MAX_S} s at once)")
+                } else {
+                    format!("warped {capped} s")
+                })
             }
             DevCmd::EndRound => {
                 if self.phase != Phase::Round || self.round.as_ref().is_none_or(|r| r.over) {
@@ -763,14 +814,22 @@ impl Room {
             .or(bots.first().copied())
     }
 
-    /// `id` just connected: the room's owner takes the host role back, anyone else may fill a vacancy.
+    /// `id` just connected: the room's owner takes the host role back (unless they gave it away), anyone else
+    /// may fill a vacancy.
     fn seat_host(&mut self, id: Pid) {
-        let uid = self.player(id).map(|p| p.uid.as_str());
-        if self.owner.is_some() && uid == self.owner.as_deref() {
+        if self.is_owner(id) && !self.handed_over {
             self.host = Some(id);
         } else {
             self.update_host();
         }
+    }
+
+    /// Player `id` is the person who owns the room.
+    fn is_owner(&self, id: Pid) -> bool {
+        self.owner.is_some()
+            && self
+                .player(id)
+                .is_some_and(|p| !p.bot && Some(&p.uid) == self.owner.as_ref())
     }
 
     /// The host must be connected: the owner if they are here, else whoever has been here longest.
@@ -786,6 +845,53 @@ impl Room {
             .find(|p| p.conn.is_some() && Some(&p.uid) == self.owner.as_ref())
             .or_else(|| humans.iter().find(|p| p.conn.is_some()));
         self.host = next.map(|p| p.id).or(cur).or(humans.first().map(|p| p.id));
+        // The role is back with the owner: a handover before this one no longer counts.
+        if self.host.is_some_and(|h| self.is_owner(h)) {
+            self.handed_over = false;
+        }
+    }
+
+    /// `name`, or with a number after it when someone else in the room is already called so.
+    fn unique_name(&self, id: Pid, name: String) -> String {
+        let taken = |n: &str| {
+            let n = n.to_lowercase();
+            self.players.iter().any(|p| p.id != id && p.name.to_lowercase() == n)
+        };
+        if !taken(&name) {
+            return name;
+        }
+        for k in 2..=MAX_PLAYERS + 1 {
+            let suffix = format!(" {k}");
+            let keep = NAME_MAX.saturating_sub(suffix.chars().count());
+            let base: String = name.chars().take(keep).collect();
+            let candidate = format!("{}{suffix}", base.trim_end());
+            if !taken(&candidate) {
+                return candidate;
+            }
+        }
+        name
+    }
+
+    /// Someone kept guessing the PIN (`Hub::join`): a new one, which the host sees in the lobby. Those the room let
+    /// in before still come back without it.
+    pub fn new_pin(&mut self) {
+        if self.pin.is_none() {
+            return;
+        }
+        self.pin = Some(make_pin());
+        warn!(room = %self.id, "too many wrong PINs: the room has a new one");
+        if let Some(h) = self.host {
+            let text = "Кто-то подбирал PIN-код комнаты — он сменился, новый видно в лобби".into();
+            self.send_to(
+                h,
+                ServerMsg::Chat {
+                    id: 0,
+                    name: "Сервер".into(),
+                    text,
+                },
+            );
+        }
+        self.send_lobby();
     }
 
     /// Takes a player out of the room and its arena (what that means for the room: `remove_player`).
@@ -887,6 +993,26 @@ impl Room {
         self.next_round();
     }
 
+    /// Planned games that need more players than there are now are skipped (one of two left: no tail tag).
+    fn skip_unfit(&mut self, players: usize) {
+        if self.practice() {
+            return;
+        }
+        let Some(session) = self.session.as_mut() else { return };
+        let mut skipped = Vec::new();
+        while let Some(g) = session.plan.get(session.index).and_then(|id| director::game(id)) {
+            // (The rule of `director::fits`.)
+            if g.min_players.unwrap_or(1) as usize <= players {
+                break;
+            }
+            skipped.push(g.id);
+            session.index += 1;
+        }
+        if !skipped.is_empty() {
+            info!(room = %self.id, players, skipped = ?skipped, "games that no longer fit skipped");
+        }
+    }
+
     /// The game of the next round, its number and the number of rounds (None: the game is over).
     fn next_game(&self) -> Option<(&'static GameMeta, u32, u32)> {
         let session = self.session.as_ref()?;
@@ -921,6 +1047,7 @@ impl Room {
 
     /// Draws the next round now and builds its arena (and the bots' grid) on another thread: off the tick.
     fn prepare_round(&mut self) {
+        self.skip_unfit(self.roster().len());
         let Some((game, _, _)) = self.next_game() else { return };
         let dev_seed = self.next_seed;
         let (seed, participants) = self.draw_round(self.roster());
@@ -960,6 +1087,7 @@ impl Room {
         if ids.is_empty() {
             return self.back_to_lobby();
         }
+        self.skip_unfit(ids.len());
         let Some((game, index, total)) = self.next_game() else {
             return self.end_game();
         };
@@ -1030,7 +1158,9 @@ impl Room {
     fn with_view<R>(&mut self, f: impl FnOnce(&RoundView, &mut Rng) -> R) -> Option<R> {
         let game = self.round.as_ref()?.game;
         let time_up = self.time_up();
-        let solo = self.session.as_ref().map_or(1, |s| s.started) <= 1;
+        // Alone in this round (bots count), whoever the game started with: with one of two players gone, a
+        // survival round must not end at once on "the last bean standing".
+        let solo = self.arena.participants.len() <= 1;
         let bots: BTreeSet<Pid> = self.players.iter().filter(|p| p.bot).map(|p| p.id).collect();
         let players = &self.players;
         let arena = &self.arena;
@@ -1065,7 +1195,7 @@ impl Room {
         let Some(r) = &mut self.round else { return };
         r.over = true;
         let (game, index, total) = (r.game, r.index, r.total);
-        self.arena.frozen = true;
+        self.arena.freeze();
         let stats: BTreeMap<Pid, RoundStats> = self.arena.pawns.iter().map(|p| (p.id, p.stats)).collect();
         let totals: BTreeMap<Pid, i64> = self.players.iter().map(|p| (p.id, p.score)).collect();
         let rows = self
@@ -1202,7 +1332,11 @@ impl Room {
     /// Advances timers and the simulation to server tick `real`.
     pub fn update(&mut self, real: u64, inputs: &mut dyn Inputs) {
         self.clock.set_real(real);
-        let grace = ticks(RECONNECT_GRACE_S);
+        let grace = ticks(if self.phase == Phase::Lobby {
+            LOBBY_GRACE_S
+        } else {
+            RECONNECT_GRACE_S
+        });
         let timed_out: Vec<Pid> = self
             .players
             .iter()
@@ -1215,6 +1349,10 @@ impl Room {
             self.remove_player(id);
         }
         self.tick_room(inputs, false);
+        if self.lobby_due && real.saturating_sub(self.profile_sent) >= ticks(PROFILE_EVERY_S) {
+            self.profile_sent = real;
+            self.send_lobby();
+        }
     }
 
     fn tick_room(&mut self, inputs: &mut dyn Inputs, all: bool) {
@@ -1253,6 +1391,9 @@ impl Room {
             .filter_map(|p| Some((p.id, inputs.frame(p.id, p.conn?, tick).clamped())))
             .collect();
         frames.sort_unstable_by_key(|f| f.0);
+        if frames.iter().any(|f| f.1 != InputFrame::IDLE) {
+            self.active_at = self.clock.real();
+        }
         let events = self.arena.step(k, |id| {
             frames
                 .binary_search_by_key(&id, |f| f.0)
@@ -1424,6 +1565,7 @@ impl Room {
             self.out.push(Out::Msg(c, ServerMsg::Lobby(m)));
         }
         self.changed = true;
+        self.lobby_due = false;
     }
 
     fn send_to(&mut self, id: Pid, msg: ServerMsg) {

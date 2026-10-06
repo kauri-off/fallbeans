@@ -130,6 +130,8 @@ optional = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.rustls]
 version = "0.23.23"
+# fallbeans patch: the *ring* provider (`session::WebSocketSessionPlugin`, `client::config`).
+features = ["ring"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.rustls-native-certs]
 version = "0.8.0"
