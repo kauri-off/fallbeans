@@ -62,7 +62,7 @@ fn rounds_end_in_the_recorded_state() {
         std::fs::write(&path, &text).unwrap();
         return;
     }
-    let want = std::fs::read_to_string(&path).expect("no recorded hashes: run with FB_BLESS=1");
+    let want = include_str!("determinism.txt");
     assert_eq!(
         text,
         want.replace("\r\n", "\n"),
