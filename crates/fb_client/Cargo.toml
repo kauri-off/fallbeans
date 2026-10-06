@@ -15,7 +15,8 @@ fb_net.workspace = true
 fb_proto.workspace = true
 # Bevy's "3d" and "ui" bundles spelled out, without what the game does not use: gizmos, animation and morph
 # targets (the models have none), mesh and sprite picking (UI picking only), the default font (the UI puts its own
-# at the default handle), webgl2. No OpenGL: wgpu is built with DX12, Vulkan and Metal only. ktx2 and zstd stay: SMAA's and tonemapping's lookup tables are KTX2 + zstd.
+# at the default handle), webgl2. No OpenGL: wgpu is built with DX12, Vulkan and Metal only. ktx2 and zstd
+# stay: SMAA's and tonemapping's lookup tables are KTX2 + zstd.
 bevy = { workspace = true, features = [
   # default_app, default_platform
   "async_executor",
