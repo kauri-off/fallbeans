@@ -37,7 +37,9 @@ pub fn game(id: &str) -> Option<&'static GameMeta> {
     GAMES.iter().map(|m| m.meta()).find(|g| g.id == id)
 }
 
-fn fits(g: &GameMeta, players: u32) -> bool {
+/// The game can be played by this many. A plan is made for the players a game starts with: whoever runs
+/// it checks again before each round (players leave), and skips a game that no longer fits.
+pub fn fits(g: &GameMeta, players: u32) -> bool {
     g.min_players.unwrap_or(1) <= players
 }
 
@@ -48,7 +50,8 @@ fn pool_for(mode: Mode, players: u32) -> Vec<&'static GameMeta> {
         .filter(|g| fits(g, players))
         .filter(|g| match mode {
             Mode::Races => g.genre == Genre::Race,
-            Mode::Survival => g.genre != Genre::Race,
+            // As the name says: no points games (they are in the mix).
+            Mode::Survival => g.genre == Genre::Survival,
             Mode::Mix | Mode::Custom => true,
         })
         .collect()
@@ -179,6 +182,13 @@ mod tests {
             };
             for id in plan_game(5, &races, &mut rng) {
                 assert_eq!(game(id).unwrap().genre, Genre::Race);
+            }
+            let survival = Playlist {
+                mode: Mode::Survival,
+                ..Default::default()
+            };
+            for id in plan_game(5, &survival, &mut rng) {
+                assert_eq!(game(id).unwrap().genre, Genre::Survival);
             }
         }
     }

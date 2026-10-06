@@ -34,11 +34,16 @@ const IMMUNE: f64 = 1.5;
 const ARENA_R: f64 = 15.0;
 /// Tail holders run at this share of full speed (the chasers are a little quicker).
 const TAIL_SLOW: f64 = 0.86;
+/// A hold lets go after this long (fb_arena).
+const HOLD_MAX: f64 = 3.0;
 
 struct Tails {
     /// Who has a tail, in the order they got it.
     tails: Vec<u32>,
     immune: BTreeMap<u32, f64>,
+    /// Tails grabbed while immune (grabber, holder, since): the tail goes when the immunity ends, if the
+    /// grabber still holds on.
+    held: Vec<(u32, u32, f64)>,
     last_second: f64,
 }
 
@@ -51,6 +56,11 @@ impl Tails {
     fn mine(&self, me: Option<u32>) -> bool {
         me.is_some_and(|me| self.has(me))
     }
+}
+
+/// A grabber at `a` is close enough to take the tail of the bean at `v`.
+fn in_reach(a: V3, v: V3) -> bool {
+    m::hypot(a.x - v.x, a.z - v.z) <= STEAL_RANGE && (a.y - v.y).abs() <= 2.0
 }
 
 /// The tail goes from `from` to `to`.
@@ -179,6 +189,7 @@ impl MapDef for TailTag {
         let st = b.state(Tails {
             tails: order.into_iter().take(n).collect(),
             immune: BTreeMap::new(),
+            held: Vec::new(),
             last_second: 0.0,
         });
         let arena_wander = arena_brain(ArenaOpts::new(ARENA_R - 4.0));
@@ -211,6 +222,28 @@ impl MapDef for TailTag {
                             pass(cx, st, gone, to);
                         }
                     }
+                    // Tails held through their immunity change hands as it ends. A hold renews the grabber's
+                    // slow-down every tick (to 0.15 s ahead): one let go has it running out.
+                    let held = core::mem::take(&mut cx.world.st_mut(st).held);
+                    let mut keep = Vec::new();
+                    for (actor, target, since) in held {
+                        let s = cx.world.st(st);
+                        if t - since > HOLD_MAX || s.has(actor) || !s.has(target) {
+                            continue;
+                        }
+                        let (Some(a), Some(v)) = (cx.bodies.get(actor), cx.bodies.get(target)) else {
+                            continue;
+                        };
+                        if a.slow_until <= t + 0.1 || !in_reach(a.pos, v.pos) {
+                            continue;
+                        }
+                        if s.immune.get(&target).copied().unwrap_or(-1.0) > t {
+                            keep.push((actor, target, since));
+                        } else {
+                            pass(cx, st, target, actor);
+                        }
+                    }
+                    cx.world.st_mut(st).held.extend(keep);
                 }
                 // Tails weigh you down a little: the chasers can catch up.
                 let tails = cx.world.st(st).tails.clone();
@@ -241,13 +274,17 @@ impl MapDef for TailTag {
                 if t < 0.0 || s.has(actor) || !s.has(target) {
                     return;
                 }
-                if s.immune.get(&target).copied().unwrap_or(-1.0) > t {
-                    return;
-                }
                 let (Some(a), Some(v)) = (cx.bodies.get(actor), cx.bodies.get(target)) else {
                     return;
                 };
-                if m::hypot(a.pos.x - v.pos.x, a.pos.z - v.pos.z) > STEAL_RANGE || (a.pos.y - v.pos.y).abs() > 2.0 {
+                if !in_reach(a.pos, v.pos) {
+                    return;
+                }
+                if s.immune.get(&target).copied().unwrap_or(-1.0) > t {
+                    // Just got it: the grabber has to hold on until the immunity is over (the tick).
+                    let s = cx.world.st_mut(st);
+                    s.held.retain(|h| h.0 != actor);
+                    s.held.push((actor, target, t));
                     return;
                 }
                 pass(cx, st, target, actor);

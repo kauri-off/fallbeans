@@ -272,7 +272,7 @@ impl MapDef for StarFall {
             }
             t += SPECIAL_EVERY * (0.85 + b.rng.next() * 0.3);
         }
-        stars.sort_by(|a, c| a.at.partial_cmp(&c.at).unwrap_or(core::cmp::Ordering::Equal));
+        stars.sort_by(|a, c| a.at.total_cmp(&c.at));
         for (i, s) in stars.iter_mut().enumerate() {
             s.k = i;
         }
@@ -408,6 +408,7 @@ impl MapDef for StarFall {
                         continue;
                     }
                     let sp = sky.spots[s.spot];
+                    // (Two beans at a star on the same tick: the one that joined first gets it.)
                     for id in cx.bodies.ids() {
                         let Some(body) = cx.bodies.get(id) else { continue };
                         if body.in_portal() {

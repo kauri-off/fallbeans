@@ -308,6 +308,9 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                             if mode == Mode::Races && g.genre != Genre::Race {
                                 out.error(format!("races mode planned {id} ({})", g.genre.id()));
                             }
+                            if mode == Mode::Survival && g.genre != Genre::Survival {
+                                out.error(format!("survival mode planned {id} ({})", g.genre.id()));
+                            }
                         }
                     }
                 }

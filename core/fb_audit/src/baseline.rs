@@ -70,14 +70,17 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
             into.insert(format!("balance/{id}/{k}"), e);
         }
     };
-    put(
-        "fallsPerBotMin",
-        runs.iter()
-            .map(|r| r.falls.len() as f64 / r.bot_seconds * 60.0)
-            .collect(),
-        0.15,
-        0.2,
-    );
+    // (A fall in a survival round is an elimination, not a fall: always 0 there.)
+    if meta.genre != Genre::Survival {
+        put(
+            "fallsPerBotMin",
+            runs.iter()
+                .map(|r| r.falls.len() as f64 / r.bot_seconds * 60.0)
+                .collect(),
+            0.15,
+            0.2,
+        );
+    }
     match meta.genre {
         Genre::Race => {
             put(

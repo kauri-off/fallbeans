@@ -953,7 +953,7 @@ impl Arena {
     /// Builds the bots' navigation grid now, ahead of the round (a server room does it off its tick).
     pub fn prepare_nav(&mut self) {
         if self.nav.is_none() && self.nav_pre.is_none() && self.kind == ArenaKind::Round && self.spec.bot.is_some() {
-            self.nav_pre = Some((self.build_nav(), self.world.hash(true)));
+            self.nav_pre = Some((self.build_nav(), NavGrid::key(&self.world)));
         }
     }
 
@@ -970,7 +970,7 @@ impl Arena {
         if !self.pawns.iter().any(|p| p.bot.is_some()) {
             return;
         }
-        self.nav_pre = Some((self.build_nav(), self.world.hash(true)));
+        self.nav_pre = Some((self.build_nav(), NavGrid::key(&self.world)));
     }
 
     fn think(&mut self, i: usize, events: &mut Vec<ArenaEvent>) {
@@ -983,7 +983,7 @@ impl Arena {
             // Built ahead during the intro: the same grid if the static world is the same.
             let pre = self.nav_pre.take();
             self.nav = Some(match pre {
-                Some((nav, hash)) if hash == self.world.hash(true) => nav,
+                Some((nav, key)) if key == NavGrid::key(&self.world) => nav,
                 _ => self.build_nav(),
             });
         }

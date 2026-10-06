@@ -173,7 +173,7 @@ fn ice_slope() -> Segment {
                     }),
                 ));
             }
-            stops.sort_by(|a, c| a.0.partial_cmp(&c.0).unwrap_or(core::cmp::Ordering::Equal));
+            stops.sort_by(|a, c| a.0.total_cmp(&c.0));
             for (f, clear) in stops {
                 let before = 0f64.at_least(f - 2.4 / seg_len);
                 path.push(Waypoint::spread(x0 + (x1 - x0) * before, z0 + (z1 - z0) * before, 0.2));

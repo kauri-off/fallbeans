@@ -742,7 +742,10 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let sim_ms: f64 = runs.iter().map(|r| r.sim_ms).sum();
     let ticks: i64 = runs.iter().map(|r| r.ticks).sum();
     out.metric("seeds", runs.len());
-    out.metric("fallsPerBotMin", r1(falls as f64 / bot_seconds * 60.0));
+    // (A fall in a survival round is an elimination: there are no falls to count.)
+    if meta.genre != Genre::Survival {
+        out.metric("fallsPerBotMin", r1(falls as f64 / bot_seconds * 60.0));
+    }
     out.metric("msPerTick8Bots", r3(sim_ms / ticks.max(1) as f64));
     if stuck > 0 {
         out.metric("stuck", stuck as u32);
@@ -778,8 +781,13 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             }
         }
         Genre::Survival => {
-            let first = first_outs.iter().copied().fold(meta.duration, m::min);
-            out.metric("firstOut", r1(first));
+            // The mean over seeds of the first elimination (the whole round where nobody went out), as
+            // in the baseline.
+            let firsts: Vec<f64> = runs
+                .iter()
+                .map(|r| r.out_times.iter().copied().fold(meta.duration, m::min))
+                .collect();
+            out.metric("firstOut", r1(firsts.iter().sum::<f64>() / n));
             out.metric("outP50", r1(median(&out_times)));
             out.metric(
                 "survivorsAtEnd",

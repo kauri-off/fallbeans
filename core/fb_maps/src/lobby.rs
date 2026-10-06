@@ -422,7 +422,10 @@ impl MapDef for Lobby {
         let mut armed: BTreeSet<u32> = BTreeSet::new();
         let tick = move |cx: &mut fb_sim::map::Cx, _t: f64| {
             let (bx, bz, br, by) = BELL;
-            for id in cx.bodies.ids() {
+            let ids = cx.bodies.ids();
+            // Whoever left is forgotten.
+            armed.retain(|id| ids.contains(id));
+            for id in ids {
                 let Some(p) = cx.bodies.get(id).map(|b| b.pos) else {
                     continue;
                 };

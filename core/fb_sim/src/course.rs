@@ -890,7 +890,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                         let pref = p.x + bot.mem.traits.off * 3.0;
                         options.sort_by(|&a, &c| {
                             let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
-                            da.partial_cmp(&dc).unwrap_or(core::cmp::Ordering::Equal)
+                            da.total_cmp(&dc)
                         });
                         let first = bot.rng.next() < 0.7;
                         let at = if first {

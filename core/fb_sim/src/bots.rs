@@ -185,10 +185,12 @@ pub struct BotMem {
     pub aimed: bool,
     /// The stick of the last decision (smoothing).
     pub stick: Option<(f64, f64)>,
-    /// Waypoint brains: the current waypoint, the one it may go on from, and when it got ready to go.
+    /// Waypoint brains: the current waypoint, the one it may go on from, and when it got ready to go;
+    /// where it was at its last decision (position, time, speed), to tell a respawn or a portal.
     pub wp: Option<usize>,
     pub go: Option<usize>,
     pub ready_at: Option<f64>,
+    pub seen: Option<(V3, f64, f64)>,
     /// Arena brains: preferred distance from the centre, ground height, whom it hunts and until when, the
     /// next hunt, the spot it heads for and until when, and whether it is there.
     pub pref: Option<f64>,
@@ -224,6 +226,7 @@ impl Default for BotMem {
             wp: None,
             go: None,
             ready_at: None,
+            seen: None,
             pref: None,
             gy: None,
             hunt: None,
@@ -1382,11 +1385,27 @@ fn target_x(bot: &BotView, w: &Waypoint) -> f64 {
     }
 }
 
+/// Was the bot put somewhere else since its last decision (a respawn, a portal)? A jump in position
+/// that its speed does not explain. Keeps this decision's position for the next one.
+fn teleported(bot: &mut BotView) -> bool {
+    let b = bot.body;
+    let speed = m::hypot3(b.vel.x, b.vel.y, b.vel.z);
+    let seen = bot.mem.seen.replace((b.pos, bot.t, speed));
+    seen.is_some_and(|(p, t, v)| {
+        let dt = bot.t - t;
+        let moved = m::hypot3(b.pos.x - p.x, b.pos.y - p.y, b.pos.z - p.z);
+        // (After a gap in the decisions there is nothing to compare with.)
+        dt <= 2.5 * BOT_DT && moved > 3.0 + v.at_least(speed) * dt * 2.0
+    })
+}
+
 /// Follows waypoints along a course (by z), with waits, timed jumps, detours and special stretches.
 pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut BotView, out: &mut BotInput) {
     init_bot(bot);
+    let jumped = teleported(bot);
     let b = bot.body;
     let n = points.len();
+    let was = bot.mem.wp;
     let reach = |w: &Waypoint| if w.w == Some(0.0) { 0.5 } else { 1.2 };
     let mut i = bot.mem.wp.map_or(-1, |w| w as i64);
     let behind = i >= 1 && b.pos.z < points[i as usize - 1].borrow().z - 4.0;
@@ -1406,6 +1425,12 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
         && i < n - 1
     {
         i += 1;
+    }
+    // A wait belongs to one approach of one waypoint: a new waypoint, or the same one again after a fall
+    // (from the checkpoint before it), waits again.
+    if was != Some(i) || jumped {
+        bot.mem.go = None;
+        bot.mem.ready_at = None;
     }
     bot.mem.wp = Some(i);
     let Some(wp) = points.get(i).map(Borrow::borrow) else {
@@ -1791,4 +1816,70 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
         },
     );
     unstick(bot, out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Bot {
+        rng: Rng,
+        mem: BotMem,
+        plan: BotPlan,
+    }
+
+    impl Bot {
+        /// One decision of a waypoint brain, standing at `pos` at time t.
+        fn decide(&mut self, points: &[Waypoint], pos: V3, t: f64) {
+            let world = World::default();
+            let mut body = Body::new(0);
+            body.pos = pos;
+            body.grounded = true;
+            let scores = BTreeMap::new();
+            let mut view = BotView {
+                id: 1,
+                body: &body,
+                t,
+                rng: &mut self.rng,
+                mem: &mut self.mem,
+                plan: &mut self.plan,
+                others: &[],
+                nav: None,
+                bonuses: &[],
+                world: &world,
+                scores: &scores,
+            };
+            path_step(points, 0.0, &mut view, &mut BotInput::default());
+        }
+    }
+
+    #[test]
+    fn waits_again_at_a_hazard_after_a_respawn() {
+        let points = [
+            Waypoint::at(0.0, 0.0),
+            Waypoint::at(0.0, 10.0).wait(|_| true),
+            Waypoint::at(0.0, 20.0),
+        ];
+        let mut bot = Bot {
+            rng: Rng::new(7),
+            mem: BotMem::default(),
+            plan: BotPlan::default(),
+        };
+        let mut t = 0.0;
+        while bot.mem.go != Some(1) {
+            assert!(t < 2.0, "never got ready to go");
+            bot.decide(&points, V3::new(0.0, 0.0, 5.0), t);
+            t += BOT_DT;
+        }
+        // On its way to the hazard it stays committed…
+        for z in [5.5, 6.0, 6.5] {
+            bot.decide(&points, V3::new(0.0, 0.0, z), t);
+            t += BOT_DT;
+            assert_eq!(bot.mem.go, Some(1));
+        }
+        // …until it is knocked off and back at the checkpoint before it: the same waypoint, waited for again.
+        bot.decide(&points, V3::new(0.0, 0.5, 1.0), t);
+        assert_eq!(bot.mem.wp, Some(1));
+        assert_eq!(bot.mem.go, None);
+    }
 }
