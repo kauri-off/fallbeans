@@ -758,12 +758,7 @@ fn results(
                         ..default()
                     })
                     .with_children(|x| name_tag(x, f, &session, row_.id, 13.0));
-                    let note = if row_.afk {
-                        text::AFK.to_string()
-                    } else {
-                        row_.note.clone()
-                    };
-                    rich(t, f, &note, 12.0, MUTED);
+                    rich(t, f, &row_.note, 12.0, MUTED);
                     cell(t, 2.0, |x| {
                         rich(x, f, &format!("+{}", row_.points), 13.0, GREEN_INK);
                     });

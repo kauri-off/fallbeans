@@ -13,7 +13,7 @@ fn r3(v: f64) -> f64 {
 fn round_stats(s: &RoundStats) -> Value {
     json!({
         "falls": s.falls, "shortcuts": s.shortcuts, "kos": s.kos, "grabs": s.grabs, "tackles": s.tackles,
-        "idle": r3(s.idle), "finishAt": s.finish_at.map(r3), "outAt": s.out_at.map(r3),
+        "finishAt": s.finish_at.map(r3), "outAt": s.out_at.map(r3),
     })
 }
 

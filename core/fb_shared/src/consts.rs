@@ -1,5 +1,5 @@
 /// Bumped on every change to a replicated component or message (`fb_net`): old clients cannot connect.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 pub const MAX_PLAYERS: usize = 8;
 

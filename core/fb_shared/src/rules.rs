@@ -11,8 +11,6 @@ pub const FALL_PENALTY: i64 = 1;
 pub const SHORTCUT_PENALTY: i64 = 2;
 /// Penalties never take more than this from one round.
 pub const MAX_PENALTY: i64 = 4;
-/// Continuous idle time (s) after which a player gets no placement points for the round.
-pub const AFK_SECONDS: f64 = 20.0;
 
 /// Per-player numbers the server counts during a round.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -23,8 +21,6 @@ pub struct RoundStats {
     pub kos: u32,
     pub grabs: u32,
     pub tackles: u32,
-    /// Longest stretch without any input (s).
-    pub idle: f64,
     /// Finish time in a race (s since the start).
     pub finish_at: Option<f64>,
     /// When the player was eliminated in a survival round (s since the start).
@@ -60,7 +56,6 @@ pub struct RoundRow {
     pub total: i64,
     /// Did the job: finished, survived, scored.
     pub ok: bool,
-    pub afk: bool,
     pub note: String,
     pub falls: u32,
 }
@@ -210,13 +205,12 @@ fn note(r: &RoundView, id: u32, s: &RoundStats) -> String {
 }
 
 /// Scores a finished round: placement points by rank (scaled to the number of players), minus
-/// penalties for falls and shortcuts, capped. An idle (AFK) player gets no placement points.
+/// penalties for falls and shortcuts, capped.
 /// `totals` are the game totals before this round; a total never drops below 0.
 pub fn score_round(
     r: &RoundView,
     stats: &BTreeMap<u32, RoundStats>,
     totals: &BTreeMap<u32, i64>,
-    bots: &BTreeSet<u32>,
     rng: Option<&mut Rng>,
 ) -> Vec<RoundRow> {
     let groups = rank_groups(r, rng);
@@ -235,10 +229,7 @@ pub fn score_round(
         for &id in g {
             let s = stats.get(&id).copied().unwrap_or_default();
             let (place, placed_points) = placed[&id];
-            let afk = !bots.contains(&id) && s.idle >= AFK_SECONDS;
-            let points = if afk {
-                0
-            } else if r.solo || count == 1 {
+            let points = if r.solo || count == 1 {
                 solo_points(id)
             } else {
                 placed_points
@@ -260,7 +251,6 @@ pub fn score_round(
                 delta: total - before,
                 total,
                 ok: succeeded(r, id),
-                afk,
                 note: note(r, id, &s),
                 falls: s.falls,
             });
@@ -318,7 +308,7 @@ mod tests {
     }
 
     fn score(x: &V, s: &BTreeMap<u32, RoundStats>, totals: &BTreeMap<u32, i64>) -> Vec<RoundRow> {
-        with(x, |r| score_round(r, s, totals, &BTreeSet::new(), None))
+        with(x, |r| score_round(r, s, totals, None))
     }
 
     #[test]
@@ -368,30 +358,24 @@ mod tests {
     }
 
     #[test]
-    fn fines_falls_and_shortcuts_capped_and_zeroes_afk() {
+    fn fines_falls_and_shortcuts_capped() {
         let mut x = v(Genre::Race);
         x.finished = vec![1, 2, 3, 4];
-        let st = |f: u32, sc: u32, idle: f64| RoundStats {
+        let st = |f: u32, sc: u32| RoundStats {
             falls: f,
             shortcuts: sc,
-            idle,
             ..Default::default()
         };
-        let s = stats(&[
-            (1, st(2, 0, 0.0)),
-            (2, st(9, 0, 0.0)),
-            (3, st(0, 1, 0.0)),
-            (4, st(0, 0, 60.0)),
-        ]);
+        let s = stats(&[(1, st(2, 0)), (2, st(9, 0)), (3, st(0, 1))]);
         let rows = score(&x, &s, &[(4, 3)].into());
         let by = |id| rows.iter().find(|r| r.id == id).unwrap().clone();
         assert_eq!((by(1).points, by(1).penalty, by(1).delta), (10, 2, 8));
         assert_eq!((by(2).points, by(2).penalty, by(2).delta), (7, 4, 3));
         assert_eq!((by(3).points, by(3).penalty, by(3).delta), (3, 2, 1));
-        assert_eq!((by(4).points, by(4).afk, by(4).total), (0, true, 3));
+        assert_eq!((by(4).points, by(4).total), (0, 3));
         let mut y = v(Genre::Race);
         y.finished = vec![2, 1];
-        let broke = score(&y, &stats(&[(1, st(3, 0, 0.0))]), &[(1, 1)].into());
+        let broke = score(&y, &stats(&[(1, st(3, 0))]), &[(1, 1)].into());
         assert_eq!(broke.iter().find(|r| r.id == 1).unwrap().total, 1 + 7 - 3);
     }
 

@@ -100,8 +100,6 @@ pub struct Pawn {
     pub teleports: u32,
     pub stats: RoundStats,
     pub last_hit: Option<Hit>,
-    /// Sim time of the last input with movement or buttons.
-    pub active_at: f64,
     pub forbidden_for: f64,
     /// Dev: holds on as if the grab button were pressed until this sim time.
     pub force_grab_until: f64,
@@ -606,7 +604,6 @@ impl Arena {
             teleports: 0,
             stats: RoundStats::default(),
             last_hit: None,
-            active_at: self.time().at_least(0.0),
             forbidden_for: 0.0,
             force_grab_until: -1e9,
             reaching: false,
@@ -737,12 +734,6 @@ impl Arena {
             let p = &mut self.pawns[i];
             // Before the start (and on the podium) nobody moves.
             p.frame = if moving { got } else { InputFrame::IDLE };
-            if round && t >= 0.0 {
-                if p.frame != InputFrame::IDLE {
-                    p.active_at = t;
-                }
-                p.stats.idle = p.stats.idle.at_least(t - p.active_at);
-            }
             if let Some(r) = &mut self.recording
                 && p.bot.is_none()
             {

@@ -182,7 +182,6 @@ pub const SPECTATE_HINT: &str = "ЛКМ/ПКМ или A/D — сменить и�
 pub const CLICK_FIELD: &str = "🖱 Щёлкните по полю, чтобы вернуть управление";
 pub const OR_ESC_MENU: &str = "или нажмите Esc для меню";
 pub const BOT: &str = "бот";
-pub const AFK: &str = "AFK";
 
 pub const VPN_SHORT: &str = "Игра идёт через WebSocket: UDP до сервера не доходит";
 pub const VPN_SILENT: &str = "Игра идёт через WebSocket: UDP до сервера не доходит, задержка может быть больше.\n\

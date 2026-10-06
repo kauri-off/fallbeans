@@ -323,7 +323,6 @@ fn rules(ctx: &Ctx, out: &mut Out) {
     // Scoring: points within 0…10, totals never negative, better placement never scores less.
     let genres = [Genre::Race, Genre::Survival, Genre::Points];
     let total = if ctx.quick { 300 } else { 3000 };
-    let no_bots = BTreeSet::new();
     for i in 0..total {
         let n = 1 + (rng.next() * 8.0).floor() as u32;
         let ids: Vec<u32> = (1..=n).collect();
@@ -366,7 +365,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
             })
             .collect();
         let totals: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.next() * 30.0).floor() as i64)).collect();
-        let rows = score_round(&view, &stats, &totals, &no_bots, None);
+        let rows = score_round(&view, &stats, &totals, None);
         for r in &rows {
             if r.points < 0 || r.points > TOP_POINTS {
                 out.error(format!("round scored {} placement points", r.points));

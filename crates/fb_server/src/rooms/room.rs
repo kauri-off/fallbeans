@@ -1068,9 +1068,8 @@ impl Room {
         self.arena.frozen = true;
         let stats: BTreeMap<Pid, RoundStats> = self.arena.pawns.iter().map(|p| (p.id, p.stats)).collect();
         let totals: BTreeMap<Pid, i64> = self.players.iter().map(|p| (p.id, p.score)).collect();
-        let bots: BTreeSet<Pid> = self.players.iter().filter(|p| p.bot).map(|p| p.id).collect();
         let rows = self
-            .with_view(|v, rng| score_round(v, &stats, &totals, &bots, Some(rng)))
+            .with_view(|v, rng| score_round(v, &stats, &totals, Some(rng)))
             .unwrap_or_default();
         let n = rows.len();
         let round_secs = self.arena.time().max(0.0);
