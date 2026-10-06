@@ -507,11 +507,22 @@ pub fn dress_beans(
 }
 
 /// The rainbow suit: its colour runs round the colour wheel.
-fn tick_rainbow(time: Res<Time<Real>>, paints: Res<Paints>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn tick_rainbow(
+    time: Res<Time<Real>>,
+    paints: Res<Paints>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut last: Local<Option<u32>>,
+) {
     if paints.rainbow.is_empty() {
         return;
     }
-    let hue = Color::hsl((time.elapsed_secs() * 0.15).fract() * 360.0, 0.85, 0.6);
+    // In steps of 3°, about 18 a second: a material changed is uploaded again, not with every frame.
+    const STEP: f32 = 3.0;
+    let step = ((time.elapsed_secs() * 0.15).fract() * 360.0 / STEP) as u32;
+    if last.replace(step) == Some(step) {
+        return;
+    }
+    let hue = Color::hsl(step as f32 * STEP, 0.85, 0.6);
     for (h, belly) in &paints.rainbow {
         if let Some(mut m) = materials.get_mut(h) {
             m.base_color = if *belly { hue.mix(&Color::WHITE, 0.62) } else { hue };
@@ -619,18 +630,25 @@ pub fn animate_beans(
     mut vis: Query<&mut Visibility, Without<BeanAnim>>,
     mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
     paints: Res<Paints>,
+    mut scratch: Local<(Vec<Cue>, HashMap<u32, (Vec3, f32)>)>,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
-    let cues: Vec<Cue> = cues.read().copied().collect();
+    // (Kept from frame to frame: no list and map allocated every frame.)
+    let (cue_list, drawn) = &mut *scratch;
+    cue_list.clear();
+    cue_list.extend(cues.read().copied());
+    let cues = &*cue_list;
     // Where every bean is drawn (for arms reaching for the one held).
-    let drawn: HashMap<u32, (Vec3, f32)> = beans
-        .iter()
-        .map(|(id, a, .., tf, _, _, _, _)| (id.0, (tf.translation, a.out.grow)))
-        .collect();
+    drawn.clear();
+    drawn.extend(
+        beans
+            .iter()
+            .map(|(id, a, .., tf, _, _, _, _)| (id.0, (tf.translation, a.out.grow))),
+    );
     let podium = map.as_ref().is_some_and(|m| m.round.kind == ArenaKind::Podium);
     for (id, mut anim, rig, dress, mut root, full, pose, hold, own) in &mut beans {
-        for c in &cues {
+        for c in cues {
             match *c {
                 Cue::Emote { id: who, e } if who == id.0 => anim.play_emote(e),
                 Cue::Finish(who) if who == id.0 => anim.react(Expr::Laugh, 3.0),

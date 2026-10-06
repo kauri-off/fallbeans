@@ -121,7 +121,8 @@ fn report(
     for l in fb_net::logbook::tail(LOG_LINES) {
         let _ = writeln!(s, "{}", crate::crash::line(&l));
     }
-    if file.write_all(s.as_bytes()).is_ok() {
+    // (Sent to whoever fixes it: without the player's home folder, the user name in it.)
+    if file.write_all(crate::crash::redact(&s).as_bytes()).is_ok() {
         info!("F8 report: {}", path.display());
         session.note(time.elapsed_secs(), text::report_saved(&path.display().to_string()));
     }

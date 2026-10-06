@@ -15,6 +15,7 @@ pub const QUIT: &str = "Выйти из игры";
 pub const UPDATE: &str = "Обновить";
 pub const DOWNLOAD: &str = "Скачать";
 pub const RELEASE_PAGE: &str = "Страница релиза";
+pub const RETRY: &str = "Попробовать снова";
 pub const RESTARTING: &str = "Обновлено — перезапускаем…";
 
 pub fn version(build: &str) -> String {
@@ -414,7 +415,7 @@ pub fn keys(pad: bool, binds: &crate::settings::Bindings, grab: &str, chat: bool
     } else if binds.is_default() {
         format!("WASD — бег · Мышь — камера · Пробел — прыжок · E/ЛКМ — нырок · Q/ПКМ — {grab} · 1–5 — эмоции")
     } else {
-        let first = |b: Bind| binds.keys(b).first().and_then(|k| label(*k)).unwrap_or("?");
+        let first = |b: Bind| binds.keys(b).first().and_then(|k| label(*k)).unwrap_or("—");
         let run = [Bind::Forward, Bind::Left, Bind::Back, Bind::Right]
             .map(first)
             .join("/");

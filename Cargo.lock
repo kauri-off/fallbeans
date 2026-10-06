@@ -3407,6 +3407,7 @@ dependencies = [
  "sha2",
  "swash",
  "sysinfo",
+ "toml",
  "ureq",
  "wgpu",
  "wgpu-types",

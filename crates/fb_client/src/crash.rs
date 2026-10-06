@@ -33,9 +33,37 @@ impl Plugin for CrashPlugin {
         let next = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             next(info);
-            write_report(&dir, &panic_text(info));
+            if !background(std::thread::current().name()) {
+                write_report(&dir, &panic_text(info));
+            }
         }));
     }
+}
+
+/// A thread whose panic does not end the game: Bevy's I/O and async pools (a file loaded or saved, a face
+/// drawn) and the game's own helpers named `fb-…` (an update, a request). Such a panic is no crash to tell the
+/// player about, and must not take the one report of the run from a real crash after it. The main thread,
+/// the systems' pool and the render thread (unnamed) are the game.
+fn background(thread: Option<&str>) -> bool {
+    thread.is_some_and(|n| {
+        n.starts_with("fb-") || n.starts_with("IO Task Pool") || n.starts_with("Async Compute Task Pool")
+    })
+}
+
+/// The report without the player's home folder (the user name in it): `~` instead.
+pub fn redact(s: &str) -> String {
+    let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
+    redact_home(s, &home)
+}
+
+fn redact_home(s: &str, home: &str) -> String {
+    let home = home.trim_end_matches(['/', '\\']);
+    // (Too short to be a user's own folder: `/` or a drive.)
+    if home.chars().count() < 4 {
+        return s.to_string();
+    }
+    let slashed = home.replace('\\', "/");
+    s.replace(home, "~").replace(&slashed, "~")
 }
 
 /// `RenderErrorHandler`: Bevy's (quit), with a report first. A lost device (a driver reset, a GPU hang) is
@@ -64,7 +92,7 @@ fn write_report(dir: &Path, what: &str) {
     let Some((mut file, path)) = logs::create(dir, "crash", "txt") else {
         return;
     };
-    if file.write_all(report(what).as_bytes()).is_ok() {
+    if file.write_all(redact(&report(what)).as_bytes()).is_ok() {
         let _ = fs::write(dir.join(MARKER), path.to_string_lossy().as_bytes());
         eprintln!("crash report: {}", path.display());
     }
@@ -120,6 +148,27 @@ mod tests {
         assert_eq!(take_marker(&dir), Some(PathBuf::from("/x/crash-1.txt")));
         assert_eq!(take_marker(&dir), None);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn background_threads_are_no_crash() {
+        assert!(background(Some("IO Task Pool (0)")));
+        assert!(background(Some("Async Compute Task Pool (2)")));
+        assert!(background(Some("fb-update")));
+        for game in [Some("main"), Some("Compute Task Pool (1)"), None] {
+            assert!(!background(game), "{game:?}");
+        }
+    }
+
+    #[test]
+    fn the_home_folder_is_left_out() {
+        let s = "log: C:\\Users\\Боб\\AppData\\Roaming\\x.log\nat C:/Users/Боб/src/a.rs\n";
+        assert_eq!(
+            redact_home(s, "C:\\Users\\Боб"),
+            "log: ~\\AppData\\Roaming\\x.log\nat ~/src/a.rs\n"
+        );
+        assert_eq!(redact_home("/home/bob/.config/x", "/home/bob/"), "~/.config/x");
+        assert_eq!(redact_home("/x", "/"), "/x");
     }
 
     #[test]

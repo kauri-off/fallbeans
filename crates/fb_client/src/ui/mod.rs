@@ -348,6 +348,14 @@ fn rich_with(
     id
 }
 
+/// The text `t` (just spawned in `p`) breaks inside a word that does not fit on a line, a path or a URL,
+/// instead of running out of its panel.
+pub fn wrap_anywhere(p: &mut ChildSpawnerCommands, t: Entity) {
+    p.commands()
+        .entity(t)
+        .insert(TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter));
+}
+
 pub fn label(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
     rich(p, f, s, 15.0, INK)
 }
@@ -1157,7 +1165,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Knob::MouseSens,
             text::MOUSE_SENS,
             controls.mouse_sensitivity,
-            (0.2, 3.0),
+            crate::settings::SENS_RANGE,
             0.05,
         );
         button(
@@ -1173,7 +1181,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Knob::StickSens,
             text::STICK_SENS,
             controls.stick_sensitivity,
-            (0.2, 3.0),
+            crate::settings::SENS_RANGE,
             0.05,
         );
         button(
@@ -1190,9 +1198,17 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Look::Check(controls.camera_shake),
             Action::Set(Toggle::Shake),
         );
-        slider(c, f, Knob::Fov, text::FOV, display.fov, (55.0, 100.0), 1.0);
+        slider(c, f, Knob::Fov, text::FOV, display.fov, crate::settings::FOV_RANGE, 1.0);
         slider(c, f, Knob::Volume, text::VOLUME, sound.volume, (0.0, 1.0), 0.05);
-        slider(c, f, Knob::UiScale, text::UI_SCALE, display.ui_scale, (0.75, 1.5), 0.05);
+        slider(
+            c,
+            f,
+            Knob::UiScale,
+            text::UI_SCALE,
+            display.ui_scale,
+            crate::settings::UI_SCALE_RANGE,
+            0.05,
+        );
         button(
             c,
             f,
@@ -1347,7 +1363,7 @@ pub fn rebind(
             ui.rebinding = None;
             return;
         }
-        if crate::keys::label(*k).is_some() {
+        if crate::keys::bindable(*k) {
             binds.bind(b, *k);
             ui.rebinding = None;
             crate::settings::save_soon(&mut commands);
