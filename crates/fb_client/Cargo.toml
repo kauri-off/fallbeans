@@ -93,7 +93,17 @@ ureq.workspace = true
 lightyear_udp.workspace = true
 lightyear_sync.workspace = true
 lightyear_transport.workspace = true
-lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+lightyear = { workspace = true, features = [
+  "client",
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "udp",
+  "websocket",
+] }
 # The process's RAM and CPU in the F4 overlay and recordings, read only while shown.
 sysinfo.workspace = true
 # Only for the `profiler` feature: the spans of these three without the rest of `bevy/trace`.
