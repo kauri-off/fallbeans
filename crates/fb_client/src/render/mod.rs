@@ -59,6 +59,20 @@ impl Material for SkyMaterial {
         "embedded://fb_client/render/sky.wgsl".into()
     }
 
+    // (Alpha-masked, though nothing is cut away: the alpha-mask phase is drawn after the opaque one in the
+    // same pass, so the sky comes last and the depth test skips its maths wherever the map covers it.)
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Mask(0.5)
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
     fn specialize(
         _: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -100,7 +114,7 @@ impl Plugin for GfxPlugin {
         ));
         app.init_resource::<LookShown>();
         app.add_systems(Startup, setup.after(crate::view::setup_camera));
-        app.add_systems(Update, apply_look);
+        app.add_systems(Update, (apply_look, sky_clouds).chain());
         app.add_systems(
             PostUpdate,
             follow_camera
@@ -118,10 +132,13 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut skies: ResMut<Assets<SkyMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     camera: Query<Entity, With<MainCamera>>,
 ) {
     if let Ok(cam) = camera.single() {
         commands.entity(cam).insert((
+            // (From the start, as in every round: the shaders warmed up before it are the round's.)
+            env_light(&fb_sim::looks::classic(), &mut images),
             Hdr,
             Tonemapping::KhronosPbrNeutral,
             Exposure {
@@ -233,6 +250,12 @@ fn apply_look(
         ..default()
     };
     clear.0 = crate::view::hex(l.sky.horizon);
+    commands.entity(cam).insert(env_light(look, &mut images));
+}
+
+/// The look's ambient light (`env.rs`).
+fn env_light(look: &ResolvedLook, images: &mut Assets<Image>) -> EnvironmentMapLight {
+    let l = look.look;
     let c = |hex: &str| {
         let c = linear(hex);
         [c.red, c.green, c.blue]
@@ -243,12 +266,32 @@ fn apply_look(
         l.hemi.intensity as f32,
         l.env as f32,
     ));
-    commands.entity(cam).insert(EnvironmentMapLight {
+    EnvironmentMapLight {
         diffuse_map: cube.clone(),
         specular_map: cube,
         intensity: LUX,
         ..default()
-    });
+    }
+}
+
+/// No clouds on Low (ten octaves of noise over most of the screen); the look sets the rest of the sky.
+fn sky_clouds(
+    quality: Option<Res<quality::Quality>>,
+    sky: Query<&MeshMaterial3d<SkyMaterial>, With<Sky>>,
+    mut skies: ResMut<Assets<SkyMaterial>>,
+) {
+    let on = if quality.is_some_and(|q| q.preset == quality::Preset::Low) {
+        0.0
+    } else {
+        1.0
+    };
+    let Ok(h) = sky.single() else { return };
+    // (Looked at first: touching the material would prepare it again.)
+    if skies.get(&h.0).is_some_and(|m| m.u.params.y != on)
+        && let Some(mut m) = skies.get_mut(&h.0)
+    {
+        m.u.params.y = on;
+    }
 }
 
 fn follow_camera(

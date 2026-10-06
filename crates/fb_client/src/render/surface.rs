@@ -4,6 +4,7 @@
 //! primitive and stays glued to moving parts. Palette materials also carry the look's pattern
 //! (stripes, checker, dots, chevron, waves) in its two tones.
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
@@ -407,27 +408,6 @@ pub fn detail_image(k: Kind) -> Image {
             level[i + 3] = (r[y as usize * SIZE + x as usize] * 255.0).round() as u8;
         }
     }
-    // Mip levels by averaging 2×2 texels (the tiles repeat: no edge handling needed).
-    let mut data = level.clone();
-    let mut size = SIZE;
-    let mut levels = 1;
-    while size > 1 {
-        let n = size / 2;
-        let mut next = vec![0u8; n * n * 4];
-        for y in 0..n {
-            for x in 0..n {
-                for c in 0..4 {
-                    let s = |xx: usize, yy: usize| level[(yy * size + xx) * 4 + c] as u32;
-                    let v = s(2 * x, 2 * y) + s(2 * x + 1, 2 * y) + s(2 * x, 2 * y + 1) + s(2 * x + 1, 2 * y + 1);
-                    next[(y * n + x) * 4 + c] = ((v + 2) / 4) as u8;
-                }
-            }
-        }
-        data.extend_from_slice(&next);
-        level = next;
-        size = n;
-        levels += 1;
-    }
     let mut image = Image::new(
         Extent3d {
             width: SIZE as u32,
@@ -435,12 +415,12 @@ pub fn detail_image(k: Kind) -> Image {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![0; SIZE * SIZE * 4],
+        level,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
-    image.data = Some(data);
-    image.texture_descriptor.mip_level_count = levels;
+    // (The tiles repeat: the mips need no edge handling.)
+    add_mips(&mut image);
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
@@ -451,6 +431,92 @@ pub fn detail_image(k: Kind) -> Image {
         ..default()
     });
     image
+}
+
+/// Appends the mip chain to a square, power-of-two RGBA8 image made on the CPU and sets its level count:
+/// 2×2 averages. sRGB images are averaged in linear light, weighted by alpha (no dark fringes where they turn
+/// transparent); the rest channel by channel, as plain data (the detail textures' normals and masks).
+pub fn add_mips(image: &mut Image) {
+    let size = image.width() as usize;
+    let srgb = image.texture_descriptor.format.is_srgb();
+    if !size.is_power_of_two() || image.height() as usize != size || image.texture_descriptor.mip_level_count != 1 {
+        return;
+    }
+    let Some(level0) = image.data.take() else { return };
+    let (data, levels) = mip_chain(level0, size, srgb);
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = levels;
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Level 0 followed by every smaller level down to 1×1, and how many levels that is.
+fn mip_chain(level0: Vec<u8>, size: usize, srgb: bool) -> (Vec<u8>, u32) {
+    // (Linear → sRGB through 4096 steps: finer than a byte of sRGB everywhere but in the deepest blacks.)
+    const STEPS: usize = 4096;
+    let (to_linear, to_srgb): (Vec<f32>, Vec<u8>) = if srgb {
+        (
+            (0..256).map(|i| srgb_to_linear(i as f32 / 255.0)).collect(),
+            (0..STEPS)
+                .map(|i| (linear_to_srgb(i as f32 / (STEPS - 1) as f32) * 255.0).round() as u8)
+                .collect(),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut data = level0.clone();
+    let mut level = level0;
+    let mut size = size;
+    let mut levels = 1;
+    while size > 1 {
+        let n = size / 2;
+        let mut next = Vec::with_capacity(n * n * 4);
+        for y in 0..n {
+            for x in 0..n {
+                let quad = [
+                    (2 * y * size + 2 * x) * 4,
+                    (2 * y * size + 2 * x + 1) * 4,
+                    ((2 * y + 1) * size + 2 * x) * 4,
+                    ((2 * y + 1) * size + 2 * x + 1) * 4,
+                ];
+                let sum = |c: usize| quad.iter().map(|&i| level[i + c] as u32).sum::<u32>();
+                if srgb {
+                    let alpha = quad.map(|i| level[i + 3] as f32);
+                    let total: f32 = alpha.iter().sum();
+                    for c in 0..3 {
+                        let lin = quad.iter().zip(alpha).fold(0.0, |acc, (&i, a)| {
+                            acc + to_linear[level[i + c] as usize] * if total > 0.0 { a / total } else { 0.25 }
+                        });
+                        next.push(to_srgb[(lin.clamp(0.0, 1.0) * (STEPS - 1) as f32).round() as usize]);
+                    }
+                    next.push(((sum(3) + 2) / 4) as u8);
+                } else {
+                    for c in 0..4 {
+                        next.push(((sum(c) + 2) / 4) as u8);
+                    }
+                }
+            }
+        }
+        data.extend_from_slice(&next);
+        level = next;
+        size = n;
+        levels += 1;
+    }
+    (data, levels)
 }
 
 // ---------------------------------------------------------------- the material
@@ -467,13 +533,24 @@ pub struct SurfaceUniform {
     pub extra: Vec4,
 }
 
+/// Bindless where the platform has it (Vulkan, DX12), as the standard material is: an extended material is
+/// bindless only when both halves are, and only then do the map's many materials share one bind group.
+/// Bindless indices 50…52 (the standard material has 0…30) in their own index table at binding 100, the
+/// data in an array at 101; without bindless, a uniform at 50 and the texture and sampler at 51 and 52.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
+#[data(50, SurfaceUniform, binding_array(101))]
+#[bindless(index_table(range(50..53), binding(100)))]
 pub struct Surface {
-    #[uniform(100)]
     pub u: SurfaceUniform,
-    #[texture(101)]
-    #[sampler(102)]
+    #[texture(51)]
+    #[sampler(52)]
     pub detail: Handle<Image>,
+}
+
+impl From<&Surface> for SurfaceUniform {
+    fn from(s: &Surface) -> Self {
+        s.u
+    }
 }
 
 impl MaterialExtension for Surface {
@@ -518,7 +595,7 @@ pub struct Paint {
     pub kind: Pattern,
 }
 
-/// What a surface material is made of, as a cache key.
+/// What a surface material is made of (`Surfaces::material` shares one material per spec).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spec {
     pub color: LinearRgba,
@@ -544,10 +621,68 @@ impl Spec {
         }
     }
 
-    fn key(&self) -> String {
-        format!("{self:?}")
+    /// The spec as a cache key: its numbers bit for bit, every field in a fixed place.
+    fn key(&self) -> SpecKey {
+        let mut bits = [0u32; SPEC_KEY_LEN];
+        let mut n = 0;
+        let mut put = |v: u32| {
+            bits[n] = v;
+            n += 1;
+        };
+        let rgba = |c: LinearRgba| [c.red, c.green, c.blue, c.alpha];
+        // Colour and kind: 4 + 1.
+        for v in rgba(self.color) {
+            put(v.to_bits());
+        }
+        put(self.kind.map_or(0, |k| k as u32 + 1));
+        // The paint: 1 + 13.
+        match self.paint {
+            Some(p) => {
+                put(1);
+                for v in rgba(p.c1).into_iter().chain(rgba(p.c2)) {
+                    put(v.to_bits());
+                }
+                for v in [p.freq, p.dir.x, p.dir.y, p.speed, pattern_id(p.kind)] {
+                    put(v.to_bits());
+                }
+            }
+            None => {
+                for _ in 0..14 {
+                    put(0);
+                }
+            }
+        }
+        // Roughness and metalness: 2 + 2.
+        for v in [self.roughness, self.metallic] {
+            put(u32::from(v.is_some()));
+            put(v.map_or(0, f32::to_bits));
+        }
+        // The alpha mode: 2.
+        let (mode, cutoff) = match self.alpha {
+            AlphaMode::Opaque => (0, 0.0),
+            AlphaMode::Mask(c) => (1, c),
+            AlphaMode::Blend => (2, 0.0),
+            AlphaMode::Premultiplied => (3, 0.0),
+            AlphaMode::AlphaToCoverage => (4, 0.0),
+            AlphaMode::Add => (5, 0.0),
+            AlphaMode::Multiply => (6, 0.0),
+        };
+        put(mode);
+        put(f32::to_bits(cutoff));
+        // Emission: 4.
+        for v in rgba(self.emissive) {
+            put(v.to_bits());
+        }
+        debug_assert_eq!(n, SPEC_KEY_LEN);
+        SpecKey(bits)
     }
 }
+
+/// A `Spec` as a cache key (`Spec::key`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpecKey([u32; SPEC_KEY_LEN]);
+
+const SPEC_KEY_LEN: usize = 29;
 
 /// The detail textures made so far, and the materials (shared: identical ones batch into one draw).
 #[derive(Resource, Default)]
@@ -555,7 +690,10 @@ pub struct Surfaces {
     textures: HashMap<Kind, Handle<Image>>,
     /// Detail textures being made off the main thread from the start (2–8 ms each).
     pending: HashMap<Kind, Task<Image>>,
-    materials: HashMap<String, Handle<SurfaceMaterial>>,
+    /// Materials lent the flat texture while their kind's is still being made: given it once it is in.
+    waiting: Vec<(Kind, AssetId<SurfaceMaterial>)>,
+    /// The shared materials by spec; the ones nothing else holds any more go (`prune`).
+    materials: HashMap<SpecKey, Handle<SurfaceMaterial>>,
     /// A plain texture for materials without a surface (the shader then changes nothing).
     flat: Option<Handle<Image>>,
     /// No detail texture or its maths (the Low preset).
@@ -585,23 +723,57 @@ impl Surfaces {
         }
         self.plain = plain;
         let z = if plain { 1.0 } else { 0.0 };
-        for (_, m) in materials.iter_mut() {
-            m.extension.u.extra.z = z;
+        // (Only the ones that differ: a material touched is prepared again.)
+        let stale: Vec<AssetId<SurfaceMaterial>> = materials
+            .iter()
+            .filter(|(_, m)| m.extension.u.extra.z != z)
+            .map(|(id, _)| id)
+            .collect();
+        for id in stale {
+            if let Some(mut m) = materials.get_mut(id) {
+                m.extension.u.extra.z = z;
+            }
         }
     }
 
-    pub fn texture(&mut self, k: Kind, images: &mut Assets<Image>) -> Handle<Image> {
-        let pending = &mut self.pending;
-        self.textures
+    /// The detail texture of a kind if it is made; if not, it is started (if it was not) and None.
+    fn ready_texture(&mut self, k: Kind) -> Option<Handle<Image>> {
+        if let Some(h) = self.textures.get(&k) {
+            return Some(h.clone());
+        }
+        self.pending
             .entry(k)
-            .or_insert_with(|| {
-                let image = match pending.remove(&k) {
-                    Some(task) => block_on(task),
-                    None => detail_image(k),
-                };
-                images.add(image)
-            })
-            .clone()
+            .or_insert_with(|| AsyncComputeTaskPool::get().spawn(async move { detail_image(k) }));
+        None
+    }
+
+    fn flat(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
+        self.flat.get_or_insert_with(|| images.add(flat_image())).clone()
+    }
+
+    /// A finished detail texture: in, and given to the materials that wait for it.
+    fn finish(&mut self, k: Kind, images: &mut Assets<Image>, materials: &mut Assets<SurfaceMaterial>) {
+        let Some(task) = self.pending.remove(&k) else { return };
+        // (Finished: no wait.)
+        let h = images.add(block_on(task));
+        self.waiting.retain(|(wk, id)| {
+            if *wk != k {
+                return true;
+            }
+            if let Some(mut m) = materials.get_mut(*id) {
+                m.extension.detail = h.clone();
+            }
+            false
+        });
+        self.textures.insert(k, h);
+    }
+
+    /// Forgets the shared materials only this cache still holds (their maps are gone).
+    fn prune(&mut self) {
+        self.materials.retain(|_, h| match h {
+            Handle::Strong(a) => Arc::strong_count(a) > 1,
+            Handle::Uuid(..) => true,
+        });
     }
 
     /// A material with a base standard material to start from (a model's own); the kind's roughness
@@ -613,7 +785,7 @@ impl Surfaces {
         kind: Option<Kind>,
         paint: Option<Paint>,
         keep_roughness: bool,
-        key: Option<String>,
+        key: Option<SpecKey>,
         images: &mut Assets<Image>,
         materials: &mut Assets<SurfaceMaterial>,
     ) -> Handle<SurfaceMaterial> {
@@ -628,9 +800,11 @@ impl Surfaces {
             extra: Vec4::new(-1.0, 0.0, if self.plain { 1.0 } else { 0.0 }, 0.0),
             ..default()
         };
-        let detail = match kind {
-            Some(k) => self.texture(k, images),
-            None => self.flat.get_or_insert_with(|| images.add(flat_image())).clone(),
+        // (A detail texture still being made: the flat one until it is in, rather than waiting for it here.)
+        let (detail, waits) = match kind.map(|k| (k, self.ready_texture(k))) {
+            Some((_, Some(h))) => (h, None),
+            Some((k, None)) => (self.flat(images), Some(k)),
+            None => (self.flat(images), None),
         };
         if let Some(d) = &d {
             u.detail = Vec4::new(d.scale, d.normal, d.rough_var, d.cavity);
@@ -655,6 +829,9 @@ impl Surfaces {
             base,
             extension: Surface { u, detail },
         });
+        if let Some(k) = waits {
+            self.waiting.push((k, h.id()));
+        }
         if let Some(k) = key {
             self.materials.insert(k, h.clone());
         }
@@ -690,24 +867,37 @@ impl Surfaces {
 }
 
 fn make_textures(mut surfaces: ResMut<Surfaces>) {
-    let pool = AsyncComputeTaskPool::get();
     for k in Kind::ALL {
-        surfaces.pending.insert(k, pool.spawn(async move { detail_image(k) }));
+        surfaces.ready_texture(k);
     }
 }
 
-fn take_textures(mut surfaces: ResMut<Surfaces>, mut images: ResMut<Assets<Image>>) {
+fn take_textures(
+    mut surfaces: ResMut<Surfaces>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<SurfaceMaterial>>,
+) {
     if surfaces.pending.is_empty() {
         return;
     }
     let ready: Vec<Kind> = surfaces
         .pending
-        .iter_mut()
+        .iter()
         .filter_map(|(k, task)| task.is_finished().then_some(*k))
         .collect();
     for k in ready {
-        surfaces.texture(k, &mut images);
+        surfaces.finish(k, &mut images, &mut materials);
     }
+}
+
+/// Every few seconds: the cache lets go of the materials no map uses any more.
+fn prune_materials(mut surfaces: ResMut<Surfaces>, time: Res<Time<Real>>, mut next: Local<f32>) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    surfaces.prune();
 }
 
 pub struct SurfacePlugin;
@@ -717,7 +907,7 @@ impl Plugin for SurfacePlugin {
         app.add_plugins(MaterialPlugin::<SurfaceMaterial>::default());
         app.init_resource::<Surfaces>();
         app.add_systems(Startup, make_textures);
-        app.add_systems(Update, take_textures);
+        app.add_systems(Update, (take_textures, prune_materials));
     }
 }
 
@@ -744,5 +934,46 @@ mod tests {
         assert_eq!(img.texture_descriptor.mip_level_count, 9);
         let total: usize = (0..9).map(|l| (256usize >> l).pow(2) * 4).sum();
         assert_eq!(img.data.as_ref().unwrap().len(), total);
+    }
+
+    #[test]
+    fn srgb_mips_average_in_linear_light_by_alpha() {
+        // 2×2: opaque white, opaque black, two transparent reds.
+        let level0 = vec![255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 0, 0, 255, 0, 0, 0];
+        let (data, levels) = mip_chain(level0.clone(), 2, true);
+        assert_eq!(levels, 2);
+        let top = &data[16..];
+        // Half of white in linear light is sRGB 188; the transparent red does not tint it.
+        assert!((187..=189).contains(&top[0]), "{top:?}");
+        assert_eq!(top[0], top[1]);
+        assert_eq!(top[1], top[2]);
+        assert_eq!(top[3], 128);
+        // As plain data: byte averages.
+        let (data, _) = mip_chain(level0, 2, false);
+        assert_eq!(&data[16..], &[191, 64, 64, 128]);
+    }
+
+    #[test]
+    fn spec_keys_tell_specs_apart() {
+        let a = Spec::plain(LinearRgba::WHITE, Some(Kind::Plastic));
+        let b = Spec {
+            alpha: AlphaMode::Blend,
+            ..a.clone()
+        };
+        let c = Spec {
+            paint: Some(Paint {
+                c1: LinearRgba::WHITE,
+                c2: LinearRgba::BLACK,
+                freq: 1.0,
+                dir: Vec2::X,
+                speed: 0.0,
+                kind: Pattern::Dots,
+            }),
+            ..a.clone()
+        };
+        assert_eq!(a.key(), a.clone().key());
+        assert_ne!(a.key(), b.key());
+        assert_ne!(a.key(), c.key());
+        assert_ne!(a.key(), Spec::plain(LinearRgba::WHITE, None).key());
     }
 }

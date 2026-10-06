@@ -37,7 +37,7 @@ fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: &[f32], alpha: f32) -> Image 
             data.push((edge * 255.0).round() as u8);
         }
     }
-    Image::new(
+    let mut image = Image::new(
         Extent3d {
             width: SIZE as u32,
             height: SIZE as u32,
@@ -47,7 +47,10 @@ fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: &[f32], alpha: f32) -> Image 
         data,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
-    )
+    );
+    // (Mips: thin white strokes shimmer at a distance without them.)
+    super::surface::add_mips(&mut image);
+    image
 }
 
 /// A pixel's centre relative to the disc's centre.

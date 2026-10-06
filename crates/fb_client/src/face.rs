@@ -168,7 +168,7 @@ impl Canvas {
                 data.push((c.clamp(0.0, 1.0) * 255.0).round() as u8);
             }
         }
-        Image::new(
+        let mut image = Image::new(
             Extent3d {
                 width: TEX as u32,
                 height: TEX as u32,
@@ -178,7 +178,10 @@ impl Canvas {
             data,
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::RENDER_WORLD,
-        )
+        );
+        // (Mips: the strokes shimmer on a bean across the map without them.)
+        crate::render::surface::add_mips(&mut image);
+        image
     }
 }
 

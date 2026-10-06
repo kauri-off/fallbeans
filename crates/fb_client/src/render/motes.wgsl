@@ -11,6 +11,21 @@ struct Motes {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> m: Motes;
 
+const TAU: f32 = 6.2831853;
+// Bevy's `globals.time` wraps at this: every motion repeats a whole number of times over it.
+const HOUR: f32 = 3600.0;
+
+// sin(rate · t + phase) with the rate rounded to whole turns an hour (seamless where the time wraps).
+fn wave(t: f32, rate: f32, phase: f32) -> f32 {
+    let turns = round(rate * HOUR / TAU);
+    return sin(TAU * fract(t / HOUR * turns) + phase);
+}
+
+// A steady drift at `speed` through a box of `size`, rounded to whole crossings an hour (the box wraps it).
+fn drift(t: f32, speed: f32, size: f32) -> f32 {
+    return size * fract(t / HOUR * round(speed * HOUR / size));
+}
+
 struct Vertex {
     @location(0) position: vec3<f32>,
     // The quad's corner (−1…1).
@@ -30,14 +45,14 @@ fn vertex(v: Vertex) -> Out {
     let seed = v.seed.x;
     let t = globals.time;
     let rise = m.box_rise.w;
-    let drift = vec3(
-        sin(t * 0.3 + seed * 40.0) * 0.8 + t * 0.35,
-        sin(t * 0.5 + seed * 17.0) * 0.6 + t * rise * (0.7 + seed * 0.6),
-        cos(t * 0.27 + seed * 23.0) * 0.8,
-    );
     let b = m.box_rise.xyz;
+    let sway = vec3(
+        wave(t, 0.3, seed * 40.0) * 0.8 + drift(t, 0.35, b.x),
+        wave(t, 0.5, seed * 17.0) * 0.6 + drift(t, rise * (0.7 + seed * 0.6), b.y),
+        wave(t, 0.27, seed * 23.0 + TAU * 0.25) * 0.8,
+    );
     let c = view.world_position;
-    let q = v.position + drift - c + b * 0.5;
+    let q = v.position + sway - c + b * 0.5;
     let p = q - b * floor(q / b) - b * 0.5 + c;
     var mv = view.view_from_world * vec4(p, 1.0);
     let d = -mv.z;
@@ -48,7 +63,7 @@ fn vertex(v: Vertex) -> Out {
     out.clip = view.clip_from_view * mv;
     out.corner = v.corner;
     out.alpha = smoothstep(1.5, 4.0, d) * (1.0 - smoothstep(14.0, 22.0, d))
-        * (0.55 + 0.45 * sin(t * (1.5 + seed * 2.0) + seed * 60.0)) * m.tint.a;
+        * (0.55 + 0.45 * wave(t, 1.5 + seed * 2.0, seed * 60.0)) * m.tint.a;
     return out;
 }
 

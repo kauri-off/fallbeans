@@ -1,6 +1,9 @@
 // AMD FidelityFX Super Resolution 1, EASU (github.com/GPUOpen-Effects/FidelityFX-FSR, MIT):
 // edge-adaptive spatial upsampling, 12 taps, a Lanczos-like kernel stretched along local edges, deringed.
 // The scene was drawn into the top-left `in_size` of the source; the output fills the whole target.
+// The source is linear HDR (EASU runs before the post-processing, which works on the whole target): taps go
+// through FSR 1's simple reversible tone mapper (FsrSrtm, c / (1 + max(c))) and the result back through
+// its inverse, so highlights neither steer the edge analysis nor ring.
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
 struct Easu {
@@ -13,7 +16,13 @@ struct Easu {
 
 fn tap(p: vec2<i32>) -> vec3<f32> {
     let mx = vec2<i32>(u.in_size) - 1;
-    return textureLoad(src, clamp(p, vec2(0), mx), 0).rgb;
+    let c = max(textureLoad(src, clamp(p, vec2(0), mx), 0).rgb, vec3(0.0));
+    return c / (1.0 + max(c.r, max(c.g, c.b)));
+}
+
+// FsrSrtmInv: back to linear HDR.
+fn untonemap(c: vec3<f32>) -> vec3<f32> {
+    return c / max(1.0 / 32768.0, 1.0 - max(c.r, max(c.g, c.b)));
 }
 
 // Luma times 2.
@@ -123,5 +132,5 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Dering: within the 4 nearest texels.
     let mn = min(min(f, g), min(j, k));
     let mx = max(max(f, g), max(j, k));
-    return vec4(min(mx, max(mn, ac / aw)), 1.0);
+    return vec4(untonemap(min(mx, max(mn, ac / aw))), 1.0);
 }
