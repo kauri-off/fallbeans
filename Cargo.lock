@@ -3437,7 +3437,6 @@ dependencies = [
  "aeronet_websocket",
  "base64 0.22.1",
  "bevy",
- "bevy_render",
  "bevy_replicon",
  "clap",
  "fb_arena",

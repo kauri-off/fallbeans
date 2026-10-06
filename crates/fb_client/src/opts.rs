@@ -32,11 +32,12 @@ pub enum Transport {
     Ws,
 }
 
+/// A graphics API the game draws with (`backend.rs`): 1.2 or newer for Vulkan.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Vulkan,
+    /// Windows only.
     Dx12,
-    Gl,
 }
 
 #[derive(Parser, Resource, Clone, Debug)]
@@ -109,7 +110,8 @@ pub struct Opts {
     pub spike: u64,
     #[arg(long, default_value_t = 10.0)]
     pub spike_every: f32,
-    /// Graphics API (default: wgpu's choice, or WGPU_BACKEND).
+    /// Graphics API for this run, over the settings' (default: DirectX 12 on Windows, Vulkan without a DX12 GPU;
+    /// Vulkan elsewhere).
     #[arg(long, value_enum)]
     pub backend: Option<Backend>,
     /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs).
@@ -220,5 +222,13 @@ mod tests {
             Some("http://192.168.1.10:7000/fallbeans")
         );
         assert!(Opts::try_parse_from(["fb_client", "--fps", "0"]).is_err());
+    }
+
+    #[test]
+    fn backends_are_vulkan_and_dx12() {
+        let b = |name: &str| Opts::try_parse_from(["fb_client", "--backend", name]).map(|o| o.backend);
+        assert_eq!(b("vulkan").ok(), Some(Some(Backend::Vulkan)));
+        assert_eq!(b("dx12").ok(), Some(Some(Backend::Dx12)));
+        assert!(b("gl").is_err());
     }
 }

@@ -141,6 +141,15 @@ pub const FPS_LIMIT: &str = "Ограничение кадров в секунд
 pub const NO_LIMIT: &str = "Нет";
 pub const BACKEND: &str = "Графический API (после перезапуска)";
 pub const BACKEND_AUTO: &str = "Авто";
+/// No GPU the game can draw with (`backend.rs`): said before the game's window opens.
+pub const NO_GPU: &str = if cfg!(target_os = "windows") {
+    "Игре нужна видеокарта с DirectX 12 или Vulkan 1.2, а такой не нашлось. Обновите драйвер видеокарты (с сайта \
+     NVIDIA, AMD или Intel) и запустите игру снова."
+} else {
+    "Игре нужна видеокарта с Vulkan 1.2, а такой не нашлось. Поставьте драйвер Vulkan для своей видеокарты (Mesa: \
+     пакет mesa-vulkan-drivers, в Arch — vulkan-radeon или vulkan-intel; NVIDIA — её собственный драйвер) и \
+     запустите игру снова."
+};
 
 pub fn adapter(name: &str, tier: &str) -> String {
     format!("Видеокарта: {name} · уровень {tier}")

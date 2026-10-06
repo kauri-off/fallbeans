@@ -817,7 +817,7 @@ fn play_round_on(gpu: wgpu::DeviceType, map: &str) {
     g.frames(120);
 }
 
-/// Tier T0 (OpenGL or a software device): the Low preset's own paths.
+/// Tier T0 (a software device): the Low preset's own paths.
 #[test]
 fn round_on_the_lowest_tier() {
     play_round_on(wgpu::DeviceType::Cpu, "portal-panic");

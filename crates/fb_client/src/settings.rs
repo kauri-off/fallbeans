@@ -131,7 +131,8 @@ pub struct Graphics {
     pub vsync: bool,
     /// Frames a second at most (0: no limit).
     pub fps_limit: u32,
-    /// "" (wgpu's pick), "vulkan", "dx12" or "gl": takes effect on the next start.
+    /// "" (automatic), "vulkan" or "dx12" (Windows): takes effect on the next start. Other names (an old
+    /// "gl") are automatic (`backend.rs`).
     pub backend: String,
 }
 
