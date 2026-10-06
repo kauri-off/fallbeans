@@ -2,6 +2,7 @@
 use bevy::math::Curve;
 use bevy::prelude::*;
 use fb_shared::game::{ArenaKind, FallBehaviour};
+use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyState};
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -58,28 +59,31 @@ pub struct BodyFull {
 /// having seen something else (another bean where it was a moment ago, an input that came late). Left
 /// alone below a threshold it grows until it crosses it, a second later, as a bigger correction.
 /// Not compared: the landing impact (drawn only, f32 on the wire) and the size (set from the bonus at
-/// the start of every step).
+/// the start of every step). Floats compare by their bits: a NaN equals itself (`!=` would roll back on
+/// every snapshot) and −0 differs from +0 (the next step may not treat them alike).
 pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
     let (x, y) = (&a.body, &b.body);
+    let f = |a: f64, b: f64| a.to_bits() != b.to_bits();
+    let v = |a: V3, b: V3| a.to_array().map(f64::to_bits) != b.to_array().map(f64::to_bits);
     a.teleports != b.teleports
         || a.checkpoint != b.checkpoint
         || x.actor != y.actor
-        || x.pos != y.pos
-        || x.vel != y.vel
-        || x.yaw != y.yaw
+        || v(x.pos, y.pos)
+        || v(x.vel, y.vel)
+        || f(x.yaw, y.yaw)
         || x.grounded != y.grounded
         || x.ground_col != y.ground_col
         || x.state != y.state
-        || x.state_t != y.state_t
-        || x.coyote != y.coyote
-        || x.jump_buf != y.jump_buf
-        || x.slow_until != y.slow_until
-        || x.slow_k != y.slow_k
-        || x.tilt != y.tilt
-        || x.tilt_dir != y.tilt_dir
+        || f(x.state_t, y.state_t)
+        || f(x.coyote, y.coyote)
+        || f(x.jump_buf, y.jump_buf)
+        || f(x.slow_until, y.slow_until)
+        || f(x.slow_k, y.slow_k)
+        || f(x.tilt, y.tilt)
+        || f(x.tilt_dir, y.tilt_dir)
         || x.power != y.power
-        || x.power_until != y.power_until
-        || x.climb_to != y.climb_to
+        || f(x.power_until, y.power_until)
+        || v(x.climb_to, y.climb_to)
 }
 
 /// What a bean is doing, for its animation.

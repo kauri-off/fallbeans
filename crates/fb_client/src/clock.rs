@@ -28,9 +28,19 @@ const SPEEDUP: f32 = 1.1;
 const STEP: f32 = 0.1;
 /// A frame this long (s) stalls the clocks: packets come in a burst while the remote timeline has not yet
 /// moved on, and its estimate jumps by the frame's length for a while. Not the path: for STALL_QUIET s
-/// after such a frame the held aim does not rise (once it did, and stayed up for a minute).
+/// after such a frame the estimate's offset may not raise the held aim (once it did, and stayed up for a
+/// minute). RTT and jitter still may: every map load is such a frame, right at the start of a round.
 const STALL: f32 = 0.1;
 const STALL_QUIET: f32 = 5.0;
+/// Most ticks an input may arrive ahead of the server's tick (the margin plus a clock error short of a
+/// jump): Lightyear's server drops input messages more than 64 ticks ahead (`MAX_INPUT_LOOKAHEAD_TICKS`),
+/// and then the bean stands still. Past it presses arrive late instead (`fb_net::LATE_TICKS` recovers them).
+const MAX_AHEAD: f32 = 60.0;
+/// Above this margin a late press can be lost: the server's input buffer is a ring of 64 ticks ending at
+/// the newest input, and it must still hold the ticks up to LATE_TICKS behind the server's.
+const LATE_LEAD: f32 = (63 - fb_net::LATE_TICKS) as f32;
+/// How often the warning about a margin above LATE_LEAD may repeat, s.
+const WARN_EVERY_S: f32 = 30.0;
 
 /// The aim over the remote timeline's own clock (its estimate's offset + RTT/2 + JITTER_K × jitter) as
 /// held, ticks; None before the first estimate. Offsets count from the first one of the connection (the
@@ -41,8 +51,13 @@ pub struct Lead {
     base: Option<TickDelta>,
     /// The margin the config carries now (fixed part plus what the held aim adds).
     pub margin: f32,
-    /// Real time until which the held aim does not rise (after a long frame).
+    /// Real time until which the offset does not raise the held aim (after a long frame), and the offset
+    /// from before that frame.
     quiet_until: f32,
+    quiet_offset: f32,
+    last_offset: Option<f32>,
+    /// When the margin was last said to be above LATE_LEAD.
+    warned: Option<f32>,
 }
 
 pub struct ClockPlugin;
@@ -85,31 +100,51 @@ fn steer(
     mut lead: ResMut<Lead>,
 ) {
     let Ok((ping, remote)) = links.single() else {
-        (lead.held, lead.base) = (None, None);
+        (lead.held, lead.base, lead.last_offset) = (None, None, None);
         return;
     };
     if ping.latency_samples_recv() < 3 || !remote.is_initialized() {
         return;
     }
     let now = time.elapsed_secs();
-    if time.delta_secs() > STALL {
-        lead.quiet_until = now + STALL_QUIET;
-    }
     let tick = TICK.as_secs_f32();
     let offset = remote.current_estimate() - remote.now();
     let offset = (offset - *lead.base.get_or_insert(offset)).to_f32();
+    if time.delta_secs() > STALL {
+        // (The offset of this frame may have jumped already: the one before it.)
+        let before = lead.last_offset.unwrap_or(offset);
+        lead.quiet_offset = if now < lead.quiet_until {
+            lead.quiet_offset.min(before)
+        } else {
+            before
+        };
+        lead.quiet_until = now + STALL_QUIET;
+    }
+    lead.last_offset = Some(offset);
     let half = ping.rtt().as_secs_f32() / 2.0 / tick;
-    let want = offset + half + JITTER_K * ping.jitter().as_secs_f32() / tick;
+    let jitter = JITTER_K * ping.jitter().as_secs_f32() / tick;
+    let want = offset + half + jitter;
     let held = match lead.held {
         Some(h) if h > want => (h - FALL_PER_S * time.delta_secs()).max(want),
-        Some(h) if now < lead.quiet_until => h,
+        // After a long frame only RTT and jitter raise it.
+        Some(h) if now < lead.quiet_until => h.max(offset.min(lead.quiet_offset) + half + jitter),
         _ => want,
     };
     lead.held = Some(held);
     let ws = conn.is_some_and(|c| c.transport == Transport::Ws);
     // Lightyear adds its estimate (offset + RTT/2) itself.
     // (Held through a stall while the offset jumps, it could go below zero: Lightyear panics on that.)
-    let margin = (opts.input_margin + if ws { WS_MARGIN } else { 0.0 } + held - offset - half).max(0.0);
+    let max_error = opts.sync_max_error.unwrap_or(MAX_ERROR);
+    let want_margin = opts.input_margin + if ws { WS_MARGIN } else { 0.0 } + held - offset - half;
+    let margin = want_margin.min(MAX_AHEAD - max_error).max(0.0);
+    if margin > LATE_LEAD && lead.warned.is_none_or(|t| now - t >= WARN_EVERY_S) {
+        lead.warned = Some(now);
+        warn!(
+            "input lead {margin:.1} ticks (wanted {want_margin:.1}; RTT {:.0} ms, jitter {:.0} ms): above {LATE_LEAD} a late press may be lost",
+            ping.rtt().as_secs_f32() * 1000.0,
+            ping.jitter().as_secs_f32() * 1000.0
+        );
+    }
     if (margin - lead.margin).abs() >= STEP {
         lead.margin = margin;
         insert(&mut commands, &opts, margin);

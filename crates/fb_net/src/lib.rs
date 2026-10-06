@@ -33,6 +33,8 @@ pub fn build() -> String {
     }
 }
 
+/// Netcode's id in every connect token: the wire version and the simulation's fingerprint
+/// (`PROTOCOL_VERSION`), so a token of another build is refused too.
 pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
 pub const UDP_PORT: u16 = 5888;
 /// The HTTP API (session, health, debug); behind a reverse proxy at https://…/fallbeans/.
@@ -52,6 +54,19 @@ pub const LATE_TICKS: u32 = 30;
 pub const INPUT_REDUNDANCY: u16 = (LATE_TICKS / 2) as u16;
 /// The server's loop rate: twice the tick rate, so ticks run on time without spinning.
 pub const SERVER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / (2 * TICK_RATE as u64));
+/// An unacked reliable message goes again after 1.5 × RTT, never sooner than this. Lightyear's minimum, 0,
+/// resent every unacked message every 1.5 × RTT through a WebSocket stall (TCP loses nothing): bursts of
+/// duplicates once it clears. On UDP a lost message waits at least this long (channels are not per
+/// transport). Lightyear's own channels (replication, inputs) keep their settings.
+pub const RESEND_MIN: Duration = Duration::from_millis(150);
+
+/// The game's own reliable channels.
+fn reliable() -> ReliableSettings {
+    ReliableSettings {
+        rtt_resend_min_delay: RESEND_MIN,
+        ..default()
+    }
+}
 
 #[derive(Clone)]
 pub struct ProtocolPlugin;
@@ -72,12 +87,12 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<ClientMsg>()
             .add_direction(NetworkDirection::ClientToServer);
         app.add_channel::<MapEventsChannel>(ChannelSettings {
-            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            mode: ChannelMode::OrderedReliable(reliable()),
             ..default()
         })
         .add_direction(NetworkDirection::ServerToClient);
         app.add_channel::<ControlChannel>(ChannelSettings {
-            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            mode: ChannelMode::OrderedReliable(reliable()),
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);

@@ -17,8 +17,9 @@ use lightyear_udp::UdpPlugin;
 
 use crate::net::{UDP_TRY_S, local_addr_for, request, token_of};
 
-/// How long the probe's connection has to hold.
-const HOLD_S: f32 = 5.0;
+/// How long the probe's connection has to hold. Well under the server's hello timeout (5 s,
+/// `fb_server::rooms::hub`): the probe says no hello, and the server would warn about it every minute.
+const HOLD_S: f32 = 3.0;
 
 /// On a thread: a UDP connect token from the HTTP API at `url`, then the connection; the answer is whether it
 /// came up and held.
