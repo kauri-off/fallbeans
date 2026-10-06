@@ -35,8 +35,13 @@ pub struct MapPrim(pub Spec, pub Handle<SurfaceMaterial>);
 pub struct SpecialCache {
     generation: u32,
     meshes: HashMap<(usize, usize), Handle<Mesh>>,
-    mats: HashMap<(usize, usize, i8, i8), PieceMat>,
-    pictures: HashMap<(usize, usize), Handle<Image>>,
+    /// `look_of` ids by item and part: identical parts share materials (one draw).
+    looks: HashMap<(usize, usize), u32>,
+    look_ids: HashMap<String, u32>,
+    /// By look, tone step, opacity step.
+    mats: HashMap<(u32, i8, i8), PieceMat>,
+    /// Portal pictures by form and colour (kept across maps: nothing else changes them).
+    pictures: HashMap<(bool, &'static str), Handle<Image>>,
     /// Tinted materials by the primitive's own material (identical primitives share it), colour, step.
     tints: HashMap<(AssetId<SurfaceMaterial>, &'static str, i8), Handle<SurfaceMaterial>>,
     out: LookOut,
@@ -94,6 +99,21 @@ fn flat(form: Form) -> bool {
             | Form::Arrow
             | Form::Plane(..)
             | Form::Label(..)
+    )
+}
+
+/// Everything `part_material` and the pictures read of a part (the round's look is the same for all).
+fn look_of(part: &Part) -> String {
+    let form = match part.form {
+        Form::Label(_, _, text) => format!("label {text}"),
+        Form::Swirl(_) => "swirl".into(),
+        Form::Rings(_) => "rings".into(),
+        f if flat(f) => "flat".into(),
+        _ => "solid".into(),
+    };
+    format!(
+        "{:?} {:?} {:?} {:?} {form}",
+        part.colors, part.pal, part.finish, part.surface
     )
 }
 
@@ -191,8 +211,9 @@ pub fn pose_specials(
     if cache.generation != map.generation {
         cache.generation = map.generation;
         cache.meshes.clear();
+        cache.looks.clear();
+        cache.look_ids.clear();
         cache.mats.clear();
-        cache.pictures.clear();
         cache.tints.clear();
     }
     let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
@@ -235,13 +256,19 @@ pub fn pose_specials(
             let mat = match part.form {
                 Form::Model(_) => None,
                 _ => {
-                    let key = (root.item, pi, step(p.tone), step(p.alpha.clamp(0.0, 1.0)));
+                    let n = cache.look_ids.len() as u32;
+                    let ids = &mut cache.look_ids;
+                    let look = *cache
+                        .looks
+                        .entry((root.item, pi))
+                        .or_insert_with(|| *ids.entry(look_of(part)).or_insert(n));
+                    let key = (look, step(p.tone), step(p.alpha.clamp(0.0, 1.0)));
                     Some(
                         cache
                             .mats
                             .entry(key)
                             .or_insert_with(|| {
-                                let mut m = part_material(part, &map.look, key.2, key.3);
+                                let mut m = part_material(part, &map.look, key.1, key.2);
                                 let a = m.base_color.alpha();
                                 match part.form {
                                     // A board with its emoji drawn on (the board's colour in the picture).
@@ -254,7 +281,7 @@ pub fn pose_specials(
                                     Form::Swirl(_) | Form::Rings(_) => {
                                         let tex = cache
                                             .pictures
-                                            .entry((root.item, pi))
+                                            .entry((matches!(part.form, Form::Swirl(_)), part.colors[0]))
                                             .or_insert_with(|| {
                                                 let c = hex(part.colors[0]);
                                                 images.add(match part.form {
@@ -264,7 +291,7 @@ pub fn pose_specials(
                                             })
                                             .clone();
                                         m.base_color_texture = Some(tex);
-                                        let k = 1.0 + 1.5 * key.2.max(0) as f32 / STEPS;
+                                        let k = 1.0 + 1.5 * key.1.max(0) as f32 / STEPS;
                                         m.base_color = LinearRgba::new(k, k, k, a).into();
                                     }
                                     _ => {}

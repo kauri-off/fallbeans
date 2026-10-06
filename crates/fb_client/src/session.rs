@@ -368,13 +368,15 @@ fn receive(
     }
 }
 
-/// `--start <map>`: as the host, plays a game of that map (rounds of it) once enough players are in.
+/// `--start <maps>`: as the host, plays a game of those maps in turn once enough players are in.
 fn start_game(
     opts: Res<Opts>,
     mut session: ResMut<Session>,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
 ) {
-    let Some(map) = &opts.start else { return };
+    if opts.start.is_empty() {
+        return;
+    }
     let Some(lobby) = &session.lobby else { return };
     if session.started || lobby.phase != Phase::Lobby || lobby.host != session.me {
         return;
@@ -385,7 +387,7 @@ fn start_game(
         return;
     }
     session.started = true;
-    info!("starting {map} with {n} players");
+    info!("starting {} with {n} players", opts.start.join(","));
     if opts.fill {
         send(&mut senders, ClientMsg::Fill(true));
     }
@@ -393,7 +395,13 @@ fn start_game(
         &mut senders,
         ClientMsg::Playlist(Playlist {
             mode: Mode::Custom,
-            games: vec![map.clone(); opts.start_rounds as usize],
+            games: opts
+                .start
+                .iter()
+                .cycle()
+                .take(opts.start_rounds as usize)
+                .cloned()
+                .collect(),
             rounds: opts.start_rounds,
         }),
     );

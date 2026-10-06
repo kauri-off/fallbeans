@@ -102,8 +102,9 @@ target/release/fb_client
 
 ## Известные проблемы
 
-- Intel Gen9 (UHD 620/630, Comet Lake) на Vulkan с Mesa 26.2 (anv): через ~5 с раунда видеокарта зависает
-  (`GPU HANG` в журнале ядра), игра закрывается. Обход: запускать с `INTEL_DEBUG=reemit`.
+- Intel Gen9 (HD 520, UHD 620/630, Comet Lake) с Mesa 26.2 (и Vulkan, и OpenGL) через несколько секунд сцены
+  вешает видеокарту (`GPU HANG` в журнале ядра). На Linux клиент, найдя такую видеокарту, сам перезапускается с
+  `INTEL_DEBUG=reemit` (замеры разницы не показали); заданная вручную `INTEL_DEBUG` не трогается.
 - `--backend gl` на Wayland падает («Fallback system failed to choose present mode», Bevy #22220): OpenGL работает
   только через XWayland (без `WAYLAND_DISPLAY`).
 - Графический API выбирается флагом `--backend` или в настройках и действует со следующего запуска: если игра не

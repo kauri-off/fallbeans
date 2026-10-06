@@ -23,16 +23,15 @@ fn rgb(c: Color) -> [f32; 3] {
 
 const DEEP: [f32; 3] = [0x1a as f32 / 255.0, 0x0f as f32 / 255.0, 0x3d as f32 / 255.0];
 
-/// The disc filled by `fill`, with white strokes over it (coverage per pixel from `stroke`, 0…1).
-fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: impl Fn(f32, f32) -> f32, alpha: f32) -> Image {
+/// The disc filled by `fill`, with white strokes over it (`stroke`: coverage per pixel, 0…1).
+fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: &[f32], alpha: f32) -> Image {
     let half = SIZE as f32 / 2.0;
     let mut data = Vec::with_capacity(SIZE * SIZE * 4);
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let (px, py) = (x as f32 + 0.5 - half, y as f32 + 0.5 - half);
-            let r = px.hypot(py);
+            let r = at(x, y).length();
             let edge = (half - r + 0.5).clamp(0.0, 1.0);
-            let s = stroke(px, py) * alpha;
+            let s = stroke[y * SIZE + x] * alpha;
             let c = fill(r).map(|v| v * (1.0 - s) + s);
             data.extend(c.map(|v| (v * 255.0).round() as u8));
             data.push((edge * 255.0).round() as u8);
@@ -51,16 +50,20 @@ fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: impl Fn(f32, f32) -> f32, alp
     )
 }
 
+/// A pixel's centre relative to the disc's centre.
+fn at(x: usize, y: usize) -> Vec2 {
+    let half = SIZE as f32 / 2.0;
+    Vec2::new(x as f32 + 0.5 - half, y as f32 + 0.5 - half)
+}
+
 fn segment_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let ab = b - a;
     let t = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
     p.distance(a + ab * t)
 }
 
-/// White at the centre through the colour to deep violet, four white spiral arms.
-pub fn swirl(color: Color) -> Image {
-    let c = rgb(color);
-    let arms: Vec<[Vec2; 61]> = (0..4)
+fn spiral_arms() -> Vec<[Vec2; 61]> {
+    (0..4)
         .map(|arm| {
             std::array::from_fn(|k| {
                 let f = k as f32 / 60.0;
@@ -69,17 +72,37 @@ pub fn swirl(color: Color) -> Image {
                 Vec2::new(a.cos() * r, a.sin() * r)
             })
         })
-        .collect();
+        .collect()
+}
+
+/// The arms' coverage: a segment only reaches the pixels within 4 px of its bounding box.
+fn swirl_strokes() -> Vec<f32> {
+    let half = SIZE as f32 / 2.0;
+    let range = |lo: f32, hi: f32| {
+        (lo + half - 4.0).floor().max(0.0) as usize..=((hi + half + 4.0).ceil() as usize).min(SIZE - 1)
+    };
+    let mut d = vec![f32::MAX; SIZE * SIZE];
+    for arm in spiral_arms() {
+        for w in arm.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (lo, hi) = (a.min(b), a.max(b));
+            for y in range(lo.y, hi.y) {
+                for x in range(lo.x, hi.x) {
+                    let i = y * SIZE + x;
+                    d[i] = d[i].min(segment_dist(at(x, y), a, b));
+                }
+            }
+        }
+    }
+    d.into_iter().map(|d| (3.0 - d + 0.5).clamp(0.0, 1.0)).collect()
+}
+
+/// White at the centre through the colour to deep violet, four white spiral arms.
+pub fn swirl(color: Color) -> Image {
+    let c = rgb(color);
     picture(
         |r| gradient(r, [(0.0, [1.0; 3]), (0.35, c), (1.0, DEEP)]),
-        |x, y| {
-            let p = Vec2::new(x, y);
-            let d = arms
-                .iter()
-                .flat_map(|arm| arm.windows(2).map(|w| segment_dist(p, w[0], w[1])))
-                .fold(f32::MAX, f32::min);
-            (3.0 - d + 0.5).clamp(0.0, 1.0)
-        },
+        &swirl_strokes(),
         0.55,
     )
 }
@@ -87,18 +110,17 @@ pub fn swirl(color: Color) -> Image {
 /// Deep violet at the centre through the colour to white at the rim, three white rings.
 pub fn rings(color: Color) -> Image {
     let c = rgb(color);
-    picture(
-        |r| gradient(r, [(0.0, DEEP), (0.6, c), (1.0, [1.0; 3])]),
-        |x, y| {
-            let r = x.hypot(y);
+    let strokes: Vec<f32> = (0..SIZE * SIZE)
+        .map(|i| {
+            let r = at(i % SIZE, i / SIZE).length();
             let d = [0.14, 0.28, 0.42]
                 .map(|k| (r - k * SIZE as f32).abs())
                 .into_iter()
                 .fold(f32::MAX, f32::min);
             (3.5 - d + 0.5).clamp(0.0, 1.0)
-        },
-        0.6,
-    )
+        })
+        .collect();
+    picture(|r| gradient(r, [(0.0, DEEP), (0.6, c), (1.0, [1.0; 3])]), &strokes, 0.6)
 }
 
 /// The exit's arrow in the x/y plane, its tip at +y.
@@ -131,5 +153,21 @@ mod tests {
             assert_eq!(at(0, 0)[3], 0);
             assert_eq!(at(SIZE / 2, SIZE / 2)[3], 255);
         }
+    }
+
+    #[test]
+    fn swirl_strokes_match_every_segment() {
+        let arms = spiral_arms();
+        let all: Vec<f32> = (0..SIZE * SIZE)
+            .map(|i| {
+                let p = super::at(i % SIZE, i / SIZE);
+                let d = arms
+                    .iter()
+                    .flat_map(|arm| arm.windows(2).map(|w| segment_dist(p, w[0], w[1])))
+                    .fold(f32::MAX, f32::min);
+                (3.0 - d + 0.5).clamp(0.0, 1.0)
+            })
+            .collect();
+        assert_eq!(swirl_strokes(), all);
     }
 }

@@ -79,9 +79,9 @@ pub struct Opts {
     /// Suit colour for this run (index into the palette).
     #[arg(long)]
     pub color: Option<u8>,
-    /// Map id: if this client hosts the room, it starts a game where every round is this map.
-    #[arg(long, value_name = "MAP", value_parser = map_ids())]
-    pub start: Option<String>,
+    /// Map ids: if this client hosts the room, it starts a game of these maps in turn (`a,b,c`).
+    #[arg(long, value_name = "MAP", value_parser = map_ids(), value_delimiter = ',')]
+    pub start: Vec<String>,
     /// With `--start`: wait until the room has this many players (default: 2, or 1 if the server runs with `--solo`; never fewer).
     #[arg(long, value_name = "N")]
     pub start_players: Option<usize>,
@@ -149,6 +149,9 @@ pub struct Opts {
     pub perf_sweep: bool,
     #[arg(long, value_name = "SECS", default_value_t = 5.0)]
     pub perf_warmup: f32,
+    /// `--perf-capture` from the launch on (the menu, the lobby, every round), not from a round's warmup.
+    #[arg(long)]
+    pub perf_from_start: bool,
     /// Where a recording goes (default: `perf-<time>.json` in the logs folder).
     #[arg(long)]
     pub perf_out: Option<PathBuf>,
@@ -183,7 +186,7 @@ impl Opts {
             || self.offscreen
             || self.room.is_some()
             || self.practice.is_some()
-            || self.start.is_some();
+            || !self.start.is_empty();
         direct.then(|| {
             let host = self.server.as_deref().unwrap_or("127.0.0.1");
             // (An IPv6 address goes in brackets in a URL.)

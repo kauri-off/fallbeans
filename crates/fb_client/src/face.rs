@@ -10,6 +10,7 @@ use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 
 use crate::bean::Expr;
 use crate::beans::Rig;
@@ -415,15 +416,33 @@ fn draw(e: Expr) -> Image {
 /// Triangles of the visor and the body in model space.
 struct Front {
     tris: Vec<[Vec3; 3]>,
+    /// Each triangle's extent in x and y (min x, min y, max x, max y): a ray along −z misses the rest.
+    boxes: Vec<[f32; 4]>,
 }
 
 impl Front {
+    fn new(tris: Vec<[Vec3; 3]>) -> Self {
+        let boxes = tris
+            .iter()
+            .map(|[a, b, c]| {
+                let lo = a.min(*b).min(*c);
+                let hi = a.max(*b).max(*c);
+                [lo.x, lo.y, hi.x, hi.y]
+            })
+            .collect();
+        Self { tris, boxes }
+    }
+
     /// Where a ray from (x, y, 2) along −z first hits the front, and the normal there.
     fn hit(&self, x: f32, y: f32) -> Option<(f32, Vec3)> {
         let o = Vec3::new(x, y, 2.0);
         let d = Vec3::NEG_Z;
         let mut best: Option<(f32, Vec3)> = None;
-        for [a, b, c] in &self.tris {
+        for ([a, b, c], r) in self.tris.iter().zip(&self.boxes) {
+            // (With a margin: the test below decides the edges.)
+            if x < r[0] - 1e-4 || x > r[2] + 1e-4 || y < r[1] - 1e-4 || y > r[3] + 1e-4 {
+                continue;
+            }
             let e1 = *b - *a;
             let e2 = *c - *a;
             let p = d.cross(e2);
@@ -556,6 +575,17 @@ fn brow() -> Mesh {
 
 // ---------------------------------------------------------------- systems
 
+/// The face kit being made off the main thread (rays against the model, ten mouth pictures).
+#[derive(Resource)]
+struct KitTask(Task<KitParts>);
+
+struct KitParts {
+    patch: Mesh,
+    brow: Mesh,
+    surface: Surface,
+    mouths: Vec<(Expr, Image)>,
+}
+
 /// What every face shares: the patch, the brow, the surface, a material per expression.
 #[derive(Resource)]
 struct FaceKit {
@@ -587,6 +617,7 @@ impl Plugin for FacePlugin {
 fn make_kit(
     mut commands: Commands,
     kit: Option<Res<FaceKit>>,
+    mut task: Option<ResMut<KitTask>>,
     rigs: Query<&Rig>,
     children: Query<&Children>,
     parts: Query<(&GltfMaterialName, &Mesh3d)>,
@@ -598,6 +629,36 @@ fn make_kit(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if kit.is_some() {
+        return;
+    }
+    if let Some(task) = task.as_mut() {
+        let Some(parts) = check_ready(&mut task.0) else { return };
+        commands.remove_resource::<KitTask>();
+        let mouths = parts
+            .mouths
+            .into_iter()
+            .map(|(e, img)| {
+                let mat = materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(img)),
+                    alpha_mode: AlphaMode::Blend,
+                    perceptual_roughness: 0.5,
+                    depth_bias: 4.0,
+                    ..default()
+                });
+                (e, mat)
+            })
+            .collect();
+        commands.insert_resource(FaceKit {
+            patch: meshes.add(parts.patch),
+            brow: meshes.add(parts.brow),
+            brow_mat: materials.add(StandardMaterial {
+                base_color: crate::view::hex(INK),
+                perceptual_roughness: 0.6,
+                ..default()
+            }),
+            surface: parts.surface,
+            mouths,
+        });
         return;
     }
     let Some(model) = rigs.iter().find(|r| r.ready()).map(|r| r.model) else {
@@ -650,32 +711,16 @@ fn make_kit(
     if tris.is_empty() {
         return;
     }
-    let front = Front { tris };
-    let mouths = EXPRS
-        .iter()
-        .map(|e| {
-            let tex = images.add(draw(*e));
-            let mat = materials.add(StandardMaterial {
-                base_color_texture: Some(tex),
-                alpha_mode: AlphaMode::Blend,
-                perceptual_roughness: 0.5,
-                depth_bias: 4.0,
-                ..default()
-            });
-            (*e, mat)
-        })
-        .collect();
-    commands.insert_resource(FaceKit {
-        patch: meshes.add(patch(&front)),
-        brow: meshes.add(brow()),
-        brow_mat: materials.add(StandardMaterial {
-            base_color: crate::view::hex(INK),
-            perceptual_roughness: 0.6,
-            ..default()
-        }),
-        surface: Surface::build(&front),
-        mouths,
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let front = Front::new(tris);
+        KitParts {
+            patch: patch(&front),
+            brow: brow(),
+            surface: Surface::build(&front),
+            mouths: EXPRS.iter().map(|e| (*e, draw(*e))).collect(),
+        }
     });
+    commands.insert_resource(KitTask(task));
 }
 
 fn attach(mut commands: Commands, kit: Option<Res<FaceKit>>, rigs: Query<(Entity, &Rig), Without<FaceParts>>) {
@@ -796,6 +841,37 @@ mod tests {
         app.update();
         let w = app.world_mut();
         assert_eq!(w.query::<&Mesh3d>().iter(w).count(), 0, "face parts left behind");
+    }
+
+    #[test]
+    fn boxes_skip_only_missed_triangles() {
+        // A bumpy dome of triangles: every ray of a grid hits the same as without the boxes.
+        let at = |i: i32, j: i32| {
+            let (x, y) = (i as f32 * 0.05, 1.0 + j as f32 * 0.05);
+            Vec3::new(
+                x,
+                y,
+                0.3 - x * x - (y - 1.2).powi(2) + 0.01 * ((i * 7 + j * 3) % 5) as f32,
+            )
+        };
+        let mut tris = Vec::new();
+        for j in 0..10 {
+            for i in -6..6 {
+                tris.push([at(i, j), at(i + 1, j), at(i, j + 1)]);
+                tris.push([at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+            }
+        }
+        let front = Front::new(tris.clone());
+        let all = Front {
+            boxes: vec![[f32::MIN, f32::MIN, f32::MAX, f32::MAX]; tris.len()],
+            tris,
+        };
+        for j in 0..40 {
+            for i in -40..40 {
+                let (x, y) = (i as f32 * 0.0083, 0.98 + j as f32 * 0.0131);
+                assert_eq!(front.hit(x, y), all.hit(x, y), "at {x} {y}");
+            }
+        }
     }
 
     #[test]

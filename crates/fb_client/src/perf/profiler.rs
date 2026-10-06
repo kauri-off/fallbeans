@@ -14,6 +14,8 @@ use bevy::log::tracing_subscriber::registry::LookupSpan;
 
 /// Every span is summed (else only the waits).
 static ON: AtomicBool = AtomicBool::new(false);
+/// Ids of the spans summed while off (`prepare_windows`, the latest `present_frames`).
+static ALWAYS: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 static EPOCH: OnceLock<Instant> = OnceLock::new();
 static SLOTS: Mutex<BTreeMap<(Kind, String), Arc<Slot>>> = Mutex::new(BTreeMap::new());
 
@@ -138,6 +140,11 @@ fn slot(kind: Kind, name: String, always: bool) -> Option<Arc<Slot>> {
     Some(s.clone())
 }
 
+fn passed_over(id: &Id) -> bool {
+    let raw = id.into_u64();
+    !is_on() && ALWAYS.iter().all(|a| a.load(Ordering::Relaxed) != raw)
+}
+
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Profiler {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let meta = attrs.metadata();
@@ -159,10 +166,16 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Profiler {
         let (Some(slot), Some(span)) = (slot(kind, name, always), ctx.span(id)) else {
             return;
         };
+        if always {
+            ALWAYS[usize::from(kind == Kind::Frame)].store(id.into_u64(), Ordering::Relaxed);
+        }
         span.extensions_mut().insert(slot);
     }
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
+        if passed_over(id) {
+            return;
+        }
         let Some(span) = ctx.span(id) else { return };
         let ext = span.extensions();
         if let Some(s) = ext.get::<Arc<Slot>>()
@@ -173,6 +186,9 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Profiler {
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        if passed_over(id) {
+            return;
+        }
         let Some(span) = ctx.span(id) else { return };
         let ext = span.extensions();
         if let Some(s) = ext.get::<Arc<Slot>>() {

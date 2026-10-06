@@ -342,6 +342,7 @@ fn report(d: &Value) -> String {
             t += &passes_table(&first["passes"], pixels(d));
         }
     } else {
+        t += &segments_table(d);
         t += "\n";
         t += &stats_table(&d["summary"]);
         t += "\n";
@@ -401,7 +402,78 @@ fn report(d: &Value) -> String {
                 .take(5)
                 .map(|p| format!("{} {}", p[0].as_str().unwrap_or("?"), f2(&p[1])))
                 .collect();
-            let _ = writeln!(t, "  {} ms at {} s: {}", f2(&sp["ms"]), f2(&sp["t"]), top.join(" · "));
+            let _ = writeln!(
+                t,
+                "  {} ms at {} s ({}): {}",
+                f2(&sp["ms"]),
+                f2(&sp["t"]),
+                scene_at(d, num(&sp["t"]).unwrap_or(0.0)),
+                top.join(" · ")
+            );
+        }
+    }
+    t
+}
+
+fn count(v: &Value) -> String {
+    num(v).map_or("—".into(), |x| format!("{x:.0}"))
+}
+
+fn segments(d: &Value) -> &[Value] {
+    d["segments"].as_array().map(Vec::as_slice).unwrap_or_default()
+}
+
+/// The scene a recording was in at `t` (its segments).
+fn scene_at(d: &Value, t: f64) -> &str {
+    segments(d)
+        .iter()
+        .rev()
+        .find(|s| num(&s["t"]).is_some_and(|s0| s0 <= t))
+        .and_then(|s| s["scene"].as_str())
+        .unwrap_or("?")
+}
+
+/// Each scene of a recording: frame times, the scene's load and its costliest systems.
+fn segments_table(d: &Value) -> String {
+    let segs = segments(d);
+    if segs.is_empty() {
+        return String::new();
+    }
+    let mut t = String::from(
+        "\nscenes (p50, ms)       from     secs     fps   frame   p99     gpu    main  render    wait  meshes visible shadow\n",
+    );
+    for s in segs {
+        let m = &s["summary"];
+        let c = &s["counts"];
+        let _ = writeln!(
+            t,
+            "{:<20}{:>7.1}{:>9.1}{:>8.0}{:>8}{:>6}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>7}",
+            s["scene"].as_str().unwrap_or("?"),
+            num(&s["t"]).unwrap_or(0.0),
+            num(&m["secs"]).unwrap_or(0.0),
+            num(&m["fps"]).unwrap_or(0.0),
+            f2(&m["frame"]["p50"]),
+            num(&m["frame"]["p99"]).map_or("—".into(), |x| format!("{x:.1}")),
+            f2(&m["gpu"]["p50"]),
+            f2(&m["main"]["p50"]),
+            f2(&m["render"]["p50"]),
+            f2(&m["wait"]["p50"]),
+            count(&c["meshes"]),
+            count(&c["visible"]),
+            count(&c["casters"]),
+        );
+    }
+    if segs.len() > 1 {
+        for s in segs {
+            let systems: Vec<String> = s["cpu"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|r| r["kind"] == "system")
+                .take(8)
+                .map(|r| format!("{} {}", r["name"].as_str().unwrap_or("?"), f2(&r["ms"])))
+                .collect();
+            let _ = writeln!(t, "  {}: {}", s["scene"].as_str().unwrap_or("?"), systems.join(" · "));
         }
     }
     t

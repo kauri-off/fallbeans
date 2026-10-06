@@ -109,6 +109,9 @@ fn wgpu_settings(backend: Option<Backend>) -> WgpuSettings {
 }
 
 fn main() -> AppExit {
+    if let Some(code) = render::quality::intel_gen9_relaunch() {
+        return AppExit::from_code(code);
+    }
     let mut app = App::new();
     build(&mut app, Opts::parse(), None);
     app.run()

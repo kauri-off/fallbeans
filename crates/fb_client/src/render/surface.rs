@@ -15,6 +15,7 @@ use bevy::render::render_resource::{
     TextureFormat,
 };
 use bevy::shader::ShaderRef;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use fb_sim::looks::Pattern;
 
 pub type SurfaceMaterial = ExtendedMaterial<StandardMaterial, Surface>;
@@ -41,6 +42,26 @@ pub enum Kind {
 }
 
 impl Kind {
+    const ALL: [Kind; 17] = [
+        Kind::Plastic,
+        Kind::Padded,
+        Kind::Rubber,
+        Kind::Metal,
+        Kind::Fabric,
+        Kind::Ice,
+        Kind::Cloud,
+        Kind::Gold,
+        Kind::Wood,
+        Kind::Glossy,
+        Kind::Tile,
+        Kind::Leaf,
+        Kind::Grass,
+        Kind::Rock,
+        Kind::Cloth,
+        Kind::Glass,
+        Kind::Carpet,
+    ];
+
     pub fn of(name: &str) -> Option<Kind> {
         Some(match name {
             "plastic" => Kind::Plastic,
@@ -442,7 +463,7 @@ pub struct SurfaceUniform {
     pub detail: Vec4,
     /// Pattern frequency, direction (x, z), speed.
     pub pattern: Vec4,
-    /// Pattern kind (−1: none), frost.
+    /// Pattern kind (−1: none), frost, 1: no detail texture (`Surfaces::set_plain`).
     pub extra: Vec4,
 }
 
@@ -532,9 +553,13 @@ impl Spec {
 #[derive(Resource, Default)]
 pub struct Surfaces {
     textures: HashMap<Kind, Handle<Image>>,
+    /// Detail textures being made off the main thread from the start (2–8 ms each).
+    pending: HashMap<Kind, Task<Image>>,
     materials: HashMap<String, Handle<SurfaceMaterial>>,
     /// A plain texture for materials without a surface (the shader then changes nothing).
     flat: Option<Handle<Image>>,
+    /// No detail texture or its maths (the Low preset).
+    plain: bool,
 }
 
 fn flat_image() -> Image {
@@ -553,10 +578,29 @@ fn flat_image() -> Image {
 }
 
 impl Surfaces {
+    /// Every surface material, made and to be made, with or without its detail texture.
+    pub fn set_plain(&mut self, plain: bool, materials: &mut Assets<SurfaceMaterial>) {
+        if self.plain == plain {
+            return;
+        }
+        self.plain = plain;
+        let z = if plain { 1.0 } else { 0.0 };
+        for (_, m) in materials.iter_mut() {
+            m.extension.u.extra.z = z;
+        }
+    }
+
     pub fn texture(&mut self, k: Kind, images: &mut Assets<Image>) -> Handle<Image> {
+        let pending = &mut self.pending;
         self.textures
             .entry(k)
-            .or_insert_with(|| images.add(detail_image(k)))
+            .or_insert_with(|| {
+                let image = match pending.remove(&k) {
+                    Some(task) => block_on(task),
+                    None => detail_image(k),
+                };
+                images.add(image)
+            })
             .clone()
     }
 
@@ -581,7 +625,7 @@ impl Surfaces {
         let mut base = base;
         let d = kind.map(def);
         let mut u = SurfaceUniform {
-            extra: Vec4::new(-1.0, 0.0, 0.0, 0.0),
+            extra: Vec4::new(-1.0, 0.0, if self.plain { 1.0 } else { 0.0 }, 0.0),
             ..default()
         };
         let detail = match kind {
@@ -645,12 +689,35 @@ impl Surfaces {
     }
 }
 
+fn make_textures(mut surfaces: ResMut<Surfaces>) {
+    let pool = AsyncComputeTaskPool::get();
+    for k in Kind::ALL {
+        surfaces.pending.insert(k, pool.spawn(async move { detail_image(k) }));
+    }
+}
+
+fn take_textures(mut surfaces: ResMut<Surfaces>, mut images: ResMut<Assets<Image>>) {
+    if surfaces.pending.is_empty() {
+        return;
+    }
+    let ready: Vec<Kind> = surfaces
+        .pending
+        .iter_mut()
+        .filter_map(|(k, task)| task.is_finished().then_some(*k))
+        .collect();
+    for k in ready {
+        surfaces.texture(k, &mut images);
+    }
+}
+
 pub struct SurfacePlugin;
 
 impl Plugin for SurfacePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<SurfaceMaterial>::default());
         app.init_resource::<Surfaces>();
+        app.add_systems(Startup, make_textures);
+        app.add_systems(Update, take_textures);
     }
 }
 

@@ -108,7 +108,42 @@ fn drop_stale_background_motion(
     }
 }
 
+/// Skylake…Comet Lake and the Atom ones of that generation (PCI device ids).
+fn gen9(id: u16) -> bool {
+    matches!(id >> 8, 0x19 | 0x59 | 0x3e | 0x9b | 0x87) || matches!(id, 0x0a84 | 0x5a84 | 0x5a85 | 0x3184 | 0x3185)
+}
+
+fn intel_gen9_present() -> bool {
+    let Ok(cards) = std::fs::read_dir("/sys/class/drm") else {
+        return false;
+    };
+    let hex = |p: std::path::PathBuf| {
+        let s = std::fs::read_to_string(p).ok()?;
+        u16::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok()
+    };
+    cards.flatten().any(|card| {
+        let dev = card.path().join("device");
+        hex(dev.join("vendor")) == Some(0x8086) && hex(dev.join("device")).is_some_and(gen9)
+    })
+}
+
+/// Against Mesa 26.2's Gen9 GPU hangs: runs the client again with `INTEL_DEBUG=reemit` (free), its exit code.
+pub fn intel_gen9_relaunch() -> Option<u8> {
+    if !cfg!(target_os = "linux") || std::env::var_os("INTEL_DEBUG").is_some() || !intel_gen9_present() {
+        return None;
+    }
+    let status = std::process::Command::new(std::env::current_exe().ok()?)
+        .args(std::env::args_os().skip(1))
+        .env("INTEL_DEBUG", "reemit")
+        .status()
+        .ok()?;
+    Some(status.code().map_or(1, |c| c.clamp(0, 255) as u8))
+}
+
 fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
+    if let Ok(v) = std::env::var("INTEL_DEBUG") {
+        info!("graphics: INTEL_DEBUG={v}");
+    }
     let (tier, adapter) = match info {
         Some(i) => {
             let i = &i.0;
@@ -203,6 +238,8 @@ fn apply(
     mut sun: Query<(Entity, &mut DirectionalLight), With<Sun>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     map: Option<Res<crate::game::Map>>,
+    mut surfaces: ResMut<super::surface::Surfaces>,
+    mut surface_mats: ResMut<Assets<super::surface::SurfaceMaterial>>,
     mut done: Local<Option<(Preset, Graphics)>>,
 ) {
     let Some(mut q) = q else { return };
@@ -226,6 +263,7 @@ fn apply(
         return;
     }
     *done = Some(now);
+    surfaces.set_plain(preset == Preset::Low, &mut surface_mats);
     let Ok(cam) = camera.single() else { return };
     let mut e = commands.entity(cam);
     e.remove::<(TemporalAntiAliasing, Smaa, Fxaa, ScreenSpaceAmbientOcclusion, Vignette)>();
@@ -262,7 +300,8 @@ fn apply(
             ..default()
         });
     }
-    if g.grade {
+    // (Half a millisecond of an integrated GPU for darker corners.)
+    if g.grade && preset != Preset::Low {
         e.insert(Vignette {
             intensity: 0.22,
             radius: 0.9,
@@ -321,4 +360,21 @@ pub fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>, 
     }
     slept.0 = nap.as_secs_f32();
     *last = Some(std::time::Instant::now());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gen9;
+
+    #[test]
+    fn gen9_ids() {
+        // UHD 620 (Kaby Lake R), UHD 630 (Coffee Lake), UHD (Comet Lake U), HD 520 (Skylake), Apollo Lake.
+        for id in [0x5917, 0x3e92, 0x9b41, 0x1916, 0x5a85] {
+            assert!(gen9(id), "{id:04x}");
+        }
+        // Ice Lake, Tiger Lake, Alder Lake, Broadwell.
+        for id in [0x8a52, 0x9a49, 0x46a6, 0x1616] {
+            assert!(!gen9(id), "{id:04x}");
+        }
+    }
 }

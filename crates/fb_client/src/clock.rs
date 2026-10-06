@@ -108,7 +108,8 @@ fn steer(
     lead.held = Some(held);
     let ws = conn.is_some_and(|c| c.transport == Transport::Ws);
     // Lightyear adds its estimate (offset + RTT/2) itself.
-    let margin = opts.input_margin + if ws { WS_MARGIN } else { 0.0 } + held - offset - half;
+    // (Held through a stall while the offset jumps, it could go below zero: Lightyear panics on that.)
+    let margin = (opts.input_margin + if ws { WS_MARGIN } else { 0.0 } + held - offset - half).max(0.0);
     if (margin - lead.margin).abs() >= STEP {
         lead.margin = margin;
         insert(&mut commands, &opts, margin);

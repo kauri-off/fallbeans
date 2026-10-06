@@ -73,6 +73,16 @@ impl Passes {
     }
 }
 
+/// A stretch of a recording in one scene (the menu, the lobby, a round of a map, the podium).
+struct Segment {
+    scene: String,
+    started: f32,
+    frames: Vec<Frame>,
+    cpu: CpuAcc,
+    passes: Passes,
+    counts: Option<super::scene::Scene>,
+}
+
 struct Step {
     name: &'static str,
     graphics: Graphics,
@@ -89,6 +99,7 @@ pub struct Capture {
     cpu: CpuAcc,
     passes: Passes,
     spikes: Vec<Spike>,
+    segments: Vec<Segment>,
     steps: Vec<Step>,
     step: usize,
     step_started: f32,
@@ -109,6 +120,7 @@ impl Capture {
             cpu: CpuAcc::default(),
             passes: Passes::default(),
             spikes: Vec::new(),
+            segments: Vec::new(),
             steps: Vec::new(),
             step: 0,
             step_started: now,
@@ -267,13 +279,18 @@ fn auto_start(
         return;
     }
     let now = real.elapsed_secs();
-    if !map.is_some_and(|m| m.round.kind == ArenaKind::Round) {
-        *round_since = None;
+    if recording.0.is_some() {
         return;
     }
-    let since = *round_since.get_or_insert(now);
-    if now - since < opts.perf_warmup || recording.0.is_some() {
-        return;
+    if !opts.perf_from_start {
+        if !map.is_some_and(|m| m.round.kind == ArenaKind::Round) {
+            *round_since = None;
+            return;
+        }
+        let since = *round_since.get_or_insert(now);
+        if now - since < opts.perf_warmup {
+            return;
+        }
     }
     *done = true;
     let what = if opts.perf_sweep { What::Sweep } else { What::Benchmark };
@@ -288,11 +305,24 @@ fn auto_start(
     recording.0 = Some(c);
 }
 
+/// `menu`, `lobby`, `podium`, or the map of a round.
+fn scene_name(map: Option<&Map>) -> String {
+    match map {
+        None => "menu".into(),
+        Some(m) => match m.round.kind {
+            ArenaKind::Lobby => "lobby".into(),
+            ArenaKind::Podium => "podium".into(),
+            ArenaKind::Round => m.round.map.clone(),
+        },
+    }
+}
+
 fn record(world: &mut World) {
     let now = world.resource::<Time<Real>>().elapsed_secs();
     let Some(mut c) = world.resource_mut::<Recording>().0.take() else {
         return;
     };
+    let scene = scene_name(world.get_resource::<Map>());
     let passes = gpu::passes(world.resource::<DiagnosticsStore>(), Instant::now());
     {
         let perf = world.resource::<Perf>();
@@ -313,6 +343,24 @@ fn record(world: &mut World) {
                 step.passes.add(passes);
             }
         } else {
+            if c.segments.last().is_none_or(|s| s.scene != scene) {
+                c.segments.push(Segment {
+                    scene,
+                    started: frame.t,
+                    frames: Vec::new(),
+                    cpu: CpuAcc::default(),
+                    passes: Passes::default(),
+                    counts: None,
+                });
+            }
+            if let Some(seg) = c.segments.last_mut() {
+                seg.frames.push(frame);
+                seg.passes.add(passes.clone());
+                seg.cpu.add(&perf.taken);
+                if perf.scene.is_some() {
+                    seg.counts.clone_from(&perf.scene);
+                }
+            }
             c.frames.push(frame);
             c.passes.add(passes);
             c.cpu.add(&perf.taken);
@@ -455,6 +503,21 @@ fn document(world: &mut World, c: &Capture) -> Value {
         doc["passes"] = json!(c.passes.averages());
         doc["cpu"] = json!(c.cpu.rows().into_iter().take(60).collect::<Vec<_>>());
         doc["frames"] = columns(&c.frames);
+        let vsync = g.vsync && c.what == What::Manual;
+        doc["segments"] = c
+            .segments
+            .iter()
+            .map(|s| {
+                json!({
+                    "scene": s.scene,
+                    "t": s.started,
+                    "summary": Summary::of(&s.frames, vsync),
+                    "passes": s.passes.averages(),
+                    "cpu": s.cpu.rows().into_iter().take(40).collect::<Vec<_>>(),
+                    "counts": s.counts,
+                })
+            })
+            .collect();
     }
     doc
 }
