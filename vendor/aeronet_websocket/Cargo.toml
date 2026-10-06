@@ -22,25 +22,15 @@ autotests = false
 autobenches = false
 description = "WebSocket IO layer implementation for `aeronet`"
 readme = "README.md"
-keywords = [
-    "bevy",
-    "gamedev",
-    "network",
-]
-categories = [
-    "game-development",
-    "network-programming",
-]
+keywords = ["bevy", "gamedev", "network"]
+categories = ["game-development", "network-programming"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/aecsocket/aeronet"
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg=docsrs_aeronet"]
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "wasm32-unknown-unknown",
-]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [features]
 client = []
@@ -96,12 +86,7 @@ version = "1.0.0"
 
 [dependencies.derive_more]
 version = "2.0.1"
-features = [
-    "deref",
-    "deref_mut",
-    "display",
-    "error",
-]
+features = ["deref", "deref_mut", "display", "error"]
 default-features = false
 
 [dependencies.document-features]
@@ -157,13 +142,7 @@ version = "0.4.51"
 
 [target.'cfg(target_family = "wasm")'.dependencies.web-sys]
 version = "0.3.70"
-features = [
-    "BinaryType",
-    "CloseEvent",
-    "ErrorEvent",
-    "MessageEvent",
-    "WebSocket",
-]
+features = ["BinaryType", "CloseEvent", "ErrorEvent", "MessageEvent", "WebSocket"]
 
 # fallbeans: upstream code kept as is; its warnings (futures deprecations, pedantic clippy) are not ours.
 [lints.rust]

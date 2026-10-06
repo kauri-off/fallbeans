@@ -16,11 +16,7 @@ accepted = [
   "MPL-2.0",
 ]
 # What the packages are built for (a crate only another platform's `cfg` pulls in is left out).
-targets = [
-  "x86_64-pc-windows-msvc",
-  "x86_64-unknown-linux-gnu",
-  "x86_64-unknown-linux-musl",
-]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Not in the binaries: tests' crates. Build scripts and proc macros are counted (their code may end up inside).
 ignore-dev-dependencies = true
 ignore-build-dependencies = false

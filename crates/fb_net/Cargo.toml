@@ -13,7 +13,16 @@ fb_sim.workspace = true
 bevy = { workspace = true, features = ["std", "bevy_log"] }
 bevy_replicon = { workspace = true, features = ["server"] }
 clap.workspace = true
-lightyear = { workspace = true, features = ["std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+lightyear = { workspace = true, features = [
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "udp",
+  "websocket",
+] }
 serde.workspace = true
 
 [lints]
