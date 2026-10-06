@@ -410,10 +410,12 @@ pub fn dress_beans(
             commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
         }
         if let Some(t) = outfit.shoes {
+            // (From the model's own shoe: its baked AO stays.)
+            let shoe_template = materials.get(&parts.shoe_mat).cloned().unwrap_or_default();
             let shoe = paints.get(format!("shoe {}", t.hex()), &mut materials, || StandardMaterial {
                 base_color: hex(t.hex()),
                 perceptual_roughness: 0.5,
-                ..default()
+                ..shoe_template
             });
             for e in &parts.shoes {
                 commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));

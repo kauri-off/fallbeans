@@ -49,7 +49,7 @@ const SAMPLES: usize = 240;
 const MAIN_LOOP_PATIENCE: Duration = Duration::from_secs(2);
 /// Session requests a minute per address (IPv6: per /64; this machine is exempt). A client asks once per
 /// connection attempt, every 2 s at most while it retries; a script must not mint identities without end.
-const SESSIONS_PER_MINUTE: usize = 60;
+const SESSIONS_PER_MINUTE: usize = 128;
 /// Largest request body (the session request is a few hundred bytes).
 const BODY_MAX: usize = 16 * 1024;
 /// Open HTTP connections at most: beyond it the listener waits (each is a task and a file descriptor).
@@ -62,7 +62,7 @@ const IDLE: Duration = Duration::from_secs(20);
 const REQUEST: Duration = Duration::from_secs(10);
 /// Open connections from one address (`auth::address_key`: IPv6 per /64, this machine exempt): one host
 /// must not take the MAX_CONNECTIONS everybody shares.
-const CONNECTIONS_PER_ADDRESS: usize = 16;
+const CONNECTIONS_PER_ADDRESS: usize = 32;
 /// Names looked up for connect tokens behind a proxy are kept this long, and so many at most.
 const RESOLVED_FOR: Duration = Duration::from_secs(60);
 const RESOLVED_MAX: usize = 64;

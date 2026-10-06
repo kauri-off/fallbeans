@@ -114,7 +114,7 @@ pub fn stress(a: &StressArgs) -> bool {
             .arg(a.shared.bin("fb_server"));
             c
         }
-        None => Command::new(a.shared.bin("fb_server")),
+        None => a.shared.command("fb_server"),
     };
     server_cmd
         .args(server_flags(&dir.join("server.trace").to_string_lossy()))
@@ -145,7 +145,7 @@ pub fn stress(a: &StressArgs) -> bool {
                 c.args(["-c", &p.clients]).arg(a.shared.bin("fb_client"));
                 c
             }
-            None => Command::new(a.shared.bin("fb_client")),
+            None => a.shared.command("fb_client"),
         };
         c.args([
             "--headless",
@@ -506,8 +506,9 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     let max = worst(&|l| num_after(l, "max "));
     let per_player = worst(&|l| num_before(l, " per player"));
     let mem = worst(&|l| num_after(l, "mem "));
-    // The first line also holds the start and the joins (the clients' clocks not synced yet).
-    let settled = metrics.iter().skip(1);
+    // The first line also holds the start and the joins (the clients' clocks not synced yet); the last one the
+    // clients that already quit at `--exit-after` (still players to the server, whose inputs stopped).
+    let settled = metrics.iter().skip(1).take(metrics.len().saturating_sub(2));
     let cpu = settled
         .clone()
         .filter_map(|l| num_after(l, "cpu "))

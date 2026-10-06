@@ -260,15 +260,18 @@ fn env_light(look: &ResolvedLook, images: &mut Assets<Image>) -> EnvironmentMapL
         let c = linear(hex);
         [c.red, c.green, c.blue]
     };
-    let cube = images.add(env::cube(
-        c(l.hemi.sky),
-        c(l.hemi.ground),
-        l.hemi.intensity as f32,
-        l.env as f32,
-    ));
+    let mut cube = |map| {
+        images.add(env::cube(
+            c(l.hemi.sky),
+            c(l.hemi.ground),
+            l.hemi.intensity as f32,
+            l.env as f32,
+            map,
+        ))
+    };
     EnvironmentMapLight {
-        diffuse_map: cube.clone(),
-        specular_map: cube,
+        diffuse_map: cube(env::Map::Diffuse),
+        specular_map: cube(env::Map::Specular),
         intensity: LUX,
         ..default()
     }

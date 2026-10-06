@@ -96,6 +96,7 @@ pub fn board(text: &str, bg: Color) -> Image {
     );
     // (Mips: the frame and the emoji shimmer at a distance without them.)
     super::surface::add_mips(&mut image);
+    super::surface::filtered(&mut image, 8);
     image
 }
 

@@ -41,7 +41,7 @@ const HANDSHAKE_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(
 /// from one address (IPv6: its /64). This machine is exempt from the second: a reverse proxy's connections
 /// all come from it.
 const MAX_CONNECTIONS: usize = 512;
-const MAX_PER_ADDRESS: usize = 16;
+const MAX_PER_ADDRESS: usize = 32;
 
 pub async fn start(
     config: ServerConfig,

@@ -13,6 +13,7 @@ use bevy::core_pipeline::prepass::background_motion_vectors::{
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
+use bevy::post_process::bloom::Bloom;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::camera::{MipBias, TemporalJitter};
@@ -203,10 +204,15 @@ fn watch_frames(
     slept: Res<Slept>,
     windows: Query<&Window, With<PrimaryWindow>>,
     perf: Option<Res<crate::perf::Perf>>,
+    compiling: Option<Res<super::warmup::Compiling>>,
 ) {
     let Some(q) = q.as_mut() else { return };
-    // (A sweep switches features off and on: its frames say nothing about the preset.)
-    if windows.single().is_ok_and(|w| !w.focused) || perf.is_some_and(|p| p.busy) {
+    // (A sweep switches features off and on: its frames say nothing about the preset; nor do the frames while
+    // shaders compile, at the start and on a map's first sight of a material.)
+    if windows.single().is_ok_and(|w| !w.focused)
+        || perf.is_some_and(|p| p.busy)
+        || compiling.is_some_and(|c| c.now() > 0)
+    {
         *slow = 0.0;
         return;
     }
@@ -268,9 +274,22 @@ fn apply(
     }
     *done = Some((preset, g.clone()));
     surfaces.set_plain(preset == Preset::Low, &mut surface_mats);
+    // (Low draws no detail texture; an integrated GPU's bandwidth is spared on Medium.)
+    surfaces.anisotropy = match preset {
+        Preset::Low => 1,
+        Preset::Medium => 4,
+        Preset::High => 16,
+    };
     let Ok(cam) = camera.single() else { return };
     let mut e = commands.entity(cam);
-    e.remove::<(TemporalAntiAliasing, Smaa, Fxaa, ScreenSpaceAmbientOcclusion, Vignette)>();
+    e.remove::<(
+        TemporalAntiAliasing,
+        Smaa,
+        Fxaa,
+        ScreenSpaceAmbientOcclusion,
+        Vignette,
+        Bloom,
+    )>();
     // (And what TAA and SSAO brought along: left behind, the prepasses would keep running and TAA's
     // texture LOD bias of −1 would make every texture shimmer. Inserting them again brings them back.)
     e.remove::<(
@@ -319,19 +338,32 @@ fn apply(
             ..default()
         });
     }
+    // The slightest glow around what is bright (the sun on white, the bell, portals): energy-conserving, so the
+    // picture keeps its brightness; a few tenths of a millisecond on an integrated GPU, none on Low.
+    if g.grade && preset != Preset::Low {
+        e.insert(Bloom {
+            intensity: if preset == Preset::High { 0.06 } else { 0.04 },
+            low_frequency_boost: 0.5,
+            ..Bloom::NATURAL
+        });
+    }
     // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M.)
     if preset == Preset::Low {
         e.insert(DepthPrepass);
     }
-    // (Below High one hardware-filtered tap per shadow lookup instead of the Gaussian's nine.)
-    e.insert(if preset == Preset::High {
-        ShadowFilteringMethod::Gaussian
-    } else {
-        ShadowFilteringMethod::Hardware2x2
+    // (High with TAA: the temporal filter, sharp edges that TAA smooths over frames; High otherwise the
+    // Gaussian; below High one hardware-filtered tap per shadow lookup instead of the Gaussian's nine.)
+    let taa = g.aa && preset == Preset::High && !upscaling;
+    e.insert(match preset {
+        Preset::High if taa => ShadowFilteringMethod::Temporal,
+        Preset::High => ShadowFilteringMethod::Gaussian,
+        _ => ShadowFilteringMethod::Hardware2x2,
     });
+    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over three cascades,
+    // Medium 2048 over one; the cascades overlap by a third, so their seams blend instead of showing.)
     let (size, cascades, reach) = match preset {
-        Preset::High => (2048, 2, 70.0),
-        Preset::Medium => (1024, 1, 40.0),
+        Preset::High => (4096, 3, 80.0),
+        Preset::Medium => (2048, 1, 40.0),
         Preset::Low => (1024, 1, 30.0),
     };
     commands.insert_resource(DirectionalLightShadowMap { size });
@@ -341,7 +373,8 @@ fn apply(
             CascadeShadowConfigBuilder {
                 num_cascades: cascades,
                 maximum_distance: reach,
-                first_cascade_far_bound: if cascades > 1 { 18.0 } else { reach },
+                first_cascade_far_bound: if cascades > 1 { 14.0 } else { reach },
+                overlap_proportion: 0.33,
                 ..default()
             }
             .build(),

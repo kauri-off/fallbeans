@@ -259,11 +259,17 @@ fn animate(
         }
     }
     for (m, name, mut tf) in &mut parts {
-        let Ok((p, _)) = props.get(m.prop) else { continue };
+        let Ok((p, prop_tf)) = props.get(m.prop) else { continue };
         let ph = p.phase;
         match name.as_str() {
             "Pennant" => {
-                let a = (t * 2.2 + ph).sin() * 0.22 + (t * 5.1 + ph * 2.0).sin() * 0.05;
+                // One wind over the map: gusts travel across it, so neighbouring flags swing together a moment
+                // apart (each on a phase of its own looked like flags in different weathers); a flag's own
+                // phase only adds its flutter.
+                let gust = prop_tf.translation.x * 0.3 + prop_tf.translation.z * 0.18;
+                let a = (t * 2.2 - gust).sin() * 0.2
+                    + (t * 0.7 - gust * 0.4).sin() * 0.08
+                    + (t * 6.3 - gust * 2.0 + ph).sin() * 0.045;
                 tf.rotation = m.rest.rotation * Quat::from_rotation_y(a);
             }
             "FanBlades" => {

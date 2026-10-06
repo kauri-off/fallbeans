@@ -28,7 +28,14 @@ struct Warm;
 
 /// Pipelines the render world's cache still waits for (written there each frame, read here).
 #[derive(Resource, Clone, Default)]
-struct Compiling(Arc<AtomicUsize>);
+pub struct Compiling(Arc<AtomicUsize>);
+
+impl Compiling {
+    /// Pipelines compiling as of the render world's last frame.
+    pub fn now(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 
 pub struct WarmupPlugin;
 

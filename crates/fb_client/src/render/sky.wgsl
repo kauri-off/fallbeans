@@ -19,8 +19,12 @@ struct Sky {
 const TAU: f32 = 6.2831853;
 // Bevy's `globals.time` wraps at this: whatever moves repeats a whole number of times over it.
 const HOUR: f32 = 3600.0;
-// The cloud noise repeats over this many cells (x, y); the wind crosses exactly one period an hour.
-const CLOUD_PERIOD = vec2<i32>(36, 18);
+// The cloud noise repeats over this many cells (x, y); the wind crosses exactly one period an hour. Square: the
+// octaves are turned by an integer matrix (`OCTAVE`), which maps whole periods to whole periods only so.
+const CLOUD_PERIOD = vec2<i32>(36, 36);
+// Each octave turned by 26.6° and scaled by √5 against the one before: axis-aligned octaves stack their cells
+// into rectangles, which the clouds' sharp edge showed as square clouds.
+const OCTAVE = mat2x2<f32>(2.0, -1.0, 1.0, 2.0);
 
 // PCG (Jarzynski and Olano, "Hash Functions for GPU Rendering"): exact at any cell, unlike sin().
 fn pcg3(p: vec3<u32>) -> vec3<u32> {
@@ -49,7 +53,8 @@ fn h2(c: vec2<i32>) -> f32 {
 fn n2(p: vec2<f32>) -> f32 {
     let i = vec2<i32>(floor(p));
     let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
+    // (Quintic: the cubic's kink at the cell edges shows as creases along the grid.)
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     return mix(
         mix(h2(i), h2(i + vec2(1, 0)), u.x),
         mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), u.x),
@@ -57,14 +62,14 @@ fn n2(p: vec2<f32>) -> f32 {
     );
 }
 
-// (Octaves at exactly twice the scale: a shift by whole periods stays whole periods in every one.)
+// (Octaves through an integer matrix: a shift by whole periods stays whole periods in every one.)
 fn fbm(p0: vec2<f32>) -> f32 {
     var p = p0;
     var s = 0.0;
     var a = 0.5;
     for (var i = 0; i < 5; i++) {
         s += a * n2(p);
-        p = p * 2.0 + vec2(1.7, 9.2);
+        p = OCTAVE * p + vec2(1.7, 9.2);
         a *= 0.5;
     }
     return s;
@@ -95,7 +100,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if d.y > 0.0 && sky.params.y > 0.5 {
         let uv = d.xz / (d.y + 0.18) * 1.3;
-        // One noise period an hour: (36, 18) cells in 3600 s.
+        // One noise period an hour: (36, 36) cells in 3600 s; the second layer three periods.
         let wind = vec2<f32>(CLOUD_PERIOD) * fract(time / HOUR);
         var c = fbm(uv + wind) + 0.25 * fbm(uv * 3.1 - wind * 3.0);
         c = smoothstep(0.62, 0.95, c);

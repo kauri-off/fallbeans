@@ -121,6 +121,9 @@ winresource = "0.1"
 
 [features]
 default = ["brp", "profiler"]
+# Bevy as a shared library: a change relinks the client in seconds instead of a minute. Local builds only
+# (`cargo xtask dev` turns it on); never in packages: the exe would need Bevy's and Rust's DLLs beside it.
+dynamic = ["bevy/dynamic_linking"]
 # The Bevy Remote Protocol probe (`--brp`): off in distributed builds.
 brp = ["bevy/bevy_remote"]
 # Bevy's spans of systems, schedules, the app and the render world: the built-in profiler of the F4 overlay

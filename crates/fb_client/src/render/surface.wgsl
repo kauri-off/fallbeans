@@ -82,7 +82,9 @@ fn fragment(
 
     var color = pbr_input.material.base_color;
     let kind = i32(round(surface.extra.x));
-    let sampled = surface.extra.z < 0.5;
+    // (A kind with no normal, roughness, cavity or frost would sample the flat texture for nothing.)
+    let sampled = surface.extra.z < 0.5
+        && any(vec4(surface.detail.y, surface.detail.z, surface.detail.w, surface.extra.y) != vec4(0.0));
     // (Without the detail texture: what the flat texture holds, no change.)
     var height = 1.0;
     var rough = 0.5;

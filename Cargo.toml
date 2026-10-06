@@ -56,6 +56,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 
 [profile.dev]
 opt-level = 1
+# Backtraces keep their lines; locals in a debugger go. Much smaller debug info, much faster links.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

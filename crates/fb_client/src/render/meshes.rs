@@ -142,9 +142,11 @@ impl LodBand {
 /// `k` for the field of view and the preset (further detail on better presets).
 pub fn lod_k(fov_deg: f32, preset: Option<super::quality::Preset>) -> f32 {
     use super::quality::Preset;
+    // (High: the levels switch far enough out that the jump between them is a few pixels.)
     let bias = match preset {
-        Some(Preset::High) | None => 1.0,
-        Some(Preset::Medium) => 0.75,
+        Some(Preset::High) => 1.6,
+        None => 1.0,
+        Some(Preset::Medium) => 0.9,
         Some(Preset::Low) => 0.6,
     };
     1.0 / ((fov_deg.to_radians() / 2.0).tan() * bias)

@@ -46,22 +46,42 @@ fn dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
     [d[0] / l, d[1] / l, d[2] / l]
 }
 
-/// The look's ambient light as a cube map (with mip levels, for rough reflections): radiance in units
-/// of the sun's colour scale. `sky`/`ground` are linear colours of the hemisphere light, `env` the
-/// strength of the even fill.
-pub fn cube(sky: [f32; 3], ground: [f32; 3], intensity: f32, env: f32) -> Image {
+/// Which of the two maps of the ambient light.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Map {
+    /// What a surface's normal receives (Bevy samples it at the normal, level 0, as it is: no convolution
+    /// of its own): the hemisphere light's irradiance, sky to ground over n.y with half their difference as
+    /// the slope, as three.js's `HemisphereLight` gives it.
+    Diffuse,
+    /// What a reflection sees (with mip levels, read by roughness): the radiance whose cosine-weighted
+    /// average is that irradiance. Over a hemisphere a gradient flattens to 2/3 of its slope, so 1.5× steeper.
+    Specular,
+}
+
+/// The look's ambient light as a cube map: in units of the sun's colour scale. `sky`/`ground` are linear
+/// colours of the hemisphere light, `env` the strength of the even fill.
+pub fn cube(sky: [f32; 3], ground: [f32; 3], intensity: f32, env: f32, map: Map) -> Image {
     let k = intensity / core::f32::consts::PI;
     let sky = sky.map(|c| c * k);
     let ground = ground.map(|c| c * k);
     let fill = env * 0.5;
-    let at = |d: [f32; 3]| -> [f32; 3] {
-        // Cosine-weighted over a hemisphere a gradient flattens to 2/3 of its slope: 1.5× steeper.
-        core::array::from_fn(|i| ((sky[i] + ground[i]) * 0.5 + (sky[i] - ground[i]) * 0.75 * d[1]).max(0.0) + fill)
+    let slope = match map {
+        Map::Diffuse => 0.5,
+        Map::Specular => 0.75,
     };
-    let levels = SIZE.trailing_zeros() + 1;
+    let at = |d: [f32; 3]| -> [f32; 3] {
+        core::array::from_fn(|i| ((sky[i] + ground[i]) * 0.5 + (sky[i] - ground[i]) * slope * d[1]).max(0.0) + fill)
+    };
+    // (The diffuse map is read at level 0 only, and a smooth gradient needs few texels.)
+    let size0 = if map == Map::Diffuse { 8 } else { SIZE };
+    let levels = if map == Map::Diffuse {
+        1
+    } else {
+        size0.trailing_zeros() + 1
+    };
     let mut data = Vec::new();
     for face in 0..6 {
-        let mut size = SIZE;
+        let mut size = size0;
         for _ in 0..levels {
             for y in 0..size {
                 for x in 0..size {
@@ -76,12 +96,12 @@ pub fn cube(sky: [f32; 3], ground: [f32; 3], intensity: f32, env: f32) -> Image 
     }
     let mut image = Image::new(
         Extent3d {
-            width: SIZE,
-            height: SIZE,
+            width: size0,
+            height: size0,
             depth_or_array_layers: 6,
         },
         TextureDimension::D2,
-        vec![0; (SIZE * SIZE * 6 * 8) as usize],
+        vec![0; (size0 * size0 * 6 * 8) as usize],
         TextureFormat::Rgba16Float,
         RenderAssetUsages::RENDER_WORLD,
     );

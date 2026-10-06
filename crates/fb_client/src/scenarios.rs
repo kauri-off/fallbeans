@@ -996,3 +996,44 @@ rounds! {
     round_frost_sky: "frost-sky",
     round_star_fall: "star-fall",
 }
+
+/// A tester's run on a real server: through a round's intro the own bean stood where it was in the lobby, and
+/// the server's spawn point came only as a respawn of 4–20 m some ticks after the start. Here, in the intro,
+/// the predicted bean must already be where the server has it.
+#[test]
+fn the_own_bean_is_at_its_spawn_in_the_intro() {
+    use bevy::prelude::*;
+    use fb_net::{BodyFull, PlayerId};
+    use lightyear::prelude::Predicted;
+
+    // (A real network's delay: on the bench's loopback the server's spawn came back before anything moved.)
+    let mut g = Game::new(&["--room", "dev", "--lag", "40", "--jitter", "5"]);
+    in_lobby(&mut g);
+    // Somewhere in the lobby that is no round's spawn.
+    g.frames(30);
+    g.dev(DevCmd::Start {
+        games: vec!["door-dash".into()],
+        rounds: None,
+        bots: Some(3),
+    });
+    g.until_arena(20.0, "the round", |a| {
+        a.kind == ArenaKind::Round && a.game == "door-dash"
+    });
+    g.frames(90);
+    let me = g.res::<Session>().me.expect("in a room");
+    let mine = |w: &mut World| {
+        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos)
+    };
+    let client = mine(g.client().world_mut()).expect("the own bean is predicted");
+    let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+    let server: Vec<_> = q
+        .iter(g.server.world())
+        .filter(|(p, _)| p.0 == me)
+        .map(|(_, f)| f.body.pos)
+        .collect();
+    assert!(
+        server.iter().any(|s| (*s - client).length() < 0.5),
+        "the client has its bean at {client:?}, the server at {server:?}"
+    );
+}

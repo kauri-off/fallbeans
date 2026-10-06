@@ -50,6 +50,7 @@ fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: &[f32], alpha: f32) -> Image 
     );
     // (Mips: thin white strokes shimmer at a distance without them.)
     super::surface::add_mips(&mut image);
+    super::surface::filtered(&mut image, 8);
     image
 }
 

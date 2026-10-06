@@ -18,6 +18,9 @@ env:
   CARGO_ABOUT: 0.9.2
   CARGO_DEB: 3.8.0
   CARGO_GENERATE_RPM: 0.21.0
+  # DirectX's shader compiler shipped in the Windows package (DX12 compiles with it instead of FXC).
+  DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
+  DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
 
 jobs:
   version:
@@ -85,6 +88,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: choco install nsis --no-progress -y
       - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - name: dxc
+        shell: bash
+        run: |
+          curl -fsSL -o dxc.zip "$DXC_URL"
+          echo "$DXC_SHA256  dxc.zip" | sha256sum -c -
+          unzip -q dxc.zip -d dxc
+          echo "FB_DXC_DIR=$PWD/dxc" >> "$GITHUB_ENV"
       - run: cargo xtask dist nsis
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

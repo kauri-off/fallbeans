@@ -433,6 +433,58 @@ pub fn detail_image(k: Kind) -> Image {
     image
 }
 
+/// Trilinear sampling with anisotropic filtering (`anisotropy`× at most; wgpu wants every filter linear for
+/// it): pictures made on the CPU that are seen at an angle (portals, emoji boards, mouths).
+pub fn filtered(image: &mut Image, anisotropy: u16) {
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: anisotropy,
+        ..default()
+    });
+}
+
+/// The models' textures (their baked AO) come from the glTF without mips: Bevy makes none for PNG or JPEG,
+/// and crevices and seams sparkle at a distance. The chain is made here once each is loaded; `AO_MARGIN`
+/// (`blender/export.py`) pads the UV islands by 4 px, so the mips are used down to the 8th of the size only
+/// (`lod_max_clamp`), past which the islands would bleed into each other.
+fn mip_model_textures(
+    mut events: MessageReader<AssetEvent<Image>>,
+    server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    for e in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id }) = e else {
+            continue;
+        };
+        let from_model = server
+            .get_path(*id)
+            .is_some_and(|p| p.path().extension().is_some_and(|x| x == "glb"));
+        if !from_model {
+            continue;
+        }
+        let Some(mut image) = images.get_mut(*id) else { continue };
+        let format = image.texture_descriptor.format;
+        if image.texture_descriptor.mip_level_count != 1
+            || !matches!(format, TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb)
+        {
+            continue;
+        }
+        add_mips(&mut image);
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            mag_filter: ImageFilterMode::Linear,
+            min_filter: ImageFilterMode::Linear,
+            mipmap_filter: ImageFilterMode::Linear,
+            lod_max_clamp: 3.0,
+            anisotropy_clamp: 4,
+            ..default()
+        });
+    }
+}
+
 /// Appends the mip chain to a square, power-of-two RGBA8 image made on the CPU and sets its level count:
 /// 2×2 averages. sRGB images are averaged in linear light, weighted by alpha (no dark fringes where they turn
 /// transparent); the rest channel by channel, as plain data (the detail textures' normals and masks).
@@ -698,6 +750,8 @@ pub struct Surfaces {
     flat: Option<Handle<Image>>,
     /// No detail texture or its maths (the Low preset).
     plain: bool,
+    /// Anisotropic filtering of the detail textures finished from now on (the preset's; 0: not set yet).
+    pub anisotropy: u16,
 }
 
 fn flat_image() -> Image {
@@ -755,7 +809,12 @@ impl Surfaces {
     fn finish(&mut self, k: Kind, images: &mut Assets<Image>, materials: &mut Assets<SurfaceMaterial>) {
         let Some(task) = self.pending.remove(&k) else { return };
         // (Finished: no wait.)
-        let h = images.add(block_on(task));
+        let mut image = block_on(task);
+        if let ImageSampler::Descriptor(d) = &mut image.sampler {
+            // (Set when it is made: the image lives in the render world only, it cannot be changed later.)
+            d.anisotropy_clamp = if self.anisotropy == 0 { 8 } else { self.anisotropy };
+        }
+        let h = images.add(image);
         self.waiting.retain(|(wk, id)| {
             if *wk != k {
                 return true;
@@ -907,7 +966,7 @@ impl Plugin for SurfacePlugin {
         app.add_plugins(MaterialPlugin::<SurfaceMaterial>::default());
         app.init_resource::<Surfaces>();
         app.add_systems(Startup, make_textures);
-        app.add_systems(Update, (take_textures, prune_materials));
+        app.add_systems(Update, (take_textures, prune_materials, mip_model_textures));
     }
 }
 

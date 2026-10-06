@@ -2,6 +2,7 @@
 # `--locked`: a Cargo.lock behind Cargo.toml is an error (`cargo update --workspace`), never a silent update.
 xtask = "run -q --locked --package xtask --"
 
-# The C runtime linked into the exe: a clean Windows has no VCRUNTIME140.dll and the installer does not ship it.
+# LLVM's linker that comes with rustup: links the client several times faster than MSVC's link.exe. (The C
+# runtime is linked into the packaged exe only, `cargo xtask dist`: set here it would split the build cache.)
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+linker = "rust-lld.exe"

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::render::settings::{Backends, InstanceFlags, WgpuSettings};
+use bevy::render::settings::{Backends, Dx12Compiler, InstanceFlags, WgpuSettings};
 use bevy::tasks::block_on;
 
 use crate::opts::{Backend, Opts};
@@ -275,6 +275,20 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
     // its default reckons with every backend.)
     if !cfg!(debug_assertions) && p.backend != Backend::Dx12 {
         wgpu.instance_flags.remove(InstanceFlags::VALIDATION_INDIRECT_CALL);
+    }
+    // DX12 compiles shaders with DXC when the installer put it beside the exe: Bevy looks for it in the current
+    // folder only, and falls back to FXC, which takes seconds per pipeline (objects stay invisible until theirs
+    // is ready, and the stalls once read as a slow GPU). `WGPU_DX12_COMPILER` still chooses.
+    if p.backend == Backend::Dx12
+        && std::env::var_os("WGPU_DX12_COMPILER").is_none()
+        && let Some(dxc) = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("dxcompiler.dll")))
+            .filter(|d| d.is_file())
+    {
+        wgpu.dx12_shader_compiler = Dx12Compiler::DynamicDxc {
+            dxc_path: dxc.to_string_lossy().into_owned(),
+        };
     }
     wgpu
 }

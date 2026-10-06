@@ -110,11 +110,39 @@ fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
         .arg("packaging/about.hbs"))
 }
 
+/// DirectX's shader compiler for the Windows package (`backend.rs`: DX12 compiles with it instead of FXC), from
+/// an unpacked DXC release in `FB_DXC_DIR` (release.yml downloads it); without it the game falls back to FXC.
+fn dxc_into(dir: &Path) {
+    if !cfg!(windows) {
+        return;
+    }
+    let Some(src) = std::env::var_os("FB_DXC_DIR").map(PathBuf::from) else {
+        eprintln!("FB_DXC_DIR is not set: the package compiles DX12 shaders with FXC (slow)");
+        return;
+    };
+    for f in ["dxcompiler.dll", "dxil.dll"] {
+        copy(src.join("bin").join("x64").join(f), dir.join(f));
+    }
+    let licenses = dir.join("dxc-licenses");
+    fs::create_dir_all(&licenses).unwrap_or_else(|e| panic!("{}: {e}", licenses.display()));
+    for f in ["LICENCE-MIT.txt", "LICENSE-LLVM.txt", "LICENSE-MS.txt"] {
+        copy(src.join(f), licenses.join(f));
+    }
+}
+
 /// The release client, staged with its assets and licenses into `dir`.
 fn client_into(dir: &Path) -> bool {
     let mut c = stamped(cargo());
     c.args(["build", "--locked", "--profile", "dist", "-p", "fb_client"])
         .args(CLIENT_FEATURES);
+    // The C runtime inside the exe: a clean Windows has no VCRUNTIME140.dll and the installer does not ship it.
+    // (Here, not in .cargo/config.toml: there every local build would rebuild everything for it.)
+    if cfg!(windows) {
+        c.env(
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+            "-C target-feature=+crt-static",
+        );
+    }
     if !run(&mut c) || !third_party("fb_client", &CLIENT_FEATURES, &dir.join(THIRD_PARTY)) {
         return false;
     }
@@ -122,6 +150,7 @@ fn client_into(dir: &Path) -> bool {
     copy(Path::new("target/dist").join(&exe), dir.join(&exe));
     copy_dir(&root().join("assets"), &dir.join("assets"));
     copy("LICENSE", dir.join("LICENSE"));
+    dxc_into(dir);
     true
 }
 

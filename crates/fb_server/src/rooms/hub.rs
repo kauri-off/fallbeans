@@ -23,7 +23,7 @@ const ID_CHARS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 const ID_LENGTH: usize = 5;
 /// Per address (`auth::address_key`: IPv6 per /64, this machine exempt), so that one script cannot take
 /// the whole server: open connections, rooms opened, practice rooms.
-pub(super) const SESSIONS_PER_ADDRESS: usize = 16;
+pub(super) const SESSIONS_PER_ADDRESS: usize = 32;
 const ROOMS_PER_ADDRESS: usize = 3;
 const PRACTICE_PER_ADDRESS: usize = 1;
 /// Rooms open at once by default (`--max-rooms`). The target host is one core for 4 rooms of 8 players

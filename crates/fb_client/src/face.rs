@@ -181,6 +181,7 @@ impl Canvas {
         );
         // (Mips: the strokes shimmer on a bean across the map without them.)
         crate::render::surface::add_mips(&mut image);
+        crate::render::surface::filtered(&mut image, 8);
         image
     }
 }

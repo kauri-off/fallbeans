@@ -43,6 +43,10 @@ workspace = true
 # `cargo xtask dist deb|rpm`: a static (musl) server with its systemd unit, built with the `dist` profile
 # (`target/release/` is the tools' placeholder for the real profile directory), and the third-party licenses
 # that xtask generates first.
+[features]
+# Bevy as a shared library, for local builds only (`cargo xtask dev`; see fb_client).
+dynamic = ["bevy/dynamic_linking"]
+
 [package.metadata.deb]
 name = "fallbeans-server"
 maintainer = "kauri-off"

@@ -107,8 +107,21 @@ impl Shared {
         c.args(["build", "-p", "fb_server", "-p", "fb_client"]);
         if self.release {
             c.arg("--release");
+        } else {
+            // (Bevy as a DLL: relinks in seconds. `command` puts the DLLs on the PATH.)
+            c.args(["--features", "fb_client/dynamic,fb_server/dynamic"]);
         }
         run(&mut c)
+    }
+
+    /// The built `name` to run: a debug build finds Bevy's DLL (target/debug/deps) and Rust's own (the
+    /// toolchain's bin) on the PATH, as `cargo run` would give it.
+    pub fn command(&self, name: &str) -> Command {
+        let mut c = Command::new(self.bin(name));
+        if !self.release {
+            c.env("PATH", dll_path());
+        }
+        c
     }
 }
 
@@ -127,6 +140,25 @@ struct DevArgs {
     trace_clicks: bool,
     #[command(flatten)]
     shared: Shared,
+}
+
+/// The PATH with the debug build's deps and the toolchain's bin in front (Bevy's and Rust's DLLs).
+pub fn dll_path() -> std::ffi::OsString {
+    let sysroot = Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+        .current_dir(root())
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+    let mut dirs = vec![root().join("target").join("debug").join("deps")];
+    if let Some(s) = sysroot {
+        dirs.push(s.join("bin"));
+        dirs.push(s.join("lib"));
+    }
+    if let Some(p) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&p));
+    }
+    std::env::join_paths(dirs).unwrap_or_default()
 }
 
 pub fn root() -> PathBuf {
@@ -176,7 +208,9 @@ fn dev(a: &DevArgs) -> bool {
     if !a.shared.build() {
         return false;
     }
-    let Ok(mut server) = Command::new(a.shared.bin("fb_server"))
+    let Ok(mut server) = a
+        .shared
+        .command("fb_server")
         .args(a.shared.server_args())
         .args(["--dev", "--solo"])
         .spawn()
@@ -192,7 +226,7 @@ fn dev(a: &DevArgs) -> bool {
     }
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
-            let mut c = Command::new(a.shared.bin("fb_client"));
+            let mut c = a.shared.command("fb_client");
             let profile = letters(i);
             c.args([
                 "--profile",
