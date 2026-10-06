@@ -389,9 +389,12 @@ mod tests {
         let old = gpu("HD 4000", false, Some((1, 0)));
         let lavapipe = gpu("llvmpipe", true, Some((1, 4)));
         let to = |b: Backend, name: &str| Some((b, name.to_string()));
-        assert_eq!(on(&[warp.clone(), radeon], &[new.clone()]), to(Backend::Dx12, "Radeon"));
-        assert_eq!(on(&[warp.clone()], &[new]), to(Backend::Vulkan, "Arc"));
-        assert_eq!(on(&[warp], &[old.clone()]), to(Backend::Dx12, "WARP"));
+        assert_eq!(
+            on(&[warp.clone(), radeon], std::slice::from_ref(&new)),
+            to(Backend::Dx12, "Radeon")
+        );
+        assert_eq!(on(std::slice::from_ref(&warp), &[new]), to(Backend::Vulkan, "Arc"));
+        assert_eq!(on(&[warp], std::slice::from_ref(&old)), to(Backend::Dx12, "WARP"));
         assert_eq!(on(&[], &[old.clone(), lavapipe]), to(Backend::Vulkan, "llvmpipe"));
         assert_eq!(on(&[], &[old]), None);
         assert_eq!(on(&[], &[]), None);

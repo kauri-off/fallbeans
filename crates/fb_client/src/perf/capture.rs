@@ -359,7 +359,8 @@ fn record(
     let now = real.elapsed_secs();
     let passes = gpu::passes(&store, Instant::now());
     // (The overlay's spikes come in time order: the ones after the last taken are new.)
-    for s in perf.spikes.iter().filter(|s| s.t >= c.started && s.t > c.spike_t) {
+    let (started, last) = (c.started, c.spike_t);
+    for s in perf.spikes.iter().filter(|s| s.t >= started && s.t > last) {
         c.spike_t = s.t;
         c.spike_count += 1;
         if c.spikes.len() < SPIKES_MAX {

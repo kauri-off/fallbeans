@@ -41,7 +41,7 @@ impl Plugin for MenuPlugin {
 
 /// A press on the game field: on nothing, or on the HUD and name tags over it.
 #[derive(Message)]
-struct FieldClick;
+pub(super) struct FieldClick;
 
 /// Presses bubble from what they hit up to the window: one that started on a panel is not the field's.
 fn on_press(

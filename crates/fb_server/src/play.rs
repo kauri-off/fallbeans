@@ -497,7 +497,7 @@ fn publish(
         let existing = rounds.get(&key).copied();
         let fresh = match existing.map(|e| round_q.get_mut(e)) {
             Some(Ok(mut r)) => {
-                if !same(&*r) {
+                if !same(&r) {
                     *r = round();
                 }
                 false

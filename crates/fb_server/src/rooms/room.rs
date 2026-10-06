@@ -424,11 +424,12 @@ impl Room {
                 }
             }
             ClientMsg::Color(c) => {
-                if lobby && !self.players.iter().any(|o| o.id != id && o.color == *c) {
-                    if let Some(p) = self.player_mut(id).filter(|p| p.color != *c) {
-                        p.color = *c;
-                        self.lobby_due = true;
-                    }
+                if lobby
+                    && !self.players.iter().any(|o| o.id != id && o.color == *c)
+                    && let Some(p) = self.player_mut(id).filter(|p| p.color != *c)
+                {
+                    p.color = *c;
+                    self.lobby_due = true;
                 }
             }
             ClientMsg::Outfit(o) => {
