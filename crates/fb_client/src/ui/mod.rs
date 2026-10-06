@@ -1238,6 +1238,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
 }
 
 fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
+    use crate::opts::Backend;
     use crate::render::quality::{Preset, Tier};
     let g = &*o.gfx;
     let tier = o.quality.as_ref().map_or(Tier::T2, |q| q.tier);
@@ -1306,14 +1307,16 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
             .map(|(n, s)| (s, GfxPick::Fps(n), g.fps_limit == n, true))
             .collect();
     chips(p, text::FPS_LIMIT, &fps);
+    // (Only what this system runs; a saved name it cannot, an old "gl" among them, is "auto".)
+    let saved = Backend::from_setting(&g.backend);
     let backends: Vec<(&str, GfxPick, bool, bool)> = [
-        ("", text::BACKEND_AUTO, true),
-        ("vulkan", "Vulkan", true),
-        ("dx12", "DirectX 12", cfg!(target_os = "windows")),
-        ("gl", "OpenGL", true),
+        ("", text::BACKEND_AUTO, None),
+        ("dx12", "DirectX 12", Some(Backend::Dx12)),
+        ("vulkan", "Vulkan", Some(Backend::Vulkan)),
     ]
     .into_iter()
-    .map(|(id, s, ok)| (s, GfxPick::Backend(id), g.backend == id, ok))
+    .filter(|(_, _, b)| b.is_none_or(Backend::available))
+    .map(|(id, s, b)| (s, GfxPick::Backend(id), saved == b, true))
     .collect();
     chips(p, text::BACKEND, &backends);
 }

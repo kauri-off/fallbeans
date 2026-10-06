@@ -2,6 +2,7 @@
 //! `--headless` runs the same game without a window or GPU (stress runs).
 mod assets;
 mod audio;
+mod backend;
 mod bean;
 mod beans;
 #[cfg(feature = "brp")]
@@ -48,7 +49,7 @@ use bevy::asset::AssetMetaCheck;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{Backends, InstanceFlags, RenderCreation, WgpuLimits, WgpuSettings};
+use bevy::render::settings::RenderCreation;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{ExitCondition, MonitorSelection, PresentMode, WindowMode};
 use bevy::winit::WinitSettings;
@@ -56,7 +57,7 @@ use clap::Parser;
 use fb_net::{NetStatsPlugin, ProtocolPlugin, TICK};
 use lightyear::prelude::client::ClientPlugins;
 
-use crate::opts::{Backend, Opts};
+use crate::opts::Opts;
 
 // (The two `bevy_ecs` modules: the spans of systems and schedules, for the profiler.)
 const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info,lightyear=warn,aeronet=warn";
@@ -84,29 +85,6 @@ fn asset_dir() -> String {
         return dir.to_string_lossy().into();
     }
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets").into()
-}
-
-fn wgpu_settings(backend: Option<Backend>) -> WgpuSettings {
-    let backends = backend.map(|b| match b {
-        Backend::Vulkan => Backends::VULKAN,
-        Backend::Dx12 => Backends::DX12,
-        Backend::Gl => Backends::GL,
-    });
-    let mut wgpu = WgpuSettings {
-        backends: backends.or(WgpuSettings::default().backends),
-        ..default()
-    };
-    if wgpu.backends == Some(Backends::GL) {
-        // GL 3.3 has no compute shaders: wgpu's indirect-call validation would fail device creation.
-        wgpu.instance_flags.remove(InstanceFlags::VALIDATION_INDIRECT_CALL);
-        // Bevy compiles the SSAO compute pipelines up front unless this limit is under 5, and naga's GLSL
-        // for them does not compile (textureGatherOffset on a depth texture). T0 has no AO anyway.
-        wgpu.constrained_limits = Some(WgpuLimits {
-            max_storage_textures_per_shader_stage: 4,
-            ..default()
-        });
-    }
-    wgpu
 }
 
 fn main() -> AppExit {
@@ -143,14 +121,11 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             bevy::state::app::StatesPlugin,
         ));
     } else {
-        let backend = opts
-            .backend
-            .or_else(|| match app.world().resource::<settings::Graphics>().backend.as_str() {
-                "vulkan" => Some(Backend::Vulkan),
-                "dx12" => Some(Backend::Dx12),
-                "gl" => Some(Backend::Gl),
-                _ => None,
-            });
+        // (Before the renderer: the graphics API, from the GPUs this machine has.)
+        let render_creation = match noop {
+            Some(noop) => noop,
+            None => RenderCreation::Automatic(Box::new(backend::choose(app, &opts))),
+        };
         let window = if opts.offscreen {
             None
         } else {
@@ -184,7 +159,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 ..default()
             })
             .set(RenderPlugin {
-                render_creation: noop.unwrap_or_else(|| RenderCreation::Automatic(Box::new(wgpu_settings(backend)))),
+                render_creation,
                 ..default()
             })
             .set(LogPlugin {

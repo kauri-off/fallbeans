@@ -269,7 +269,7 @@ fn full_body(perf: &Perf, target: Option<UVec2>) -> String {
     // (Bevy 0.19 times no shadow pass: their cost shows in the sweep.)
     let mut s = String::from("GPU passes (no shadows)     GPU ms  CPU ms     tris  frag/px\n");
     if perf.passes.is_empty() {
-        s += "  (no GPU timers: GL, or --no-gpu-timers)\n";
+        s += "  (no GPU timers: --no-gpu-timers, or none on this GPU)\n";
     }
     for p in perf.passes.iter().take(14) {
         s += &format!(

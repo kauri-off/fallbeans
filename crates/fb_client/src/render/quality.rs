@@ -1,5 +1,5 @@
 //! Hardware tiers and graphics presets: the tier is read from the adapter at start
-//! (T0: OpenGL or a software device, no compute; T1: a Vulkan/DX12 integrated GPU; T2: the rest), the
+//! (T0: a software device; T1: an integrated GPU, or one that says neither; T2: a discrete GPU), the
 //! preset follows it unless the player picks one, and switches only take work away. With the preset
 //! on "auto", frames that stay slow for a while lower it a step (never up: that is the player's call).
 use core::time::Duration;
@@ -20,7 +20,7 @@ use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::ColorGrading;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{PresentMode, PrimaryWindow};
-use wgpu_types::{Backend, DeviceType};
+use wgpu_types::DeviceType;
 
 use super::Sun;
 use crate::settings::Graphics;
@@ -28,10 +28,11 @@ use crate::view::MainCamera;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tier {
-    /// OpenGL or a software device: no compute shaders.
+    /// A software device, the CPU draws (WARP, llvmpipe/lavapipe): Low.
     T0,
-    /// Vulkan or DX12 on an integrated GPU.
+    /// An integrated GPU (or a virtual one, or one of no known kind): Medium.
     T1,
+    /// A discrete GPU: High.
     T2,
 }
 
@@ -147,10 +148,10 @@ fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
     let (tier, adapter) = match info {
         Some(i) => {
             let i = &i.0;
-            let tier = match (i.backend, i.device_type) {
-                (Backend::Gl, _) | (_, DeviceType::Cpu) => Tier::T0,
-                (_, DeviceType::IntegratedGpu) => Tier::T1,
-                _ => Tier::T2,
+            let tier = match i.device_type {
+                DeviceType::Cpu => Tier::T0,
+                DeviceType::DiscreteGpu => Tier::T2,
+                DeviceType::IntegratedGpu | DeviceType::VirtualGpu | DeviceType::Other => Tier::T1,
             };
             (tier, format!("{} ({:?}, {:?})", i.name, i.backend, i.device_type))
         }

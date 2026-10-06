@@ -50,7 +50,7 @@ struct RunArgs {
     /// players run) or `dev`.
     #[arg(long, default_value = "perf")]
     cargo_profile: String,
-    /// Extra flags for the client, e.g. `--client-arg=--backend=gl`.
+    /// Extra flags for the client, e.g. `--client-arg=--backend=vulkan`.
     #[arg(long, allow_hyphen_values = true)]
     client_arg: Vec<String>,
     #[arg(long, default_value = "jump-club")]
