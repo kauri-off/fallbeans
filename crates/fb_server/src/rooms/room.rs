@@ -1001,8 +1001,7 @@ impl Room {
         let Some(session) = self.session.as_mut() else { return };
         let mut skipped = Vec::new();
         while let Some(g) = session.plan.get(session.index).and_then(|id| director::game(id)) {
-            // (The rule of `director::fits`.)
-            if g.min_players.unwrap_or(1) as usize <= players {
+            if director::fits(g, players as u32) {
                 break;
             }
             skipped.push(g.id);

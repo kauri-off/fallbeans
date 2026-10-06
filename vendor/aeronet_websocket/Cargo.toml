@@ -115,8 +115,10 @@ optional = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.rustls]
 version = "0.23.23"
-# fallbeans patch: the *ring* provider (`session::WebSocketSessionPlugin`, `client::config`).
-features = ["ring"]
+# fallbeans patch: the *ring* provider (`session::WebSocketSessionPlugin`, `client::config`), and not aws-lc
+# (a C build needing cmake, next to the ring ureq already brings).
+default-features = false
+features = ["ring", "std", "logging", "tls12"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.rustls-native-certs]
 version = "0.8.0"
@@ -128,6 +130,9 @@ features = ["rt-multi-thread", "time"]
 [target.'cfg(not(target_family = "wasm"))'.dependencies.tokio-rustls]
 version = "0.26.2"
 optional = true
+# fallbeans patch: see rustls.
+default-features = false
+features = ["ring", "logging", "tls12"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.tokio-tungstenite]
 version = "0.26.2"
