@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use bevy::gltf::GltfMaterialName;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use super::lod::{ModelLods, add_levels};
@@ -71,7 +72,8 @@ struct Moving {
     rest: Transform,
 }
 
-/// A model's mesh that already has its surface.
+/// A mesh `dress` is done with: a model's, now on its surface, or one of no model (beans, bonuses…), which
+/// is not looked at again.
 #[derive(Component)]
 struct Dressed;
 
@@ -81,6 +83,7 @@ impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ModelLods>();
         app.add_systems(Update, (dress, find_moving, animate).chain());
+        app.add_systems(Update, (super::lod::finish_levels, super::meshes::refresh_bands));
     }
 }
 
@@ -94,7 +97,8 @@ fn prop_of(mut e: Entity, parents: &Query<&ChildOf>, props: &Query<&Prop>) -> Op
     None
 }
 
-/// Model meshes as they appear: the standard material from the glTF becomes a surface material.
+/// Model meshes as they appear: the standard material from the glTF becomes a surface material. A model whose
+/// root casts no shadow (scenery) gives that to each of its meshes: the component is not inherited.
 #[allow(clippy::type_complexity)]
 fn dress(
     mut commands: Commands,
@@ -109,6 +113,7 @@ fn dress(
     >,
     parents: Query<&ChildOf>,
     props: Query<&Prop>,
+    shadowless: Query<(), (With<Prop>, With<NotShadowCaster>)>,
     standard: Res<Assets<StandardMaterial>>,
     mut surfaces: ResMut<Surfaces>,
     mut images: ResMut<Assets<Image>>,
@@ -116,14 +121,14 @@ fn dress(
     mut done: Local<HashMap<(AssetId<StandardMaterial>, String), Handle<SurfaceMaterial>>>,
     lod: (
         ResMut<ModelLods>,
-        ResMut<Assets<Mesh>>,
+        Res<Assets<Mesh>>,
         Res<crate::settings::Display>,
         Option<Res<super::quality::Quality>>,
     ),
     shapes: Query<(&Mesh3d, &Transform, &ChildOf)>,
     transforms: Query<&Transform>,
 ) {
-    let (mut lods, mut mesh_assets, display, quality) = lod;
+    let (mut lods, mesh_assets, display, quality) = lod;
     let k = super::meshes::lod_k(display.fov, quality.map(|q| q.preset));
     if !meshes.is_empty() {
         // (Materials of a model unloaded between maps come back under new ids: forget the old ones.)
@@ -131,6 +136,7 @@ fn dress(
     }
     for (e, mat, mat_name, name) in &meshes {
         let Some(p) = prop_of(e, &parents, &props) else {
+            commands.entity(e).try_insert(Dressed);
             continue;
         };
         let Some(base) = standard.get(&mat.0) else { continue };
@@ -171,10 +177,14 @@ fn dress(
                 surfaces.material_from(base, kind, None, mat_name == "Glint", None, &mut images, &mut materials)
             })
             .clone();
-        commands
-            .entity(e)
+        let shadow = !shadowless.contains(p);
+        let mut dressed = commands.entity(e);
+        dressed
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert((MeshMaterial3d(h.clone()), Dressed));
+        if !shadow {
+            dressed.insert(NotShadowCaster);
+        }
         // Levels of detail for what stands still (moving parts would leave their copies behind).
         let moving = part.starts_with("Pennant") || part.starts_with("FanBlades") || prop.is_some_and(|p| p.special);
         if !moving && let Ok((mesh, tf, parent)) = shapes.get(e) {
@@ -196,8 +206,9 @@ fn dress(
                 *tf,
                 parent.parent(),
                 scale,
+                shadow,
                 &mut lods,
-                &mut mesh_assets,
+                &mesh_assets,
                 k,
             );
         }

@@ -338,7 +338,20 @@ pub fn dress_beans(
     mut wardrobe: ResMut<Wardrobe>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    quality: Option<Res<crate::render::quality::Quality>>,
+    mut coated: Local<Option<bool>>,
 ) {
+    // No clearcoat on Low (a second specular layer in every bean pixel); the suits made already follow a change.
+    let coat = quality.is_none_or(|q| q.preset != crate::render::quality::Preset::Low);
+    if coated.replace(coat).is_some_and(|was| was != coat) {
+        for (key, h) in &paints.mats {
+            if key.starts_with("body ")
+                && let Some(mut m) = materials.get_mut(h)
+            {
+                m.clearcoat = if coat { 0.3 } else { 0.0 };
+            }
+        }
+    }
     for (id, color, rig, mut dress) in &mut beans {
         let Some(parts) = &rig.parts else { continue };
         let player = session
@@ -368,7 +381,7 @@ pub fn dress_beans(
         let body = paints.get(format!("body {suit}"), &mut materials, || StandardMaterial {
             base_color: suit_base(suit),
             perceptual_roughness: 0.5,
-            clearcoat: 0.3,
+            clearcoat: if coat { 0.3 } else { 0.0 },
             clearcoat_perceptual_roughness: 0.35,
             ..template
         });
@@ -464,12 +477,23 @@ pub fn dress_beans(
                 ))
                 .id();
             dress.parts.push(parent);
-            for i in 0..5 {
+            // The tail's spheres, made once for every bean.
+            const BALLS: [Handle<Mesh>; 5] = [
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e01"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e02"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e03"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e04"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e05"),
+            ];
+            for (i, ball) in BALLS.iter().enumerate() {
                 let r = 0.17 - i as f32 * 0.02;
                 let pos = if i > 0 { Vec3::new(0.0, 0.1, -0.15) } else { Vec3::ZERO };
+                if !meshes.contains(ball) {
+                    let _ = meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
+                }
                 parent = commands
                     .spawn((
-                        Mesh3d(meshes.add(Sphere::new(r).mesh().uv(14, 10))),
+                        Mesh3d(ball.clone()),
                         MeshMaterial3d(if i == 4 { tip.clone() } else { fur.clone() }),
                         Transform::from_translation(pos),
                         Visibility::default(),

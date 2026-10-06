@@ -8,7 +8,9 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_sim::V3;
 use fb_sim::math::Affine;
+use fb_sim::nodes::Nodes;
 use fb_sim::physics::power;
 use fb_sim::scene::{PrimKind, SceneItem};
 use lightyear::prelude::*;
@@ -113,6 +115,19 @@ fn mat4(m: &Affine) -> Mat4 {
     ))
 }
 
+/// The world bounds (min, max) of a box of half size `half` under `m`.
+fn world_bounds(m: &Mat4, half: Vec3) -> (Vec3, Vec3) {
+    let mut lo = Vec3::INFINITY;
+    let mut hi = Vec3::NEG_INFINITY;
+    for i in 0..8u32 {
+        let side = |bit: u32, h: f32| if i & bit == 0 { -h } else { h };
+        let p = m.transform_point3(Vec3::new(side(1, half.x), side(2, half.y), side(4, half.z)));
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    (lo, hi)
+}
+
 fn spawn_map(
     mut commands: Commands,
     map: Option<Res<Map>>,
@@ -137,9 +152,22 @@ fn spawn_map(
         .spawn((MapRoot(map.generation), Transform::default(), Visibility::default()))
         .id();
     // Shared handles: identical primitives and materials batch into one draw.
-    let mut prims: HashMap<(PrimKind, [u64; 3], u32, u32), Handle<Mesh>> = HashMap::new();
+    let mut prims: HashMap<(PrimKind, [u64; 3], u32), Handle<Mesh>> = HashMap::new();
     let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
-    let mut lift = 0u32;
+    // Primitives that touch are lifted apart (by their transform: identical ones still share a mesh).
+    let bounds: Vec<(Vec3, Vec3)> = map
+        .scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SceneItem::Prim { node, kind, dims, .. } => Some(world_bounds(
+                &mat4(&map.render.get(*node).world),
+                meshes::half_extents(*kind, *dims),
+            )),
+            _ => None,
+        })
+        .collect();
+    let mut lifts = meshes::lifts(&bounds).into_iter();
     for (i, item) in map.scene.items.iter().enumerate() {
         let (node, child) = match item {
             SceneItem::Prim {
@@ -151,28 +179,31 @@ fn spawn_map(
                 surface,
                 pattern,
             } => {
-                lift += 1;
-                let l = 1 + lift % meshes::LIFTS;
+                let lift = Transform::from_xyz(0.0, lifts.next().unwrap_or(0) as f32 * meshes::LIFT, 0.0);
                 let spec = prim_spec(&map.look, *kind, *dims, *pal, *freq, *surface, *pattern);
                 let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
                 let piece = commands.spawn(MapPrim(spec, mat.clone())).id();
-                // Each level of detail a child, shown by the camera's distance (cross-faded).
-                let ranges = meshes::level_ranges(*kind, *dims, lod_k);
-                let single = ranges.len() == 1;
-                for (level, range) in ranges {
+                // Each level of detail a child, shown by the camera's distance.
+                let levels = meshes::prim_levels(*kind, *dims);
+                let single = levels.len() == 1;
+                for band in levels {
                     let mesh = prims
-                        .entry((*kind, dims.map(f64::to_bits), l, meshes::level_id(*kind, *dims, level)))
-                        .or_insert_with(|| meshes.add(meshes::prim(*kind, *dims, level, l)))
+                        .entry((
+                            *kind,
+                            dims.map(f64::to_bits),
+                            meshes::level_id(*kind, *dims, band.first),
+                        ))
+                        .or_insert_with(|| meshes.add(meshes::prim(*kind, *dims, band.first)))
                         .clone();
                     let mut child = commands.spawn((
                         Mesh3d(mesh),
                         MeshMaterial3d(mat.clone()),
                         PrimLevel,
-                        Transform::default(),
+                        lift,
                         ChildOf(piece),
                     ));
                     if !single {
-                        child.insert(range);
+                        child.insert((band, band.range(lod_k)));
                     }
                 }
                 (*node, piece)
@@ -205,35 +236,52 @@ fn spawn_map(
             ChildOf(root),
         ));
     }
+    if map.bonuses.list.is_empty() {
+        return;
+    }
+    // Bonuses share their meshes, and their materials by kind (the card's picture too: it is the kind's).
+    let shapes = [
+        meshes.add(Sphere::new(0.62).mesh().uv(32, 20)),
+        meshes.add(Circle::new(0.42).mesh().resolution(32)),
+        meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40)),
+    ];
+    let mut looks: HashMap<u8, [Handle<StandardMaterial>; 3]> = HashMap::new();
     for b in &map.bonuses.list {
-        let color = hex(match b.kind {
-            power::GIANT => "#ff6f91",
-            power::JUMP => "#58d68d",
-            _ => "#ffd23f",
-        });
-        let (icon, _) = crate::ui::text::bonus(b.kind);
-        let bubble = MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: color.with_alpha(0.45),
-            emissive: color.to_linear() * 0.45,
-            perceptual_roughness: 0.15,
-            alpha_mode: AlphaMode::Blend,
-            ..default()
-        }));
-        let card = MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(images.add(crate::render::emoji::board(icon, color))),
-            unlit: true,
-            cull_mode: None,
-            double_sided: true,
-            ..default()
-        }));
-        let ring = MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: color.with_alpha(0.6),
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            double_sided: true,
-            ..default()
-        }));
+        let [bubble, card, ring] = looks
+            .entry(b.kind)
+            .or_insert_with(|| {
+                let color = hex(match b.kind {
+                    power::GIANT => "#ff6f91",
+                    power::JUMP => "#58d68d",
+                    _ => "#ffd23f",
+                });
+                let (icon, _) = crate::ui::text::bonus(b.kind);
+                [
+                    materials.add(StandardMaterial {
+                        base_color: color.with_alpha(0.45),
+                        emissive: color.to_linear() * 0.45,
+                        perceptual_roughness: 0.15,
+                        alpha_mode: AlphaMode::Blend,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color_texture: Some(images.add(crate::render::emoji::board(icon, color))),
+                        unlit: true,
+                        cull_mode: None,
+                        double_sided: true,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color: color.with_alpha(0.6),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Blend,
+                        cull_mode: None,
+                        double_sided: true,
+                        ..default()
+                    }),
+                ]
+            })
+            .clone();
         commands
             .spawn((
                 BonusView(b.i),
@@ -244,20 +292,20 @@ fn spawn_map(
             .with_children(|g| {
                 g.spawn((
                     BonusPart::Bubble,
-                    Mesh3d(meshes.add(Sphere::new(0.62).mesh().uv(32, 20))),
-                    bubble,
+                    Mesh3d(shapes[0].clone()),
+                    MeshMaterial3d(bubble),
                     Transform::from_xyz(0.0, 1.05, 0.0),
                 ));
                 g.spawn((
                     BonusPart::Card,
-                    Mesh3d(meshes.add(Circle::new(0.42).mesh().resolution(32))),
-                    card,
+                    Mesh3d(shapes[1].clone()),
+                    MeshMaterial3d(card),
                     Transform::from_xyz(0.0, 1.05, 0.0),
                 ));
                 g.spawn((
                     BonusPart::Ring,
-                    Mesh3d(meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40))),
-                    ring,
+                    Mesh3d(shapes[2].clone()),
+                    MeshMaterial3d(ring),
                     Transform::from_xyz(0.0, 0.04, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
                     bevy::light::NotShadowCaster,
                 ));
@@ -327,27 +375,80 @@ pub fn frame_tick(timeline: &LocalTimeline, fixed: &Time<Fixed>) -> f64 {
     timeline.tick().0 as f64 + fixed.overstep_fraction() as f64
 }
 
+/// What `pose_map` saw of each node the frame before, so that only what moves is posed again.
+#[derive(Default)]
+struct Posed {
+    generation: Option<u32>,
+    /// Position, rotation, scale.
+    locals: Vec<(V3, V3, V3)>,
+    shown: Vec<bool>,
+    /// The world matrix changed this frame (the node or one above it moved).
+    moved: Vec<bool>,
+    /// Turned shown or hidden this frame.
+    flipped: Vec<bool>,
+}
+
+impl Posed {
+    /// Recomputes the world matrices of the nodes that moved or sit under one that did (all of them: `all`).
+    fn update(&mut self, nodes: &mut Nodes, all: bool) {
+        let n = nodes.0.len();
+        if self.locals.len() != n {
+            self.locals.resize(n, (V3::ZERO, V3::ZERO, V3::ZERO));
+            self.shown.resize(n, false);
+            self.moved.resize(n, false);
+            self.flipped.resize(n, false);
+        }
+        // (Parents come before their children.)
+        for i in 0..n {
+            let node = &nodes.0[i];
+            let local = (node.pos, node.rot, node.scale);
+            let parent = node.parent.map(|p| p as usize);
+            let moved = all || self.locals[i] != local || parent.is_some_and(|p| self.moved[p]);
+            let shown = node.visible && parent.is_none_or(|p| self.shown[p]);
+            if moved {
+                nodes.update_one(i as u32);
+            }
+            self.flipped[i] = all || shown != self.shown[i];
+            self.locals[i] = local;
+            self.shown[i] = shown;
+            self.moved[i] = moved;
+        }
+    }
+}
+
+/// The map's movers pose the nodes for the frame; the pieces on nodes that moved, appeared or vanished follow.
 fn pose_map(
     map: Option<ResMut<Map>>,
     timeline: Res<LocalTimeline>,
     fixed: Res<Time<Fixed>>,
-    mut pieces: Query<(&MapPiece, &mut Transform, &mut Visibility)>,
+    mut posed: Local<Posed>,
+    mut pieces: Query<(Ref<MapPiece>, &mut Transform, &mut Visibility)>,
 ) {
     let Some(mut map) = map else { return };
     let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
+    // (A map built again after none starts from generation 0 again.)
+    let all = map.is_added() || posed.generation != Some(map.generation);
     let map = &mut *map;
-    map.world.pose(t, &mut map.render);
+    map.world.pose_locals(t, &mut map.render);
+    posed.generation = Some(map.generation);
+    posed.update(&mut map.render, all);
     for (piece, mut tf, mut vis) in &mut pieces {
-        let next = Transform::from_matrix(mat4(&map.render.get(piece.node).world));
-        if *tf != next {
-            *tf = next;
+        let n = piece.node as usize;
+        let fresh = piece.is_added();
+        if fresh || posed.moved.get(n) == Some(&true) {
+            let next = Transform::from_matrix(mat4(&map.render.get(piece.node).world));
+            if *tf != next {
+                *tf = next;
+            }
         }
-        let shown = if map.render.shown(piece.node) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        vis.set_if_neq(shown);
+        if fresh || posed.flipped.get(n) == Some(&true) {
+            let shown = if posed.shown.get(n).copied().unwrap_or(true) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            vis.set_if_neq(shown);
+        }
     }
 }
 

@@ -467,6 +467,8 @@ impl Kit<'_> {
                     .with_rotation(Quat::from_rotation_y(yaw))
                     .with_scale(Vec3::splat(scale)),
                 Visibility::default(),
+                // (Given to each mesh by `props::dress`, as the rest of the scenery.)
+                NotShadowCaster,
                 ChildOf(parent),
             ))
             .id()
@@ -495,6 +497,7 @@ impl Kit<'_> {
                 Prop::painted("island", paint),
                 t,
                 Visibility::default(),
+                NotShadowCaster,
                 ChildOf(parent),
             ))
             .id()
@@ -1901,6 +1904,18 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
         .world
         .resource_mut::<Assets<Mesh>>()
         .add(Sphere::new(3.2).mesh().uv(28, 18).scaled_by(Vec3::new(1.0, 1.15, 1.0)));
+    let frustum = |top: f32, bottom: f32, h: f32, seg: u32| {
+        ConicalFrustum {
+            radius_top: top,
+            radius_bottom: bottom,
+            height: h,
+        }
+        .mesh()
+        .resolution(seg)
+        .build()
+    };
+    let sk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(1.1, 0.7, 1.2, 18));
+    let bk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(0.75, 0.6, 0.8, 12));
     for n in 0..count {
         let mut pos = None;
         for _ in 0..20 {
@@ -1928,19 +1943,7 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
                 ChildOf(g),
             ));
         }
-        let frustum = |top: f32, bottom: f32, h: f32, seg: u32| {
-            ConicalFrustum {
-                radius_top: top,
-                radius_bottom: bottom,
-                height: h,
-            }
-            .mesh()
-            .resolution(seg)
-            .build()
-        };
-        let sk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(1.1, 0.7, 1.2, 18));
-        let bk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(0.75, 0.6, 0.8, 12));
-        for (mesh, mat, y) in [(sk, &skirt, 1.9), (bk, &basket, 0.0)] {
+        for (mesh, mat, y) in [(sk.clone(), &skirt, 1.9), (bk.clone(), &basket, 0.0)] {
             if let Mat::S(h) = mat {
                 k.world.spawn((
                     Decor,

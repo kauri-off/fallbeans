@@ -1,6 +1,6 @@
 //! Drawing the specials of a map (portal rings, hex tiles, glass panes…): the pieces their looks place
 //! every frame, and the map's primitives they tint. Lit pieces are drawn on surfaces, as the map.
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -44,6 +44,8 @@ pub struct SpecialCache {
     pictures: HashMap<(bool, &'static str), Handle<Image>>,
     /// Tinted materials by the primitive's own material (identical primitives share it), colour, step.
     tints: HashMap<(AssetId<SurfaceMaterial>, &'static str, i8), Handle<SurfaceMaterial>>,
+    /// Nodes tinted the frame before: one the looks no longer tint gets its own material back.
+    tinted: BTreeSet<u32>,
     out: LookOut,
 }
 
@@ -215,6 +217,7 @@ pub fn pose_specials(
         cache.look_ids.clear();
         cache.mats.clear();
         cache.tints.clear();
+        cache.tinted.clear();
     }
     let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
     let mut tints: BTreeMap<u32, Tint> = BTreeMap::new();
@@ -364,29 +367,34 @@ pub fn pose_specials(
             }
         }
     }
-    if tints.is_empty() {
+    if tints.is_empty() && cache.tinted.is_empty() {
         return;
     }
     for (piece, prim, children) in &prims {
-        let Some(tint) = tints.get(&piece.node) else { continue };
-        let k = step(tint.k);
-        let h = cache
-            .tints
-            .entry((prim.1.id(), tint.to, k))
-            .or_insert_with(|| {
-                let to = LinearRgba::from(hex(tint.to));
-                let f = k as f32 / STEPS;
-                let mut spec = prim.0.clone();
-                match &mut spec.paint {
-                    Some(p) => {
-                        p.c1 = p.c1.mix(&to, f);
-                        p.c2 = p.c2.mix(&to, f);
-                    }
-                    None => spec.color = spec.color.mix(&to, f),
-                }
-                surfaces.material(&spec, &mut images, &mut surface_mats)
-            })
-            .clone();
+        let h = match tints.get(&piece.node) {
+            Some(tint) => {
+                let k = step(tint.k);
+                cache
+                    .tints
+                    .entry((prim.1.id(), tint.to, k))
+                    .or_insert_with(|| {
+                        let to = LinearRgba::from(hex(tint.to));
+                        let f = k as f32 / STEPS;
+                        let mut spec = prim.0.clone();
+                        match &mut spec.paint {
+                            Some(p) => {
+                                p.c1 = p.c1.mix(&to, f);
+                                p.c2 = p.c2.mix(&to, f);
+                            }
+                            None => spec.color = spec.color.mix(&to, f),
+                        }
+                        surfaces.material(&spec, &mut images, &mut surface_mats)
+                    })
+                    .clone()
+            }
+            None if cache.tinted.contains(&piece.node) => prim.1.clone(),
+            None => continue,
+        };
         for c in children {
             if let Ok(mut mat) = levels.get_mut(*c)
                 && mat.0 != h
@@ -395,4 +403,6 @@ pub fn pose_specials(
             }
         }
     }
+    cache.tinted.clear();
+    cache.tinted.extend(tints.keys().copied());
 }
