@@ -152,7 +152,8 @@ fn row(name: &str, s: Option<Stat>) -> String {
     }
 }
 
-/// `144 fps | frame 6.94 ms p99 9.1 | 1% low 118 fps | GPU 4.20 | CPU main 2.10 render 1.80 | GPU-bound`
+/// `144 fps | frame 6.94 ms p99 9.1 | 1% low 118 fps | GPU 4.20 | CPU main 2.10 render 1.80 (wait 0.40) | GPU-bound`
+/// (over the last 2 s: fps is the frames over their time, as F3 shows it).
 fn line(s: &Summary) -> String {
     let avg = |st: Option<Stat>| ms(st.map_or(f32::NAN, |s| s.avg));
     format!(
@@ -269,7 +270,7 @@ fn full_body(perf: &Perf, target: Option<UVec2>) -> String {
     // (Bevy 0.19 times no shadow pass: their cost shows in the sweep.)
     let mut s = String::from("GPU passes (no shadows)     GPU ms  CPU ms     tris  frag/px\n");
     if perf.passes.is_empty() {
-        s += "  (no GPU timers: --no-gpu-timers, or none on this GPU)\n";
+        s += "  (no GPU timers: --no-gpu-timers, or the GPU has no timestamp queries)\n";
     }
     for p in perf.passes.iter().take(14) {
         s += &format!(
@@ -292,9 +293,16 @@ fn full_body(perf: &Perf, target: Option<UVec2>) -> String {
     s
 }
 
+/// The Cpu page of a game started without `--profiler`: the spans it sums are not there.
+const NO_SPANS: &str = "Время систем и расписаний меряется, только если игра запущена с флагом --profiler\n\
+                        (или с FB_PROFILER=1): без него профайлер ничего не стоит.\nF4: скрыть | F9: запись";
+
 fn cpu_body(perf: &Perf) -> String {
     if !profiler::BUILT {
         return "the profiler is not in this build (feature `profiler`)".into();
+    }
+    if !perf.profiler {
+        return NO_SPANS.into();
     }
     let rows = &perf.cpu;
     let find = |kind: Kind, name: &str| {

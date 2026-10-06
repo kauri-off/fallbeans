@@ -10,35 +10,43 @@ use lightyear_transport::plugin::{PacketAcked, PacketLost};
 use crate::net::{Conn, Fallback};
 
 /// Seconds the loss is measured over.
-const WINDOW_S: usize = 10;
+const WINDOW_S: u64 = 10;
 /// Seconds the full VPN hint stays up after a fallback.
 pub const HINT_S: f32 = 25.0;
 
-/// Packets sent and acknowledged or lost, a bucket a second.
+/// Packets acknowledged and lost, a bucket a second (by the second of real time it is for: seconds with no
+/// packet have none).
 #[derive(Resource, Default)]
 pub struct NetDiag {
-    buckets: VecDeque<(u32, u32)>,
-    second: u64,
+    buckets: VecDeque<(u64, u32, u32)>,
 }
 
 impl NetDiag {
-    /// Share of the packets sent in the last seconds whose acknowledgement never came, or came too late
-    /// (None: too few).
-    pub fn loss(&self) -> Option<f32> {
-        let (acked, lost) = self.buckets.iter().fold((0, 0), |(a, l), (ba, bl)| (a + ba, l + bl));
+    /// Share of the packets of the last `WINDOW_S` seconds (`now`: real time) whose acknowledgement never
+    /// came, or came too late (None: too few).
+    pub fn loss(&self, now: f32) -> Option<f32> {
+        let s = now as u64;
+        let (acked, lost) = self
+            .buckets
+            .iter()
+            .filter(|(at, ..)| at + WINDOW_S > s)
+            .fold((0, 0), |(a, l), (_, ba, bl)| (a + ba, l + bl));
         (acked + lost >= 30).then(|| lost as f32 / (acked + lost) as f32)
     }
 
-    fn bucket(&mut self, now: f32) -> &mut (u32, u32) {
+    /// This second's (acked, lost).
+    fn bucket(&mut self, now: f32) -> (&mut u32, &mut u32) {
         let s = now as u64;
-        if s != self.second || self.buckets.is_empty() {
-            self.second = s;
-            self.buckets.push_back((0, 0));
-            if self.buckets.len() > WINDOW_S {
-                self.buckets.pop_front();
-            }
+        while self.buckets.front().is_some_and(|(at, ..)| at + WINDOW_S <= s) {
+            self.buckets.pop_front();
         }
-        self.buckets.back_mut().unwrap()
+        if self.buckets.back().is_none_or(|(at, ..)| *at != s) {
+            self.buckets.push_back((s, 0, 0));
+        }
+        match self.buckets.back_mut() {
+            Some((_, acked, lost)) => (acked, lost),
+            None => unreachable!("a bucket was just pushed"),
+        }
     }
 }
 
@@ -48,10 +56,10 @@ impl Plugin for DiagPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetDiag>();
         app.add_observer(|_: On<PacketAcked>, time: Res<Time<Real>>, mut d: ResMut<NetDiag>| {
-            d.bucket(time.elapsed_secs()).0 += 1;
+            *d.bucket(time.elapsed_secs()).0 += 1;
         });
         app.add_observer(|_: On<PacketLost>, time: Res<Time<Real>>, mut d: ResMut<NetDiag>| {
-            d.bucket(time.elapsed_secs()).1 += 1;
+            *d.bucket(time.elapsed_secs()).1 += 1;
         });
         app.add_observer(|_: On<Add, Connected>, mut d: ResMut<NetDiag>| d.buckets.clear());
     }
@@ -71,7 +79,7 @@ pub fn summary(conn: Option<&Conn>, link: Option<&Link>, diag: &NetDiag, now: f3
             l.stats.jitter.as_secs_f32() * 1000.0
         );
     }
-    if let Some(loss) = diag.loss() {
+    if let Some(loss) = diag.loss(now) {
         s += &format!(" | loss {:.1}%", loss * 100.0);
     }
     match conn.fallback {

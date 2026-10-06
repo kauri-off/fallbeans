@@ -59,8 +59,18 @@ use lightyear::prelude::client::ClientPlugins;
 
 use crate::opts::Opts;
 
-// (The two `bevy_ecs` modules: the spans of systems and schedules, for the profiler.)
-const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info,lightyear=warn,aeronet=warn";
+const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,lightyear=warn,aeronet=warn";
+/// `--profiler`: the spans of systems and schedules (`bevy_ecs` above), for the built-in profiler.
+const PROFILER_SPANS: &str = ",bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info";
+/// Without it, Bevy's per-frame spans of the app and the render world go too (a span filtered out where it is
+/// made costs nothing). `bevy_render::renderer` stays: `present_frames` is the swapchain wait of every frame.
+const NO_PROFILER_SPANS: &str = ",bevy_app::sub_app=warn,bevy_render::batching=warn,bevy_render::extract_plugin=warn,bevy_render::pipelined_rendering=warn,bevy_render::renderer::render_context=warn,bevy_render::view::visibility=warn";
+
+/// The log filter: which spans exist is decided here, at the start (a system's span is made once).
+fn log_filter(profiler: bool) -> String {
+    let spans = if profiler { PROFILER_SPANS } else { NO_PROFILER_SPANS };
+    format!("{LOG_FILTER}{spans}")
+}
 
 /// The console log: events only (spans would prefix every line with the system it came from).
 fn fmt_layer(_: &mut App) -> Option<bevy::log::BoxedFmtLayer> {
@@ -93,12 +103,15 @@ fn main() -> AppExit {
     }
     let mut app = App::new();
     build(&mut app, Opts::parse(), None);
-    app.run()
+    let exit = app.run();
+    logs::flush();
+    exit
 }
 
 /// The whole client. `noop`: tests, with wgpu's noop device and a window nothing opens; they step the app.
 fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
     let test = noop.is_some();
+    let profiler = opts.profiler();
     // (First: the graphics API may come from the settings.)
     app.add_plugins(settings::ClientSettingsPlugin {
         profile: opts.profile.clone(),
@@ -114,7 +127,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         app.add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps))),
             LogPlugin {
-                filter: LOG_FILTER.into(),
+                filter: log_filter(profiler),
                 fmt_layer,
                 ..default()
             },
@@ -163,7 +176,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 ..default()
             })
             .set(LogPlugin {
-                filter: LOG_FILTER.into(),
+                filter: log_filter(profiler),
                 custom_layer: logs::layer,
                 fmt_layer,
                 ..default()
@@ -210,6 +223,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             face::FacePlugin,
             perf::PerfPlugin {
                 gpu_timers: !opts.no_gpu_timers && !test,
+                profiler,
             },
         ));
         if opts.trace_clicks {

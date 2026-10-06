@@ -24,6 +24,24 @@ fn fps(s: &str) -> Result<f64, String> {
         .ok_or_else(|| "between 1 and 1000".into())
 }
 
+/// `--perf-capture`: seconds a benchmark records (NaN or infinity would never end).
+fn capture_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (f32::MIN_POSITIVE..=3600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "more than 0, at most 3600".into())
+}
+
+/// `--perf-warmup`: seconds of a round before a benchmark.
+fn warmup_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (0.0..=600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "between 0 and 600".into())
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
     /// UDP, then WebSocket if UDP gets no answer within 2 s.
@@ -143,14 +161,18 @@ pub struct Opts {
     #[cfg(feature = "brp")]
     #[arg(long, num_args = 0..=1, default_missing_value = "15702")]
     pub brp: Option<u16>,
-    /// Records this many seconds of a round uncapped, saves and quits (`cargo xtask perf`).
-    #[arg(long, value_name = "SECS")]
+    /// Records this many seconds of a round uncapped, saves and quits (`cargo xtask perf`; F9 stops it early).
+    #[arg(long, value_name = "SECS", value_parser = capture_secs)]
     pub perf_capture: Option<f32>,
     /// Switches the graphics features off one at a time in a round, saves and quits.
     #[arg(long)]
     pub perf_sweep: bool,
-    #[arg(long, value_name = "SECS", default_value_t = 5.0)]
+    #[arg(long, value_name = "SECS", default_value_t = 5.0, value_parser = warmup_secs)]
     pub perf_warmup: f32,
+    /// The spans of every system and schedule, for the F4 profiler and the CPU rows of recordings (also
+    /// `FB_PROFILER=1`). Without it they are filtered out where they are made and cost nothing.
+    #[arg(long)]
+    pub profiler: bool,
     /// `--perf-capture` from the launch on (the menu, the lobby, every round), not from a round's warmup.
     #[arg(long)]
     pub perf_from_start: bool,
@@ -179,6 +201,11 @@ pub struct Opts {
 impl Opts {
     pub fn autopilot(&self) -> bool {
         self.autopilot || self.headless
+    }
+
+    /// `--profiler`, or `FB_PROFILER=1`.
+    pub fn profiler(&self) -> bool {
+        self.profiler || std::env::var("FB_PROFILER").is_ok_and(|v| v == "1")
     }
 
     /// The HTTP API to connect to at the start (None: the player picks a server from the list).
@@ -230,5 +257,17 @@ mod tests {
         assert_eq!(b("vulkan").ok(), Some(Some(Backend::Vulkan)));
         assert_eq!(b("dx12").ok(), Some(Some(Backend::Dx12)));
         assert!(b("gl").is_err());
+    }
+
+    #[test]
+    fn benchmark_times_end() {
+        let ok = |args: &[&str]| Opts::try_parse_from([&["fb_client"], args].concat()).is_ok();
+        assert!(ok(&["--perf-capture", "30", "--perf-warmup", "0"]));
+        for bad in ["nan", "inf", "-1", "0"] {
+            assert!(!ok(&["--perf-capture", bad]), "{bad}");
+        }
+        for bad in ["nan", "inf", "-1"] {
+            assert!(!ok(&["--perf-warmup", bad]), "{bad}");
+        }
     }
 }

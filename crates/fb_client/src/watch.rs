@@ -148,9 +148,7 @@ fn check(
     }
     let replayed = metrics.map_or(0, |m| m.rollback_ticks).wrapping_sub(c.replayed);
     c.window = (c.window.0 + 1, c.window.1.max(d));
-    while c.list.front().is_some_and(|x| now - x.at > KEEP_S) {
-        c.list.pop_front();
-    }
+    forget_old(&mut c.list, now);
     c.list.push_back(Correction {
         at: now,
         tick,
@@ -183,9 +181,21 @@ fn check(
     }
 }
 
+/// A run of rubber-banding over, and the corrections older than `KEEP_S` gone (also with none coming: an F8
+/// report reads the list).
 fn end_run(time: Res<Time<Real>>, mut c: ResMut<Corrections>) {
-    if c.run.as_ref().is_some_and(|r| time.elapsed_secs() - r.last > RUN_GAP_S) {
+    let now = time.elapsed_secs();
+    if c.run.as_ref().is_some_and(|r| now - r.last > RUN_GAP_S) {
         end(&mut c.run);
+    }
+    if c.list.front().is_some_and(|x| now - x.at > KEEP_S) {
+        forget_old(&mut c.list, now);
+    }
+}
+
+fn forget_old(list: &mut VecDeque<Correction>, now: f32) {
+    while list.front().is_some_and(|x| now - x.at > KEEP_S) {
+        list.pop_front();
     }
 }
 

@@ -77,14 +77,18 @@ fn update(
     others: Query<(), With<Interpolated>>,
     net: Res<crate::diag::NetDiag>,
     time: Res<Time<Real>>,
+    perf: Option<Res<crate::perf::Perf>>,
 ) {
     let Ok(mut text) = text.single_mut() else { return };
     if !ui.debug {
         return;
     }
-    let fps = diag
-        .get(&FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|d| d.smoothed())
+    // (As F4 counts it: the frames of the last 2 s over their time. Bevy's smoothed rate, which differs, only
+    // without the perf plugin.)
+    let fps = perf
+        .and_then(|p| p.fps(2.0))
+        .map(f64::from)
+        .or_else(|| diag.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()))
         .unwrap_or(0.0);
     let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
     let link = conn.as_ref().and_then(|c| c.entity).and_then(|e| links.get(e).ok());
@@ -119,7 +123,7 @@ fn update(
             )
         });
     text.0 = format!(
-        "{net_s} | {fps:.0} fps\n{round_s}\nt {t:.2} s | tick {} | others {}\n{body_s}\nrollbacks {rollbacks} ({rb_ticks} ticks) | map events {}",
+        "{net_s} | {fps:.0} fps (2 s)\n{round_s}\nt {t:.2} s | tick {} | others {}\n{body_s}\nrollbacks {rollbacks} ({rb_ticks} ticks) | map events {}",
         timeline.tick().0,
         others.iter().count(),
         stats.map_events,
