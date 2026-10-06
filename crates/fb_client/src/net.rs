@@ -267,7 +267,8 @@ fn ask(conn: &mut Conn, now: f32) {
     let (tx, rx) = channel();
     let url = format!("{}/api/session", conn.http);
     let req = session_request(conn, conn.transport);
-    std::thread::spawn(move || {
+    // Named: a panic here is not a crash of the game (`crash.rs`); a thread that fails to start drops `tx`.
+    let _ = std::thread::Builder::new().name("fb-session".into()).spawn(move || {
         let _ = tx.send(request(&url, &req));
     });
     conn.asking = Some(Mutex::new(rx));

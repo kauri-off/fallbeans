@@ -1005,7 +1005,7 @@ fn server_actions(
     ids: Res<Identities>,
     conn: Option<Res<Conn>>,
     fields: Query<(&Field, &EditableText)>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut commands: Commands,
 ) {
     let mut opened = false;

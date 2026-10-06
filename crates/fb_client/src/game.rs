@@ -533,7 +533,6 @@ fn predict(
                         z: p.pos.z as f64,
                         vx: p.vel.x as f64,
                         vz: p.vel.y as f64,
-                        touching: false,
                         size: p.size as f64,
                     }),
             );

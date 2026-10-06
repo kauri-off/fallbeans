@@ -95,8 +95,6 @@ pub struct OtherBody {
     pub z: f64,
     pub vx: f64,
     pub vz: f64,
-    /// Unused (nothing reads it); kept until the client stops setting it (`fb_client` game.rs).
-    pub touching: bool,
     pub size: f64,
 }
 

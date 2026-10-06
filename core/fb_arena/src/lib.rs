@@ -484,7 +484,6 @@ pub fn other_of(id: u32, b: &Body) -> OtherBody {
         z: b.pos.z,
         vx: b.vel.x,
         vz: b.vel.z,
-        touching: false,
         size: b.size,
     }
 }

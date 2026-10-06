@@ -217,9 +217,11 @@ pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, m
         }
         let (tx, rx) = channel();
         let a = addr.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(check(&a));
-        });
+        let _ = std::thread::Builder::new()
+            .name("fb-server-check".into())
+            .spawn(move || {
+                let _ = tx.send(check(&a));
+            });
         states.pending.push((addr.clone(), Mutex::new(rx)));
     }
 }

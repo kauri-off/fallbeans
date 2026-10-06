@@ -25,7 +25,7 @@ const HOLD_S: f32 = 3.0;
 /// came up and held.
 pub fn start(url: String, req: SessionRequest, conditioner: Option<LinkConditionerConfig>) -> Receiver<bool> {
     let (tx, rx) = channel();
-    std::thread::spawn(move || {
+    let _ = std::thread::Builder::new().name("fb-probe".into()).spawn(move || {
         let _ = tx.send(run(&url, &req, conditioner));
     });
     rx
