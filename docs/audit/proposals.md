@@ -1,5 +1,9 @@
 # Audit 2026-10-05 — proposals (changes not applied)
 
+> **Исторический документ (аудит 2026-10-05).** Описывает дерево и версию на тот день; многое с тех пор изменено
+> или удалено (`docs/decisions.md`, `cargo xtask golden`, `stress --remote`, `deploy/`, золотые трассы TS, OpenGL).
+> Текущее состояние — код, `docs/state.md` и `README.md`.
+
 > Validated against the repository on 2026-10-05 (after PR #11): every open problem below was still in the code;
 > the quick ones were then fixed and are marked "Applied … (validation pass)".
 
@@ -274,7 +278,7 @@ Sources: `K:\GameDevLibrary\books` (image-pipeline, iquilezles).
 |---|---|---|
 | 6.1 | 🟢 | **Bevy 0.20 / Lightyear**: wait. Bevy 0.20 is rc.2 (2026-09-28); Lightyear's port (PR #1760) and replicon's (#768) are open. The move is one step for Bevy, Lightyear, replicon, aeronet 0.22, wgpu 30, glam 0.33. Breaking areas that hit this code: UI Em/Rem units and `TextFont` default size, `BorderRadius`, deprecated `Button`/`Interaction`, flat pointer events, `Font::from_bytes`, `Tonemapping` moved, WESL instead of naga_oil (FSR and surface WGSL), `ViewDepthTexture`, generic `Extract`, exclusive systems, observer generics, query iterators returning `Result`, `NextState::set_if_neq` renamed. glam 0.33 changed scalar paths (`FloatExt::lerp`, recip→division): bump glam first and run `cargo xtask check`. Large effort. |
 | 6.3 | 🟢 | (There is no CI any more — every check runs locally: this would be a `cargo xtask` step.) `cargo audit` with `--ignore RUSTSEC-2026-0121` (steamworks, lockfile-only via Lightyear's optional Steam) and a reason. Other lockfile-only/unmaintained: paste, rustls-pemfile; ttf-parser (Linux client, via winit Wayland decorations — upstream). |
-| 6.4 | 🟢 | One TLS crypto library: aws-lc-rs comes only from the vendored aeronet's rustls defaults, ring from ureq/rcgen. Give rustls only `ring` in the vendor crate and install the ring provider in `session/mod.rs` → aws-lc-sys and `cmake` leave both builds (musl server jobs need cmake only for it). Test `cargo xtask stress --remote --transport ws`. |
+| 6.4 | 🟢 | One TLS crypto library: aws-lc-rs comes only from the vendored aeronet's rustls defaults, ring from ureq/rcgen. Give rustls only `ring` in the vendor crate and install the ring provider in `vendor/aeronet_websocket/src/session/mod.rs` → aws-lc-sys and `cmake` leave both builds (musl server jobs need cmake only for it). Test `cargo xtask stress --remote --transport ws`. |
 | 6.5 | 🟢 | A check on the MSRV (`rust-version = 1.95`), locally (`cargo +1.95 check --workspace`) or in `release.yml`'s `check` job: only stable is built now. |
 | 6.6 | 🟢 | hmac 0.13 / sha2 0.11 — hold until tungstenite moves to digest 0.11 (else two digest stacks); sysinfo 0.39 with 6.1; `wgpu-types` pin could relax to `"29"`. |
 

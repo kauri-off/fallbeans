@@ -13,8 +13,8 @@
 | Linux | `FallBeans-<версия>-x86_64.AppImage` | `chmod +x` и запустить |
 | Linux (Flatpak) | `FallBeans-<версия>-x86_64.flatpak` | `flatpak install --user <файл>` |
 
-Нужно минимум 2 ядра, 2 ГБ памяти и видеокарта с OpenGL 3.3 (Vulkan, DirectX 12 или OpenGL). Подписей у файлов нет,
-контрольные суммы — `SHA256SUMS` в релизе.
+Нужно минимум 2 ядра, 2 ГБ памяти и видеокарта с DirectX 12 (Windows 10 и новее) или Vulkan 1.2 (Linux, а на
+Windows — запасной вариант). Подписей у файлов нет, контрольные суммы — `SHA256SUMS` в релизе.
 
 Windows и AppImage обновляются сами: при новой версии на главном экране появится кнопка «Обновить». Flatpak
 показывает ссылку на релиз; новый файл ставится через `flatpak install --user --reinstall <файл>`, настройки
@@ -34,10 +34,11 @@ Windows и AppImage обновляются сами: при новой верс�
 | Бег | WASD или стрелки | левый стик |
 | Камера | мышь (ЛКМ захватывает курсор) | правый стик |
 | Прыжок | Пробел | A |
-| Нырок | E, Shift, Ctrl или ЛКМ | X или B |
+| Нырок | E, Shift (любой), левый Ctrl или ЛКМ | X или B |
 | Захват | Q или ПКМ | RB или RT |
 | Эмоции | 1–5 | крестовина (1–4) |
-| Меню, чат | Esc, Enter | |
+| Меню | Esc | Start |
+| Чат | Enter | |
 
 Зритель переключает игрока или обзор арены: A / D, Q / E, стрелки, кнопки мыши; на геймпаде — крестовина
 влево-вправо, LB / RB. F3 — отладочный оверлей, F4 — производительность, F8 — отчёт о проблеме (ниже),
@@ -69,13 +70,20 @@ F9 — запись замера производительности.
 | Система | Файл | Как поставить |
 | --- | --- | --- |
 | Debian, Ubuntu | `fallbeans-server_*_amd64.deb` | `sudo apt install ./fallbeans-server_*_amd64.deb` |
-| Fedora, RHEL, openSUSE | `fallbeans-server-*.x86_64.rpm` | `sudo dnf install ./fallbeans-server-*.x86_64.rpm` |
+| Fedora, RHEL | `fallbeans-server-*.x86_64.rpm` | `sudo dnf install ./fallbeans-server-*.x86_64.rpm` |
+| openSUSE | `fallbeans-server-*.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./fallbeans-server-*.x86_64.rpm` |
 
 Служба `fallbeans` запускается сразу. Открыть в файерволе: **5887/tcp** (HTTP API), **5888/udp** (игра),
 **5889/tcp** (WebSocket, запасной путь, если UDP режется). Настройки — `/etc/fallbeans/fallbeans.env` (`FB_NAME` —
 название в списке серверов, `FB_ARGS` — флаги из `fb_server --help`), затем `sudo systemctl restart fallbeans`.
-Логи — `journalctl -u fallbeans` (например, `journalctl -u fallbeans --since "10 min ago"` к отчёту F8 игрока). Секрет `FB_SECRET` создаётся при установке один раз: новый секрет даст всем
-игрокам новые identity.
+Логи — `journalctl -u fallbeans` (например, `journalctl -u fallbeans --since "10 min ago"` к отчёту F8 игрока).
+Секрет `FB_SECRET` создаётся при установке один раз: новый секрет даст всем игрокам новые identity.
+
+Отладочный API (`/fallbeans/api/debug/…`: `state`, `health`, `logs`, `trace`, `replay`, `maps`) без ключа выключен.
+Чтобы включить, задайте в том же файле длинный случайный `FB_DEBUG_KEY=…` и перезапустите службу; затем один раз
+откройте в браузере `http://<сервер>:5887/fallbeans/api/debug/login?key=<ключ>` — браузер получит cookie на неделю,
+и, например, `…/api/debug/state?format=text` покажет состояние комнат. Ключ никому не давайте: он открывает всё о
+комнатах и игроках.
 
 Игроки добавляют сервер одной строкой: `192.168.1.10`, `192.168.1.10:7000` (HTTP API на другом порту), имя машины
 или `game.example.com` (сначала `https://…/fallbeans`, затем порт 5887). Остальное сервер сообщает сам: адрес UDP —
@@ -89,8 +97,8 @@ F9 — запись замера производительности.
 
 ## Сборка из исходников
 
-Нужен Rust stable ≥ 1.95; на Linux ещё `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`. Первая сборка
-долгая (Bevy).
+Нужен rustup: версию Rust задаёт `rust-toolchain.toml`, rustup поставит её сам. На Linux ещё `libasound2-dev
+libudev-dev libwayland-dev libxkbcommon-dev`. Первая сборка долгая (Bevy).
 
 ```sh
 cargo build --release -p fb_server -p fb_client
@@ -98,15 +106,14 @@ target/release/fb_server --name "Дома"
 target/release/fb_client
 ```
 
-Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`).
+Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`). В `vendor/` — копии `aeronet_websocket`
+и `lightyear_transport` с нашими исправлениями (подключены через `[patch.crates-io]` в `Cargo.toml`).
 
 ## Известные проблемы
 
-- Intel Gen9 (HD 520, UHD 620/630, Comet Lake) с Mesa 26.2 (и Vulkan, и OpenGL) через несколько секунд сцены
-  вешает видеокарту (`GPU HANG` в журнале ядра). На Linux клиент, найдя такую видеокарту, сам перезапускается с
-  `INTEL_DEBUG=reemit` (замеры разницы не показали); заданная вручную `INTEL_DEBUG` не трогается.
-- `--backend gl` на Wayland падает («Fallback system failed to choose present mode», Bevy #22220): OpenGL работает
-  только через XWayland (без `WAYLAND_DISPLAY`).
+- Intel Gen9 (HD 520, UHD 620/630, Comet Lake) с Mesa 26.2 через несколько секунд сцены вешает видеокарту
+  (`GPU HANG` в журнале ядра). На Linux клиент, найдя такую видеокарту, сам перезапускается с `INTEL_DEBUG=reemit`
+  (замеры разницы не показали); заданная вручную `INTEL_DEBUG` не трогается.
 - Графический API выбирается флагом `--backend` или в настройках и действует со следующего запуска: если игра не
   запускается на одном API, сама на другой она не переключится.
 - Linux без `pipewire-alsa`: ALSA-устройство по умолчанию занято PipeWire, в логе `ALSA lib pcm_dmix… unable to
@@ -117,4 +124,15 @@ target/release/fb_client
 
 [GNU AGPL v3](LICENSE) или любая более поздняя версия. Кто запускает изменённый сервер для других игроков, обязан
 дать им исходники своих изменений. Шрифты в `assets/fonts` — SIL Open Font License 1.1 (`OFL*.txt` рядом с ними).
+Модели в `assets/models` сделаны для этой игры в Blender (исходник — `blender/models.blend`, экспорт —
+`blender/export.py`) и распространяются под той же лицензией, что и игра.
+
+Библиотеки на Rust, встроенные в клиент и сервер, — под своими разрешительными лицензиями (MIT, Apache-2.0, BSD,
+ISC, Zlib и другие): их список и тексты лежат в каждом пакете в `THIRD-PARTY-LICENSES.html` рядом с `LICENSE`
+(Windows — в папке игры, AppImage — рядом с бинарником в `usr/bin`, Flatpak — в `share/licenses`, сервер —
+`/usr/share/doc/fallbeans-server/` или `/usr/share/licenses/fallbeans-server/`). Файл собирает `cargo xtask dist`
+через [cargo-about](https://github.com/EmbarkStudios/cargo-about) (`packaging/about.toml`).
+
 Прежняя браузерная версия на TypeScript — тег [`ts-final`](https://github.com/kauri-off/fallbeans/tree/ts-final).
+Клиент подключается только к серверу с той же версией протокола, а она учитывает и код симуляции (физику, карты):
+после обновления клиентов обновите и сервер.

@@ -1,5 +1,9 @@
 # Total audit of Fall Beans — plan
 
+> **Исторический документ (аудит 2026-10-05).** Описывает дерево и версию на тот день; многое с тех пор изменено
+> или удалено (`docs/decisions.md`, `cargo xtask golden`, `stress --remote`, `deploy/`, золотые трассы TS, OpenGL).
+> Текущее состояние — код, `docs/state.md` и `README.md`.
+
 Date: 2026-10-05. Tree: `K:\fallbeans-rogue-port-to-rust` (branch `rogue/port-to-rust` content, **not a git checkout** —
 no `.git`). Version `0.1.0-alpha`. Toolchain here: rustc/cargo 1.98.1 stable, Windows 11.
 
@@ -53,7 +57,7 @@ Then I (the main thread):
 3. Bounded runtime smoke: server + headless clients via `cargo xtask stress` (short, `--release`), and
    `fb_client --offscreen --exit-after` if useful.
 4. Write `docs/audit/report.md` (all findings, what was fixed) and `docs/audit/proposals.md` (bigger changes with
-   variants); rewrite `docs/state.md`; append to `docs/decisions.md` (that tree's decisions log; the repository has none).
+   variants); rewrite `docs/state.md`; append to that tree's `decisions.md` (a decisions log the repository no longer keeps).
 
 ## Never let anything run endlessly or get stuck (hard limit: 30 minutes per run)
 
@@ -83,4 +87,4 @@ Then I (the main thread):
 - Fixed source tree (diff vs the baseline snapshot).
 - `docs/audit/report.md` — every finding with status.
 - `docs/audit/proposals.md` — larger changes: problem, impact, variants, recommendation.
-- Updated `docs/state.md` and `docs/decisions.md`.
+- Updated `docs/state.md` and that tree's decisions log (gone since).

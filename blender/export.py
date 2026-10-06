@@ -1,7 +1,7 @@
 """
-Exports every model of blender/fallguys_assets.blend to glTF binaries, headless:
+Exports every model of blender/models.blend to glTF binaries, headless:
 
-    blender -b blender/fallguys_assets.blend --python blender/export.py -- <out dir>
+    blender -b blender/models.blend --python blender/export.py -- <out dir>
 
 Each collection named A_<model> becomes <out dir>/<model>.glb (A_bean -> bean.glb), with the
 collection's objects, their names and hierarchy (the game animates bean parts by node name),

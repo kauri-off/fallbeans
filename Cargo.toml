@@ -58,6 +58,21 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+# The simulation at full speed in dev builds too (stress and audits without --release): bit-identical, Rust never
+# contracts floating-point operations into FMA at any opt-level.
+[profile.dev.package.fb_shared]
+opt-level = 3
+
+[profile.dev.package.fb_sim]
+opt-level = 3
+
+[profile.dev.package.fb_maps]
+opt-level = 3
+
+[profile.dev.package.fb_arena]
+opt-level = 3
+
+# panic = "unwind" (the default) stays everywhere: the server catches a room's panic (`catch_unwind`).
 [profile.release]
 lto = "thin"
 
@@ -68,10 +83,14 @@ lto = false
 incremental = true
 codegen-units = 256
 
-# Release packages (`cargo xtask dist`). Symbols stay: crash reports name the functions in their backtrace.
+# Release packages (`cargo xtask dist`), client and server: one codegen unit with fat LTO (slow to build, a few %
+# faster). Symbols and line tables stay (nothing is stripped): crash reports name the function and the line in their
+# backtrace. On Windows those come from the PDB, which the installer does not ship.
 [profile.dist]
 inherits = "release"
-strip = "debuginfo"
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

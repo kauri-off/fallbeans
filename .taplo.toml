@@ -1,0 +1,3 @@
+# `taplo fmt`: the TOML files at the width of the Rust code (rustfmt.toml), two-space indents (.editorconfig).
+[formatting]
+column_width = 120

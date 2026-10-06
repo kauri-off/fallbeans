@@ -13,7 +13,66 @@ fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
 fb_proto.workspace = true
-bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav", "bevy_settings", "system_clipboard", "sysinfo_plugin"] }
+# Bevy's "3d" and "ui" bundles spelled out, without what the game does not use: gizmos, animation and morph
+# targets (the models have none), mesh and sprite picking (UI picking only), the default font (the UI puts its own
+# at the default handle), webgl2. No OpenGL: wgpu is built with DX12, Vulkan and Metal only. ktx2 and zstd stay: SMAA's and tonemapping's lookup tables are KTX2 + zstd.
+bevy = { workspace = true, features = [
+  # default_app, default_platform
+  "async_executor",
+  "bevy_asset",
+  "bevy_log",
+  "bevy_state",
+  "reflect_auto_register",
+  "std",
+  "multi_threaded",
+  "bevy_winit",
+  "x11",
+  "wayland",
+  "custom_cursor",
+  "bevy_gilrs",
+  "bevy_clipboard",
+  "system_clipboard",
+  "sysinfo_plugin",
+  # common_api, 3d_api
+  "bevy_camera",
+  "bevy_color",
+  "bevy_image",
+  "bevy_mesh",
+  "bevy_shader",
+  "bevy_material",
+  "bevy_text",
+  "bevy_window",
+  "bevy_light",
+  "bevy_mikktspace",
+  "hdr",
+  "png",
+  "jpeg",
+  "ktx2",
+  "zstd_rust",
+  "smaa_luts",
+  "tonemapping_luts",
+  # 3d_bevy_render
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_anti_alias",
+  "bevy_post_process",
+  "bevy_pbr",
+  "bevy_gltf",
+  # scene
+  "bevy_world_serialization",
+  "bevy_scene",
+  # ui, picking
+  "bevy_ui",
+  "bevy_ui_render",
+  "bevy_ui_widgets",
+  "bevy_input_focus",
+  "bevy_picking",
+  "ui_picking",
+  # the rest
+  "bevy_audio",
+  "wav",
+  "bevy_settings",
+] }
 wgpu-types.workspace = true
 # The graphics API is chosen before Bevy's renderer starts (`backend.rs`): the adapters of DX12 and Vulkan.
 # (Bevy builds wgpu with DX12, Vulkan and Metal only: no OpenGL.)

@@ -8,7 +8,6 @@ rustc-ice-*.txt
 
 # Claude Code session files
 .claude/*
-!.claude/settings.json
 
 # Secrets and logs
 .env
