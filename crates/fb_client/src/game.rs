@@ -74,7 +74,15 @@ pub struct Map {
     pub sfx: Vec<&'static str>,
     /// How this round looks (`fb_sim::looks`): palettes, sky, light, fog, scenery.
     pub look: fb_sim::looks::ResolvedLook,
+    /// The room it was built in: every room's first lobby is arena 1 with seed 1, another room's is not this.
+    room: Option<String>,
+    /// The others as the own bean met them at each predicted tick: a rollback replays a tick against the same
+    /// bodies, not against where they are drawn now.
+    others: BTreeMap<i64, Vec<OtherBody>>,
 }
+
+/// Ticks of the others kept (`PredictionManager::max_rollback_ticks` and a little).
+const OTHERS_KEPT: usize = 128;
 
 impl Map {
     pub fn time(&self, tick: f64) -> f64 {
@@ -176,7 +184,13 @@ impl Plugin for GamePlugin {
         app.init_resource::<Gate>();
         app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
-        app.add_systems(PreUpdate, (build_round, latch_presses.after(bevy::input::InputSystems)));
+        app.add_systems(
+            PreUpdate,
+            (
+                (drop_map, build_round).chain(),
+                latch_presses.after(bevy::input::InputSystems),
+            ),
+        );
         app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
         app.add_systems(FixedUpdate, predict);
         app.add_systems(
@@ -202,6 +216,14 @@ fn open_trace(mut commands: Commands, opts: Res<Opts>) {
     }
 }
 
+/// Out of the room (at the room list, on another server): its map goes, and with it what the next room would
+/// take for its own (players, bonuses, decorations). The scene stays drawn until the next map's replaces it.
+fn drop_map(map: Option<Res<Map>>, session: Res<Session>, mut commands: Commands) {
+    if map.is_some() && session.room.is_none() {
+        commands.remove_resource::<Map>();
+    }
+}
+
 /// Builds the arena's map once both the replicated `Round` and its `ArenaInfo` (who plays: maps deal
 /// tails and stars from it) are in.
 fn build_round(
@@ -211,10 +233,22 @@ fn build_round(
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
     mut unknown: Local<Option<u32>>,
+    mut generations: Local<u32>,
 ) {
-    let Some(round) = rounds.iter().next() else { return };
+    // (Out of the room, its arena may linger a moment: `drop_map`.)
+    if session.room.is_none() {
+        return;
+    }
+    // The arena the player is in: the last one's `Round` may linger a moment beside it.
+    let in_arena = |r: &&Round| session.arena.as_ref().is_some_and(|a| a.id == r.arena);
+    let Some(round) = rounds.iter().find(in_arena) else {
+        return;
+    };
     let mut map = map;
-    if let Some(m) = map.as_mut().filter(|m| m.round.same_arena(round)) {
+    if let Some(m) = map
+        .as_mut()
+        .filter(|m| m.round.same_arena(round) && m.room == session.room)
+    {
         // The same arena with its clock moved (a dev warp or pause): no new map.
         if m.round != *round {
             m.round = round.clone();
@@ -253,6 +287,9 @@ fn build_round(
     let me = session.me;
     client_start(&mut b.world, &mut spec, &mut session.scores, me, &mut out);
     let render = b.world.nodes.clone();
+    // (Counted here, not from the map before: there may be none, and views tell maps apart by it.)
+    let generation = *generations;
+    *generations = generation.wrapping_add(1);
     let mut next = Map {
         round: round.clone(),
         world: b.world,
@@ -263,11 +300,13 @@ fn build_round(
         static_hash,
         pending: Vec::new(),
         seen: BTreeSet::new(),
-        generation: map.map_or(0, |m| m.generation + 1),
+        generation,
         info,
         deco: BTreeMap::new(),
         sfx: Vec::new(),
         look: fb_sim::looks::look_for(def.looks(), round.seed),
+        room: session.room.clone(),
+        others: BTreeMap::new(),
     };
     next.take_out(out);
     commands.insert_resource(next);
@@ -470,20 +509,40 @@ fn predict(
     } else {
         BodyInput::default()
     };
-    let extra: Vec<OtherBody> = others
-        .iter()
-        .filter(|(_, p)| p.anim != Anim::Portal)
-        .map(|(o, p)| OtherBody {
-            id: o.0,
-            x: p.pos.x as f64,
-            y: p.pos.y as f64,
-            z: p.pos.z as f64,
-            vx: p.vel.x as f64,
-            vz: p.vel.y as f64,
-            touching: false,
-            size: p.size as f64,
-        })
-        .collect();
+    // The others as drawn, the first time this tick is predicted; a rollback's replay meets them where they
+    // were then. As on the server, a bean that finished or is out (or is in a portal) is in nobody's way.
+    let map = &mut *map;
+    let replayed = rollback.is_some().then(|| map.others.get(&k).cloned()).flatten();
+    let extra = match replayed {
+        Some(extra) => extra,
+        None => {
+            let mut extra = if map.others.len() >= OTHERS_KEPT {
+                map.others.pop_first().map(|(_, v)| v).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            extra.clear();
+            extra.extend(
+                others
+                    .iter()
+                    .filter(|(o, p)| p.anim != Anim::Portal && !map.gone(o.0))
+                    .map(|(o, p)| OtherBody {
+                        id: o.0,
+                        x: p.pos.x as f64,
+                        y: p.pos.y as f64,
+                        z: p.pos.z as f64,
+                        vx: p.vel.x as f64,
+                        vz: p.vel.y as f64,
+                        touching: false,
+                        size: p.size as f64,
+                    }),
+            );
+            // (By id: the query's order may change between a tick and its replay.)
+            extra.sort_by_key(|o| o.id);
+            map.others.insert(k, extra.clone());
+            extra
+        }
+    };
     let full = &mut *full;
     // A body from the previous arena may stand on a collider this world does not have.
     if full.body.ground_col >= map.world.colliders.len() as i32 {
@@ -498,7 +557,6 @@ fn predict(
         input,
     }];
     // Map logic predicted here (a portal, a pane that breaks), and the sounds it asks for.
-    let map = &mut *map;
     let (mut scores, mut out) = (Default::default(), Vec::new());
     let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
     tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
@@ -577,8 +635,10 @@ fn predict_respawn(map: &Map, id: u32, full: &mut BodyFull) {
 #[derive(Resource, Default)]
 struct Inbox(Vec<(MapEventMsg, f64)>);
 
-/// Seconds an event may wait for its arena.
+/// Seconds an event may wait for its arena; for the arena the player is in or one replicated, whose map is
+/// still to be built (a slow machine, a big map), longer.
 const INBOX_WAIT: f64 = 5.0;
+const INBOX_WAIT_BUILDING: f64 = 60.0;
 
 fn receive_map_events(
     mut receivers: Query<&mut MessageReceiver<MapEventMsg>>,
@@ -603,23 +663,38 @@ fn apply_map_events(
     mut inbox: ResMut<Inbox>,
     interp: Option<Res<InterpolationTimeline>>,
     own: Query<&PlayerId, With<Predicted>>,
+    rounds: Query<&Round>,
     mut session: ResMut<Session>,
     time: Res<Time<Real>>,
     mut cues: MessageWriter<Cue>,
 ) {
-    let Some(mut map) = map else { return };
+    let now = time.elapsed_secs_f64();
+    let Some(mut map) = map else {
+        if !inbox.0.is_empty() {
+            inbox.0.retain(|(_, at)| now - at < INBOX_WAIT_BUILDING);
+        }
+        return;
+    };
+    // (Nothing to do: neither `Map` nor `Session` is touched, so neither reads as changed.)
+    if inbox.0.is_empty() && map.pending.is_empty() {
+        return;
+    }
     let map = &mut *map;
     let arena = map.round.arena;
-    let now = time.elapsed_secs_f64();
     let real = time.elapsed_secs();
+    let building = |a: u32| session.arena.as_ref().is_some_and(|s| s.id == a) || rounds.iter().any(|r| r.arena == a);
     // This arena's events go on; others wait a while for their map.
     inbox.0.retain(|(msg, at)| {
         if msg.arena == arena {
             map.pending.push(msg.clone());
             return false;
         }
-        now - at < INBOX_WAIT
+        let age = now - at;
+        age < INBOX_WAIT || (age < INBOX_WAIT_BUILDING && building(msg.arena))
     });
+    if map.pending.is_empty() {
+        return;
+    }
     let me = own.single().ok().map(|p| p.0);
     let now = interp.map(|t| t.tick().0);
     let session = &mut *session;

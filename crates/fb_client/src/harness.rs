@@ -98,6 +98,20 @@ fn free_port(udp: bool) -> String {
     }
 }
 
+/// A server with `--dev --solo` on free ports: the app, its WebSocket and HTTP ports.
+fn new_server() -> (App, String, String) {
+    let (udp, ws, http) = (free_port(true), free_port(false), free_port(false));
+    #[rustfmt::skip]
+    let opts = fb_server::Opts::parse_from([
+        "fb_server", "--dev", "--solo", "--udp-port", &udp, "--ws-port", &ws, "--http-port", &http,
+        "--ws-addr", "127.0.0.1", "--http-addr", "127.0.0.1", "--public-host", "127.0.0.1",
+        "--link-timeout", &LINK_TIMEOUT_S.to_string(),
+    ]);
+    let mut server = fb_server::app(opts, false);
+    ready(&mut server);
+    (server, ws, http)
+}
+
 /// What `App::run` does before the first frame.
 fn ready(app: &mut App) {
     while app.plugins_state() == PluginsState::Adding {
@@ -115,6 +129,8 @@ pub struct Peer {
 
 pub struct Game {
     pub server: App,
+    /// More servers (`add_server`), stepped with the first.
+    pub more: Vec<App>,
     pub peers: Vec<Peer>,
     /// The client the player's actions go to (`as_peer`).
     pub at: usize,
@@ -130,17 +146,10 @@ impl Game {
     }
 
     pub fn on(gpu: wgpu::DeviceType, args: &[&str]) -> Self {
-        let (udp, ws, http) = (free_port(true), free_port(false), free_port(false));
-        #[rustfmt::skip]
-        let server = fb_server::Opts::parse_from([
-            "fb_server", "--dev", "--solo", "--udp-port", &udp, "--ws-port", &ws, "--http-port", &http,
-            "--ws-addr", "127.0.0.1", "--http-addr", "127.0.0.1", "--public-host", "127.0.0.1",
-            "--link-timeout", &LINK_TIMEOUT_S.to_string(),
-        ]);
-        let mut server = fb_server::app(server, false);
-        ready(&mut server);
+        let (server, ws, http) = new_server();
         let mut g = Self {
             server,
+            more: Vec::new(),
             peers: Vec::new(),
             at: 0,
             http,
@@ -179,6 +188,13 @@ impl Game {
         &self.http
     }
 
+    /// Another server (its own secret: its identities are not the first one's); its HTTP port.
+    pub fn add_server(&mut self) -> String {
+        let (server, _, http) = new_server();
+        self.more.push(server);
+        http
+    }
+
     /// The player's actions go to client `i` from now on.
     pub fn as_peer(&mut self, i: usize) {
         self.at = i;
@@ -195,6 +211,9 @@ impl Game {
 
     pub fn step(&mut self) {
         self.server.update();
+        for s in &mut self.more {
+            s.update();
+        }
         self.step_clients();
     }
 

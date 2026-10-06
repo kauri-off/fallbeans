@@ -20,7 +20,7 @@ use lightyear::websocket::client::WebSocketTarget;
 use crate::opts::{Opts, Transport};
 use crate::servers::Target;
 use crate::session::Session;
-use crate::settings::{Me, Player};
+use crate::settings::{Identities, Me};
 
 /// How long UDP gets to answer before `auto` goes over WebSocket.
 pub const UDP_TRY_S: f32 = 2.0;
@@ -353,7 +353,7 @@ fn receive_session(
     time: Res<Time>,
     mut session: ResMut<Session>,
     conn: Option<ResMut<Conn>>,
-    mut player: ResMut<Player>,
+    mut ids: ResMut<Identities>,
 ) {
     let Some(mut conn) = conn else { return };
     let now = time.elapsed_secs();
@@ -376,9 +376,9 @@ fn receive_session(
     if reply.ws_url.is_some() {
         conn.ws = reply.ws_url.clone();
     }
-    if opts.token.is_none() && player.identity != reply.identity {
-        player.identity = reply.identity.clone();
-        crate::settings::save_now(&mut commands);
+    // (Kept for this server only: another one is never sent it.)
+    if opts.token.is_none() {
+        ids.set(&conn.http, &reply.identity);
     }
     if reply.protocol != PROTOCOL_VERSION {
         error!(

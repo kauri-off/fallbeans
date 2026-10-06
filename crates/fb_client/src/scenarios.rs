@@ -530,6 +530,141 @@ fn the_server_list() {
     on_room_list(&mut g);
 }
 
+/// From the room list to the server list, `addr` added to it if it is not there, and «Играть» on it.
+fn connect_through_the_list(g: &mut Game, addr: &str) {
+    g.press(5.0, "К серверам", |a| matches!(a, Action::LeaveServer));
+    g.until(5.0, "the server list", |w| {
+        w.resource::<crate::servers::Target>().0.is_none()
+    });
+    if !g.res::<crate::servers::Servers>().list.iter().any(|s| s == addr) {
+        g.focus(Field::Server);
+        g.erase(Field::Server);
+        g.type_text(addr);
+        g.blur();
+        g.press(2.0, "Добавить", |a| matches!(a, Action::AddServer));
+    }
+    let a = addr.to_string();
+    g.press(
+        10.0,
+        "Играть на этом сервере",
+        move |x| matches!(x, Action::Connect(s) if *s == a),
+    );
+}
+
+/// Audit #4: one identity was shared by every server. Server B was sent the token server A gave, and B's reply
+/// replaced it, so back on A the player was somebody new (their room no longer theirs). Now each server gets
+/// only its own.
+#[test]
+fn an_identity_for_each_server() {
+    let mut g = Game::new(&[]);
+    on_room_list(&mut g);
+    let a_http = format!("http://127.0.0.1:{}/fallbeans", g.http_port());
+    let a_addr = format!("127.0.0.1:{}", g.http_port());
+    let id_of = |g: &Game, http: &str| g.res::<crate::settings::Identities>().get(http);
+    let a = id_of(&g, &a_http).expect("server A's identity kept");
+    let b_port = g.add_server();
+    let b_http = format!("http://127.0.0.1:{b_port}/fallbeans");
+    assert_eq!(id_of(&g, &b_http), None);
+
+    connect_through_the_list(&mut g, &format!("127.0.0.1:{b_port}"));
+    assert_ne!(
+        g.res::<crate::net::Conn>().identity.as_deref(),
+        Some(a.as_str()),
+        "server B was sent A's identity"
+    );
+    on_room_list(&mut g);
+    let b = id_of(&g, &b_http).expect("server B's identity kept");
+    assert_ne!(a, b);
+    assert_eq!(
+        id_of(&g, &a_http).as_deref(),
+        Some(a.as_str()),
+        "B's reply took A's identity"
+    );
+
+    connect_through_the_list(&mut g, &a_addr);
+    on_room_list(&mut g);
+    assert_eq!(
+        g.res::<crate::net::Conn>().identity.as_deref(),
+        Some(a.as_str()),
+        "back on A, the same player"
+    );
+    assert_eq!(id_of(&g, &b_http).as_deref(), Some(b.as_str()));
+}
+
+/// Leaving a room takes its map along: every room's first lobby is arena 1 with seed 1, and the next room
+/// used to keep the last one's map (its players, bonuses and decorations).
+#[test]
+fn the_map_goes_with_the_room() {
+    use crate::game::Map;
+    let mut g = Game::new(&[]);
+    create_room(&mut g, "Первая", false);
+    g.until(10.0, "the lobby's map", |w| w.contains_resource::<Map>());
+    let first = g.res::<Map>().generation;
+    menu(&mut g);
+    g.press(2.0, "Выйти из комнаты", |a| {
+        matches!(a, Action::LeaveRoom)
+    });
+    on_room_list(&mut g);
+    g.until(5.0, "the map gone and the room closed", |w| {
+        !w.contains_resource::<Map>() && w.resource::<Session>().mine.is_none()
+    });
+    create_room(&mut g, "Вторая", false);
+    g.until(10.0, "the new lobby's own map", |w| {
+        w.get_resource::<Map>().is_some_and(|m| m.generation > first)
+    });
+    g.frames(30);
+}
+
+/// The Esc that closes the chat line does not open the menu as well.
+#[test]
+fn esc_closes_the_chat_not_the_menu() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    g.escape();
+    assert!(!g.res::<Ui>().menu, "Esc closes the menu");
+    g.enter();
+    assert!(g.res::<Ui>().chat, "Enter opens the chat");
+    g.type_text("ой");
+    g.escape();
+    assert!(!g.res::<Ui>().chat, "Esc closes the chat");
+    assert!(!g.res::<Ui>().menu, "the Esc that closed the chat opened the menu");
+    g.escape();
+    assert!(g.res::<Ui>().menu, "the next Esc opens it");
+}
+
+/// A key taken from an action that had only it: the two swap (it used to get its defaults back, the taken key
+/// among them, so Q both jumped and grabbed). The game's own keys (F8, the emotes) are not taken.
+#[test]
+fn rebind_takes_a_key_from_another_action() {
+    let mut g = Game::new(&[]);
+    on_room_list(&mut g);
+    g.press(5.0, "Настройки", |a| {
+        matches!(a, Action::HomeTab(HomeTab::Settings))
+    });
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold("keys")));
+    let keys = |g: &Game, b: Bind| g.res::<crate::settings::Bindings>().keys(b);
+    g.press(2.0, "Изменить: прыжок", |a| {
+        matches!(a, Action::Rebind(Bind::Jump))
+    });
+    g.key(KeyCode::F8, Key::F8, None);
+    g.key(KeyCode::Digit1, Key::Character("1".into()), Some("1"));
+    assert_eq!(g.res::<Ui>().rebinding, Some(Bind::Jump), "F8 and 1 are the game's");
+    g.key(KeyCode::KeyQ, Key::Character("q".into()), Some("q"));
+    assert_eq!(keys(&g, Bind::Jump), [KeyCode::KeyQ]);
+    assert_eq!(keys(&g, Bind::Grab), [KeyCode::Space], "grab takes jump's key");
+    g.press(2.0, "Изменить: нырок", |a| {
+        matches!(a, Action::Rebind(Bind::Dive))
+    });
+    g.key(KeyCode::KeyW, Key::Character("w".into()), Some("w"));
+    assert_eq!(keys(&g, Bind::Dive), [KeyCode::KeyW]);
+    assert_eq!(
+        keys(&g, Bind::Forward),
+        [KeyCode::ArrowUp],
+        "forward keeps its other key"
+    );
+    g.frames(10);
+}
+
 /// fuzz-ui seed 22: a second click on «Играть» in the frame the button went, after the first press had its link:
 /// two links connected and replicon panicked.
 #[test]

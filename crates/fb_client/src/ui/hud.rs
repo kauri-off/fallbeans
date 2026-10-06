@@ -348,6 +348,18 @@ fn genre_pill(p: &mut ChildSpawnerCommands, f: &Fonts, g: Genre, s: &str) {
     });
 }
 
+/// The arena's points as whole numbers, for a section's key: formatted straight into the hash, without a list
+/// built every frame.
+struct Points<'a>(&'a std::collections::BTreeMap<Pid, f64>);
+
+impl core::fmt::Debug for Points<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|(id, v)| (*id, *v as i64)))
+            .finish()
+    }
+}
+
 /// Top left: the round, the players with their status, score and ping.
 fn panel(
     mut q: Query<(Entity, &mut Section), With<PanelBox>>,
@@ -361,7 +373,7 @@ fn panel(
         return;
     };
     let round = info.kind == ArenaKind::Round;
-    let points: Vec<(Pid, i64)> = session.scores.iter().map(|(id, v)| (*id, *v as i64)).collect();
+    let points = Points(&session.scores);
     let key = key_of(&(&session.lobby, info.id, info.kind, &hud.roster, &points, session.me));
     if !sec.stale(key) {
         return;
@@ -445,7 +457,7 @@ fn panel(
                 if info.kind == ArenaKind::Lobby && pl.crowns > 0 {
                     rich(r, f, &format!("👑{}", pl.crowns), 12.0, INK);
                 }
-                let bells = points.iter().find(|s| s.0 == pl.id).map_or(0, |s| s.1);
+                let bells = session.scores.get(&pl.id).map_or(0, |v| *v as i64);
                 if info.kind == ArenaKind::Lobby && bells > 0 {
                     rich(r, f, &format!("🔔{bells}"), 12.0, INK);
                 }
@@ -536,13 +548,16 @@ fn feed(
                     padding: UiRect::axes(rem(0.75), rem(0.3125)),
                     border: UiRect::all(px(1)),
                     border_radius: BorderRadius::all(rem(0.75)),
+                    // (A note may carry a long path: an F8 report's.)
+                    max_width: rem(30.0),
                     ..default()
                 },
                 glass(),
             ))
             .with_children(|r| match &x.what {
                 Feed::Note(s) => {
-                    rich(r, f, s, 13.0, INK);
+                    let t = rich(r, f, s, 13.0, INK);
+                    wrap_anywhere(r, t);
                 }
                 Feed::Ko {
                     victim,

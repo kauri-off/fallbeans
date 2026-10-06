@@ -3457,6 +3457,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "swash",
+ "toml",
  "ureq",
  "wgpu",
  "wgpu-types",
