@@ -8,7 +8,9 @@ English. License: AGPL-3.0-or-later.
 - `core/` (fb_shared, fb_sim, fb_maps, fb_arena, fb_audit) — the deterministic simulation and its tools: no Bevy,
   f64, no wall clock, no unseeded randomness, no `HashMap`, maths only through `fb_shared::m`.
 - `crates/` (fb_proto, fb_net, fb_server, fb_client) — Bevy/Lightyear code.
-- `docs/state.md` — the handoff between threads: read it first, rewrite it before you stop.
+- `docs/state.md` — the handoff between threads: read it first, update it before you stop. It must stay true
+  after the author commits: no commit hashes, dates, "uncommitted" or "done in this thread" notes (that is git's
+  job). Only open state: what is unverified, broken or half-done, and where to start next; drop items once fixed.
 
 ## Commands
 
