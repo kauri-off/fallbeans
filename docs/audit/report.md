@@ -1,5 +1,9 @@
 # Audit 2026-10-05 — report
 
+> **Исторический документ (аудит 2026-10-05).** Описывает дерево и версию на тот день; многое с тех пор изменено
+> или удалено (`docs/decisions.md`, `cargo xtask golden`, `stress --remote`, `deploy/`, золотые трассы TS, OpenGL).
+> Текущее состояние — код, `docs/state.md` и `README.md`.
+
 Total check of the tree `K:\fallbeans-rogue-port-to-rust` (content of branch `rogue/port-to-rust`, version
 `0.1.0-alpha`; **no `.git` in this copy** — the diff against the untouched snapshot was taken with
 `git diff --no-index`). Plan: [`plan.md`](plan.md). Bigger changes that were **not** applied:

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fall Beans: лицензии сторонних библиотек</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: sans-serif; max-width: 860px; margin: 0 auto; padding: 0 16px 48px; line-height: 1.45; }
+  pre { white-space: pre-wrap; max-height: 320px; overflow-y: auto; padding: 8px; border: 1px solid #8884; }
+  .used-by { font-size: 0.9em; }
+</style>
+</head>
+<body>
+<h1>Fall Beans: лицензии сторонних библиотек</h1>
+<p>Fall Beans распространяется под GNU AGPL v3 или любой более поздней версией (файл <code>LICENSE</code> рядом).
+В программу встроены библиотеки на Rust; ниже — их лицензии и полные тексты. Шрифты клиента (<code>assets/fonts</code>) —
+SIL Open Font License 1.1 (<code>OFL*.txt</code> рядом с ними). Исходный код:
+<a href="https://github.com/kauri-off/fallbeans">github.com/kauri-off/fallbeans</a>.</p>
+
+<h2>Лицензии</h2>
+<ul>
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> — {{count}}</li>
+{{/each}}
+</ul>
+
+<h2>Тексты</h2>
+{{#each licenses}}
+<section>
+  {{#if first_of_kind}}<h3 id="{{id}}">{{name}}</h3>{{/if}}
+  <p class="used-by">
+  {{#each used_by}}
+    <a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a>
+  {{/each}}
+  </p>
+  <pre>{{text}}</pre>
+</section>
+{{/each}}
+</body>
+</html>

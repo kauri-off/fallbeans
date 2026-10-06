@@ -1,0 +1,6 @@
+# One compiler for local builds and the release workflow (which reads the version from here): a new stable's lints
+# must not block a release of unchanged code. Raise it on purpose, then run `cargo xtask check`.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

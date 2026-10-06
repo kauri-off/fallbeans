@@ -41,9 +41,6 @@ enum Task {
     FuzzUi(fuzz::FuzzArgs),
     /// Release package of one kind into dist/.
     Dist(dist::DistArgs),
-    /// Claude Code hook: rustfmt on the edited file (hook payload on stdin).
-    #[command(hide = true)]
-    FormatHook,
 }
 
 /// What both server and clients take.
@@ -149,8 +146,30 @@ pub fn cargo() -> Command {
 
 fn check() -> bool {
     run(cargo().args(["fmt", "--all", "--check"]))
-        && run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))
-        && run(cargo().args(["test", "--workspace"]))
+        && run(cargo().args([
+            "clippy",
+            "--locked",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ]))
+        && run(cargo().args(["test", "--locked", "--workspace"]))
+}
+
+/// A client's tag from its index, as spreadsheet columns: a…z, aa, ab, …
+fn letters(mut i: u32) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.push(b'a' + (i % 26) as u8);
+        if i < 26 {
+            break;
+        }
+        i = i / 26 - 1;
+    }
+    s.reverse();
+    String::from_utf8(s).unwrap_or_default()
 }
 
 fn dev(a: &DevArgs) -> bool {
@@ -174,7 +193,7 @@ fn dev(a: &DevArgs) -> bool {
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = Command::new(a.shared.bin("fb_client"));
-            let profile = (b'a' + i as u8) as char;
+            let profile = letters(i);
             c.args([
                 "--profile",
                 &format!("dev-{profile}"),
@@ -205,12 +224,12 @@ fn dev(a: &DevArgs) -> bool {
     true
 }
 
-/// Blender bakes and exports every model of blender/fallguys_assets.blend straight into assets/models.
+/// Blender bakes and exports every model of blender/models.blend straight into assets/models.
 fn export_models() -> bool {
     let blender = std::env::var("BLENDER").unwrap_or_else(|_| "blender".into());
     let ok = run(Command::new(blender).current_dir(root()).args([
         "-b",
-        "blender/fallguys_assets.blend",
+        "blender/models.blend",
         "--python",
         "blender/export.py",
         "--",
@@ -222,42 +241,8 @@ fn export_models() -> bool {
     ok
 }
 
-/// Exit code 2 shows Claude what rustfmt could not fix.
-fn format_hook() -> ExitCode {
-    let mut input = String::new();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-    let payload: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
-    let Some(file) = payload["tool_input"]["file_path"].as_str() else {
-        return ExitCode::SUCCESS;
-    };
-    if !file.ends_with(".rs") || file.contains("/target/") || file.contains("\\target\\") {
-        return ExitCode::SUCCESS;
-    }
-    let out = Command::new("rustfmt")
-        .args(["--edition", "2024", "--config-path"])
-        .arg(root().join("rustfmt.toml"))
-        .arg(file)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => ExitCode::SUCCESS,
-        Ok(o) => {
-            eprintln!(
-                "rustfmt: {file} still has problems:\n{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            );
-            ExitCode::from(2)
-        }
-        Err(e) => {
-            eprintln!("rustfmt: {e}");
-            ExitCode::SUCCESS
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let ok = match Cli::parse().task {
-        Task::FormatHook => return format_hook(),
         Task::Check => check(),
         Task::Audit { args } => run(cargo().args(["run", "--release", "-p", "fb_audit", "--"]).args(args)),
         Task::Assets { export } => {

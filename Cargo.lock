@@ -3513,7 +3513,6 @@ dependencies = [
  "getrandom 0.3.4",
  "hmac",
  "lightyear",
- "serde",
  "serde_json",
  "sha2",
  "sysinfo",

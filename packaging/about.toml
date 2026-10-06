@@ -1,0 +1,30 @@
+# cargo-about (`cargo xtask dist`): THIRD-PARTY-LICENSES.html of every package, from `packaging/about.hbs`.
+# The licenses the locked crates use, nothing else: a dependency under any other license fails the package build.
+# Order is preference: for "A OR B" the first one listed here is the one shown.
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "ISC",
+  "Zlib",
+  "BSL-1.0",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "MIT-0",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+# What the packages are built for (a crate only another platform's `cfg` pulls in is left out).
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+]
+# Not in the binaries: tests' crates. Build scripts and proc macros are counted (their code may end up inside).
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+
+# Our own crates (publish = false): AGPL, the LICENSE every package carries.
+[private]
+ignore = true

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use clap::Args;
@@ -199,15 +199,17 @@ fn server_cores() -> Option<Pin> {
     })
 }
 
-fn wait_or_kill(c: &mut Child, deadline: Instant) {
+/// The child's exit status, or `None` once it had to be killed at the deadline.
+pub fn wait_or_kill(c: &mut Child, deadline: Instant) -> Option<ExitStatus> {
     while Instant::now() < deadline {
-        if let Ok(Some(_)) = c.try_wait() {
-            return;
+        if let Ok(Some(status)) = c.try_wait() {
+            return Some(status);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = c.kill();
     let _ = c.wait();
+    None
 }
 
 /// A traced tick of one bean: input and feet position.

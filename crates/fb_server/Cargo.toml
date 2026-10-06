@@ -18,7 +18,6 @@ axum.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
@@ -30,7 +29,9 @@ lightyear = { workspace = true, features = ["server", "std", "replication", "pre
 [lints]
 workspace = true
 
-# `cargo xtask dist deb|rpm`: a static (musl) server with its systemd unit.
+# `cargo xtask dist deb|rpm`: a static (musl) server with its systemd unit, built with the `dist` profile
+# (`target/release/` is the tools' placeholder for the real profile directory), and the third-party licenses
+# that xtask generates first.
 [package.metadata.deb]
 name = "fallbeans-server"
 maintainer = "kauri-off"
@@ -46,6 +47,7 @@ assets = [
     ["../../packaging/server/setup.sh", "usr/lib/fallbeans/", "755"],
     ["../../packaging/server/remove.sh", "usr/lib/fallbeans/", "755"],
     ["../../LICENSE", "usr/share/doc/fallbeans-server/", "644"],
+    ["../../target/licenses/fb_server/THIRD-PARTY-LICENSES.html", "usr/share/doc/fallbeans-server/", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -61,4 +63,5 @@ assets = [
     { source = "../../packaging/server/setup.sh", dest = "/usr/lib/fallbeans/setup.sh", mode = "755" },
     { source = "../../packaging/server/remove.sh", dest = "/usr/lib/fallbeans/remove.sh", mode = "755" },
     { source = "../../LICENSE", dest = "/usr/share/licenses/fallbeans-server/LICENSE", mode = "644", doc = true },
+    { source = "../../target/licenses/fb_server/THIRD-PARTY-LICENSES.html", dest = "/usr/share/licenses/fallbeans-server/THIRD-PARTY-LICENSES.html", mode = "644", doc = true },
 ]
