@@ -260,6 +260,12 @@ impl World {
 
     /// Poses `nodes` (a copy of this world's) for drawing at time t; colliders are left alone.
     pub fn pose(&self, t: f64, nodes: &mut Nodes) {
+        self.pose_locals(t, nodes);
+        nodes.update_all();
+    }
+
+    /// `pose` without the world matrices: the caller refreshes those of the nodes that moved.
+    pub fn pose_locals(&self, t: f64, nodes: &mut Nodes) {
         let mut ctx = MoveCtx {
             nodes,
             colliders: None,
@@ -269,7 +275,6 @@ impl World {
         for mv in &self.movers {
             mv(t, &mut ctx);
         }
-        nodes.update_all();
     }
 
     /// Fingerprint of the collision geometry at the current time.
