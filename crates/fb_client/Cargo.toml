@@ -32,6 +32,11 @@ lightyear_udp.workspace = true
 lightyear_sync.workspace = true
 lightyear_transport.workspace = true
 lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+# The process's RAM and CPU in the F4 overlay and recordings, read only while shown.
+sysinfo.workspace = true
+# Only for the `profiler` feature: the spans of these three without the rest of `bevy/trace`.
+bevy_app = { version = "=0.19.1", default-features = false, optional = true }
+bevy_ecs = { version = "=0.19.1", default-features = false, optional = true }
 
 [dev-dependencies]
 # The client's tests: a real server in their process, drawing on wgpu's noop device.
@@ -45,12 +50,14 @@ winresource = "0.1"
 default = ["brp", "profiler"]
 # The Bevy Remote Protocol probe (`--brp`): off in distributed builds.
 brp = ["bevy/bevy_remote"]
-# Bevy's spans for every system: the built-in profiler of the F4 overlay (`perf/profiler.rs`).
-profiler = ["bevy/trace"]
-# The same spans to Tracy (https://github.com/wolfpld/tracy), with the GPU's passes: development only.
-tracy = ["profiler", "bevy/trace_tracy"]
-# The same spans to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
-chrome = ["profiler", "bevy/trace_chrome"]
+# Bevy's spans of systems, schedules, the app and the render world: the built-in profiler of the F4 overlay
+# (`perf/profiler.rs`; they exist at run time only with `--profiler`). Not `bevy/trace`: its error layer
+# formats every span's fields, and pbr, core_pipeline, asset and winit add spans the profiler does not read.
+profiler = ["bevy_ecs/trace", "bevy_app/trace", "bevy_render/trace"]
+# All of Bevy's spans to Tracy (https://github.com/wolfpld/tracy), with the GPU's passes: development only.
+tracy = ["profiler", "bevy/trace", "bevy/trace_tracy"]
+# All of them to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
+chrome = ["profiler", "bevy/trace", "bevy/trace_chrome"]
 
 [lints]
 workspace = true

@@ -1,14 +1,24 @@
 //! The scene's load: entities, meshes, triangles, lights, materials, textures, memory.
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
 use bevy::camera::visibility::ViewVisibility;
-use bevy::diagnostic::{DiagnosticPath, DiagnosticsStore, SystemInformationDiagnosticsPlugin};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::diagnostic::MeshAllocatorDiagnosticPlugin;
-use bevy::render::renderer::RenderDevice;
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
 use serde::Serialize;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+use wgpu_types::Backend;
 
+use super::RenderShared;
 use crate::render::surface::SurfaceMaterial;
+
+const MB: f32 = 1024.0 * 1024.0;
+/// Seconds between GPU allocator reports (DX12 only; the report walks every allocation).
+const GPU_REPORT_S: f32 = 5.0;
+/// A CPU sample older than this is no fair "since the last look" (the counts were not shown meanwhile).
+const CPU_GAP: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Scene {
@@ -26,7 +36,7 @@ pub struct Scene {
     pub texture_mb: f32,
     /// Vertex and index buffers, MB.
     pub mesh_mb: f32,
-    /// What wgpu allocated on the GPU (Vulkan, DX12), MB.
+    /// What wgpu allocated on the GPU, MB: DX12 only (the other backends have no allocator report).
     pub gpu_mb: Option<f32>,
     pub ui_nodes: u32,
     pub ram_mb: Option<f32>,
@@ -62,8 +72,54 @@ fn image_bytes(image: &Image) -> u64 {
     sum * u64::from(d.size.depth_or_array_layers.max(1))
 }
 
-pub fn count(world: &mut World) -> Scene {
-    const MB: f32 = 1024.0 * 1024.0;
+/// What `count` keeps between looks: the process's CPU time, the last GPU allocator report. The process is
+/// read only while the counts are shown or recorded (Bevy's system information plugin would refresh it, and
+/// every CPU's load, five times a second for every player).
+#[derive(Resource)]
+pub struct Probe {
+    sys: System,
+    pid: Pid,
+    /// When, and the process's CPU time then (ms).
+    cpu: Option<(Instant, u64)>,
+    /// When (real time, s), and what the report said.
+    gpu: Option<(f32, Option<f32>)>,
+}
+
+impl Default for Probe {
+    fn default() -> Probe {
+        Probe {
+            sys: System::new(),
+            pid: Pid::from_u32(std::process::id()),
+            cpu: None,
+            gpu: None,
+        }
+    }
+}
+
+impl Probe {
+    /// The process's resident memory (MB) and its CPU since the last look (% of one core; None the first time).
+    fn process(&mut self) -> (Option<f32>, Option<f32>) {
+        let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        self.sys
+            .refresh_processes_specifics(ProcessesToUpdate::Some(&[self.pid]), false, kind);
+        let Some(p) = self.sys.process(self.pid) else {
+            return (None, None);
+        };
+        let (now, ms) = (Instant::now(), p.accumulated_cpu_time());
+        let cpu = self
+            .cpu
+            .replace((now, ms))
+            .filter(|(at, _)| now.duration_since(*at) < CPU_GAP)
+            .and_then(|(at, was)| {
+                let wall = now.duration_since(at).as_secs_f64() * 1000.0;
+                (wall > 0.0).then(|| (ms.saturating_sub(was) as f64 / wall * 100.0) as f32)
+            });
+        (Some(p.memory() as f32 / MB), cpu)
+    }
+}
+
+/// The counts as of now (`now`: real time, s).
+pub fn count(world: &mut World, now: f32) -> Scene {
     let mut s = Scene {
         entities: world.entities().count_spawned(),
         ..default()
@@ -89,19 +145,30 @@ pub fn count(world: &mut World) -> Scene {
     let images = world.resource::<Assets<Image>>();
     s.textures = images.len() as u32;
     s.texture_mb = images.iter().map(|(_, i)| image_bytes(i)).sum::<u64>() as f32 / MB;
-    let store = world.resource::<DiagnosticsStore>();
-    let value = |p: &DiagnosticPath| store.get(p).and_then(|d| d.value()).map(|v| v as f32);
-    let (mem, cpu) = (
-        SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE,
-        SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE,
-    );
-    s.mesh_mb = value(MeshAllocatorDiagnosticPlugin::slabs_size_diagnostic_path()).unwrap_or(0.0) / MB;
-    s.ram_mb = value(&mem).map(|gib| gib * 1024.0);
-    s.cpu = value(&cpu);
-    s.gpu_mb = world
-        .get_resource::<RenderDevice>()
-        .and_then(|d| d.wgpu_device().generate_allocator_report())
-        .map(|r| r.total_allocated_bytes as f32 / MB);
+    s.mesh_mb = world
+        .get_resource::<RenderShared>()
+        .map_or(0, |r| r.0.mesh_bytes.load(Ordering::Relaxed)) as f32
+        / MB;
+    let dx12 = world
+        .get_resource::<RenderAdapterInfo>()
+        .is_some_and(|i| i.0.backend == Backend::Dx12);
+    let report_due = dx12
+        && world
+            .get_resource::<Probe>()
+            .is_some_and(|p| p.gpu.is_none_or(|(at, _)| now - at >= GPU_REPORT_S));
+    let report = report_due.then(|| {
+        world
+            .get_resource::<RenderDevice>()
+            .and_then(|d| d.wgpu_device().generate_allocator_report())
+            .map(|r| r.total_allocated_bytes as f32 / MB)
+    });
+    if let Some(mut probe) = world.get_resource_mut::<Probe>() {
+        if let Some(mb) = report {
+            probe.gpu = Some((now, mb));
+        }
+        (s.ram_mb, s.cpu) = probe.process();
+        s.gpu_mb = probe.gpu.and_then(|(_, mb)| mb);
+    }
     s
 }
 

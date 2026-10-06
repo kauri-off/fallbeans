@@ -19,7 +19,7 @@ pub struct PerfArgs {
 enum PerfCmd {
     /// Server plus one windowed client in a round with bots: records the frames, prints the report.
     Run(RunArgs),
-    /// The report of a recording (`perf-*.json` from the logs folder or `target/perf`).
+    /// The report of a recording (`perf-*.json` from the logs folder, or `target/perf-runs` of `run`).
     Show { file: PathBuf },
     /// What changed from one recording to another.
     Compare { base: PathBuf, new: PathBuf },
@@ -27,13 +27,31 @@ enum PerfCmd {
     Csv { file: PathBuf, out: Option<PathBuf> },
 }
 
+/// `--secs`: what the client takes for `--perf-capture` (more than 0, at most an hour).
+fn record_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (f32::MIN_POSITIVE..=3600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "more than 0, at most 3600".into())
+}
+
+/// `--warmup`: what the client takes for `--perf-warmup`.
+fn warmup_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (0.0..=600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "between 0 and 600".into())
+}
+
 #[derive(Args)]
 struct RunArgs {
     /// Seconds recorded.
-    #[arg(long, default_value_t = 30.0)]
+    #[arg(long, default_value_t = 30.0, value_parser = record_secs)]
     secs: f32,
     /// Seconds of the round before the recording.
-    #[arg(long, default_value_t = 8.0)]
+    #[arg(long, default_value_t = 8.0, value_parser = warmup_secs)]
     warmup: f32,
     /// The graphics features off one at a time instead (about a minute).
     #[arg(long)]
@@ -154,6 +172,8 @@ fn run(r: &RunArgs) -> bool {
         "--fill",
         "--autopilot",
         "--no-update",
+        // (The spans of systems: the recording's CPU rows.)
+        "--profiler",
         "--perf-warmup",
         &r.warmup.to_string(),
     ])
@@ -393,7 +413,9 @@ fn report(d: &Value) -> String {
     }
     let spikes = d["spikes"].as_array().map(Vec::as_slice).unwrap_or_default();
     if !spikes.is_empty() {
-        let _ = writeln!(t, "\nlong frames ({}):", spikes.len());
+        // (A recording keeps the first few hundred; `spike_count` is all of them.)
+        let all = d["spike_count"].as_u64().unwrap_or(spikes.len() as u64);
+        let _ = writeln!(t, "\nlong frames ({all}):");
         for sp in spikes.iter().take(8) {
             let top: Vec<String> = sp["top"]
                 .as_array()
@@ -557,17 +579,39 @@ fn compare(b: &Value, n: &Value) -> String {
             find(n, "passes", name, "gpu"),
         );
     }
-    let mut systems = names(n, "cpu");
-    for x in names(b, "cpu") {
-        if !systems.contains(&x) {
-            systems.push(x);
+    // (By kind and name: a system and its commands, or a schedule, can have one name.)
+    let rows = |d: &Value| -> Vec<(String, String)> {
+        d["cpu"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r["kind"].as_str()?.to_string(), r["name"].as_str()?.to_string())))
+            .collect()
+    };
+    let mut keys = rows(n);
+    for k in rows(b) {
+        if !keys.contains(&k) {
+            keys.push(k);
         }
     }
-    let mut deltas: Vec<(String, Option<f64>, Option<f64>)> = systems
-        .into_iter()
-        .map(|s| {
-            let (x, y) = (find(b, "cpu", &s, "ms"), find(n, "cpu", &s, "ms"));
-            (s, x, y)
+    let ms_of = |d: &Value, (kind, name): &(String, String)| {
+        d["cpu"]
+            .as_array()
+            .and_then(|v| {
+                v.iter()
+                    .find(|r| r["kind"] == kind.as_str() && r["name"] == name.as_str())
+            })
+            .and_then(|r| num(&r["ms"]))
+    };
+    let mut deltas: Vec<(String, Option<f64>, Option<f64>)> = keys
+        .iter()
+        .map(|k| {
+            let label = if k.0 == "system" {
+                k.1.clone()
+            } else {
+                format!("{} ({})", k.1, k.0)
+            };
+            (label, ms_of(b, k), ms_of(n, k))
         })
         .collect();
     deltas.sort_by(|a, b| {

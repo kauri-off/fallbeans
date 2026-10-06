@@ -10,13 +10,17 @@ pub struct Frame {
     pub frame: f32,
     /// Of it, the frame limit's sleep.
     pub sleep: f32,
-    /// The main world's schedules.
+    /// The main world's schedules, `First` to `Last`.
     pub main: f32,
-    /// The render world (the render thread): extract to cleanup, the swapchain waits included.
+    /// The render thread's last finished frame (the main frame before this one): its `Render` schedule,
+    /// `ExtractCommands` to `PostCleanup`, the swapchain waits included. Extract itself (on the main thread,
+    /// after `Last`) and the main thread's wait for the render thread are in neither `main` nor `render`:
+    /// only in `frame`.
     pub render: f32,
-    /// Of it, waiting for the swapchain (acquire and present; with the profiler built in).
+    /// Of it, waiting for the swapchain: acquire (`prepare_windows`) and present (the `present_frames` span,
+    /// so only with the profiler built in; NaN without).
     pub wait: f32,
-    /// The GPU's timed passes, shadows not among them (Vulkan and DX12, a few frames late).
+    /// The GPU's timed passes, shadows not among them (a few frames late; NaN with `--no-gpu-timers`).
     pub gpu: f32,
 }
 
@@ -31,7 +35,8 @@ pub struct Stat {
 
 impl Stat {
     pub fn of(values: impl Iterator<Item = f32>) -> Option<Stat> {
-        let mut v: Vec<f32> = values.filter(|x| x.is_finite()).collect();
+        // (NaN: not measured; a negative time is a driver's wrong GPU timestamp.)
+        let mut v: Vec<f32> = values.filter(|x| x.is_finite() && *x >= 0.0).collect();
         if v.is_empty() {
             return None;
         }

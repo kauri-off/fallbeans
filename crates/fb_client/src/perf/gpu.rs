@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use bevy::diagnostic::{Diagnostic, DiagnosticsStore};
+use bevy::diagnostic::{Diagnostic, DiagnosticPath, DiagnosticsStore};
 use serde::Serialize;
 
 /// A pass that has not reported for this long is no longer drawn (its last value stays in the store).
@@ -19,9 +19,11 @@ pub struct Pass {
     pub frags: f32,
 }
 
+/// The last value, if recent and a real one (a driver can report a negative GPU time).
 fn fresh(d: &Diagnostic, now: Instant) -> Option<f32> {
     let m = d.measurement()?;
-    (now.saturating_duration_since(m.time) < STALE).then_some(m.value as f32)
+    let v = m.value as f32;
+    (now.saturating_duration_since(m.time) < STALE && v.is_finite() && v >= 0.0).then_some(v)
 }
 
 /// `render/<top>/…/<field>`: the top-level pass, how deep, and the field.
@@ -32,19 +34,34 @@ fn split(path: &str) -> Option<(&str, usize, &str)> {
     Some((top, head.matches('/').count(), field))
 }
 
-/// The GPU time of the frame: the top-level passes added up.
-pub fn frame_ms(store: &DiagnosticsStore, now: Instant) -> f32 {
-    let mut sum = 0.0;
-    let mut any = false;
-    for d in store.iter() {
-        if let Some((_, 0, "elapsed_gpu")) = split(d.path().as_str())
-            && let Some(v) = fresh(d, now)
-        {
+/// The top-level passes' GPU times in the store, looked up again only when it has new paths (it never loses
+/// one): the frame's sum reads them without parsing every path every frame.
+#[derive(Default)]
+pub struct FramePaths {
+    seen: usize,
+    gpu: Vec<DiagnosticPath>,
+}
+
+impl FramePaths {
+    /// The GPU time of the frame: the top-level passes added up.
+    pub fn frame_ms(&mut self, store: &DiagnosticsStore, now: Instant) -> f32 {
+        let n = store.iter().count();
+        if n != self.seen {
+            self.seen = n;
+            self.gpu = store
+                .iter()
+                .filter(|d| matches!(split(d.path().as_str()), Some((_, 0, "elapsed_gpu"))))
+                .map(|d| d.path().clone())
+                .collect();
+        }
+        let mut sum = 0.0;
+        let mut any = false;
+        for v in self.gpu.iter().filter_map(|p| fresh(store.get(p)?, now)) {
             sum += v;
             any = true;
         }
+        if any { sum } else { f32::NAN }
     }
-    if any { sum } else { f32::NAN }
 }
 
 /// The passes drawn now, the costliest on the GPU (else the CPU) first.
