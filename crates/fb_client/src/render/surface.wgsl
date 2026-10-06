@@ -1,27 +1,23 @@
 // Surfaces: triplanar detail in the object's own space (normal, cavity shading,
 // roughness, frost) and the look's two-tone pattern, on top of the standard PBR material.
+// (The forward pass only: the prepasses and shadows use the standard material's shaders.)
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
     mesh_functions,
     mesh_view_bindings::globals,
-}
-
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::{
-    prepass_io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
-}
-#else
-#import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
 }
-#endif
 
 #ifdef VISIBILITY_RANGE_DITHER
 #import bevy_pbr::pbr_functions::visibility_range_dither;
+#endif
+
+#ifdef BINDLESS
+#import bevy_pbr::mesh_bindings::mesh
+#import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d}
 #endif
 
 struct Surface {
@@ -35,9 +31,36 @@ struct Surface {
     extra: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> surface: Surface;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var detail_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var detail_smp: sampler;
+#ifdef BINDLESS
+// Bindless indices 50…52 (`Surface` in surface.rs): its data, the detail texture and its sampler.
+struct SurfaceIndices {
+    material: u32,
+    detail_texture: u32,
+    detail_sampler: u32,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage> surface_indices: array<SurfaceIndices>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage> surface_array: array<Surface>;
+#else
+@group(#{MATERIAL_BIND_GROUP}) @binding(50) var<uniform> surface_uniform: Surface;
+@group(#{MATERIAL_BIND_GROUP}) @binding(51) var detail_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(52) var detail_smp: sampler;
+#endif
+
+// One projection of the detail texture.
+fn sample_detail(slot: u32, uv: vec2<f32>, gx: vec2<f32>, gy: vec2<f32>) -> vec4<f32> {
+#ifdef BINDLESS
+    return textureSampleGrad(
+        bindless_textures_2d[surface_indices[slot].detail_texture],
+        bindless_samplers_filtering[surface_indices[slot].detail_sampler],
+        uv,
+        gx,
+        gy,
+    );
+#else
+    return textureSampleGrad(detail_tex, detail_smp, uv, gx, gy);
+#endif
+}
 
 @fragment
 fn fragment(
@@ -49,6 +72,13 @@ fn fragment(
     visibility_range_dither(in.position, in.visibility_range_dither);
 #endif
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+#ifdef BINDLESS
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    let surface = surface_array[surface_indices[slot].material];
+#else
+    let slot = 0u;
+    let surface = surface_uniform;
+#endif
 
     var color = pbr_input.material.base_color;
     let kind = i32(round(surface.extra.x));
@@ -56,7 +86,7 @@ fn fragment(
     // (Without the detail texture: what the flat texture holds, no change.)
     var height = 1.0;
     var rough = 0.5;
-    // (Both branches are uniform: the material's, as the derivatives in them want.)
+    // (The branches are the material's: uniform over a triangle, as the derivatives in them want.)
     if sampled || kind >= 0 {
         // The object's frame: its axes (scale removed) and origin.
         let m = mesh_functions::get_world_from_local(in.instance_index);
@@ -81,13 +111,13 @@ fn fragment(
             var ty = vec4(0.5);
             var tz = vec4(0.5);
             if w.x > 0.0 {
-                tx = textureSampleGrad(detail_tex, detail_smp, dp.zy, gx.zy, gy.zy);
+                tx = sample_detail(slot, dp.zy, gx.zy, gy.zy);
             }
             if w.y > 0.0 {
-                ty = textureSampleGrad(detail_tex, detail_smp, dp.xz, gx.xz, gy.xz);
+                ty = sample_detail(slot, dp.xz, gx.xz, gy.xz);
             }
             if w.z > 0.0 {
-                tz = textureSampleGrad(detail_tex, detail_smp, dp.xy, gx.xy, gy.xy);
+                tz = sample_detail(slot, dp.xy, gx.xy, gy.xy);
             }
             height = tx.b * w.x + ty.b * w.y + tz.b * w.z;
             rough = tx.a * w.x + ty.a * w.y + tz.a * w.z;
@@ -101,7 +131,9 @@ fn fragment(
         if kind >= 0 {
             let dir = surface.pattern.yz;
             var q = vec2(dot(p.xz, dir), dot(p.xz, vec2(-dir.y, dir.x))) * surface.pattern.x;
-            q.x += globals.time * surface.pattern.w;
+            // The drift repeats a whole number of times (even: the checker's period is 2) over Bevy's hour of
+            // `globals.time`, which wraps at 3600 s: no jump when it does.
+            q.x += 2.0 * fract(globals.time / 3600.0 * round(surface.pattern.w * 1800.0));
             var sx = q.x;
             if kind == 3 {
                 sx += abs(fract(q.y * 0.5) - 0.5) * 1.2;
@@ -131,9 +163,6 @@ fn fragment(
         1.0,
     );
 
-#ifdef PREPASS_PIPELINE
-    let out = deferred_output(in, pbr_input);
-#else
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
@@ -141,6 +170,5 @@ fn fragment(
         out.color = pbr_input.material.base_color;
     }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-#endif
     return out;
 }

@@ -83,7 +83,7 @@ pub fn board(text: &str, bg: Color) -> Image {
         .iter()
         .flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8))
         .collect();
-    Image::new(
+    let mut image = Image::new(
         Extent3d {
             width: SIZE as u32,
             height: SIZE as u32,
@@ -93,7 +93,10 @@ pub fn board(text: &str, bg: Color) -> Image {
         data,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
-    )
+    );
+    // (Mips: the frame and the emoji shimmer at a distance without them.)
+    super::surface::add_mips(&mut image);
+    image
 }
 
 #[cfg(test)]
@@ -106,6 +109,9 @@ mod tests {
         assert!(w > 16 && h > 16);
         assert!(data.chunks(4).filter(|p| p[3] > 200).count() > 100);
         let img = board("🏆", Color::srgb(0.2, 0.4, 0.8));
-        assert_eq!(img.data.unwrap().len(), SIZE * SIZE * 4);
+        // Every mip level down to 1×1.
+        assert_eq!(img.texture_descriptor.mip_level_count, SIZE.trailing_zeros() + 1);
+        let total: usize = (0..=SIZE.trailing_zeros()).map(|l| (SIZE >> l).pow(2) * 4).sum();
+        assert_eq!(img.data.unwrap().len(), total);
     }
 }

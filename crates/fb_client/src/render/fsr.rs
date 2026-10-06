@@ -74,6 +74,9 @@ impl Plugin for FsrPlugin {
         render_app
             .add_systems(RenderStartup, init_pipeline)
             .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
+            // (Before the post-processing, on linear HDR, not after the tone mapping as FSR 1 would have it:
+            // the vignette (effect stack) runs before the tone mapping over the whole target, so it would
+            // centre on the full frame instead of the small one. `easu.wgsl` tone-maps its taps reversibly.)
             .add_systems(Core3d, easu.in_set(Core3dSystems::EarlyPostProcess));
     }
 }

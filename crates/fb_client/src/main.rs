@@ -211,7 +211,12 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_systems(PreStartup, offscreen_target);
         } else {
             app.add_plugins(plugins);
-            app.insert_resource(WinitSettings::continuous());
+            // (In the background at most 60 frames a second, not as many as it can: laptops' batteries. The
+            // loop still runs at that rate without events, so the network and the fixed ticks carry on.)
+            app.insert_resource(WinitSettings {
+                focused_mode: bevy::winit::UpdateMode::Continuous,
+                unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_secs_f64(1.0 / 60.0)),
+            });
         }
         app.insert_resource(bevy::render::error_handler::RenderErrorHandler(crash::render_failed));
         if opts.check_assets {
