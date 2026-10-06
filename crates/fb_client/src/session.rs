@@ -262,11 +262,16 @@ fn receive(
                         if resumed { " (resumed)" } else { "" }
                     );
                     session.me = Some(id);
+                    // (Back from practice within the server's lobby grace is a resume of the room, but an entry
+                    // for the player: the menu opens as on any entry.)
+                    let other_room = session.room.as_ref() != Some(&room);
                     session.room = Some(room);
                     session.practice = practice;
                     session.denied = None;
                     if !resumed {
                         session.chat.clear();
+                    }
+                    if !resumed || other_room {
                         session.entries += 1;
                     }
                 }

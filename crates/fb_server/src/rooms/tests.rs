@@ -1122,14 +1122,14 @@ fn a_survival_round_with_one_player_left_is_played_not_won_at_once() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec!["jump-club".into(), "hex-a-gone".into()],
+        games: vec!["hex-a-gone".into()],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
+    t.until(15.0, |t| t.room.arena.map.meta().id == "hex-a-gone", |_| {});
+    // One of the two leaves in the intro: "the last bean standing" used to end the round on its next tick.
     t.room.quit(b.id);
     t.pump();
-    t.until(15.0, |t| t.room.arena.map.meta().id == "hex-a-gone", |_| {});
-    // Still in the intro: "the last bean standing" used to end it on its first tick.
     t.advance(0.5);
     assert_eq!(t.room.phase, Phase::Round);
     assert!(t.room.round.as_ref().is_some_and(|r| !r.over));
