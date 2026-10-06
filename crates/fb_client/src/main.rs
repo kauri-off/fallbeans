@@ -7,6 +7,7 @@ mod beans;
 #[cfg(feature = "brp")]
 mod brp;
 mod camera;
+mod clicks;
 mod clock;
 mod crash;
 mod diag;
@@ -231,6 +232,9 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 gpu_timers: !opts.no_gpu_timers && !test,
             },
         ));
+        if opts.trace_clicks {
+            app.add_plugins(clicks::ClickTracePlugin);
+        }
         if !opts.offscreen && !test {
             app.add_plugins((audio::AudioPlugin, update::UpdatePlugin));
         }

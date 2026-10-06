@@ -169,6 +169,9 @@ pub struct Opts {
     pub check_assets: bool,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
+    /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).
+    #[arg(long)]
+    pub trace_clicks: bool,
 }
 
 impl Opts {

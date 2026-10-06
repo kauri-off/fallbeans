@@ -125,6 +125,9 @@ struct DevArgs {
     /// The host fills the room's empty places with bots.
     #[arg(long)]
     fill: bool,
+    /// Clients log every left click (`--trace-clicks`).
+    #[arg(long)]
+    trace_clicks: bool,
     #[command(flatten)]
     shared: Shared,
 }
@@ -187,6 +190,9 @@ fn dev(a: &DevArgs) -> bool {
             }
             if a.fill {
                 c.arg("--fill");
+            }
+            if a.trace_clicks {
+                c.arg("--trace-clicks");
             }
             c.spawn().ok()
         })

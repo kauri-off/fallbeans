@@ -58,6 +58,8 @@ pub struct Rig {
     teleports: u32,
     watching: Option<u32>,
     cut_arena: Option<u32>,
+    /// The yaw a round starts with: the angles stay there through the intro, whatever the mouse does.
+    start_yaw: f32,
 }
 
 impl Default for Rig {
@@ -78,6 +80,7 @@ impl Default for Rig {
             teleports: 0,
             watching: None,
             cut_arena: None,
+            start_yaw: 0.0,
         }
     }
 }
@@ -278,6 +281,7 @@ pub fn place_camera(
             _ => 0.0,
         };
         cam.yaw = yaw;
+        rig.start_yaw = yaw;
         cam.pitch = START_PITCH;
         rig.snap();
         rig.teleports = own.map_or(0, |(_, f)| f.teleports);
@@ -288,6 +292,7 @@ pub fn place_camera(
     {
         rig.teleports = f.teleports;
         cam.yaw = f.body.yaw as f32;
+        rig.start_yaw = cam.yaw;
         rig.snap();
     }
     let focus = match own {
@@ -322,6 +327,8 @@ pub fn place_camera(
         rig.cinematic(eye, Vec3::new(0.0, 2.6, 0.0), dt, cut)
     } else if map.round.kind == ArenaKind::Round && !late && t <= -INTRO_HANDOVER {
         rig.cut_arena = Some(map.round.arena);
+        cam.yaw = rig.start_yaw;
+        cam.pitch = START_PITCH;
         let (mut eye, mut look) = intro_shot(&map, &session, t);
         if let Some((tf, _)) = own {
             let h = smoothstep(t, -INTRO_HANDOVER - INTRO_BLEND, -INTRO_HANDOVER);

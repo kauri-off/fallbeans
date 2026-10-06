@@ -306,6 +306,19 @@ pub fn rich(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, color: 
 }
 
 pub fn rich_in(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, color: Color, black: bool) -> Entity {
+    rich_with(p, f, s, size, color, black, ())
+}
+
+/// Text whose root and every run carry `extra`.
+fn rich_with(
+    p: &mut ChildSpawnerCommands,
+    f: &Fonts,
+    s: &str,
+    size: f32,
+    color: Color,
+    black: bool,
+    extra: impl Bundle + Clone,
+) -> Entity {
     let font = if black { f.black.clone() } else { f.bold.clone() };
     let mut e = p.spawn((
         Text::default(),
@@ -315,6 +328,7 @@ pub fn rich_in(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, colo
             ..default()
         },
         TextColor(color),
+        extra.clone(),
     ));
     let id = e.id();
     e.with_children(|t| {
@@ -327,6 +341,7 @@ pub fn rich_in(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, colo
                     ..default()
                 },
                 TextColor(color),
+                extra.clone(),
             ));
         }
     });
@@ -432,9 +447,9 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                 }
             });
         }
+        // (Picking hits text by its runs: a run without IGNORE would take the release from the button.)
         if !s.is_empty() {
-            let t = rich(b, f, s, look.size(), ink);
-            b.commands().entity(t).insert(Pickable::IGNORE);
+            rich_with(b, f, s, look.size(), ink, false, Pickable::IGNORE);
         }
     })
 }

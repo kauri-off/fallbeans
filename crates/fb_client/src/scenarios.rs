@@ -740,6 +740,28 @@ fn a_button_takes_a_click_at_its_edge() {
     assert!(!g.res::<Ui>().menu, "«Продолжить» pressed at its top edge did nothing");
 }
 
+/// Pressed, a button's face moves down and its text with it: a click at any height on it still counts, the
+/// text sliding under the pointer or not.
+#[test]
+fn a_button_takes_a_click_anywhere_on_it() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    g.frames(10);
+    let r = g.rects(|a| matches!(a, Action::Resume))[0];
+    let mut y = r.min.y + 0.5;
+    while y < r.max.y {
+        g.click_at(Vec2::new(r.center().x, y));
+        assert!(
+            !g.res::<Ui>().menu,
+            "«Продолжить» pressed at y {y} of {r:?} did nothing"
+        );
+        g.escape();
+        g.frames(3);
+        assert!(g.res::<Ui>().menu, "Esc did not open the menu again");
+        y += 1.0;
+    }
+}
+
 /// Every option of the menu mid-round on T2, each graphics preset, upscaler and toggle applied on the fly.
 #[test]
 fn every_setting_mid_round() {
