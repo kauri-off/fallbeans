@@ -8,14 +8,51 @@ impl Default for Fnv {
 }
 
 impl Fnv {
-    /// Mixes in `v` rounded to a multiple of `1 / scale`.
+    /// Mixes in `v` rounded to a multiple of `1 / scale`. NaN mixes in as a value no number rounds to.
     pub fn mix(&mut self, v: f64, scale: f64) {
-        for b in ((v * scale).round() as i64).to_le_bytes() {
+        // (`as` turns NaN into 0; a rounded f64 is never i64::MIN + 1: near 2⁶³ they are 1024 apart.)
+        let q = if v.is_nan() {
+            i64::MIN + 1
+        } else {
+            (v * scale).round() as i64
+        };
+        self.bytes(&q.to_le_bytes());
+    }
+
+    /// Mixes in `v` exactly, by its bits.
+    pub fn bits(&mut self, v: f64) {
+        self.int(v.to_bits());
+    }
+
+    pub fn int(&mut self, v: u64) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    pub fn bytes(&mut self, b: &[u8]) {
+        for &b in b {
             self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
 
     pub fn finish(&self) -> u64 {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mixed(v: f64) -> u64 {
+        let mut h = Fnv::default();
+        h.mix(v, 1e5);
+        h.finish()
+    }
+
+    #[test]
+    fn nan_is_not_zero() {
+        assert_ne!(mixed(f64::NAN), mixed(0.0));
+        assert_ne!(mixed(f64::NAN), mixed(f64::NEG_INFINITY));
+        assert_eq!(mixed(1.0), mixed(1.0 + 1e-9));
     }
 }

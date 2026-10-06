@@ -733,10 +733,11 @@ impl Builder {
                     if body.in_portal() || portal_shut(&cx.world.portals[k], open.as_ref(), t) {
                         return;
                     }
-                    cx.world.portal_used(k, i as u32, t);
                     body.enter_portal(ev, to, yaw, speed, lift);
-                    // Clients hear of it (it shuts, they show the light); not kept for late joiners.
+                    // Clients hear of it (it shuts, they show the light); not kept for late joiners. A
+                    // client's prediction does not shut it: only the server's event does.
                     if cx.server {
+                        cx.world.portal_used(k, i as u32, t);
                         cx.out.push(MapOut::Event {
                             ev: MapEvent::Portal {
                                 pair: k as u32,

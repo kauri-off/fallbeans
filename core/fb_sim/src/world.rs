@@ -1,6 +1,5 @@
 use core::any::Any;
 use core::marker::PhantomData;
-use std::collections::BTreeMap;
 
 use crate::collider::{ColId, Collider, Shape};
 use crate::nodes::{NodeId, Nodes};
@@ -74,52 +73,128 @@ fn state<S: 'static>(states: &[StateBox], h: St<S>) -> &S {
 /// Pure function of sim time: positions the moving parts of a map. Runs on server and client.
 pub type Mover = Box<dyn Fn(f64, &mut MoveCtx) + Send + Sync>;
 
-/// Uniform x/z grid of static colliders.
+/// Uniform x/z grid of static colliders: a dense block of cells over their extent.
 #[derive(Default)]
 pub struct ColliderGrid {
     cell: f64,
-    cells: BTreeMap<i64, Vec<ColId>>,
+    /// Every collider inserted, in order, with its cells [x0, x1, z0, z1] (inclusive).
+    placed: Vec<(ColId, [i64; 4])>,
+    /// The block (from `build`): cells x0.. and z0.., nx × nz of them; cell (ix, iz) is number
+    /// c = (ix − x0)·nz + (iz − z0), its colliders `items[start[c]..start[c + 1]]` in insertion order.
+    x0: i64,
+    z0: i64,
+    nx: i64,
+    nz: i64,
+    start: Vec<u32>,
+    items: Vec<GridItem>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct GridItem {
+    col: ColId,
+    /// The collider's first cell: its lowest x and z.
+    x0: i64,
+    z0: i64,
 }
 
 impl ColliderGrid {
-    fn key(ix: i64, iz: i64) -> i64 {
-        (ix + 32768) * 65536 + (iz + 32768)
-    }
-
-    fn insert(&mut self, col: &Collider) {
-        let (ex, ez) = col.extent_xz();
-        let c = col.center;
-        let x0 = ((c.x - ex) / self.cell).floor() as i64;
-        let x1 = ((c.x + ex) / self.cell).floor() as i64;
-        let z0 = ((c.z - ez) / self.cell).floor() as i64;
-        let z1 = ((c.z + ez) / self.cell).floor() as i64;
-        for ix in x0..=x1 {
-            for iz in z0..=z1 {
-                self.cells.entry(Self::key(ix, iz)).or_default().push(col.index);
-            }
+    fn new(cell: f64) -> Self {
+        Self {
+            cell,
+            ..Default::default()
         }
     }
 
+    /// Cells [x0, x1, z0, z1] that a span covers. (`as` saturates: a huge or infinite position gives
+    /// cells outside the block, never an overflow.)
+    fn cells(&self, x0: f64, x1: f64, z0: f64, z1: f64) -> [i64; 4] {
+        [
+            (x0 / self.cell).floor() as i64,
+            (x1 / self.cell).floor() as i64,
+            (z0 / self.cell).floor() as i64,
+            (z1 / self.cell).floor() as i64,
+        ]
+    }
+
+    /// Adds a collider; `build` lays it out.
+    fn insert(&mut self, col: &Collider) {
+        let (ex, ez) = col.extent_xz();
+        let c = col.center;
+        let cells = self.cells(c.x - ex, c.x + ex, c.z - ez, c.z + ez);
+        self.placed.push((col.index, cells));
+    }
+
+    /// Lays out every collider inserted so far.
+    fn build(&mut self) {
+        let Some(&(_, first)) = self.placed.first() else {
+            return;
+        };
+        let [mut x0, mut x1, mut z0, mut z1] = first;
+        for &(_, [a0, a1, b0, b1]) in &self.placed {
+            x0 = x0.min(a0);
+            x1 = x1.max(a1);
+            z0 = z0.min(b0);
+            z1 = z1.max(b1);
+        }
+        let (nx, nz) = (x1 - x0 + 1, z1 - z0 + 1);
+        let n = usize::try_from(nx.checked_mul(nz).expect("collider grid too large")).expect("collider grid too large");
+        let at = |ix: i64, iz: i64| ((ix - x0) * nz + (iz - z0)) as usize;
+        let mut start = vec![0u32; n + 1];
+        for &(_, [a0, a1, b0, b1]) in &self.placed {
+            for ix in a0..=a1 {
+                for iz in b0..=b1 {
+                    start[at(ix, iz) + 1] += 1;
+                }
+            }
+        }
+        let mut sum = 0;
+        for s in start.iter_mut() {
+            sum += *s;
+            *s = sum;
+        }
+        let mut fill = start.clone();
+        let mut items = vec![GridItem::default(); start[n] as usize];
+        for &(col, [a0, a1, b0, b1]) in &self.placed {
+            for ix in a0..=a1 {
+                for iz in b0..=b1 {
+                    let c = at(ix, iz);
+                    items[fill[c] as usize] = GridItem { col, x0: a0, z0: b0 };
+                    fill[c] += 1;
+                }
+            }
+        }
+        (self.x0, self.z0, self.nx, self.nz) = (x0, z0, nx, nz);
+        self.start = start;
+        self.items = items;
+    }
+
+    /// Colliders in the cells within r of (x, z), each once, in the order a walk over those cells (by x, then
+    /// by z; in a cell, in insertion order) first meets them.
     fn query(&self, x: f64, z: f64, r: f64, out: &mut Vec<ColId>) {
-        let x0 = ((x - r) / self.cell).floor() as i64;
-        let x1 = ((x + r) / self.cell).floor() as i64;
-        let z0 = ((z - r) / self.cell).floor() as i64;
-        let z1 = ((z + r) / self.cell).floor() as i64;
+        if self.items.is_empty() {
+            return;
+        }
+        let [qx0, qx1, qz0, qz1] = self.cells(x - r, x + r, z - r, z + r);
+        let (x0, x1) = (qx0.max(self.x0), qx1.min(self.x0 + self.nx - 1));
+        let (z0, z1) = (qz0.max(self.z0), qz1.min(self.z0 + self.nz - 1));
         for ix in x0..=x1 {
+            let row = (ix - self.x0) * self.nz - self.z0;
             for iz in z0..=z1 {
-                if let Some(list) = self.cells.get(&Self::key(ix, iz)) {
-                    for &c in list {
-                        if !out.contains(&c) {
-                            out.push(c);
-                        }
+                let c = (row + iz) as usize;
+                for it in &self.items[self.start[c] as usize..self.start[c + 1] as usize] {
+                    // The walk meets a collider over several cells first in the lowest x, then the lowest z,
+                    // of its cells within the query: it is taken there and only there.
+                    if ix == it.x0.max(x0) && iz == it.z0.max(z0) {
+                        out.push(it.col);
                     }
                 }
             }
         }
     }
 
+    /// Cells that hold a collider.
     pub fn size(&self) -> usize {
-        self.cells.len()
+        self.start.windows(2).filter(|w| w[1] > w[0]).count()
     }
 }
 
@@ -146,10 +221,7 @@ impl Default for World {
             colliders: Vec::new(),
             dynamic: Vec::new(),
             movers: Vec::new(),
-            grid: ColliderGrid {
-                cell: 4.0,
-                cells: BTreeMap::new(),
-            },
+            grid: ColliderGrid::new(4.0),
             t: f64::NEG_INFINITY,
             states: Vec::new(),
             portals: Vec::new(),
@@ -229,6 +301,7 @@ impl World {
                 }
             }
         }
+        self.grid.build();
         self.dyn_nodes = (0..chain.len() as NodeId).filter(|&i| chain[i as usize]).collect();
         self.t = t;
         self.finalized = true;
@@ -246,8 +319,23 @@ impl World {
         self.t = t;
     }
 
+    /// Moves to tick k (time k·DT) as if ticking there: the previous matrices are those of tick k − 1,
+    /// whatever the world showed before (client prediction replays ticks out of order). Both times come
+    /// from the tick (k·DT − DT and (k − 1)·DT may differ in the last bit), so a replay is the server's tick.
+    pub fn goto_tick(&mut self, k: i64) {
+        let t = k as f64 * DT;
+        if t == self.t {
+            return;
+        }
+        let prev = (k - 1) as f64 * DT;
+        if prev != self.t {
+            self.set_time(prev);
+        }
+        self.set_time(t);
+    }
+
     /// Moves to time t as if ticking there: the previous matrices are those of t − DT, whatever the
-    /// world showed before (client prediction replays ticks out of order).
+    /// world showed before. For times between ticks; at a tick, `goto_tick`.
     pub fn goto(&mut self, t: f64) {
         if t == self.t {
             return;
@@ -305,12 +393,13 @@ impl World {
     pub fn query(&self, x: f64, z: f64, r: f64, out: &mut Vec<ColId>) {
         out.clear();
         self.grid.query(x, z, r, out);
+        // (Moving colliders are never in the grid, and each is listed once.)
         for &i in &self.dynamic {
             let c = &self.colliders[i as usize];
             let dx = c.center.x - x;
             let dz = c.center.z - z;
             let reach = c.radius + r;
-            if dx * dx + dz * dz <= reach * reach && !out.contains(&i) {
+            if dx * dx + dz * dz <= reach * reach {
                 out.push(i);
             }
         }
