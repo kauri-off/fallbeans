@@ -664,7 +664,15 @@ impl Builder {
         self.box_(-9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
         self.box_(9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
         self.box_(0.0, 0.6, z0 - 7.4, 19.6, 1.2, 0.8, pal::PINK, d());
-        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, d());
+        // Gone by the time bots plan (t = 0): the grid leaves it out, so the one built during the intro holds.
+        let no_nav = PrimOpts {
+            col: ColliderOpts {
+                nav_skip: true,
+                ..Default::default()
+            },
+            ..d()
+        };
+        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, no_nav);
         // Flags and cones by the gate (on the rails: nothing to trip over, out of the camera's way).
         let flag = |tint, yaw| PropOpts {
             tint: Some(tint),

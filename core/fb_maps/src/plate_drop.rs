@@ -35,6 +35,8 @@ const N: i32 = 9;
 /// Warning (shaking, reddening) before a plate drops, and how fast it falls away.
 const WARN: f64 = 1.1;
 const DROP: f64 = 48.0;
+/// From when bots count the centre as a place to be (about half the plates are gone by then).
+const CENTRE_LATE: f64 = 55.0;
 
 struct Plate {
     x: f64,
@@ -177,12 +179,18 @@ impl MapDef for PlateDrop {
             }
             plate_at(x, z).is_some_and(|f| f - t > 0.3)
         }));
+        // Spots worth standing on, judged by what anyone can see: a plate that is not shaking yet, or late on,
+        // the centre (it never drops, but the beams' hub stands on it and everybody ends up there).
+        opts.pois = vec![(1.3, 1.3), (-1.3, 1.3), (1.3, -1.3), (-1.3, -1.3)];
         opts.safe = Some(Box::new(move |x, z, t| {
             let r = m::hypot(x, z);
-            if r < 2.8 || r > reach - 3.0 {
+            if r > reach - 3.0 {
                 return false;
             }
-            plate_at2(x, z).is_some_and(|f| f - t > WARN + 2.0)
+            if x.abs() < PLATE / 2.0 - 0.3 && z.abs() < PLATE / 2.0 - 0.3 {
+                return t > CENTRE_LATE && r > 1.5;
+            }
+            plate_at2(x, z).is_some_and(|f| f - t > WARN)
         }));
         opts.jump_when = Some(Box::new(move |bot| {
             let t = bot.t.at_least(0.0);

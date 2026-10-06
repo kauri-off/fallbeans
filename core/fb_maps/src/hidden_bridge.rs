@@ -87,9 +87,12 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                         hy: THICK / 2.0,
                         hz: PANE / 2.0,
                     },
+                    // Kept out of the bots' grid, the real ones too (it would tell them apart): bots go
+                    // by what anyone can see.
                     ColliderOpts {
                         is_static: true,
                         trigger: !real,
+                        nav_skip: true,
                         ..Default::default()
                     },
                 );
@@ -119,11 +122,11 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 if pane.fall_at.is_some() || cx.t < 0.0 {
                     return;
                 }
-                let now = cx.t;
+                // Server only: clients break it on the server's event (a break they predicted could not
+                // be taken back when the server disagrees).
                 if cx.server {
+                    let now = cx.t;
                     seg_emit(cx, seg, SegEvent::Fall { i: i as u32, at: now });
-                } else {
-                    break_tile(cx, st, real, i, now);
                 }
             };
             let touched2 = touched;
@@ -142,7 +145,7 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             }
             SegEvent::Fall { i, at } if reals.get(i as usize) == Some(&false) => {
                 let i = i as usize;
-                // The server's time wins over the local guess (the collider follows it).
+                // (Heard again, e.g. by a late joiner: the server's time, which the collider follows.)
                 if cx.world.st(st)[i].fall_at.is_none() {
                     break_tile(cx, st, false, i, at);
                 } else {
@@ -272,41 +275,41 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             let row = &rows_of[ri];
             let col = bot.mem.get(k_col);
             let chosen = row.iter().copied().find(|&i| Some(tiles[i].col) == col);
-            if bot.mem.get(k_row) != Some(ri) || chosen.is_none_or(|i| panes[i].fall_at.is_some()) {
+            // Only what anyone can see: panes that broke, panes that held somebody (green).
+            let lit = |i: usize| panes[i].trusted;
+            let turned_green = chosen.is_some_and(|i| !lit(i)) && row.iter().any(|&i| lit(i));
+            if bot.mem.get(k_row) != Some(ri) || chosen.is_none_or(|i| panes[i].fall_at.is_some()) || turned_green {
                 bot.mem.set(k_row, ri);
-                let cur = col.unwrap_or(row.len() / 2);
-                let open: Vec<usize> = row
+                // Standing on the row before, the bot is on its safe pane: the next one is within a column of
+                // it. Anywhere else (the platform before the bridge, back after a fall) any pane may be it.
+                let under = ri.checked_sub(1).and_then(|r| {
+                    rows_of[r].iter().copied().find(|&i| {
+                        (tiles[i].x - p.x).abs() <= PANE / 2.0 + 0.2 && (tiles[i].z - p.z).abs() <= PANE / 2.0 + 0.2
+                    })
+                });
+                let cur = under.map(|i| tiles[i].col);
+                let open: Vec<usize> = row.iter().copied().filter(|&i| panes[i].fall_at.is_none()).collect();
+                let near: Vec<usize> = open
                     .iter()
                     .copied()
-                    .filter(|&i| panes[i].fall_at.is_none() && tiles[i].col.abs_diff(cur) <= 1)
+                    .filter(|&i| cur.is_none_or(|c| tiles[i].col.abs_diff(c) <= 1))
                     .collect();
-                let choices = if !open.is_empty() {
-                    open
-                } else {
-                    row.iter().copied().filter(|&i| panes[i].fall_at.is_none()).collect()
-                };
-                let known = choices.iter().copied().find(|&i| panes[i].trusted);
-                let real = choices.iter().copied().find(|&i| tiles[i].real);
-                // Nobody has stood on this row yet: a guess (a good eye sometimes spots the right pane).
-                let eye = 0.1 + bot.mem.traits.skill * 0.12;
-                let pick = match known {
-                    Some(k) => Some(k),
-                    None => {
-                        if real.is_some() && bot.rng.next() < eye {
-                            real
-                        } else {
-                            choices
-                                .get((bot.rng.next() * choices.len() as f64).floor() as usize)
-                                .copied()
-                        }
-                    }
-                };
-                bot.mem.set(k_col, pick.map_or(cur, |i| tiles[i].col));
+                let choices = if near.is_empty() { open } else { near };
+                let known = choices.iter().copied().find(|&i| lit(i));
+                // Nobody has stood on this row yet: a guess, after a look round (the careful ones look
+                // longer, in case somebody else tries first).
+                let pick = known.or_else(|| {
+                    choices
+                        .get((bot.rng.next() * choices.len() as f64).floor() as usize)
+                        .copied()
+                });
+                bot.mem
+                    .set(k_col, pick.map_or(cur.unwrap_or(row.len() / 2), |i| tiles[i].col));
                 let wait = bot.t
                     + if known.is_some() {
                         0.05
                     } else {
-                        0.3 + bot.rng.next() * 0.6
+                        0.3 + bot.rng.next() * 0.6 + bot.mem.traits.skill * 0.4
                     };
                 bot.mem.set(k_wait, wait);
             }
