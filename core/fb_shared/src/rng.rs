@@ -9,6 +9,11 @@ impl Rng {
         Self { a: seed }
     }
 
+    /// Where the generator is (state hashes compare it).
+    pub fn state(&self) -> u32 {
+        self.a
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> f64 {
         self.a = self.a.wrapping_add(0x6d2b_79f5);

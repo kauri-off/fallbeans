@@ -189,7 +189,7 @@ fn carries_on_from_the_full_body_state() {
         a.tick(i as f64 * DT, input);
         c.tick(i as f64 * DT, input);
     }
-    assert!(m::sqrt(c.body.pos.distance_squared(a.body.pos)) < 1e-9);
+    assert_eq!(c.body, a.body);
 }
 
 #[test]
@@ -386,30 +386,29 @@ fn does_not_catch_a_ledge_too_high_or_when_not_pushing_towards_it() {
 fn carries_on_climbing_from_a_full_state_exactly() {
     let mut a = ledge_course(2.6);
     a.reset(0.0, 0.02, 0.0);
-    let mut t = 0.0;
+    let mut k = 0i64;
     for i in 0..300 {
         if a.body.state == BodyState::Climb {
             break;
         }
-        a.run(
-            t,
-            1,
+        k += 1;
+        a.tick(
+            k as f64 * DT,
             BodyInput {
                 jump: i == 24,
                 ..FORWARD
             },
         );
-        t += DT;
     }
     assert_eq!(a.body.state, BodyState::Climb);
     let mut c = ledge_course(2.6);
     c.body = a.body.clone();
     for _ in 0..120 {
-        a.run(t, 1, FORWARD);
-        c.run(t, 1, FORWARD);
-        t += DT;
+        k += 1;
+        a.tick(k as f64 * DT, FORWARD);
+        c.tick(k as f64 * DT, FORWARD);
     }
-    assert!(m::sqrt(c.body.pos.distance_squared(a.body.pos)) < 1e-6);
+    assert_eq!(c.body, a.body);
 }
 
 #[test]

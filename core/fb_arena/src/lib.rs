@@ -15,7 +15,7 @@ use fb_sim::builder::Builder;
 use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapEvent, MapOut, MapSpec, NoBodies, Touches, spec_problems};
 use fb_sim::math::V3;
 use fb_sim::nav::{Nav, NavGrid};
-use fb_sim::physics::{Body, BodyInput, BodyState, OtherBody, StepEvents, Touch};
+use fb_sim::physics::{Body, BodyInput, BodyState, Carry, OtherBody, StepEvents, StepScratch, Touch};
 use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
 use serde_json::{Value, json};
@@ -230,6 +230,10 @@ pub struct Arena {
     nav: Option<NavGrid>,
     /// The grid built ahead of the start, and the static world it was built for.
     nav_pre: Option<(NavGrid, String)>,
+    /// Buffers ticks reuse (not state).
+    scratch: TickScratch,
+    views: Vec<OtherView>,
+    spots: Vec<V3>,
 }
 
 /// One body for `tick_bodies`.
@@ -351,38 +355,78 @@ pub fn client_hud(
     h(&cx)
 }
 
+/// Buffers `tick_bodies` reuses from tick to tick (none of it is state).
+#[derive(Default)]
+pub struct TickScratch {
+    carries: Vec<Carry>,
+    others: Vec<OtherBody>,
+    rest: Vec<OtherBody>,
+    step: StepScratch,
+}
+
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
 pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], touch: &mut TouchHook) {
+    tick_bodies_with(&mut TickScratch::default(), world, t, bodies, extra, touch);
+}
+
+/// `tick_bodies` with buffers kept by the caller.
+pub fn tick_bodies_with(
+    scratch: &mut TickScratch,
+    world: &mut World,
+    t: f64,
+    bodies: &mut [Stepper],
+    extra: &[OtherBody],
+    touch: &mut TouchHook,
+) {
     // Where a body stands on a moving platform is read in the world of the previous tick. The server's
     // world is always there; a client replaying a rollback finds it at its latest prediction instead.
-    // (Compared with a tolerance: k·DT − DT and (k − 1)·DT may differ in the last bit.)
-    if (world.t - (t - DT)).abs() > 1e-9 {
-        world.goto(t - DT);
+    // At a tick time the world goes by the tick number: (k − 1)·DT is the server's previous time, and
+    // k·DT − DT may differ from it in the last bit.
+    let k = (t / DT).round();
+    let tick = (t.is_finite() && k * DT == t).then_some(k as i64);
+    match tick {
+        Some(k) => world.goto_tick(k - 1),
+        None => {
+            if (world.t - (t - DT)).abs() > 1e-9 {
+                world.goto(t - DT);
+            }
+        }
     }
-    let mut carries = Vec::with_capacity(bodies.len());
+    let TickScratch {
+        carries,
+        others,
+        rest,
+        step,
+    } = scratch;
+    carries.clear();
     for s in bodies.iter_mut() {
         *s.ev = StepEvents::default();
         carries.push(s.body.before_world_update(world));
     }
-    world.goto(t);
-    for (s, c) in bodies.iter_mut().zip(&carries) {
+    match tick {
+        Some(k) => world.goto_tick(k),
+        None => world.goto(t),
+    }
+    for (s, c) in bodies.iter_mut().zip(carries.iter()) {
         s.body.after_world_update(c, world);
     }
-    let others: Vec<OtherBody> = bodies
-        .iter()
-        .filter(|s| !s.body.in_portal())
-        .map(|s| other_of(s.id, s.body))
-        .chain(extra.iter().copied())
-        .collect();
-    let mut rest = Vec::with_capacity(others.len());
+    others.clear();
+    others.extend(
+        bodies
+            .iter()
+            .filter(|s| !s.body.in_portal())
+            .map(|s| other_of(s.id, s.body))
+            .chain(extra.iter().copied()),
+    );
     for s in bodies.iter_mut() {
         rest.clear();
         rest.extend(others.iter().copied().filter(|o| o.id != s.id));
         let id = s.id;
-        s.body.step(s.ev, DT, s.input, world, t, &mut rest, &mut |w, b, e, tc| {
-            touch(w, id, b, e, tc)
-        });
+        s.body
+            .step(step, s.ev, DT, s.input, world, t, rest, &mut |w, b, e, tc| {
+                touch(w, id, b, e, tc)
+            });
     }
 }
 
@@ -404,9 +448,9 @@ pub fn reach_checkpoint(spec: &MapSpec, body: &Body, checkpoint: &mut Option<usi
     }
 }
 
-/// Below the kill line, or where the map says a bean is off the course.
+/// Below the kill line, or where the map says a bean is off the course (or nowhere: not a number).
 pub fn fell(spec: &MapSpec, pos: V3) -> bool {
-    pos.y < spec.kill_y || spec.is_out.as_ref().is_some_and(|f| f(pos))
+    pos.y < spec.kill_y || !pos.is_finite() || spec.is_out.as_ref().is_some_and(|f| f(pos))
 }
 
 /// Where a bean that fell (or took a shortcut) comes back: its checkpoint (races) or its spawn; None in the
@@ -520,6 +564,9 @@ impl Arena {
                 spawn_cursor: 0,
                 nav: None,
                 nav_pre: None,
+                scratch: TickScratch::default(),
+                views: Vec::new(),
+                spots: Vec::new(),
             },
             b.scene,
         )
@@ -643,8 +690,18 @@ impl Arena {
     pub fn remove_pawn(&mut self, id: u32) {
         self.op(Op::Remove(id));
         self.pawns.retain(|p| p.id != id);
-        // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up.)
+        // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up,
+        // and so would the tackles they took.)
         self.trace.remove(&id);
+        for p in &mut self.pawns {
+            p.dive_hits.remove(&id);
+        }
+    }
+
+    /// Results are decided: no more finishes, outs or credits (recorded: a replay freezes at the same tick).
+    pub fn freeze(&mut self) {
+        self.op(Op::Freeze);
+        self.frozen = true;
     }
 
     /// Dev: bot brains run (false: bots stand still).
@@ -664,7 +721,8 @@ impl Arena {
     /// Starts recording the round for replays (before pawns are added).
     pub fn record(&mut self) {
         self.recording = Some(Recording {
-            v: 2,
+            // 3: `state_hash` covers the whole state, by the bits.
+            v: 3,
             game: self.map.meta().id.to_string(),
             kind: record::kind_name(self.kind).to_string(),
             seed: self.seed,
@@ -772,7 +830,7 @@ impl Arena {
                 };
                 h(&mut cx, body, ev, tc);
             };
-            tick_bodies(&mut self.world, t, &mut steppers, &[], &mut touch);
+            tick_bodies_with(&mut self.scratch, &mut self.world, t, &mut steppers, &[], &mut touch);
         }
         self.flush(&mut events);
         for &i in &active {
@@ -874,6 +932,7 @@ impl Arena {
         let b = self.pawns[i].bot.as_ref().unwrap().input;
         let axis = |v: f64| (v.clamp(-1.0, 1.0) * 127.0).round();
         let (mx, mz) = (axis(b.mx), axis(b.mz));
+        // Clamped to unit length as the server clamps every player's frame.
         InputFrame {
             mx: mx as i8,
             mz: mz as i8,
@@ -881,6 +940,7 @@ impl Arena {
                 | (if fresh && b.dive { BTN_DIVE } else { 0 })
                 | (if b.grab { BTN_GRAB } else { 0 }),
         }
+        .clamped()
     }
 
     fn build_nav(&self) -> NavGrid {
@@ -927,34 +987,40 @@ impl Arena {
                 _ => self.build_nav(),
             });
         }
-        let others: Vec<OtherView> = self
-            .pawns
-            .iter()
-            .enumerate()
-            .filter(|(j, o)| *j != i && o.status == PawnStatus::Play)
-            .map(|(_, o)| {
-                let ob = &o.body;
-                let dive =
-                    ob.state == BodyState::Dive || (ob.state == BodyState::Slide && m::hypot(ob.vel.x, ob.vel.z) > 6.0);
-                OtherView {
-                    id: o.id,
-                    pos: ob.pos,
-                    vel: ob.vel,
-                    down: ob.down(),
-                    dive,
-                    reach: o.reaching,
-                }
-            })
-            .collect();
-        let bonuses: Vec<V3> = self.bonuses.available(t).map(|b| b.pos).collect();
         let Arena {
             pawns,
             world,
             nav,
             spec,
             scores,
+            bonuses,
+            views: others,
+            spots,
             ..
-        } = self;
+        } = &mut *self;
+        others.clear();
+        others.extend(
+            pawns
+                .iter()
+                .enumerate()
+                .filter(|(j, o)| *j != i && o.status == PawnStatus::Play)
+                .map(|(_, o)| {
+                    let ob = &o.body;
+                    let dive = ob.state == BodyState::Dive
+                        || (ob.state == BodyState::Slide && m::hypot(ob.vel.x, ob.vel.z) > 6.0);
+                    OtherView {
+                        id: o.id,
+                        pos: ob.pos,
+                        vel: ob.vel,
+                        down: ob.down(),
+                        dive,
+                        reach: o.reaching,
+                    }
+                }),
+        );
+        spots.clear();
+        spots.extend(bonuses.available(t).map(|b| b.pos));
+        let (others, bonuses) = (others.as_slice(), spots.as_slice());
         let p = &mut pawns[i];
         let st = p.bot.as_mut().unwrap();
         let mut out = BotInput::default();
@@ -965,9 +1031,9 @@ impl Arena {
             rng: &mut st.rng,
             mem: &mut st.mem,
             plan: &mut st.plan,
-            others: &others,
+            others,
             nav: nav.as_ref().map(|g| Nav::new(g, world)),
-            bonuses: &bonuses,
+            bonuses,
             world,
             scores,
         };
@@ -1086,8 +1152,9 @@ impl Arena {
                     continue;
                 }
                 let (p, o) = pair(&mut self.pawns, i, oj);
-                // Anyone can be hit, a bean already down or getting up too (each diver once per dive).
-                if p.dive_hits.get(&o.id).copied().unwrap_or(-1.0) > t {
+                // Anyone can be hit, a bean already down or getting up too (each diver once per dive); not
+                // one inside a portal.
+                if p.dive_hits.get(&o.id).copied().unwrap_or(-1.0) > t || o.body.in_portal() {
                     continue;
                 }
                 let b = &mut p.body;
@@ -1232,7 +1299,8 @@ impl Arena {
             pos,
         };
         let what = json!({ "by": by, "cause": cause, "pos": [r3(pos.x), r3(pos.y), r3(pos.z)] });
-        if self.fall == FallBehaviour::Out && !shortcut && round {
+        // (A fall during the intro is not out yet: back to the spawn.)
+        if self.fall == FallBehaviour::Out && !shortcut && round && t >= 0.0 {
             if self.frozen {
                 return;
             }
@@ -1272,19 +1340,88 @@ impl Arena {
         p.teleports += 1;
     }
 
-    /// Hash of every bean's state (replays and determinism checks compare it).
+    /// Hash of the arena's state, by the bits (replays and determinism checks compare it): every bean (body,
+    /// timers, holds, rules, bot's generator), scores, who finished and who is out, and the world. Not what
+    /// the room changes from outside (`teleports`), nor the round's stats.
     pub fn state_hash(&self) -> String {
         let mut h = Fnv::default();
-        let mut mix = |v: f64| h.mix(v, 1e5);
+        let opt = |v: Option<u64>| v.unwrap_or(u64::MAX);
         let mut sorted: Vec<&Pawn> = self.pawns.iter().collect();
         sorted.sort_by_key(|p| p.id);
         for p in sorted {
-            mix(p.id as f64);
+            h.int(u64::from(p.id));
             let b = &p.body;
-            for v in [b.pos.x, b.pos.y, b.pos.z, b.vel.x, b.vel.y, b.vel.z, b.yaw, b.tilt] {
-                mix(v);
+            for v in [
+                b.pos.x,
+                b.pos.y,
+                b.pos.z,
+                b.vel.x,
+                b.vel.y,
+                b.vel.z,
+                b.yaw,
+                b.state_t,
+                b.coyote,
+                b.jump_buf,
+                b.slow_until,
+                b.slow_k,
+                b.land_impact,
+                b.tilt,
+                b.tilt_dir,
+                b.power_until,
+                b.size,
+                b.climb_to.x,
+                b.climb_to.y,
+                b.climb_to.z,
+                p.progress,
+                p.hold_since,
+                p.grab_ready_at,
+                p.forbidden_for,
+                p.force_grab_until,
+            ] {
+                h.bits(v);
+            }
+            for v in [
+                b.actor as i64 as u64,
+                u64::from(b.grounded),
+                b.ground_col as i64 as u64,
+                b.state as u64,
+                u64::from(b.power),
+                p.status as u64,
+                opt(p.checkpoint.map(|c| c as u64)),
+                opt(p.grabbing.map(u64::from)),
+                u64::from(p.struggle),
+                u64::from(p.reaching),
+                p.spawn_i as u64,
+                opt(p.bot.as_ref().map(|s| u64::from(s.rng.state()))),
+            ] {
+                h.int(v);
+            }
+            match p.last_hit {
+                Some(hit) => {
+                    h.int(opt(hit.by.map(u64::from)));
+                    h.bytes(hit.cause.as_bytes());
+                    h.bits(hit.t);
+                }
+                None => h.int(u64::MAX),
+            }
+            h.int(p.dive_hits.len() as u64);
+            for (&id, &until) in &p.dive_hits {
+                h.int(u64::from(id));
+                h.bits(until);
             }
         }
+        h.int(self.scores.len() as u64);
+        for (&id, &v) in &self.scores {
+            h.int(u64::from(id));
+            h.bits(v);
+        }
+        for list in [&self.finished, &self.out] {
+            h.int(list.len() as u64);
+            for &id in list {
+                h.int(u64::from(id));
+            }
+        }
+        h.bytes(self.world.hash(false).as_bytes());
         format!("{:016x}", h.finish())
     }
 }
@@ -1416,6 +1553,7 @@ impl Arena {
                 let _ = self.dev_grab(actor, target, seconds);
             }
             Op::Bots(on) => self.set_bots_on(on),
+            Op::Freeze => self.freeze(),
         }
     }
 }
