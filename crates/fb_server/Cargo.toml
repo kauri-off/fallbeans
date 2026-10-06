@@ -24,6 +24,7 @@ sysinfo.workspace = true
 tokio.workspace = true
 bevy = { workspace = true, features = ["std", "bevy_log"] }
 clap.workspace = true
+ctrlc.workspace = true
 lightyear = { workspace = true, features = [
   "server",
   "std",

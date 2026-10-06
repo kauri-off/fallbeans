@@ -9,7 +9,9 @@ fn main() -> AppExit {
         return AppExit::from_code(2);
     }
     std::panic::set_hook(Box::new(panic));
-    fb_server::app(opts, true).run()
+    let mut app = fb_server::app(opts, true);
+    fb_server::exit_on_signals(&app);
+    app.run()
 }
 
 /// A panic in the log (and `/api/debug/logs`) and its backtrace on stderr, without `RUST_BACKTRACE`: a room's

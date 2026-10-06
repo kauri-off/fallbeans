@@ -3455,6 +3455,7 @@ dependencies = [
  "base64 0.22.1",
  "bevy",
  "clap",
+ "ctrlc",
  "fb_arena",
  "fb_maps",
  "fb_net",

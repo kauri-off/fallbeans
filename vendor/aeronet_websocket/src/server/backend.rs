@@ -7,9 +7,15 @@ use {
     aeronet_io::{connection::DisconnectReason, server::CloseReason},
     bevy_ecs::prelude::*,
     core::{
-        net::SocketAddr,
+        mem,
+        net::{IpAddr, Ipv6Addr, SocketAddr},
         pin::Pin,
         task::{Context, Poll},
+        time::Duration,
+    },
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex, PoisonError},
     },
     futures::{
         FutureExt, SinkExt, StreamExt,
@@ -25,11 +31,17 @@ use {
         handshake::server::{Request, Response},
         protocol::WebSocketConfig,
     },
-    tracing::{Instrument, debug, debug_span},
+    tracing::{Instrument, debug, debug_span, warn},
 };
 
 /// fallbeans patch: how long a connection may take to finish the TLS and WebSocket handshakes.
 const HANDSHAKE_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
+
+/// fallbeans patch: connections open at once (each is a task, a socket and a session entity), in all and
+/// from one address (IPv6: its /64). This machine is exempt from the second: a reverse proxy's connections
+/// all come from it.
+const MAX_CONNECTIONS: usize = 512;
+const MAX_PER_ADDRESS: usize = 16;
 
 pub async fn start(
     config: ServerConfig,
@@ -55,6 +67,8 @@ pub async fn start(
         .map_err(|_| SessionError::FrontendClosed)?;
 
     debug!("Starting server loop");
+    let limits = Arc::new(Limits::default());
+    let mut hush = Hush::default();
     loop {
         let result = futures::select! {
             x = listener.accept().fuse() => x,
@@ -62,13 +76,39 @@ pub async fn start(
                 return Err(CloseReason::ByError(SessionError::FrontendClosed.into()));
             }
         };
-        let (stream, peer_addr) = result.map_err(ServerError::AcceptConnection)?;
+        // fallbeans patch: a failed accept used to end the loop, and with it the server: every link of the
+        // Lightyear server it belongs to, UDP too. Out of file descriptors (EMFILE, ENFILE) it waits a second
+        // for some to close; after other errors (a connection reset before it was taken) a moment.
+        let (stream, peer_addr) = match result {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                let pause = if out_of_descriptors(&err) { 1000 } else { 50 };
+                if let Some(hushed) = hush.due() {
+                    warn!("WebSocket accept failed ({hushed} more not logged): {err}");
+                }
+                tokio::time::sleep(Duration::from_millis(pause)).await;
+                continue;
+            }
+        };
+        // fallbeans patch: beyond the caps a connection is closed at once.
+        let slot = match limits.take(peer_addr.ip()) {
+            Ok(slot) => slot,
+            Err(why) => {
+                if let Some(hushed) = hush.due() {
+                    warn!("WebSocket connection from {peer_addr} refused: {why} ({hushed} more not logged)");
+                }
+                drop(stream);
+                continue;
+            }
+        };
 
         tokio::spawn({
             let tx_connecting = tx_connecting.clone();
             let tls_acceptor = tls_acceptor.clone();
             let handshake_handler = config.handshake_handler.clone();
             async move {
+                // (Counted until the session is over.)
+                let _slot = slot;
                 if let Err(err) = accept_session(
                     stream,
                     peer_addr,
@@ -83,6 +123,102 @@ pub async fn start(
                 }
             }
         });
+    }
+}
+
+/// fallbeans patch: the process is out of file descriptors (EMFILE, ENFILE; WSAEMFILE on Windows).
+fn out_of_descriptors(err: &std::io::Error) -> bool {
+    if cfg!(windows) {
+        err.raw_os_error() == Some(10024)
+    } else {
+        matches!(err.raw_os_error(), Some(23 | 24))
+    }
+}
+
+/// fallbeans patch: at most one warning a second about failed or refused connections (a flood would fill the
+/// log).
+#[derive(Default)]
+struct Hush {
+    last: Option<std::time::Instant>,
+    hushed: u32,
+}
+
+impl Hush {
+    /// Whether to log now: Some(how many were left out since the last line).
+    fn due(&mut self) -> Option<u32> {
+        let now = std::time::Instant::now();
+        if self
+            .last
+            .is_some_and(|t| now.duration_since(t) < Duration::from_secs(1))
+        {
+            self.hushed += 1;
+            return None;
+        }
+        self.last = Some(now);
+        Some(mem::take(&mut self.hushed))
+    }
+}
+
+/// fallbeans patch: who a cap per address counts against: the address, or for IPv6 its /64 (one subscriber
+/// has billions of addresses); None for this machine.
+fn address_key(ip: IpAddr) -> Option<IpAddr> {
+    match ip.to_canonical() {
+        ip if ip.is_loopback() || ip.is_unspecified() => None,
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            Some(IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0)))
+        }
+        v4 => Some(v4),
+    }
+}
+
+/// fallbeans patch: the connections open now, in all and per address (`address_key`).
+#[derive(Default)]
+struct Limits {
+    open: Mutex<(usize, BTreeMap<IpAddr, usize>)>,
+}
+
+impl Limits {
+    fn take(self: &Arc<Self>, ip: IpAddr) -> Result<Slot, &'static str> {
+        let key = address_key(ip);
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if open.0 >= MAX_CONNECTIONS {
+            return Err("too many connections");
+        }
+        if let Some(k) = key
+            && open.1.get(&k).copied().unwrap_or(0) >= MAX_PER_ADDRESS
+        {
+            return Err("too many connections from this address");
+        }
+        open.0 += 1;
+        if let Some(k) = key {
+            *open.1.entry(k).or_insert(0) += 1;
+        }
+        Ok(Slot {
+            limits: Arc::clone(self),
+            key,
+        })
+    }
+}
+
+/// fallbeans patch: one open connection, counted until it is dropped.
+struct Slot {
+    limits: Arc<Limits>,
+    key: Option<IpAddr>,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut open = self.limits.open.lock().unwrap_or_else(PoisonError::into_inner);
+        open.0 = open.0.saturating_sub(1);
+        if let Some(k) = self.key
+            && let Some(n) = open.1.get_mut(&k)
+        {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                open.1.remove(&k);
+            }
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 //! Someone in a room.
 use fb_proto::{Outfit, Pid};
 
-use super::ConnId;
 use super::awards::GameStats;
+use super::{Backoff, ConnId};
 
 /// A person (connected, or within the reconnect grace) or a bot.
 #[derive(Clone, Debug)]
@@ -28,6 +28,8 @@ pub struct Player {
     pub msg_window: u64,
     pub msg_count: u32,
     pub chat_at: Option<u64>,
+    /// The "rate limited" warning about this player.
+    pub rate_log: Backoff,
     /// Round trip (ms), as the network layer measures it.
     pub rtt: u32,
 }
@@ -51,6 +53,7 @@ impl Player {
             msg_window: 0,
             msg_count: 0,
             chat_at: None,
+            rate_log: Backoff::default(),
             rtt: 0,
         }
     }

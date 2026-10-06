@@ -44,11 +44,12 @@ impl Plugin for WebSocketSessionPlugin {
         {
             use tracing::debug;
 
-            if rustls::crypto::aws_lc_rs::default_provider()
+            // fallbeans patch: *ring*, which ureq uses too (one TLS crypto library in the build, not two).
+            if rustls::crypto::ring::default_provider()
                 .install_default()
                 .is_ok()
             {
-                debug!("Installed default `aws-lc-rs` CryptoProvider");
+                debug!("Installed default `ring` CryptoProvider");
             } else {
                 debug!("CryptoProvider is already installed");
             }
