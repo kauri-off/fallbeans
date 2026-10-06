@@ -81,10 +81,19 @@ fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     fs::copy(&from, to).unwrap_or_else(|e| panic!("{} → {}: {e}", from.display(), to.display()));
 }
 
-/// The release client without the BRP probe, staged with its assets into `dir`.
+/// The release client without the BRP probe (with the profiler of F4), staged with its assets into `dir`.
 fn client_into(dir: &Path) -> bool {
     let mut c = stamped(cargo());
-    c.args(["build", "--profile", "dist", "-p", "fb_client", "--no-default-features"]);
+    c.args([
+        "build",
+        "--profile",
+        "dist",
+        "-p",
+        "fb_client",
+        "--no-default-features",
+        "--features",
+        "profiler",
+    ]);
     if !run(&mut c) {
         return false;
     }

@@ -119,7 +119,7 @@ pub struct Opts {
     /// nothing on the screen.
     #[arg(long)]
     pub offscreen: bool,
-    /// Frames a second without a window (a player's client runs at the display's rate).
+    /// Frames a second without a window, `--headless` or `--offscreen` (a player's runs at the display's rate).
     #[arg(long, default_value_t = 60.0, value_parser = fps)]
     pub fps: f64,
     /// Plays by itself: circles, hops, runs for bonuses.
@@ -141,6 +141,23 @@ pub struct Opts {
     #[cfg(feature = "brp")]
     #[arg(long, num_args = 0..=1, default_missing_value = "15702")]
     pub brp: Option<u16>,
+    /// Records this many seconds of a round uncapped, saves and quits (`cargo xtask perf`).
+    #[arg(long, value_name = "SECS")]
+    pub perf_capture: Option<f32>,
+    /// Switches the graphics features off one at a time in a round, saves and quits.
+    #[arg(long)]
+    pub perf_sweep: bool,
+    #[arg(long, value_name = "SECS", default_value_t = 5.0)]
+    pub perf_warmup: f32,
+    /// Where a recording goes (default: `perf-<time>.json` in the logs folder).
+    #[arg(long)]
+    pub perf_out: Option<PathBuf>,
+    /// No GPU timestamp and pipeline statistics queries (the GPU times of the F4 overlay).
+    #[arg(long)]
+    pub no_gpu_timers: bool,
+    /// Borderless fullscreen on the current monitor.
+    #[arg(long)]
+    pub fullscreen: bool,
     /// Does not look for a newer release.
     #[arg(long)]
     pub no_update: bool,

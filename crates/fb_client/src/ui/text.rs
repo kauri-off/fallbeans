@@ -196,6 +196,12 @@ pub const VPN_LOST: &str = "UDP пропал посреди игры (переп
 
 pub const QUALITY_LOWERED: &str = "Качество графики снижено, чтобы игра шла плавнее";
 
+pub const PERF_RECORDING: &str = "Идёт запись производительности: F9 — остановить и сохранить";
+pub const PERF_SWEEP: &str = "Замер графики (~1 мин): стойте на месте, настройки вернутся сами. F9 — прервать";
+pub fn perf_saved(path: &str) -> String {
+    format!("Замер сохранён: {path}")
+}
+
 pub const CHAT_PLACEHOLDER: &str = "Сообщение: Enter — отправить, Esc — закрыть";
 
 pub fn genre(g: fb_shared::game::Genre) -> &'static str {

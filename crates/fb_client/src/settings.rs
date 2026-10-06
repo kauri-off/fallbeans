@@ -346,7 +346,7 @@ impl Plugin for ClientSettingsPlugin {
     }
 }
 
-fn save_on_exit(mut exit: MessageReader<AppExit>, mut commands: Commands) {
+pub fn save_on_exit(mut exit: MessageReader<AppExit>, mut commands: Commands) {
     if exit.read().next().is_some() {
         commands.queue(SaveSettingsSync::IfChanged);
     }

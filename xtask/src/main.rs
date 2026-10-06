@@ -1,6 +1,7 @@
-//! Project tasks: `cargo xtask <check|audit|assets|dev|stress|fuzz-ui|dist>`.
+//! Project tasks: `cargo xtask <check|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
 mod dist;
 mod fuzz;
+mod perf;
 mod stress;
 
 use std::path::{Path, PathBuf};
@@ -34,6 +35,8 @@ enum Task {
     Dev(DevArgs),
     /// Server plus headless clients under a simulated network; checks prediction, traffic and tick cost.
     Stress(Box<stress::StressArgs>),
+    /// Render performance: `run` (a benchmark round on this machine, `--sweep`), `show`, `compare`, `csv`.
+    Perf(perf::PerfArgs),
     /// The whole client played at random (`fb_client` monkey): seeds in parallel, logs in target/fuzz-ui.
     FuzzUi(fuzz::FuzzArgs),
     /// Release package of one kind into dist/.
@@ -256,6 +259,7 @@ fn main() -> ExitCode {
         }
         Task::Dev(a) => dev(&a),
         Task::Stress(a) => stress::stress(&a),
+        Task::Perf(a) => perf::perf(&a),
         Task::FuzzUi(a) => fuzz::fuzz(&a),
         Task::Dist(a) => dist::dist(&a),
     };

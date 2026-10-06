@@ -61,6 +61,13 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 
+# Measuring and optimizing (`cargo xtask perf`): release code, rebuilt in seconds (no LTO, incremental).
+[profile.perf]
+inherits = "release"
+lto = false
+incremental = true
+codegen-units = 256
+
 # Release packages (`cargo xtask dist`). Symbols stay: crash reports name the functions in their backtrace.
 [profile.dist]
 inherits = "release"

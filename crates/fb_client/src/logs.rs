@@ -7,7 +7,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 use bevy::log::BoxedLayer;
-use bevy::log::tracing_subscriber::fmt;
+use bevy::log::tracing_subscriber::filter::FilterFn;
+use bevy::log::tracing_subscriber::{Layer, fmt};
 use bevy::prelude::*;
 
 use crate::ui::{Action, UiAction};
@@ -26,12 +27,13 @@ pub fn file() -> Option<&'static Path> {
     FILE.get().map(PathBuf::as_path)
 }
 
-/// For `LogPlugin::custom_layer` (after `Logs` is in): the logbook, and this run's file.
+/// For `LogPlugin::custom_layer` (after `Logs` is in): the logbook, the profiler, and this run's file.
 pub fn layer(app: &mut App) -> Option<BoxedLayer> {
-    let book = fb_net::logbook::layer(app)?;
+    let mut layers: Vec<BoxedLayer> = fb_net::logbook::layer(app).into_iter().collect();
+    layers.push(crate::perf::profiler::layer());
     let dir = app.world().get_resource::<Logs>().and_then(|l| l.0.clone());
     let Some((mut file, path)) = dir.and_then(|d| create(&d, "client", "log")) else {
-        return Some(book);
+        return Some(Box::new(layers));
     };
     let _ = writeln!(
         file,
@@ -42,8 +44,14 @@ pub fn layer(app: &mut App) -> Option<BoxedLayer> {
     );
     eprintln!("log: {}", path.display());
     let _ = FILE.set(path);
-    let to_file: BoxedLayer = Box::new(fmt::layer().with_ansi(false).with_writer(Mutex::new(file)));
-    Some(Box::new(vec![book, to_file]))
+    let to_file: BoxedLayer = Box::new(
+        fmt::layer()
+            .with_ansi(false)
+            .with_writer(Mutex::new(file))
+            .with_filter(FilterFn::new(|m| m.is_event())),
+    );
+    layers.push(to_file);
+    Some(Box::new(layers))
 }
 
 /// A new `<prefix>-<time>.<ext>` in `dir`; the oldest of its kind beyond `KEEP` go.

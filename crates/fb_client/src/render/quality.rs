@@ -7,6 +7,9 @@ use core::time::Duration;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::anti_alias::taa::TemporalAntiAliasing;
+use bevy::core_pipeline::prepass::background_motion_vectors::{
+    BackgroundMotionVectorsBindGroup, BackgroundMotionVectorsPipelineId,
+};
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
@@ -15,6 +18,7 @@ use bevy::prelude::*;
 use bevy::render::camera::{MipBias, TemporalJitter};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::ColorGrading;
+use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{PresentMode, PrimaryWindow};
 use wgpu_types::{Backend, DeviceType};
 
@@ -86,6 +90,21 @@ impl Plugin for QualityPlugin {
         app.add_systems(Startup, detect);
         app.add_systems(Update, (watch_frames, apply).chain());
         app.add_systems(Last, limit_fps);
+        if let Some(r) = app.get_sub_app_mut(RenderApp) {
+            r.add_systems(Render, drop_stale_background_motion.in_set(RenderSystems::Prepare));
+        }
+    }
+}
+
+/// Bevy 0.19 keeps this pipeline once the motion vector prepass goes (TAA off, SSAO on): a validation crash.
+fn drop_stale_background_motion(
+    mut commands: Commands,
+    views: Query<Entity, (With<BackgroundMotionVectorsPipelineId>, Without<MotionVectorPrepass>)>,
+) {
+    for e in &views {
+        commands
+            .entity(e)
+            .remove::<(BackgroundMotionVectorsPipelineId, BackgroundMotionVectorsBindGroup)>();
     }
 }
 
@@ -147,9 +166,11 @@ fn watch_frames(
     mut session: ResMut<crate::session::Session>,
     slept: Res<Slept>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    perf: Option<Res<crate::perf::Perf>>,
 ) {
     let Some(q) = q.as_mut() else { return };
-    if windows.single().is_ok_and(|w| !w.focused) {
+    // (A sweep switches features off and on: its frames say nothing about the preset.)
+    if windows.single().is_ok_and(|w| !w.focused) || perf.is_some_and(|p| p.busy) {
         *slow = 0.0;
         return;
     }
@@ -282,10 +303,10 @@ fn apply(
 
 /// How long the frame limit slept at the end of the last frame (s).
 #[derive(Resource, Default)]
-struct Slept(f32);
+pub struct Slept(pub f32);
 
 /// The frame rate limit: the rest of the frame's time is slept away.
-fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>, mut slept: ResMut<Slept>) {
+pub fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>, mut slept: ResMut<Slept>) {
     let now = std::time::Instant::now();
     let mut nap = Duration::ZERO;
     if g.fps_limit > 0

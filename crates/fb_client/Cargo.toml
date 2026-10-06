@@ -13,7 +13,7 @@ fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
 fb_proto.workspace = true
-bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav", "bevy_settings", "system_clipboard"] }
+bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav", "bevy_settings", "system_clipboard", "sysinfo_plugin"] }
 # GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
 bevy_render = { workspace = true, features = ["gles"] }
 wgpu-types.workspace = true
@@ -42,9 +42,15 @@ wgpu = { workspace = true, features = ["noop"] }
 winresource = "0.1"
 
 [features]
-default = ["brp"]
+default = ["brp", "profiler"]
 # The Bevy Remote Protocol probe (`--brp`): off in distributed builds.
 brp = ["bevy/bevy_remote"]
+# Bevy's spans for every system: the built-in profiler of the F4 overlay (`perf/profiler.rs`).
+profiler = ["bevy/trace"]
+# The same spans to Tracy (https://github.com/wolfpld/tracy), with the GPU's passes: development only.
+tracy = ["profiler", "bevy/trace_tracy"]
+# The same spans to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
+chrome = ["profiler", "bevy/trace_chrome"]
 
 [lints]
 workspace = true

@@ -22,6 +22,7 @@ mod monkey;
 mod net;
 mod opts;
 mod outfit;
+mod perf;
 mod probe;
 mod render;
 mod report;
@@ -48,7 +49,7 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, InstanceFlags, RenderCreation, WgpuLimits, WgpuSettings};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use bevy::window::{ExitCondition, PresentMode};
+use bevy::window::{ExitCondition, MonitorSelection, PresentMode, WindowMode};
 use bevy::winit::WinitSettings;
 use clap::Parser;
 use fb_net::{NetStatsPlugin, ProtocolPlugin, TICK};
@@ -56,7 +57,18 @@ use lightyear::prelude::client::ClientPlugins;
 
 use crate::opts::{Backend, Opts};
 
-const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,lightyear=warn,aeronet=warn";
+// (The two `bevy_ecs` modules: the spans of systems and schedules, for the profiler.)
+const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info,lightyear=warn,aeronet=warn";
+
+/// The console log: events only (spans would prefix every line with the system it came from).
+fn fmt_layer(_: &mut App) -> Option<bevy::log::BoxedFmtLayer> {
+    use bevy::log::tracing_subscriber::{Layer, filter::FilterFn, fmt};
+    Some(Box::new(
+        fmt::Layer::default()
+            .with_writer(std::io::stderr)
+            .with_filter(FilterFn::new(|m| m.is_event())),
+    ))
+}
 
 /// Where the assets are: next to the executable in a distribution, else the workspace's.
 fn asset_dir() -> String {
@@ -121,6 +133,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps))),
             LogPlugin {
                 filter: LOG_FILTER.into(),
+                fmt_layer,
                 ..default()
             },
             bevy::state::app::StatesPlugin,
@@ -143,6 +156,11 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 name: Some("io.github.kauri_off.fallbeans".into()),
                 resolution: (1280, 720).into(),
                 present_mode: PresentMode::AutoVsync,
+                mode: if opts.fullscreen {
+                    WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                } else {
+                    WindowMode::Windowed
+                },
                 ..default()
             })
         };
@@ -168,6 +186,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             .set(LogPlugin {
                 filter: LOG_FILTER.into(),
                 custom_layer: logs::layer,
+                fmt_layer,
                 ..default()
             });
         if test {
@@ -183,7 +202,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             // No window at all: the frames go to an image (`--screenshot`, `fb/shot`).
             app.add_plugins((
                 plugins.disable::<bevy::winit::WinitPlugin>(),
-                ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / 60.0)),
+                ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps)),
             ));
             app.add_systems(PreStartup, offscreen_target);
         } else {
@@ -205,6 +224,9 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             camera::CameraPlugin,
             render::GfxPlugin,
             face::FacePlugin,
+            perf::PerfPlugin {
+                gpu_timers: !opts.no_gpu_timers && !test,
+            },
         ));
         if !opts.offscreen && !test {
             app.add_plugins((audio::AudioPlugin, update::UpdatePlugin));
