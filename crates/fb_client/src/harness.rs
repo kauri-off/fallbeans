@@ -23,7 +23,7 @@ use bevy::tasks::{block_on, tick_global_task_pools_on_main_thread};
 use bevy::text::EditableText;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::{Activate, SliderRange, ValueChange};
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use clap::Parser;
 use fb_net::ClientMsg;
 use fb_proto::{ArenaInfo, DevCmd};
@@ -398,6 +398,41 @@ impl Game {
                 .write_message(MouseButtonInput { button, state, window });
             self.step();
         }
+    }
+
+    /// The cursor moved to `at` (logical pixels), then a left click there, as the window reports them (through
+    /// picking: `click` and `press` bypass it).
+    pub fn click_at(&mut self, at: Vec2) {
+        let window = self.window();
+        let moved = CursorMoved {
+            window,
+            position: at,
+            delta: None,
+        };
+        self.client().world_mut().write_message(WindowEvent::CursorMoved(moved));
+        self.frames(2);
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            let input = MouseButtonInput {
+                button: MouseButton::Left,
+                state,
+                window,
+            };
+            let w = self.client().world_mut();
+            w.write_message(input);
+            w.write_message(WindowEvent::MouseButtonInput(input));
+            self.frames(2);
+        }
+    }
+
+    /// Where the enabled buttons whose action passes `which` are on screen, logical pixels.
+    pub fn rects(&mut self, which: impl Fn(&Action) -> bool) -> Vec<Rect> {
+        let w = self.client().world_mut();
+        let k = w.query::<&Window>().single(w).map_or(1.0, |w| 1.0 / w.scale_factor());
+        w.query_filtered::<(&Act, &ComputedNode, &UiGlobalTransform, &InheritedVisibility), Without<InteractionDisabled>>()
+            .iter(w)
+            .filter(|(a, n, _, v)| which(&a.0) && v.get() && n.size().x > 0.0)
+            .map(|(_, n, t, _)| Rect::from_center_size(t.translation * k, n.size() * k))
+            .collect()
     }
 
     /// The mouse moved by `delta` (looking around while the cursor is captured).

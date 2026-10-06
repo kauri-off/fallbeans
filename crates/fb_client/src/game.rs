@@ -307,7 +307,7 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> 
 }
 
 /// Jump and dive fire once per press (a held key does not repeat them, nor does the server: see
-/// `room::frame_for`). Presses made between two ticks wait here for the next one.
+/// `room::frame_for`). Presses made between two ticks wait here for the next one that is not a rollback's.
 #[derive(Resource, Default)]
 struct Presses(u8);
 
@@ -387,7 +387,12 @@ fn write_input(
     mut q: Query<(&mut ActionState<FbInput>, Option<(&PlayerId, &BodyFull)>), With<InputMarker<FbInput>>>,
     gate: Res<Gate>,
     binds: Res<Bindings>,
+    rollback: Option<Res<Rollback>>,
 ) {
+    // A rollback replays the buffered input over what is written here: a press taken now would be lost.
+    if rollback.is_some() {
+        return;
+    }
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
     let pressed = core::mem::take(&mut presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };

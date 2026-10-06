@@ -373,12 +373,12 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
         Look::Chip(_) | Look::Tiny | Look::TinyDanger => rem(0.6),
         _ => rem(0.875),
     };
-    let mut e = p.spawn((
-        bevy::ui_widgets::Button,
-        Hovered::default(),
-        look,
-        Act(act),
+    // (Labels of check boxes wrap; other buttons keep their size.)
+    let shrink = if matches!(look, Look::Check(_)) { 1.0 } else { 0.0 };
+    let face = (
         Node {
+            flex_grow: 1.0,
+            flex_shrink: shrink,
             padding: look.padding(),
             border: UiRect::all(px(1)),
             border_radius: BorderRadius::all(radius),
@@ -389,8 +389,6 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
             },
             align_items: AlignItems::Center,
             column_gap: rem(0.4),
-            // (Labels of check boxes wrap; other buttons keep their size.)
-            flex_shrink: if matches!(look, Look::Check(_)) { 1.0 } else { 0.0 },
             ..default()
         },
         BackgroundColor(bg),
@@ -399,15 +397,10 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
         } else {
             RIM
         }),
-    ));
-    if !matches!(look, Look::Check(_) | Look::Fold | Look::Tab(false)) {
-        e.insert(BoxShadow::new(SHADOW.with_alpha(0.12), px(0), px(2), px(0), px(6)));
-    }
-    if !enabled {
-        e.insert(InteractionDisabled);
-    }
-    let id = e.id();
-    e.with_children(|b| {
+    );
+    let shadow = (!matches!(look, Look::Check(_) | Look::Fold | Look::Tab(false)))
+        .then(|| BoxShadow::new(SHADOW.with_alpha(0.12), px(0), px(2), px(0), px(6)));
+    button_shell(p, look, act, enabled, shrink, face, shadow, |b| {
         if let Look::Check(on) = look {
             b.spawn((
                 Node {
@@ -422,6 +415,7 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                 },
                 BorderColor::all(if on { BLUE } else { MUTED }),
                 BackgroundColor(if on { BLUE } else { Color::WHITE }),
+                Pickable::IGNORE,
             ))
             .with_children(|c| {
                 if on {
@@ -433,24 +427,21 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                             ..default()
                         },
                         BackgroundColor(Color::WHITE),
+                        Pickable::IGNORE,
                     ));
                 }
             });
         }
         if !s.is_empty() {
-            rich(b, f, s, look.size(), ink);
+            let t = rich(b, f, s, look.size(), ink);
+            b.commands().entity(t).insert(Pickable::IGNORE);
         }
-    });
-    id
+    })
 }
 
 /// A colour swatch button.
 pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action, enabled: bool, size: f32) -> Entity {
-    let mut e = p.spawn((
-        bevy::ui_widgets::Button,
-        Hovered::default(),
-        Look::Swatch(color, on),
-        Act(act),
+    let face = (
         Node {
             width: rem(size),
             height: rem(size),
@@ -460,11 +451,50 @@ pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action,
         },
         BackgroundColor(color),
         BorderColor::all(if on { INK } else { Color::WHITE }),
-        BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4)),
+    );
+    let shadow = Some(BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4)));
+    button_shell(p, Look::Swatch(color, on), act, enabled, 0.0, face, shadow, |_| {})
+}
+
+/// What of a button moves when it is hovered or pressed. The button itself stays put: pressed at its edge,
+/// it would otherwise slip from under the pointer, and the release would miss it.
+#[derive(Component)]
+struct Face(Entity);
+
+#[expect(clippy::too_many_arguments)]
+fn button_shell(
+    p: &mut ChildSpawnerCommands,
+    look: Look,
+    act: Action,
+    enabled: bool,
+    shrink: f32,
+    face: impl Bundle,
+    shadow: Option<BoxShadow>,
+    inside: impl FnOnce(&mut ChildSpawnerCommands),
+) -> Entity {
+    let mut e = p.spawn((
+        bevy::ui_widgets::Button,
+        Hovered::default(),
+        look,
+        Act(act),
+        Node {
+            flex_shrink: shrink,
+            ..default()
+        },
     ));
     if !enabled {
         e.insert(InteractionDisabled);
     }
+    let mut face_e = Entity::PLACEHOLDER;
+    e.with_children(|b| {
+        let mut fe = b.spawn((face, UiTransform::default(), Pickable::IGNORE));
+        if let Some(shadow) = shadow {
+            fe.insert(shadow);
+        }
+        fe.with_children(inside);
+        face_e = fe.id();
+    });
+    e.insert(Face(face_e));
     e.id()
 }
 
@@ -935,19 +965,13 @@ fn knob_values(
 }
 
 fn style_buttons(
-    mut q: Query<
-        (
-            &Look,
-            &Hovered,
-            Has<Pressed>,
-            Has<InteractionDisabled>,
-            &mut BackgroundColor,
-            &mut UiTransform,
-        ),
-        With<bevy::ui_widgets::Button>,
-    >,
+    q: Query<(&Look, &Hovered, Has<Pressed>, Has<InteractionDisabled>, &Face), With<bevy::ui_widgets::Button>>,
+    mut faces: Query<(&mut BackgroundColor, &mut UiTransform)>,
 ) {
-    for (look, hovered, pressed, disabled, mut bg, mut tf) in &mut q {
+    for (look, hovered, pressed, disabled, face) in &q {
+        let Ok((mut bg, mut tf)) = faces.get_mut(face.0) else {
+            continue;
+        };
         let (base, _) = look.fill();
         let c = if disabled {
             base.with_alpha(base.alpha() * 0.45)

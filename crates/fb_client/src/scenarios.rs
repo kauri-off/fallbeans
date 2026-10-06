@@ -4,7 +4,7 @@ use fb_net::ClientMsg;
 use fb_proto::{DenyReason, DevCmd, Phase};
 
 use bevy::input::keyboard::Key;
-use bevy::prelude::{KeyCode, World};
+use bevy::prelude::{KeyCode, Vec2, World};
 
 use crate::harness::Game;
 use crate::keys::Bind;
@@ -703,6 +703,41 @@ fn settings_at_the_room_list() {
     assert_ne!(g.res::<crate::settings::Bindings>().keys(Bind::Jump), [KeyCode::KeyK]);
     g.press(2.0, "Комнаты", |a| matches!(a, Action::HomeTab(HomeTab::Rooms)));
     on_room_list(&mut g);
+}
+
+/// A press on the menu's panel between its buttons is not one on the field: the menu stays open. One beside
+/// the panel closes it.
+#[test]
+fn a_click_on_the_menu_panel_keeps_it_open() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    g.frames(10);
+    let swatches = g.rects(|a| matches!(a, Action::Color(_)));
+    let last = swatches
+        .iter()
+        .max_by(|a, b| a.max.x.total_cmp(&b.max.x))
+        .expect("colour swatches");
+    let panel = g.rects(|a| matches!(a, Action::Resume))[0];
+    let gap = Vec2::new((last.max.x + panel.max.x) / 2.0, last.center().y);
+    assert!(
+        gap.x - last.max.x > 4.0,
+        "no room right of the swatches: {last:?} in {panel:?}"
+    );
+    g.click_at(gap);
+    assert!(g.res::<Ui>().menu, "a click on the panel closed the menu");
+    g.click_at(Vec2::new(panel.max.x + 200.0, panel.center().y));
+    assert!(!g.res::<Ui>().menu, "a click beside the panel left the menu open");
+}
+
+/// A button pressed at its very top edge, the mouse still: pressing moves it down, and it still takes the click.
+#[test]
+fn a_button_takes_a_click_at_its_edge() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    g.frames(10);
+    let r = g.rects(|a| matches!(a, Action::Resume))[0];
+    g.click_at(Vec2::new(r.center().x, r.min.y + 0.5));
+    assert!(!g.res::<Ui>().menu, "«Продолжить» pressed at its top edge did nothing");
 }
 
 /// Every option of the menu mid-round on T2, each graphics preset, upscaler and toggle applied on the fly.

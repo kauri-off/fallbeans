@@ -39,12 +39,26 @@ impl Plugin for MenuPlugin {
     }
 }
 
-/// A press on the game field (no interface under the pointer).
+/// A press on the game field: on nothing, or on the HUD and name tags over it.
 #[derive(Message)]
 struct FieldClick;
 
-fn on_press(ev: On<Pointer<Press>>, windows: Query<(), With<Window>>, mut out: MessageWriter<FieldClick>) {
-    if windows.contains(ev.entity) {
+/// Presses bubble from what they hit up to the window: one that started on a panel is not the field's.
+fn on_press(
+    ev: On<Pointer<Press>>,
+    windows: Query<(), With<Window>>,
+    parents: Query<&ChildOf>,
+    layers: Query<&Layer>,
+    mut out: MessageWriter<FieldClick>,
+) {
+    if !windows.contains(ev.entity) {
+        return;
+    }
+    let hit = ev.original_event_target();
+    let on_panel = core::iter::once(hit)
+        .chain(parents.iter_ancestors(hit))
+        .any(|e| layers.get(e).is_ok_and(|l| !matches!(l, Layer::Hud | Layer::Tags)));
+    if !on_panel {
         out.write(FieldClick);
     }
 }

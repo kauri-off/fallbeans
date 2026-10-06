@@ -26,6 +26,11 @@ const MAX_ERROR: f32 = 24.0;
 const SPEEDUP: f32 = 1.1;
 /// Changes of the margin smaller than this leave the config alone.
 const STEP: f32 = 0.1;
+/// A frame this long (s) stalls the clocks: packets come in a burst while the remote timeline has not yet
+/// moved on, and its estimate jumps by the frame's length for a while. Not the path: for STALL_QUIET s
+/// after such a frame the held aim does not rise (once it did, and stayed up for a minute).
+const STALL: f32 = 0.1;
+const STALL_QUIET: f32 = 5.0;
 
 /// The aim over the remote timeline's own clock (its estimate's offset + RTT/2 + JITTER_K × jitter) as
 /// held, ticks; None before the first estimate. Offsets count from the first one of the connection (the
@@ -36,6 +41,8 @@ pub struct Lead {
     base: Option<TickDelta>,
     /// The margin the config carries now (fixed part plus what the held aim adds).
     pub margin: f32,
+    /// Real time until which the held aim does not rise (after a long frame).
+    quiet_until: f32,
 }
 
 pub struct ClockPlugin;
@@ -84,6 +91,10 @@ fn steer(
     if ping.latency_samples_recv() < 3 || !remote.is_initialized() {
         return;
     }
+    let now = time.elapsed_secs();
+    if time.delta_secs() > STALL {
+        lead.quiet_until = now + STALL_QUIET;
+    }
     let tick = TICK.as_secs_f32();
     let offset = remote.current_estimate() - remote.now();
     let offset = (offset - *lead.base.get_or_insert(offset)).to_f32();
@@ -91,6 +102,7 @@ fn steer(
     let want = offset + half + JITTER_K * ping.jitter().as_secs_f32() / tick;
     let held = match lead.held {
         Some(h) if h > want => (h - FALL_PER_S * time.delta_secs()).max(want),
+        Some(h) if now < lead.quiet_until => h,
         _ => want,
     };
     lead.held = Some(held);
