@@ -169,7 +169,7 @@ impl Game {
         let opts = Opts::parse_from(base.iter().chain(args));
         let mut app = App::new();
         crate::build(&mut app, opts, Some(noop_gpu(gpu)));
-        // (A fixed preset: "auto" would lower it whenever the test machine is busy.)
+        // (The preset of the kind of GPU tested: every machine starts on High, a player lowers it.)
         app.world_mut().resource_mut::<crate::settings::Graphics>().preset = match gpu {
             wgpu::DeviceType::DiscreteGpu => "high",
             wgpu::DeviceType::IntegratedGpu => "medium",

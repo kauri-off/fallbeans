@@ -949,10 +949,24 @@ impl Arena {
         )
     }
 
-    /// Builds the bots' navigation grid now, ahead of the round (a server room does it off its tick).
+    /// Builds the bots' navigation grid now, ahead of the round or the lobby (a server room does it off its tick).
     pub fn prepare_nav(&mut self) {
-        if self.nav.is_none() && self.nav_pre.is_none() && self.kind == ArenaKind::Round && self.spec.bot.is_some() {
+        if self.nav.is_none() && self.nav_pre.is_none() && self.kind != ArenaKind::Podium && self.spec.bot.is_some() {
             self.nav_pre = Some((self.build_nav(), NavGrid::key(&self.world)));
+        }
+    }
+
+    /// The grid `prepare_nav` built and the static world it was built for: for another arena of the same map
+    /// and seed (`give_nav`).
+    pub fn prepared_nav(&self) -> Option<&(NavGrid, String)> {
+        self.nav_pre.as_ref()
+    }
+
+    /// A grid built ahead elsewhere (another thread, another arena of this map): used at the first need if the
+    /// static world is still the one it was built for, else built again as without it.
+    pub fn give_nav(&mut self, pre: (NavGrid, String)) {
+        if self.nav.is_none() {
+            self.nav_pre = Some(pre);
         }
     }
 

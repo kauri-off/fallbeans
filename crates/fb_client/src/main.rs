@@ -219,7 +219,10 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             report::ReportPlugin,
             ui::UiPlugin,
             camera::CameraPlugin,
-            render::GfxPlugin,
+            render::GfxPlugin {
+                // (Off on the bench, where every test would build every map first; `--warmup` there tests it.)
+                warmup: !opts.no_warmup && (!test || opts.warmup),
+            },
             face::FacePlugin,
             perf::PerfPlugin {
                 gpu_timers: !opts.no_gpu_timers && !test,

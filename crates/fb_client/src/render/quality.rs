@@ -1,7 +1,6 @@
-//! Hardware tiers and graphics presets: the tier is read from the adapter at start
-//! (T0: a software device; T1: an integrated GPU, or one that says neither; T2: a discrete GPU), the
-//! preset follows it unless the player picks one, and switches only take work away. With the preset
-//! on "auto", frames that stay slow for a while lower it a step (never up: that is the player's call).
+//! Graphics presets and the hardware tier: the preset is the player's (High on every machine until they pick
+//! another), switches only take work away. The tier is read from the adapter at start (T0: a software device;
+//! T1: an integrated GPU, or one that says neither; T2: a discrete GPU) and only told: it changes nothing.
 use core::time::Duration;
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -29,11 +28,11 @@ use crate::view::MainCamera;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tier {
-    /// A software device, the CPU draws (WARP, llvmpipe/lavapipe): Low.
+    /// A software device, the CPU draws (WARP, llvmpipe/lavapipe).
     T0,
-    /// An integrated GPU (or a virtual one, or one of no known kind): Medium.
+    /// An integrated GPU (or a virtual one, or one of no known kind).
     T1,
-    /// A discrete GPU: High.
+    /// A discrete GPU.
     T2,
 }
 
@@ -53,21 +52,13 @@ impl Preset {
             _ => return None,
         })
     }
-
-    fn lower(self) -> Preset {
-        match self {
-            Preset::High => Preset::Medium,
-            _ => Preset::Low,
-        }
-    }
 }
 
-/// What the graphics run with now: the tier, the preset in effect, and how many steps "auto" took off.
+/// What the graphics run with now: the tier and the preset in effect.
 #[derive(Resource, Clone, Debug)]
 pub struct Quality {
     pub tier: Tier,
     pub preset: Preset,
-    pub dropped: u32,
     pub adapter: String,
 }
 
@@ -90,7 +81,7 @@ impl Plugin for QualityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Slept>();
         app.add_systems(Startup, detect);
-        app.add_systems(Update, (watch_frames, apply).chain());
+        app.add_systems(Update, apply);
         app.add_systems(Last, limit_fps);
         if let Some(r) = app.get_sub_app_mut(RenderApp) {
             r.add_systems(Render, drop_stale_background_motion.in_set(RenderSystems::Prepare));
@@ -158,81 +149,20 @@ fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
         }
         None => (Tier::T1, "unknown".into()),
     };
-    let preset = match tier {
-        Tier::T0 => Preset::Low,
-        Tier::T1 => Preset::Medium,
-        Tier::T2 => Preset::High,
-    };
-    info!("graphics: {adapter}: tier {tier:?}, preset {preset:?}");
+    info!("graphics: {adapter}: tier {tier:?}");
+    if tier == Tier::T0 {
+        info!("graphics: a software device, the CPU draws: expect few frames a second (the Low preset helps)");
+    }
     commands.insert_resource(Quality {
         tier,
-        preset,
-        dropped: 0,
+        preset: Preset::High,
         adapter,
     });
 }
 
-/// The preset the settings ask for, as far as the tier allows it.
-fn preset_for(g: &Graphics, q: &Quality) -> Preset {
-    let most = match q.tier {
-        Tier::T0 => Preset::Low,
-        Tier::T1 => Preset::Medium,
-        Tier::T2 => Preset::High,
-    };
-    match Preset::of(&g.preset) {
-        Some(p) => p.min(most),
-        None => {
-            let mut p = most;
-            for _ in 0..q.dropped {
-                p = p.lower();
-            }
-            p
-        }
-    }
-}
-
-/// "auto": a frame time over 24 ms (smoothed) for 6 s lowers the preset a step. The frame limit's sleep
-/// is not the frame's work, and a window in the background may be held back by the compositor: neither
-/// counts.
-fn watch_frames(
-    time: Res<Time<Real>>,
-    g: Res<Graphics>,
-    mut q: Option<ResMut<Quality>>,
-    mut smooth: Local<f32>,
-    mut slow: Local<f32>,
-    mut session: ResMut<crate::session::Session>,
-    slept: Res<Slept>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    perf: Option<Res<crate::perf::Perf>>,
-    compiling: Option<Res<super::warmup::Compiling>>,
-) {
-    let Some(q) = q.as_mut() else { return };
-    // (A sweep switches features off and on: its frames say nothing about the preset; nor do the frames while
-    // shaders compile, at the start and on a map's first sight of a material.)
-    if windows.single().is_ok_and(|w| !w.focused)
-        || perf.is_some_and(|p| p.busy)
-        || compiling.is_some_and(|c| c.now() > 0)
-    {
-        *slow = 0.0;
-        return;
-    }
-    let dt = (time.delta_secs() - slept.0).clamp(0.0, 1.0);
-    *smooth += (dt * 1000.0 - *smooth) * 0.05;
-    if g.preset != "auto" || preset_for(&g, q) == Preset::Low {
-        *slow = 0.0;
-        return;
-    }
-    if *smooth > 24.0 {
-        *slow += dt;
-    } else {
-        *slow = 0.0;
-    }
-    if *slow > 6.0 {
-        *slow = 0.0;
-        q.dropped += 1;
-        warn!("frames run slow ({:.0} ms): graphics preset lowered", *smooth);
-        session.note(time.elapsed_secs(), crate::ui::text::QUALITY_LOWERED.into());
-    }
+/// The preset the settings ask for: High for a name it does not know (an old "auto").
+pub fn preset_for(g: &Graphics) -> Preset {
+    Preset::of(&g.preset).unwrap_or(Preset::High)
 }
 
 /// The camera, the sun and the window as the preset and switches say.
@@ -250,7 +180,7 @@ fn apply(
     mut done: Local<Option<(Preset, Graphics)>>,
 ) {
     let Some(mut q) = q else { return };
-    let preset = preset_for(&g, &q);
+    let preset = preset_for(&g);
     if q.preset != preset {
         q.preset = preset;
     }
@@ -323,7 +253,7 @@ fn apply(
             }
         }
     }
-    if g.ao && preset == Preset::High && q.tier == Tier::T2 && !upscaling {
+    if g.ao && preset == Preset::High && !upscaling {
         e.insert(ScreenSpaceAmbientOcclusion {
             quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Medium,
             ..default()

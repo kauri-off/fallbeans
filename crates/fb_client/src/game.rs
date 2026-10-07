@@ -76,9 +76,23 @@ pub struct Map {
     pub look: fb_sim::looks::ResolvedLook,
     /// The room it was built in: every room's first lobby is arena 1 with seed 1, another room's is not this.
     room: Option<String>,
+    /// Built by the warm-up behind the loading screen (`render/warmup.rs`), in no room: nobody plays it.
+    pub warmup: bool,
     /// The others as the own bean met them at each predicted tick: a rollback replays a tick against the same
     /// bodies, not against where they are drawn now.
     others: BTreeMap<i64, Vec<OtherBody>>,
+}
+
+/// The maps built so far, the warm-up's too: each its own `generation`, by which views tell maps apart.
+#[derive(Resource, Default)]
+pub struct Generations(u32);
+
+impl Generations {
+    pub fn next(&mut self) -> u32 {
+        let g = self.0;
+        self.0 = g.wrapping_add(1);
+        g
+    }
 }
 
 /// Ticks of the others kept (`PredictionManager::max_rollback_ticks` and a little).
@@ -92,6 +106,74 @@ impl Map {
     /// Finished or out: the bean has left the arena.
     pub fn gone(&self, id: Pid) -> bool {
         self.info.finished.contains(&id) || self.info.out.contains(&id)
+    }
+
+    /// `def` as a round of it would be built here, for the warm-up to draw (`render/warmup.rs`): seed 1, eight
+    /// players nobody plays, the look given; time 0 at `zero_tick`.
+    pub fn warmup(
+        def: &'static dyn fb_sim::map::MapDef,
+        kind: ArenaKind,
+        look: fb_sim::looks::ResolvedLook,
+        generation: u32,
+        zero_tick: i64,
+    ) -> Map {
+        const SEED: u32 = 1;
+        let participants: Vec<Pid> = (1..=8).collect();
+        let meta = def.meta();
+        let (mut b, mut spec) = build_map(def, SEED, true, &participants);
+        let bonuses = if kind == ArenaKind::Round {
+            Bonuses::new(&b.bonus_spots, SEED, spec.finish.is_none(), meta.duration)
+        } else {
+            Bonuses::default()
+        };
+        b.world.finalize(-1e3);
+        let static_hash = b.world.hash(true);
+        let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
+        client_start(&mut b.world, &mut spec, &mut scores, None, &mut out);
+        let render = b.world.nodes.clone();
+        let mut map = Map {
+            round: Round {
+                arena: 0,
+                kind,
+                map: meta.id.to_string(),
+                seed: SEED,
+                zero_tick,
+                fall: fb_arena::fall_behaviour(meta.genre),
+                static_hash: static_hash.clone(),
+            },
+            world: b.world,
+            spec,
+            scene: b.scene.unwrap_or_default(),
+            bonuses,
+            render,
+            static_hash,
+            pending: Vec::new(),
+            seen: BTreeSet::new(),
+            generation,
+            info: ArenaInfo {
+                id: 0,
+                kind,
+                game: meta.id.to_string(),
+                participants,
+                index: 0,
+                total: 0,
+                practice: false,
+                late: false,
+                finished: Vec::new(),
+                out: Vec::new(),
+                scores: Vec::new(),
+            },
+            deco: BTreeMap::new(),
+            sfx: Vec::new(),
+            look,
+            room: None,
+            others: BTreeMap::new(),
+            warmup: true,
+        };
+        // (Its decorations, not its sounds: nobody is there to hear them.)
+        map.take_out(out);
+        map.sfx.clear();
+        map
     }
 
     fn take_out(&mut self, out: Vec<MapOut>) {
@@ -182,6 +264,7 @@ impl Plugin for GamePlugin {
         app.init_resource::<Inbox>();
         app.init_resource::<Presses>();
         app.init_resource::<Gate>();
+        app.init_resource::<Generations>();
         app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
         app.add_systems(
@@ -217,9 +300,10 @@ fn open_trace(mut commands: Commands, opts: Res<Opts>) {
 }
 
 /// Out of the room (at the room list, on another server): its map goes, and with it what the next room would
-/// take for its own (players, bonuses, decorations). The scene stays drawn until the next map's replaces it.
+/// take for its own (players, bonuses, decorations). The scene stays drawn until the next map's replaces it. The
+/// warm-up's maps are in no room: they go when it is done with them.
 fn drop_map(map: Option<Res<Map>>, session: Res<Session>, mut commands: Commands) {
-    if map.is_some() && session.room.is_none() {
+    if map.is_some_and(|m| !m.warmup) && session.room.is_none() {
         commands.remove_resource::<Map>();
     }
 }
@@ -233,7 +317,7 @@ fn build_round(
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
     mut unknown: Local<Option<u32>>,
-    mut generations: Local<u32>,
+    mut generations: ResMut<Generations>,
 ) {
     // (Out of the room, its arena may linger a moment: `drop_map`.)
     if session.room.is_none() {
@@ -288,8 +372,7 @@ fn build_round(
     client_start(&mut b.world, &mut spec, &mut session.scores, me, &mut out);
     let render = b.world.nodes.clone();
     // (Counted here, not from the map before: there may be none, and views tell maps apart by it.)
-    let generation = *generations;
-    *generations = generation.wrapping_add(1);
+    let generation = generations.next();
     let mut next = Map {
         round: round.clone(),
         world: b.world,
@@ -307,6 +390,7 @@ fn build_round(
         look: fb_sim::looks::look_for(def.looks(), round.seed),
         room: session.room.clone(),
         others: BTreeMap::new(),
+        warmup: false,
     };
     next.take_out(out);
     commands.insert_resource(next);

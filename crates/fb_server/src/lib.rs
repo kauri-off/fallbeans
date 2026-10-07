@@ -25,6 +25,8 @@ pub use crate::opts::Opts;
 /// The server's app; `log`: the process is the server's own, with Bevy's logging and task pools sized for it
 /// (a process has one of each: the client's tests bring theirs).
 pub fn app(opts: Opts, log: bool) -> App {
+    // (The one map every room plays: its bots' grid is built now, off the main thread, not in a room's tick.)
+    rooms::room::prebuild_lobby_nav();
     let mut app = App::new();
     // FixedUpdate runs the 120 Hz ticks that are due each frame.
     let plugins = MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(SERVER_FRAME));

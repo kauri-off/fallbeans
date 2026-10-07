@@ -122,13 +122,12 @@ impl Default for Display {
     }
 }
 
-/// Graphics (`render/quality.rs`): a preset for the hardware tier, and switches that only ever take work
-/// away from it.
+/// Graphics (`render/quality.rs`): a preset, and switches that only ever take work away from it.
 #[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "graphics")]
 pub struct Graphics {
-    /// "auto" (by the hardware, lowered when frames run slow), "low", "medium" or "high".
+    /// "low", "medium" or "high" (anything else, an old "auto" among them, is brought back to "high").
     pub preset: String,
     pub shadows: bool,
     pub ao: bool,
@@ -151,7 +150,7 @@ pub struct Graphics {
 impl Default for Graphics {
     fn default() -> Self {
         Self {
-            preset: "auto".into(),
+            preset: "high".into(),
             shadows: true,
             ao: true,
             aa: true,
@@ -550,6 +549,10 @@ fn sanitize(world: &mut World) {
     };
     if fixed != d {
         *world.resource_mut::<Display>() = fixed;
+    }
+    // (There is no "auto" any more: every machine starts on the best preset, the player lowers it.)
+    if crate::render::quality::Preset::of(&world.resource::<Graphics>().preset).is_none() {
+        world.resource_mut::<Graphics>().preset = Graphics::default().preset;
     }
 }
 

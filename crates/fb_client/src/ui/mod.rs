@@ -7,6 +7,7 @@ pub mod text;
 mod chat;
 mod home;
 mod hud;
+mod loading;
 mod menu;
 mod tags;
 
@@ -860,6 +861,7 @@ impl Plugin for UiPlugin {
             hud::HudPlugin,
             chat::ChatPlugin,
             tags::TagsPlugin,
+            loading::LoadingPlugin,
         ));
     }
 }
@@ -1150,7 +1152,7 @@ impl Options<'_> {
             ui.open.contains("keys"),
             &*self.gfx,
             ui.open.contains("gfx"),
-            self.quality.as_ref().map(|q| (q.tier, q.dropped)),
+            self.quality.as_ref().map(|q| q.tier),
         ))
     }
 }
@@ -1255,14 +1257,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
 
 fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     use crate::opts::Backend;
-    use crate::render::quality::{Preset, Tier};
     let g = &*o.gfx;
-    let tier = o.quality.as_ref().map_or(Tier::T2, |q| q.tier);
-    let most = match tier {
-        Tier::T0 => Preset::Low,
-        Tier::T1 => Preset::Medium,
-        Tier::T2 => Preset::High,
-    };
     let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &[(&str, GfxPick, bool, bool)]| {
         stack(p, |c| {
             muted(c, f, title);
@@ -1274,13 +1269,12 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
         });
     };
     let presets: Vec<(&str, GfxPick, bool, bool)> = [
-        ("auto", text::PRESET_AUTO, None),
-        ("low", text::PRESET_LOW, Some(Preset::Low)),
-        ("medium", text::PRESET_MEDIUM, Some(Preset::Medium)),
-        ("high", text::PRESET_HIGH, Some(Preset::High)),
+        ("low", text::PRESET_LOW),
+        ("medium", text::PRESET_MEDIUM),
+        ("high", text::PRESET_HIGH),
     ]
     .into_iter()
-    .map(|(id, s, p)| (s, GfxPick::Preset(id), g.preset == id, p.is_none_or(|p| p <= most)))
+    .map(|(id, s)| (s, GfxPick::Preset(id), g.preset == id, true))
     .collect();
     chips(p, text::PRESET, &presets);
     if let Some(q) = &o.quality {
@@ -1305,14 +1299,7 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
         Look::Check(g.shadows),
         Action::Set(Toggle::Shadows),
     );
-    button_if(
-        p,
-        f,
-        text::AO,
-        Look::Check(g.ao && tier == Tier::T2),
-        Action::Set(Toggle::Ao),
-        tier == Tier::T2,
-    );
+    button(p, f, text::AO, Look::Check(g.ao), Action::Set(Toggle::Ao));
     button(p, f, text::AA, Look::Check(g.aa), Action::Set(Toggle::Aa));
     button(p, f, text::GRADE, Look::Check(g.grade), Action::Set(Toggle::Grade));
     button(p, f, text::MOTES, Look::Check(g.motes), Action::Set(Toggle::Motes));

@@ -13,7 +13,9 @@ pub mod portal;
 pub mod props;
 pub mod quality;
 pub mod surface;
-mod warmup;
+pub mod warmup;
+
+use std::collections::HashMap;
 
 use bevy::asset::embedded_asset;
 use bevy::camera::{Exposure, Hdr};
@@ -25,7 +27,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::render::view::{ColorGrading, ColorGradingGlobal};
 use bevy::shader::ShaderRef;
-use fb_sim::looks::ResolvedLook;
+use fb_sim::looks::{Look, ResolvedLook};
 
 use crate::game::Map;
 use crate::view::MainCamera;
@@ -97,7 +99,10 @@ const SKY_R: f32 = 900.0;
 /// How far the sun's position is from what it lights (only its direction counts).
 const SUN_DISTANCE: f32 = 42.0;
 
-pub struct GfxPlugin;
+pub struct GfxPlugin {
+    /// The loading screen's warm-up at the start and after a change of the graphics (`warmup.rs`).
+    pub warmup: bool,
+}
 
 impl Plugin for GfxPlugin {
     fn build(&self, app: &mut App) {
@@ -111,9 +116,10 @@ impl Plugin for GfxPlugin {
             decor::DecorPlugin,
             motes::MotesPlugin,
             fsr::FsrPlugin,
-            warmup::WarmupPlugin,
+            warmup::WarmupPlugin { on: self.warmup },
         ));
         app.init_resource::<LookShown>();
+        app.init_resource::<EnvLights>();
         app.add_systems(Startup, setup.after(crate::view::setup_camera));
         app.add_systems(Update, (apply_look, sky_clouds).chain());
         app.add_systems(
@@ -134,12 +140,13 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut skies: ResMut<Assets<SkyMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut env: ResMut<EnvLights>,
     camera: Query<Entity, With<MainCamera>>,
 ) {
     if let Ok(cam) = camera.single() {
         commands.entity(cam).insert((
             // (From the start, as in every round: the shaders warmed up before it are the round's.)
-            env_light(&fb_sim::looks::classic(), &mut images),
+            env.of(fb_sim::looks::classic().look, &mut images),
             Hdr,
             Tonemapping::KhronosPbrNeutral,
             Exposure {
@@ -219,6 +226,7 @@ fn apply_look(
     mut camera: Query<(Entity, &mut DistanceFog, &mut ColorGrading), With<MainCamera>>,
     mut images: ResMut<Assets<Image>>,
     mut clear: ResMut<ClearColor>,
+    mut env: ResMut<EnvLights>,
 ) {
     let Some(map) = map else { return };
     if shown.0 == Some(map.generation) {
@@ -251,30 +259,48 @@ fn apply_look(
         ..default()
     };
     clear.0 = crate::view::hex(l.sky.horizon);
-    commands.entity(cam).insert(env_light(look, &mut images));
+    commands.entity(cam).insert(env.of(l, &mut images));
 }
 
-/// The look's ambient light (`env.rs`).
-fn env_light(look: &ResolvedLook, images: &mut Assets<Image>) -> EnvironmentMapLight {
-    let l = look.look;
-    let c = |hex: &str| {
-        let c = linear(hex);
-        [c.red, c.green, c.blue]
-    };
-    let mut cube = |map| {
-        images.add(env::cube(
-            c(l.hemi.sky),
-            c(l.hemi.ground),
-            l.hemi.intensity as f32,
-            l.env as f32,
-            map,
-        ))
-    };
-    EnvironmentMapLight {
-        diffuse_map: cube(env::Map::Diffuse),
-        specular_map: cube(env::Map::Specular),
-        intensity: LUX,
-        ..default()
+/// The looks' ambient light (`env.rs`), made once per look (≈70 KB each) and kept: a round of a look seen
+/// before makes none.
+#[derive(Resource, Default)]
+pub struct EnvLights(HashMap<&'static str, EnvironmentMapLight>);
+
+impl EnvLights {
+    pub fn of(&mut self, l: &'static Look, images: &mut Assets<Image>) -> EnvironmentMapLight {
+        self.0
+            .entry(l.id)
+            .or_insert_with(|| {
+                let c = |hex: &str| {
+                    let c = linear(hex);
+                    [c.red, c.green, c.blue]
+                };
+                let mut cube = |map| {
+                    images.add(env::cube(
+                        c(l.hemi.sky),
+                        c(l.hemi.ground),
+                        l.hemi.intensity as f32,
+                        l.env as f32,
+                        map,
+                    ))
+                };
+                EnvironmentMapLight {
+                    diffuse_map: cube(env::Map::Diffuse),
+                    specular_map: cube(env::Map::Specular),
+                    intensity: LUX,
+                    ..default()
+                }
+            })
+            .clone()
+    }
+
+    /// Every look's, ahead (the warm-up).
+    pub fn make_all(&mut self, images: &mut Assets<Image>) -> usize {
+        for l in fb_sim::looks::LOOKS {
+            self.of(l, images);
+        }
+        self.0.len()
     }
 }
 

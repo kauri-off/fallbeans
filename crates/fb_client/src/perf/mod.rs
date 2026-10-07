@@ -171,7 +171,7 @@ pub struct Perf {
     pub spikes: VecDeque<Spike>,
     /// The profiler's numbers of this frame (for a recording).
     pub taken: Vec<(Arc<Slot>, f32, u32)>,
-    /// A sweep or benchmark runs: "auto" graphics do not lower the preset meanwhile.
+    /// A sweep or benchmark runs: the graphics it switches bring no loading screen (`render/warmup.rs`).
     pub busy: bool,
     /// Built in and started with `--profiler`: the spans of systems and schedules are there to sum.
     pub profiler: bool,

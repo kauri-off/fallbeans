@@ -592,13 +592,31 @@ struct KitParts {
 
 /// What every face shares: the patch, the brow, the surface, a material per expression.
 #[derive(Resource)]
-struct FaceKit {
+pub struct FaceKit {
     patch: Handle<Mesh>,
     brow: Handle<Mesh>,
     brow_mat: Handle<StandardMaterial>,
     surface: Surface,
     mouths: HashMap<Expr, Handle<StandardMaterial>>,
 }
+
+impl FaceKit {
+    /// A face's parts as `attach` puts them on a bean (the patch smiling, a brow): the warm-up draws them.
+    pub fn sample(&self) -> Vec<(Handle<Mesh>, Handle<StandardMaterial>)> {
+        let mut v: Vec<_> = self
+            .mouths
+            .get(&Expr::Smile)
+            .map(|m| (self.patch.clone(), m.clone()))
+            .into_iter()
+            .collect();
+        v.push((self.brow.clone(), self.brow_mat.clone()));
+        v
+    }
+}
+
+/// A bean model the kit may be made from before any player's bean is in (the warm-up's, `render/warmup.rs`).
+#[derive(Component)]
+pub struct FaceSource;
 
 /// A bean's mouth patch and brows, and the expression shown.
 #[derive(Component)]
@@ -623,6 +641,7 @@ fn make_kit(
     kit: Option<Res<FaceKit>>,
     mut task: Option<ResMut<KitTask>>,
     rigs: Query<&Rig>,
+    sources: Query<Entity, With<FaceSource>>,
     children: Query<&Children>,
     parts: Query<(&GltfMaterialName, &Mesh3d)>,
     names: Query<&Name>,
@@ -665,7 +684,12 @@ fn make_kit(
         });
         return;
     }
-    let Some(model) = rigs.iter().find(|r| r.ready()).map(|r| r.model) else {
+    let Some(model) = rigs
+        .iter()
+        .find(|r| r.ready())
+        .map(|r| r.model)
+        .or_else(|| sources.iter().next())
+    else {
         return;
     };
     let mut tris = Vec::new();
