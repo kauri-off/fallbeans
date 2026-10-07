@@ -585,8 +585,9 @@ pub struct SurfaceUniform {
     pub extra: Vec4,
 }
 
-/// Bindless where the platform has it (Vulkan, DX12), as the standard material is: an extended material is
-/// bindless only when both halves are, and only then do the map's many materials share one bind group.
+/// Bindless where the standard material is (Vulkan; not DX12, whose 2048 samplers do not hold its six per slot
+/// of a 2048-slot slab): an extended material is bindless only when both halves are, and only then do the map's
+/// many materials share one bind group.
 /// Bindless indices 50…52 (the standard material has 0…30) in their own index table at binding 100, the
 /// data in an array at 101; without bindless, a uniform at 50 and the texture and sampler at 51 and 52.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
