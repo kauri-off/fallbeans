@@ -51,10 +51,12 @@ impl Backend {
     }
 }
 
-/// The automatic choice, in order.
+/// The automatic choice, in order. Windows too tries Vulkan first: measured on an RTX 5060 Ti (portal-panic,
+/// High), wgpu's DX12 backend spent 14.8 ms of render-thread CPU a frame against Vulkan's 3.5 ms for the same
+/// picture (63 against 245 fps). DX12 remains for machines without a usable Vulkan 1.2 driver.
 fn auto_order() -> &'static [Backend] {
     if cfg!(target_os = "windows") {
-        &[Backend::Dx12, Backend::Vulkan]
+        &[Backend::Vulkan, Backend::Dx12]
     } else {
         &[Backend::Vulkan]
     }

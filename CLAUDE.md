@@ -28,6 +28,6 @@ English. License: AGPL-3.0-or-later.
 - Changing a replicated component or message: bump `WIRE_VERSION` (`core/fb_shared/src/consts.rs`) and bless the
   wire fixture (`FB_BLESS=1 cargo test -p fb_net --test wire`). `PROTOCOL_VERSION` is derived from it and from a
   fingerprint of `core/fb_arena/tests/determinism.txt`: re-blessing the determinism hashes changes it too.
-- Graphics: DX12 by default on Windows, Vulkan 1.2+ as its fallback and on Linux (`crates/fb_client/src/backend.rs`);
-  no OpenGL.
+- Graphics: Vulkan 1.2+ first (Windows and Linux: its render thread is ~4× cheaper than wgpu's DX12), DX12 as the
+  Windows fallback (`crates/fb_client/src/backend.rs`); no OpenGL.
 - The repository is public: no private hosts, addresses or keys in committed files.
