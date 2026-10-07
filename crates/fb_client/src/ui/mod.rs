@@ -767,9 +767,19 @@ pub fn dot(p: &mut ChildSpawnerCommands, color: Color, size: f32) -> Entity {
             ..default()
         },
         BackgroundColor(color),
-        BorderColor::all(Color::WHITE),
+        BorderColor::all(dot_rim(color)),
     ))
     .id()
+}
+
+/// A dot's rim: white, or a faint ink line round a colour too pale to show on the white panels (a white suit).
+pub fn dot_rim(c: Color) -> Color {
+    let rim = if c.luminance() > 0.8 {
+        Color::srgba(0.169, 0.102, 0.361, 0.35)
+    } else {
+        Color::WHITE
+    };
+    rim.with_alpha(rim.alpha() * c.alpha())
 }
 
 /// A folded part: its title toggles it.

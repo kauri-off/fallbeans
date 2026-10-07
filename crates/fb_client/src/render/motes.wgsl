@@ -47,7 +47,7 @@ fn vertex(v: Vertex) -> Out {
     var out: Out;
     out.clip = view.clip_from_view * mv;
     out.corner = v.corner;
-    out.alpha = smoothstep(1.5, 4.0, d) * (1.0 - smoothstep(14.0, 22.0, d))
+    out.alpha = smoothstep(2.5, 6.0, d) * (1.0 - smoothstep(14.0, 22.0, d))
         * (0.55 + 0.45 * sin(t * (1.5 + seed * 2.0) + seed * 60.0)) * m.tint.a;
     return out;
 }
