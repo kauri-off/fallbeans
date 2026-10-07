@@ -15,6 +15,7 @@ pub const QUIT: &str = "Выйти из игры";
 pub const UPDATE: &str = "Обновить";
 pub const DOWNLOAD: &str = "Скачать";
 pub const RELEASE_PAGE: &str = "Страница релиза";
+pub const RETRY: &str = "Попробовать снова";
 pub const RESTARTING: &str = "Обновлено — перезапускаем…";
 
 pub fn version(build: &str) -> String {
@@ -119,7 +120,6 @@ pub const SHOW_FPS: &str = "Показывать частоту кадров";
 pub const KEYS: &str = "Клавиши";
 pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
-pub const PRESET_AUTO: &str = "Авто";
 pub const PRESET_LOW: &str = "Низкое";
 pub const PRESET_MEDIUM: &str = "Среднее";
 pub const PRESET_HIGH: &str = "Высокое";
@@ -141,6 +141,15 @@ pub const FPS_LIMIT: &str = "Ограничение кадров в секунд
 pub const NO_LIMIT: &str = "Нет";
 pub const BACKEND: &str = "Графический API (после перезапуска)";
 pub const BACKEND_AUTO: &str = "Авто";
+/// No GPU the game can draw with (`backend.rs`): said before the game's window opens.
+pub const NO_GPU: &str = if cfg!(target_os = "windows") {
+    "Игре нужна видеокарта с DirectX 12 или Vulkan 1.2, а такой не нашлось. Обновите драйвер видеокарты (с сайта \
+     NVIDIA, AMD или Intel) и запустите игру снова."
+} else {
+    "Игре нужна видеокарта с Vulkan 1.2, а такой не нашлось. Поставьте драйвер Vulkan для своей видеокарты (Mesa: \
+     пакет mesa-vulkan-drivers, в Arch — vulkan-radeon или vulkan-intel; NVIDIA — её собственный драйвер) и \
+     запустите игру снова."
+};
 
 pub fn adapter(name: &str, tier: &str) -> String {
     format!("Видеокарта: {name} · уровень {tier}")
@@ -193,7 +202,13 @@ pub const VPN_LOST: &str = "UDP пропал посреди игры (переп
      Раз в минуту игра проверяет UDP и вернётся на него между раундами.\n\
      Чтобы UDP не пропадал, пустите адрес сервера мимо VPN (direct).";
 
-pub const QUALITY_LOWERED: &str = "Качество графики снижено, чтобы игра шла плавнее";
+pub const LOADING: &str = "Загрузка…";
+pub const LOADING_ASSETS: &str = "Модели и текстуры";
+pub const LOADING_SHADERS: &str = "Шейдеры";
+pub const LOADING_SETTINGS: &str = "Шейдеры для новых настроек графики";
+pub fn loading_maps(done: usize, all: usize) -> String {
+    format!("Карты: {done} из {all}")
+}
 
 pub const PERF_RECORDING: &str = "Идёт запись производительности: F9 — остановить и сохранить";
 pub const PERF_SWEEP: &str = "Замер графики (~1 мин): стойте на месте, настройки вернутся сами. F9 — прервать";
@@ -405,7 +420,7 @@ pub fn keys(pad: bool, binds: &crate::settings::Bindings, grab: &str, chat: bool
     } else if binds.is_default() {
         format!("WASD — бег · Мышь — камера · Пробел — прыжок · E/ЛКМ — нырок · Q/ПКМ — {grab} · 1–5 — эмоции")
     } else {
-        let first = |b: Bind| binds.keys(b).first().and_then(|k| label(*k)).unwrap_or("?");
+        let first = |b: Bind| binds.keys(b).first().and_then(|k| label(*k)).unwrap_or("—");
         let run = [Bind::Forward, Bind::Left, Bind::Back, Bind::Right]
             .map(first)
             .join("/");

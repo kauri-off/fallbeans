@@ -13,10 +13,70 @@ fb_maps.workspace = true
 fb_arena.workspace = true
 fb_net.workspace = true
 fb_proto.workspace = true
-bevy = { workspace = true, features = ["3d", "ui", "jpeg", "bevy_audio", "wav", "bevy_settings", "system_clipboard", "sysinfo_plugin"] }
-# GL fallback (old GPUs, VMs): Bevy does not expose wgpu's GLES backend as a feature of its own.
-bevy_render = { workspace = true, features = ["gles"] }
+# Bevy's "3d" and "ui" bundles spelled out, without what the game does not use: gizmos, animation and morph
+# targets (the models have none), mesh and sprite picking (UI picking only), the default font (the UI puts its own
+# at the default handle), webgl2. No OpenGL: wgpu is built with DX12, Vulkan and Metal only. ktx2 and zstd
+# stay: SMAA's and tonemapping's lookup tables are KTX2 + zstd.
+bevy = { workspace = true, features = [
+  # default_app, default_platform
+  "async_executor",
+  "bevy_asset",
+  "bevy_log",
+  "bevy_state",
+  "reflect_auto_register",
+  "std",
+  "multi_threaded",
+  "bevy_winit",
+  "x11",
+  "wayland",
+  "custom_cursor",
+  "bevy_gilrs",
+  "bevy_clipboard",
+  "system_clipboard",
+  # common_api, 3d_api
+  "bevy_camera",
+  "bevy_color",
+  "bevy_image",
+  "bevy_mesh",
+  "bevy_shader",
+  "bevy_material",
+  "bevy_text",
+  "bevy_window",
+  "bevy_light",
+  "bevy_mikktspace",
+  "hdr",
+  "png",
+  "jpeg",
+  "ktx2",
+  "zstd_rust",
+  "smaa_luts",
+  "tonemapping_luts",
+  # 3d_bevy_render
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_anti_alias",
+  "bevy_post_process",
+  "bevy_pbr",
+  "bevy_gltf",
+  # scene
+  "bevy_world_serialization",
+  "bevy_scene",
+  # ui, picking
+  "bevy_ui",
+  "bevy_ui_render",
+  "bevy_ui_widgets",
+  "bevy_input_focus",
+  "bevy_picking",
+  "ui_picking",
+  # the rest
+  "bevy_audio",
+  "wav",
+  "bevy_settings",
+] }
 wgpu-types.workspace = true
+# The graphics API is chosen before Bevy's renderer starts (`backend.rs`): the adapters of DX12 and Vulkan.
+# (Bevy builds wgpu with DX12, Vulkan and Metal only: no OpenGL.)
+wgpu.workspace = true
 aeronet_websocket = { workspace = true, features = ["client"] }
 bevy_replicon = { workspace = true, features = ["client"] }
 base64.workspace = true
@@ -26,12 +86,30 @@ semver.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The settings file's own format (bevy-settings' version): a broken one is set aside before it is overwritten.
+toml = "1.1"
 clap.workspace = true
 ureq.workspace = true
 lightyear_udp.workspace = true
 lightyear_sync.workspace = true
 lightyear_transport.workspace = true
-lightyear = { workspace = true, features = ["client", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+lightyear = { workspace = true, features = [
+  "client",
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "udp",
+  "websocket",
+] }
+# The process's RAM and CPU in the F4 overlay and recordings, read only while shown.
+sysinfo.workspace = true
+# Only for the `profiler` feature: the spans of these three without the rest of `bevy/trace`.
+bevy_app = { version = "=0.19.1", default-features = false, optional = true }
+bevy_ecs = { version = "=0.19.1", default-features = false, optional = true }
+bevy_render = { version = "=0.19.1", default-features = false, optional = true }
 
 [dev-dependencies]
 # The client's tests: a real server in their process, drawing on wgpu's noop device.
@@ -43,14 +121,19 @@ winresource = "0.1"
 
 [features]
 default = ["brp", "profiler"]
+# Bevy as a shared library: a change relinks the client in seconds instead of a minute. Local builds only
+# (`cargo xtask dev` turns it on); never in packages: the exe would need Bevy's and Rust's DLLs beside it.
+dynamic = ["bevy/dynamic_linking"]
 # The Bevy Remote Protocol probe (`--brp`): off in distributed builds.
 brp = ["bevy/bevy_remote"]
-# Bevy's spans for every system: the built-in profiler of the F4 overlay (`perf/profiler.rs`).
-profiler = ["bevy/trace"]
-# The same spans to Tracy (https://github.com/wolfpld/tracy), with the GPU's passes: development only.
-tracy = ["profiler", "bevy/trace_tracy"]
-# The same spans to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
-chrome = ["profiler", "bevy/trace_chrome"]
+# Bevy's spans of systems, schedules, the app and the render world: the built-in profiler of the F4 overlay
+# (`perf/profiler.rs`; they exist at run time only with `--profiler`). Not `bevy/trace`: its error layer
+# formats every span's fields, and pbr, core_pipeline, asset and winit add spans the profiler does not read.
+profiler = ["bevy_ecs/trace", "bevy_app/trace", "bevy_render/trace"]
+# All of Bevy's spans to Tracy (https://github.com/wolfpld/tracy), with the GPU's passes: development only.
+tracy = ["profiler", "bevy/trace", "bevy/trace_tracy"]
+# All of them to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
+chrome = ["profiler", "bevy/trace", "bevy/trace_chrome"]
 
 [lints]
 workspace = true

@@ -4,12 +4,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use clap::Args;
 
-use crate::{Shared, root};
+use crate::{Shared, target_dir};
 
 #[derive(Args)]
 pub struct StressArgs {
@@ -61,7 +61,7 @@ pub fn stress(a: &StressArgs) -> bool {
     // processes' log writes for seconds, and every connection times out.
     #[cfg(unix)]
     let _ = Command::new("sync").status();
-    let dir = root().join("target").join("stress");
+    let dir = target_dir().join("stress");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("target/stress");
     let log = |name: &str| File::create(dir.join(name)).expect("log file");
@@ -114,7 +114,7 @@ pub fn stress(a: &StressArgs) -> bool {
             .arg(a.shared.bin("fb_server"));
             c
         }
-        None => Command::new(a.shared.bin("fb_server")),
+        None => a.shared.command("fb_server"),
     };
     server_cmd
         .args(server_flags(&dir.join("server.trace").to_string_lossy()))
@@ -145,7 +145,7 @@ pub fn stress(a: &StressArgs) -> bool {
                 c.args(["-c", &p.clients]).arg(a.shared.bin("fb_client"));
                 c
             }
-            None => Command::new(a.shared.bin("fb_client")),
+            None => a.shared.command("fb_client"),
         };
         c.args([
             "--headless",
@@ -199,15 +199,17 @@ fn server_cores() -> Option<Pin> {
     })
 }
 
-fn wait_or_kill(c: &mut Child, deadline: Instant) {
+/// The child's exit status, or `None` once it had to be killed at the deadline.
+pub fn wait_or_kill(c: &mut Child, deadline: Instant) -> Option<ExitStatus> {
     while Instant::now() < deadline {
-        if let Ok(Some(_)) = c.try_wait() {
-            return;
+        if let Ok(Some(status)) = c.try_wait() {
+            return Some(status);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = c.kill();
     let _ = c.wait();
+    None
 }
 
 /// A traced tick of one bean: input and feet position.
@@ -504,8 +506,9 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
     let max = worst(&|l| num_after(l, "max "));
     let per_player = worst(&|l| num_before(l, " per player"));
     let mem = worst(&|l| num_after(l, "mem "));
-    // The first line also holds the start and the joins (the clients' clocks not synced yet).
-    let settled = metrics.iter().skip(1);
+    // The first line also holds the start and the joins (the clients' clocks not synced yet); the last one the
+    // clients that already quit at `--exit-after` (still players to the server, whose inputs stopped).
+    let settled = metrics.iter().skip(1).take(metrics.len().saturating_sub(2));
     let cpu = settled
         .clone()
         .filter_map(|l| num_after(l, "cpu "))

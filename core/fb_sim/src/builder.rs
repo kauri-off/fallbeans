@@ -664,7 +664,15 @@ impl Builder {
         self.box_(-9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
         self.box_(9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
         self.box_(0.0, 0.6, z0 - 7.4, 19.6, 1.2, 0.8, pal::PINK, d());
-        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, d());
+        // Gone by the time bots plan (t = 0): the grid leaves it out, so the one built during the intro holds.
+        let no_nav = PrimOpts {
+            col: ColliderOpts {
+                nav_skip: true,
+                ..Default::default()
+            },
+            ..d()
+        };
+        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, no_nav);
         // Flags and cones by the gate (on the rails: nothing to trip over, out of the camera's way).
         let flag = |tint, yaw| PropOpts {
             tint: Some(tint),
@@ -733,10 +741,11 @@ impl Builder {
                     if body.in_portal() || portal_shut(&cx.world.portals[k], open.as_ref(), t) {
                         return;
                     }
-                    cx.world.portal_used(k, i as u32, t);
                     body.enter_portal(ev, to, yaw, speed, lift);
-                    // Clients hear of it (it shuts, they show the light); not kept for late joiners.
+                    // Clients hear of it (it shuts, they show the light); not kept for late joiners. A
+                    // client's prediction does not shut it: only the server's event does.
                     if cx.server {
+                        cx.world.portal_used(k, i as u32, t);
                         cx.out.push(MapOut::Event {
                             ev: MapEvent::Portal {
                                 pair: k as u32,

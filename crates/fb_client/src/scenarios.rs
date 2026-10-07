@@ -47,12 +47,19 @@ fn in_phase(g: &mut Game, secs: f32, phase: Phase) {
     });
 }
 
-/// The menu, opened with Esc if it is closed.
+/// The menu, opened with Esc if it is closed. (Entering a room opens it by itself: an Esc in the same frame
+/// closes it again, so it is checked over a few frames.)
 fn menu(g: &mut Game) {
-    if !g.res::<Ui>().menu {
-        g.escape();
+    for _ in 0..3 {
+        if !g.res::<Ui>().menu {
+            g.escape();
+        }
+        g.frames(3);
+        if g.res::<Ui>().menu {
+            return;
+        }
     }
-    assert!(g.res::<Ui>().menu, "Esc opens the menu");
+    panic!("Esc opens the menu");
 }
 
 /// A game of one round of `map` begun with the dev command, past its intro.
@@ -72,6 +79,20 @@ fn into_round(g: &mut Game, map: &str) {
 fn the_client_runs_without_a_gpu() {
     let mut g = Game::new(&[]);
     g.until(10.0, "the room list", |w| w.resource::<Session>().rooms.is_some());
+}
+
+/// The loading screen's warm-up (off on the bench but here): every map built and drawn as a round's, beans in
+/// every hat, then its last map gone and the room list, whose connection waited for it.
+#[test]
+fn the_warm_up_builds_every_map() {
+    use crate::render::warmup::Warmup;
+    let mut g = Game::new(&["--warmup"]);
+    g.until(300.0, "the warm-up's end", |w| !w.resource::<Warmup>().busy());
+    assert!(
+        !g.client().world().contains_resource::<crate::game::Map>(),
+        "the warm-up's last map stays"
+    );
+    on_room_list(&mut g);
 }
 
 /// fb3af03: after a line was sent, the next one typed panicked (a cursor past the end of the cleared text).
@@ -530,6 +551,141 @@ fn the_server_list() {
     on_room_list(&mut g);
 }
 
+/// From the room list to the server list, `addr` added to it if it is not there, and «Играть» on it.
+fn connect_through_the_list(g: &mut Game, addr: &str) {
+    g.press(5.0, "К серверам", |a| matches!(a, Action::LeaveServer));
+    g.until(5.0, "the server list", |w| {
+        w.resource::<crate::servers::Target>().0.is_none()
+    });
+    if !g.res::<crate::servers::Servers>().list.iter().any(|s| s == addr) {
+        g.focus(Field::Server);
+        g.erase(Field::Server);
+        g.type_text(addr);
+        g.blur();
+        g.press(2.0, "Добавить", |a| matches!(a, Action::AddServer));
+    }
+    let a = addr.to_string();
+    g.press(
+        10.0,
+        "Играть на этом сервере",
+        move |x| matches!(x, Action::Connect(s) if *s == a),
+    );
+}
+
+/// Audit #4: one identity was shared by every server. Server B was sent the token server A gave, and B's reply
+/// replaced it, so back on A the player was somebody new (their room no longer theirs). Now each server gets
+/// only its own.
+#[test]
+fn an_identity_for_each_server() {
+    let mut g = Game::new(&[]);
+    on_room_list(&mut g);
+    let a_http = format!("http://127.0.0.1:{}/fallbeans", g.http_port());
+    let a_addr = format!("127.0.0.1:{}", g.http_port());
+    let id_of = |g: &Game, http: &str| g.res::<crate::settings::Identities>().get(http);
+    let a = id_of(&g, &a_http).expect("server A's identity kept");
+    let b_port = g.add_server();
+    let b_http = format!("http://127.0.0.1:{b_port}/fallbeans");
+    assert_eq!(id_of(&g, &b_http), None);
+
+    connect_through_the_list(&mut g, &format!("127.0.0.1:{b_port}"));
+    assert_ne!(
+        g.res::<crate::net::Conn>().identity.as_deref(),
+        Some(a.as_str()),
+        "server B was sent A's identity"
+    );
+    on_room_list(&mut g);
+    let b = id_of(&g, &b_http).expect("server B's identity kept");
+    assert_ne!(a, b);
+    assert_eq!(
+        id_of(&g, &a_http).as_deref(),
+        Some(a.as_str()),
+        "B's reply took A's identity"
+    );
+
+    connect_through_the_list(&mut g, &a_addr);
+    on_room_list(&mut g);
+    assert_eq!(
+        g.res::<crate::net::Conn>().identity.as_deref(),
+        Some(a.as_str()),
+        "back on A, the same player"
+    );
+    assert_eq!(id_of(&g, &b_http).as_deref(), Some(b.as_str()));
+}
+
+/// Leaving a room takes its map along: every room's first lobby is arena 1 with seed 1, and the next room
+/// used to keep the last one's map (its players, bonuses and decorations).
+#[test]
+fn the_map_goes_with_the_room() {
+    use crate::game::Map;
+    let mut g = Game::new(&[]);
+    create_room(&mut g, "Первая", false);
+    g.until(10.0, "the lobby's map", |w| w.contains_resource::<Map>());
+    let first = g.res::<Map>().generation;
+    menu(&mut g);
+    g.press(2.0, "Выйти из комнаты", |a| {
+        matches!(a, Action::LeaveRoom)
+    });
+    on_room_list(&mut g);
+    g.until(5.0, "the map gone and the room closed", |w| {
+        !w.contains_resource::<Map>() && w.resource::<Session>().mine.is_none()
+    });
+    create_room(&mut g, "Вторая", false);
+    g.until(10.0, "the new lobby's own map", |w| {
+        w.get_resource::<Map>().is_some_and(|m| m.generation > first)
+    });
+    g.frames(30);
+}
+
+/// The Esc that closes the chat line does not open the menu as well.
+#[test]
+fn esc_closes_the_chat_not_the_menu() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    g.escape();
+    assert!(!g.res::<Ui>().menu, "Esc closes the menu");
+    g.enter();
+    assert!(g.res::<Ui>().chat, "Enter opens the chat");
+    g.type_text("ой");
+    g.escape();
+    assert!(!g.res::<Ui>().chat, "Esc closes the chat");
+    assert!(!g.res::<Ui>().menu, "the Esc that closed the chat opened the menu");
+    g.escape();
+    assert!(g.res::<Ui>().menu, "the next Esc opens it");
+}
+
+/// A key taken from an action that had only it: the two swap (it used to get its defaults back, the taken key
+/// among them, so Q both jumped and grabbed). The game's own keys (F8, the emotes) are not taken.
+#[test]
+fn rebind_takes_a_key_from_another_action() {
+    let mut g = Game::new(&[]);
+    on_room_list(&mut g);
+    g.press(5.0, "Настройки", |a| {
+        matches!(a, Action::HomeTab(HomeTab::Settings))
+    });
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold("keys")));
+    let keys = |g: &Game, b: Bind| g.res::<crate::settings::Bindings>().keys(b);
+    g.press(2.0, "Изменить: прыжок", |a| {
+        matches!(a, Action::Rebind(Bind::Jump))
+    });
+    g.key(KeyCode::F8, Key::F8, None);
+    g.key(KeyCode::Digit1, Key::Character("1".into()), Some("1"));
+    assert_eq!(g.res::<Ui>().rebinding, Some(Bind::Jump), "F8 and 1 are the game's");
+    g.key(KeyCode::KeyQ, Key::Character("q".into()), Some("q"));
+    assert_eq!(keys(&g, Bind::Jump), [KeyCode::KeyQ]);
+    assert_eq!(keys(&g, Bind::Grab), [KeyCode::Space], "grab takes jump's key");
+    g.press(2.0, "Изменить: нырок", |a| {
+        matches!(a, Action::Rebind(Bind::Dive))
+    });
+    g.key(KeyCode::KeyW, Key::Character("w".into()), Some("w"));
+    assert_eq!(keys(&g, Bind::Dive), [KeyCode::KeyW]);
+    assert_eq!(
+        keys(&g, Bind::Forward),
+        [KeyCode::ArrowUp],
+        "forward keeps its other key"
+    );
+    g.frames(10);
+}
+
 /// fuzz-ui seed 22: a second click on «Играть» in the frame the button went, after the first press had its link:
 /// two links connected and replicon panicked.
 #[test]
@@ -776,7 +932,7 @@ fn every_setting_mid_round() {
     let n = press_every(&mut g, |a| matches!(a, Action::Set(_) | Action::Gfx(_)));
     assert!(n >= 20, "only {n} options on screen");
     // Back through the presets, each with a few frames of the round behind the menu.
-    for p in ["low", "medium", "high", "auto"] {
+    for p in ["low", "medium", "high"] {
         g.press(
             2.0,
             p,
@@ -817,7 +973,7 @@ fn play_round_on(gpu: wgpu::DeviceType, map: &str) {
     g.frames(120);
 }
 
-/// Tier T0 (OpenGL or a software device): the Low preset's own paths.
+/// Tier T0 (a software device): the Low preset's own paths.
 #[test]
 fn round_on_the_lowest_tier() {
     play_round_on(wgpu::DeviceType::Cpu, "portal-panic");
@@ -860,4 +1016,99 @@ rounds! {
     round_cliff_climb: "cliff-climb",
     round_frost_sky: "frost-sky",
     round_star_fall: "star-fall",
+}
+
+/// A tester's run on a real server: through a round's intro the own bean stood where it was in the lobby, and
+/// the server's spawn point came only as a respawn of 4–20 m some ticks after the start. Here, in the intro,
+/// the predicted bean must already be where the server has it.
+#[test]
+fn the_own_bean_is_at_its_spawn_in_the_intro() {
+    use bevy::prelude::*;
+    use fb_net::{BodyFull, PlayerId};
+    use lightyear::prelude::Predicted;
+
+    // (A real network's delay: on the bench's loopback the server's spawn came back before anything moved.)
+    let mut g = Game::new(&["--room", "dev", "--lag", "40", "--jitter", "5"]);
+    in_lobby(&mut g);
+    // Somewhere in the lobby that is no round's spawn.
+    g.frames(30);
+    g.dev(DevCmd::Start {
+        games: vec!["door-dash".into()],
+        rounds: None,
+        bots: Some(3),
+    });
+    g.until_arena(20.0, "the round", |a| {
+        a.kind == ArenaKind::Round && a.game == "door-dash"
+    });
+    g.frames(90);
+    let me = g.res::<Session>().me.expect("in a room");
+    let mine = |w: &mut World| {
+        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos)
+    };
+    let client = mine(g.client().world_mut()).expect("the own bean is predicted");
+    let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+    let server: Vec<_> = q
+        .iter(g.server.world())
+        .filter(|(p, _)| p.0 == me)
+        .map(|(_, f)| f.body.pos)
+        .collect();
+    assert!(
+        server.iter().any(|s| (*s - client).length() < 0.5),
+        "the client has its bean at {client:?}, the server at {server:?}"
+    );
+}
+
+/// Every stress client's one unexplained divergence: a client that joins as a round starts has its clock set in
+/// the intro, and Lightyear checks no server tick before the first one it predicted. The own bean stood where it
+/// was in the lobby until the server's tick came that far (in an intro where nothing moves, until the start). It
+/// must be where the server has it from the first ticks after the clock is set.
+#[test]
+fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
+    use bevy::prelude::*;
+    use fb_net::{BodyFull, PlayerId};
+    use lightyear::prelude::{Predicted, PredictionHistory};
+
+    #[rustfmt::skip]
+    let mut g = Game::new(&[
+        "--room", "dev", "--lag", "40", "--jitter", "5", "--start", "door-dash", "--start-players", "1",
+    ]);
+    let set = |w: &mut World| {
+        let mut q = w.query_filtered::<&PredictionHistory<BodyFull>, With<Predicted>>();
+        q.iter(w).any(|h| !h.is_empty())
+    };
+    g.until(20.0, "the clock is set", set);
+    let in_round = g
+        .client()
+        .world()
+        .get_resource::<crate::game::Map>()
+        .is_some_and(|m| m.round.kind == ArenaKind::Round);
+    assert!(
+        in_round,
+        "the round began only after the clock was set: nothing to check"
+    );
+    let me = g.res::<Session>().me.expect("in a room");
+    let mut off = Vec::new();
+    for _ in 0..60 {
+        g.step();
+        let w = g.client().world_mut();
+        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let client = q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos);
+        let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+        let server = q
+            .iter(g.server.world())
+            .find(|(p, _)| p.0 == me)
+            .map(|(_, f)| f.body.pos);
+        if let (Some(c), Some(s)) = (client, server)
+            && (c - s).length() > 0.5
+        {
+            off.push((c, s));
+        }
+    }
+    assert!(
+        off.len() <= 3,
+        "{} of 60 frames the client had its bean elsewhere (client, server): {:?}",
+        off.len(),
+        off.first()
+    );
 }

@@ -161,7 +161,7 @@ fn watch(
     });
     net.rtt = link.map_or(0.0, |l| l.stats.rtt.as_secs_f64() * 1000.0);
     net.jitter = link.map_or(0.0, |l| l.stats.jitter.as_secs_f64() * 1000.0);
-    net.loss = diag.loss();
+    net.loss = diag.loss(now);
     net.lead = lead.held.map(|_| lead.margin);
     let frame = time.delta_secs_f64() * 1000.0;
     line.frame_max = line.frame_max.max(frame);
@@ -264,15 +264,16 @@ fn log_stats(
     if every <= 0.0 || now - line.at < every {
         return;
     }
-    line.at = now;
+    let span = now - core::mem::replace(&mut line.at, now);
     let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
     let t = map.as_ref().map_or(0.0, |m| m.time(timeline.tick().0 as f64));
-    let out = bytes.bytes_out - *last_bytes;
+    // (A rate: the lines come every `every` s, or a bit later.)
+    let out = bytes.bytes_out.saturating_sub(*last_bytes) as f64 / f64::from(span.max(1e-3));
     *last_bytes = bytes.bytes_out;
     let frame_max = core::mem::take(&mut line.frame_max);
     let shifts = core::mem::take(&mut line.shifts);
     info!(
-        "stats: {} | rtt {:.0} ms jitter {:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out} B/s | arena {} t {t:.1}{}",
+        "stats: {} | rtt {:.0} ms jitter {:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out:.0} B/s | arena {} t {t:.1}{}",
         net.transport,
         net.rtt,
         net.jitter,

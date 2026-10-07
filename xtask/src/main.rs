@@ -41,9 +41,6 @@ enum Task {
     FuzzUi(fuzz::FuzzArgs),
     /// Release package of one kind into dist/.
     Dist(dist::DistArgs),
-    /// Claude Code hook: rustfmt on the edited file (hook payload on stdin).
-    #[command(hide = true)]
-    FormatHook,
 }
 
 /// What both server and clients take.
@@ -99,8 +96,7 @@ impl Shared {
     }
 
     pub fn bin(&self, name: &str) -> PathBuf {
-        root()
-            .join("target")
+        target_dir()
             .join(if self.release { "release" } else { "debug" })
             .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
     }
@@ -110,8 +106,21 @@ impl Shared {
         c.args(["build", "-p", "fb_server", "-p", "fb_client"]);
         if self.release {
             c.arg("--release");
+        } else {
+            // (Bevy as a DLL: relinks in seconds. `command` puts the DLLs on the PATH.)
+            c.args(["--features", "fb_client/dynamic,fb_server/dynamic"]);
         }
         run(&mut c)
+    }
+
+    /// The built `name` to run: a debug build finds Bevy's DLL (target/debug/deps) and Rust's own (the
+    /// toolchain's bin) on the PATH, as `cargo run` would give it.
+    pub fn command(&self, name: &str) -> Command {
+        let mut c = Command::new(self.bin(name));
+        if !self.release {
+            c.env("PATH", dll_path());
+        }
+        c
     }
 }
 
@@ -132,8 +141,32 @@ struct DevArgs {
     shared: Shared,
 }
 
+/// The PATH with the debug build's deps and the toolchain's bin in front (Bevy's and Rust's DLLs).
+pub fn dll_path() -> std::ffi::OsString {
+    let sysroot = Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+        .current_dir(root())
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+    let mut dirs = vec![target_dir().join("debug").join("deps")];
+    if let Some(s) = sysroot {
+        dirs.push(s.join("bin"));
+        dirs.push(s.join("lib"));
+    }
+    if let Some(p) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&p));
+    }
+    std::env::join_paths(dirs).unwrap_or_default()
+}
+
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+}
+
+/// Cargo's target directory: `CARGO_TARGET_DIR` (relative to the root), else `target`.
+pub fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
 
 pub fn run(cmd: &mut Command) -> bool {
@@ -149,15 +182,39 @@ pub fn cargo() -> Command {
 
 fn check() -> bool {
     run(cargo().args(["fmt", "--all", "--check"]))
-        && run(cargo().args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))
-        && run(cargo().args(["test", "--workspace"]))
+        && run(cargo().args([
+            "clippy",
+            "--locked",
+            "--workspace",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ]))
+        && run(cargo().args(["test", "--locked", "--workspace"]))
+}
+
+/// A client's tag from its index, as spreadsheet columns: a…z, aa, ab, …
+fn letters(mut i: u32) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.push(b'a' + (i % 26) as u8);
+        if i < 26 {
+            break;
+        }
+        i = i / 26 - 1;
+    }
+    s.reverse();
+    String::from_utf8(s).unwrap_or_default()
 }
 
 fn dev(a: &DevArgs) -> bool {
     if !a.shared.build() {
         return false;
     }
-    let Ok(mut server) = Command::new(a.shared.bin("fb_server"))
+    let Ok(mut server) = a
+        .shared
+        .command("fb_server")
         .args(a.shared.server_args())
         .args(["--dev", "--solo"])
         .spawn()
@@ -173,8 +230,8 @@ fn dev(a: &DevArgs) -> bool {
     }
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
-            let mut c = Command::new(a.shared.bin("fb_client"));
-            let profile = (b'a' + i as u8) as char;
+            let mut c = a.shared.command("fb_client");
+            let profile = letters(i);
             c.args([
                 "--profile",
                 &format!("dev-{profile}"),
@@ -205,12 +262,12 @@ fn dev(a: &DevArgs) -> bool {
     true
 }
 
-/// Blender bakes and exports every model of blender/fallguys_assets.blend straight into assets/models.
+/// Blender bakes and exports every model of blender/models.blend straight into assets/models.
 fn export_models() -> bool {
     let blender = std::env::var("BLENDER").unwrap_or_else(|_| "blender".into());
     let ok = run(Command::new(blender).current_dir(root()).args([
         "-b",
-        "blender/fallguys_assets.blend",
+        "blender/models.blend",
         "--python",
         "blender/export.py",
         "--",
@@ -222,42 +279,8 @@ fn export_models() -> bool {
     ok
 }
 
-/// Exit code 2 shows Claude what rustfmt could not fix.
-fn format_hook() -> ExitCode {
-    let mut input = String::new();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-    let payload: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
-    let Some(file) = payload["tool_input"]["file_path"].as_str() else {
-        return ExitCode::SUCCESS;
-    };
-    if !file.ends_with(".rs") || file.contains("/target/") || file.contains("\\target\\") {
-        return ExitCode::SUCCESS;
-    }
-    let out = Command::new("rustfmt")
-        .args(["--edition", "2024", "--config-path"])
-        .arg(root().join("rustfmt.toml"))
-        .arg(file)
-        .output();
-    match out {
-        Ok(o) if o.status.success() => ExitCode::SUCCESS,
-        Ok(o) => {
-            eprintln!(
-                "rustfmt: {file} still has problems:\n{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            );
-            ExitCode::from(2)
-        }
-        Err(e) => {
-            eprintln!("rustfmt: {e}");
-            ExitCode::SUCCESS
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let ok = match Cli::parse().task {
-        Task::FormatHook => return format_hook(),
         Task::Check => check(),
         Task::Audit { args } => run(cargo().args(["run", "--release", "-p", "fb_audit", "--"]).args(args)),
         Task::Assets { export } => {

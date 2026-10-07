@@ -95,8 +95,14 @@ pub struct OtherBody {
     pub z: f64,
     pub vx: f64,
     pub vz: f64,
-    pub touching: bool,
     pub size: f64,
+}
+
+/// Buffers a step reuses: kept by the caller from step to step, never part of a body's state.
+#[derive(Default)]
+pub struct StepScratch {
+    cols: Vec<ColId>,
+    hit_done: Vec<ColId>,
 }
 
 /// What happened during the last step (sounds, effects, credit); cleared before each tick.
@@ -286,7 +292,8 @@ impl Body {
     }
 
     pub fn stun(&mut self, t: f64) {
-        if self.down() {
+        // (In a portal the trip is already under way: nothing may stop it.)
+        if self.down() || self.in_portal() {
             return;
         }
         self.state = BodyState::Stun;
@@ -295,6 +302,9 @@ impl Body {
 
     /// Knocked over towards (vx, vz); a giant shrugs most of it off unless `force` (a sweeping arm).
     pub fn knock(&mut self, ev: &mut StepEvents, mut vx: f64, mut vz: f64, mut vy: f64, t: f64, force: bool) {
+        if self.in_portal() {
+            return;
+        }
         if self.size > 1.0 {
             let k = if force { 0.5 } else { 0.25 };
             vx *= k;
@@ -371,6 +381,8 @@ impl Body {
             && self.grounded
             && g.enabled
             && !g.sweep
+            // (Static ground does not move: the round trip through its matrices would only add drift.)
+            && !g.is_static
         {
             return Carry {
                 col: Some(g.index),
@@ -390,7 +402,11 @@ impl Body {
         self.pos = c.cur.transform_point3(carry.local);
         let dir = c.cur.transform_vector3(V3::new(0.0, 0.0, 1.0)).normalize_or_zero();
         let w = c.prev.transform_vector3(V3::new(0.0, 0.0, 1.0)).normalize_or_zero();
-        let d_yaw = m::atan2(dir.x, dir.z) - m::atan2(w.x, w.z);
+        let mut d_yaw = m::atan2(dir.x, dir.z) - m::atan2(w.x, w.z);
+        if d_yaw.abs() > m::PI {
+            // Across ±π: the short way round.
+            d_yaw = m::atan2(m::sin(d_yaw), m::cos(d_yaw));
+        }
         if d_yaw.abs() < 0.5 {
             self.yaw += d_yaw;
             self.tilt_dir += d_yaw;
@@ -424,12 +440,13 @@ impl Body {
 
     pub fn step(
         &mut self,
+        scratch: &mut StepScratch,
         ev: &mut StepEvents,
         dt: f64,
         input: BodyInput,
         world: &mut World,
         t: f64,
-        others: &mut [OtherBody],
+        others: &[OtherBody],
         touch: &mut OnTouch,
     ) {
         if self.state == BodyState::Portal {
@@ -591,11 +608,12 @@ impl Body {
         let mut new_ground: Option<ColId> = None;
         let mut ground_n = V3::ZERO;
         let mut wall_n = V3::ZERO;
-        let mut hit_done: Vec<ColId> = Vec::new();
+        let StepScratch { cols, hit_done } = scratch;
+        hit_done.clear();
         let mut ladder: Option<ColId> = None;
         let mut hit = Contact::default();
-        let mut cols = Vec::new();
-        for _ in 0..substeps {
+        // A touch that sends the body into a portal ends the step's collisions: it is out of play.
+        'substeps: for _ in 0..substeps {
             if !still {
                 self.pos += self.vel * (dt / substeps as f64);
             }
@@ -603,11 +621,11 @@ impl Body {
                 self.pos.x,
                 self.pos.z,
                 r + 1.2 * size + if self.tilt > 0.0 { SPINE * size } else { 0.0 },
-                &mut cols,
+                cols,
             );
             for _ in 0..3 {
                 let mut any = false;
-                for &ci in &cols {
+                for &ci in cols.iter() {
                     let col = world.col(ci);
                     if !col.enabled {
                         continue;
@@ -631,6 +649,9 @@ impl Body {
                                 } else if col.on_touch {
                                     let normal = Some(hit.normal);
                                     touch(world, self, ev, Touch { col: ci, normal });
+                                    if self.in_portal() {
+                                        break 'substeps;
+                                    }
                                 }
                             }
                             break;
@@ -731,6 +752,9 @@ impl Body {
                                     normal: Some(n),
                                 },
                             );
+                            if self.in_portal() {
+                                break 'substeps;
+                            }
                         }
                     }
                 }
@@ -738,6 +762,12 @@ impl Body {
                     break;
                 }
             }
+        }
+        if self.in_portal() {
+            // Nothing else this step: no ground, no platform's speed, no push from the others.
+            self.grounded = false;
+            self.ground_col = -1;
+            return;
         }
         if g && !self.grounded
             && !ev.jumped
@@ -779,7 +809,7 @@ impl Body {
         }
 
         let my_mass = self.mass();
-        for o in others.iter_mut() {
+        for o in others.iter() {
             let dx = self.pos.x - o.x;
             let dz = self.pos.z - o.z;
             let dy = self.pos.y - o.y;
@@ -788,7 +818,6 @@ impl Body {
             let gap = (BEAN_GAP * (size + os)) / 2.0;
             if d < gap && dy < HEIGHT * os && -dy < HEIGHT * size {
                 if climbing {
-                    o.touching = true;
                     continue;
                 }
                 if dy > SPHERES[1] * os && self.vel.y <= 0.0 {
@@ -808,7 +837,8 @@ impl Body {
                     };
                     let o_mass = if os > 1.0 { GIANT_MASS } else { 1.0 };
                     let share = o_mass / (my_mass + o_mass);
-                    let push = (gap - d) * share;
+                    // (At most a substep's reach a tick: coincident beans must not be thrown through a wall.)
+                    let push = ((gap - d) * share).at_most(r * SUBSTEP_REACH);
                     self.pos.x += nx * push;
                     self.pos.z += nz * push;
                     let vrel = (self.vel.x - o.vx) * nx + (self.vel.z - o.vz) * nz;
@@ -822,7 +852,6 @@ impl Body {
                         ev.bumped = ev.bumped.at_least(-vrel);
                     }
                 }
-                o.touching = true;
             }
         }
 
@@ -862,6 +891,11 @@ impl Body {
                 && world.col(ci).on_ground
             {
                 touch(world, self, ev, Touch { col: ci, normal: None });
+                if self.in_portal() {
+                    self.grounded = false;
+                    self.ground_col = -1;
+                    return;
+                }
             }
             if let Some(c) = new_ground.map(|c| world.col(c))
                 && c.pad != 0.0

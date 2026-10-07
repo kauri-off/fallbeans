@@ -1,7 +1,9 @@
 //! Recordings to a JSON file: F9 (until F9 again), Shift+F9 sweep, `--perf-capture` / `--perf-sweep` benchmarks.
 use std::collections::BTreeMap;
-use std::io::Write as _;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufWriter, Write as _};
+use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bevy::diagnostic::DiagnosticsStore;
@@ -11,12 +13,13 @@ use fb_shared::game::ArenaKind;
 use serde_json::{Value, json};
 
 use super::gpu::{self, Pass};
+use super::scene::Scene;
 use super::stats::{Frame, Summary};
-use super::{CpuAcc, Perf, Spike};
+use super::{CpuAcc, Perf, RenderShared, Spike};
 use crate::game::Map;
 use crate::logs::{self, Logs};
 use crate::opts::Opts;
-use crate::render::quality::{Preset, Quality, Tier};
+use crate::render::quality::{Preset, Quality};
 use crate::session::Session;
 use crate::settings::Graphics;
 use crate::ui::text;
@@ -24,12 +27,20 @@ use crate::view::MainCamera;
 
 /// A manual recording stops by itself after this long, s.
 const MAX_S: f32 = 300.0;
-/// A sweep step: seconds to settle (pipelines compile), then seconds measured.
+/// A sweep step: at least this long to settle, and then until no pipeline is compiling (at most
+/// `SETTLE_MAX_S`), then seconds measured.
 const SETTLE_S: f32 = 2.0;
+const SETTLE_MAX_S: f32 = 15.0;
 const STEP_S: f32 = 5.0;
+/// Long frames a recording keeps (the rest are only counted).
+const SPIKES_MAX: usize = 256;
 
 #[derive(Resource, Default)]
 pub struct Recording(pub Option<Capture>);
+
+/// Recordings being written on a thread of their own, and whether the game quits once one is.
+#[derive(Resource, Default)]
+struct Saving(Vec<(JoinHandle<Option<PathBuf>>, bool)>);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum What {
@@ -80,12 +91,14 @@ struct Segment {
     frames: Vec<Frame>,
     cpu: CpuAcc,
     passes: Passes,
-    counts: Option<super::scene::Scene>,
+    counts: Option<Scene>,
 }
 
 struct Step {
     name: &'static str,
     graphics: Graphics,
+    /// When the measuring began (the step settled).
+    from: Option<f32>,
     frames: Vec<Frame>,
     passes: Passes,
 }
@@ -98,7 +111,10 @@ pub struct Capture {
     frames: Vec<Frame>,
     cpu: CpuAcc,
     passes: Passes,
+    /// The first `SPIKES_MAX` long frames; how many there were; the time of the last one taken.
     spikes: Vec<Spike>,
+    spike_count: usize,
+    spike_t: f32,
     segments: Vec<Segment>,
     steps: Vec<Step>,
     step: usize,
@@ -120,6 +136,8 @@ impl Capture {
             cpu: CpuAcc::default(),
             passes: Passes::default(),
             spikes: Vec::new(),
+            spike_count: 0,
+            spike_t: f32::NEG_INFINITY,
             segments: Vec::new(),
             steps: Vec::new(),
             step: 0,
@@ -139,7 +157,7 @@ impl Capture {
                 self.steps.len(),
                 self.steps.get(self.step).map_or("", |s| s.name)
             ),
-            What::Benchmark => format!("benchmark {:.0} s", now - self.started),
+            What::Benchmark => format!("benchmark {:.0} s (F9: stop)", now - self.started),
             What::Manual => format!("recording {:.0} s (F9: stop)", now - self.started),
         }
     }
@@ -149,8 +167,11 @@ pub struct CapturePlugin;
 
 impl Plugin for CapturePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Recording>();
-        app.add_systems(Update, (keys, auto_start));
+        app.init_resource::<Recording>().init_resource::<Saving>();
+        app.add_systems(
+            Update,
+            (keys, auto_start, saved.run_if(|s: Res<Saving>| !s.0.is_empty())),
+        );
         app.add_systems(
             Last,
             (
@@ -177,7 +198,7 @@ fn steps(g: &Graphics, q: &Quality) -> Vec<(&'static str, Graphics)> {
     if base.shadows {
         v.push(("shadows off", with(&|g| g.shadows = false)));
     }
-    if base.ao && q.preset == Preset::High && q.tier == Tier::T2 && Quality::scale(&base.upscale) >= 1.0 {
+    if base.ao && q.preset == Preset::High && Quality::scale(&base.upscale) >= 1.0 {
         v.push(("AO off", with(&|g| g.ao = false)));
     }
     if base.aa {
@@ -214,6 +235,7 @@ fn start(what: What, now: f32, g: &mut Graphics, q: Option<&Quality>) -> Capture
                 .map(|(name, graphics)| Step {
                     name,
                     graphics,
+                    from: None,
                     frames: Vec::new(),
                     passes: Passes::default(),
                 })
@@ -244,11 +266,9 @@ fn keys(
         return;
     }
     let now = real.elapsed_secs();
+    // (Any recording stops: a benchmark of `--perf-capture` then saves what it has and quits.)
     if let Some(c) = recording.0.as_mut() {
-        // (A benchmark of `--perf-capture` runs to its end.)
-        if c.what != What::Benchmark {
-            c.stop_at = Some(now);
-        }
+        c.stop_at = Some(now);
         return;
     }
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -274,16 +294,18 @@ fn auto_start(
     q: Option<Res<Quality>>,
     mut round_since: Local<Option<f32>>,
     mut done: Local<bool>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
 ) {
     if *done || (opts.perf_capture.is_none() && !opts.perf_sweep) {
         return;
     }
     let now = real.elapsed_secs();
-    if recording.0.is_some() {
+    // (Not while the loading screen is up, nor over the maps it builds.)
+    if recording.0.is_some() || warm.is_some_and(|w| w.busy()) {
         return;
     }
     if !opts.perf_from_start {
-        if !map.is_some_and(|m| m.round.kind == ArenaKind::Round) {
+        if !map.is_some_and(|m| m.round.kind == ArenaKind::Round && !m.warmup) {
             *round_since = None;
             return;
         }
@@ -317,113 +339,177 @@ fn scene_name(map: Option<&Map>) -> String {
     }
 }
 
-fn record(world: &mut World) {
-    let now = world.resource::<Time<Real>>().elapsed_secs();
-    let Some(mut c) = world.resource_mut::<Recording>().0.take() else {
+/// A recording's frame. A plain system (an exclusive one would be a sync point every frame): the end, which
+/// needs the whole world, is a command.
+fn record(
+    mut commands: Commands,
+    real: Res<Time<Real>>,
+    map: Option<Res<Map>>,
+    store: Res<DiagnosticsStore>,
+    perf: Res<Perf>,
+    shared: Res<RenderShared>,
+    mut recording: ResMut<Recording>,
+    mut g: ResMut<Graphics>,
+) {
+    if recording.0.is_none() {
+        return;
+    }
+    let Some(frame) = perf.frames.back().copied() else {
         return;
     };
-    let scene = scene_name(world.get_resource::<Map>());
-    let passes = gpu::passes(world.resource::<DiagnosticsStore>(), Instant::now());
-    {
-        let perf = world.resource::<Perf>();
-        let Some(frame) = perf.frames.back().copied() else {
-            world.resource_mut::<Recording>().0 = Some(c);
-            return;
-        };
-        let new_spikes = perf
-            .spikes
-            .iter()
-            .filter(|s| s.t >= c.started && c.spikes.iter().all(|o| o.t != s.t));
-        c.spikes.extend(new_spikes.cloned().collect::<Vec<_>>());
-        if c.what == What::Sweep {
-            if let Some(step) = c.steps.get_mut(c.step)
-                && now - c.step_started >= SETTLE_S
-            {
-                step.frames.push(frame);
-                step.passes.add(passes);
-            }
-        } else {
-            if c.segments.last().is_none_or(|s| s.scene != scene) {
-                c.segments.push(Segment {
-                    scene,
-                    started: frame.t,
-                    frames: Vec::new(),
-                    cpu: CpuAcc::default(),
-                    passes: Passes::default(),
-                    counts: None,
-                });
-            }
-            if let Some(seg) = c.segments.last_mut() {
-                seg.frames.push(frame);
-                seg.passes.add(passes.clone());
-                seg.cpu.add(&perf.taken);
-                if perf.scene.is_some() {
-                    seg.counts.clone_from(&perf.scene);
-                }
-            }
-            c.frames.push(frame);
-            c.passes.add(passes);
-            c.cpu.add(&perf.taken);
+    let Some(c) = recording.0.as_mut() else { return };
+    let now = real.elapsed_secs();
+    let passes = gpu::passes(&store, Instant::now());
+    // (The overlay's spikes come in time order: the ones after the last taken are new.)
+    let (started, last) = (c.started, c.spike_t);
+    for s in perf.spikes.iter().filter(|s| s.t >= started && s.t > last) {
+        c.spike_t = s.t;
+        c.spike_count += 1;
+        if c.spikes.len() < SPIKES_MAX {
+            c.spikes.push(s.clone());
         }
     }
     let mut finished = c.stop_at.is_some_and(|t| now >= t);
-    if c.what == What::Sweep && !finished && now - c.step_started >= SETTLE_S + STEP_S {
-        c.step += 1;
-        c.step_started = now;
-        match c.steps.get(c.step) {
-            Some(step) => *world.resource_mut::<Graphics>() = step.graphics.clone(),
-            None => finished = true,
+    if c.what == What::Sweep {
+        let settled = now - c.step_started >= SETTLE_S
+            && (shared.pipelines_waiting() == 0 || now - c.step_started >= SETTLE_MAX_S);
+        let advance = match c.steps.get_mut(c.step) {
+            None => {
+                finished = true;
+                false
+            }
+            Some(step) => {
+                if step.from.is_none() && settled {
+                    step.from = Some(now);
+                }
+                if step.from.is_some() {
+                    step.frames.push(frame);
+                    step.passes.add(passes);
+                }
+                step.from.is_some_and(|f| now - f >= STEP_S)
+            }
+        };
+        if advance && !finished {
+            c.step += 1;
+            c.step_started = now;
+            match c.steps.get(c.step) {
+                Some(step) => *g = step.graphics.clone(),
+                None => finished = true,
+            }
         }
-    }
-    if c.what == What::Sweep && c.steps.is_empty() {
-        finished = true;
-    }
-    if finished {
-        finish(world, c);
     } else {
-        world.resource_mut::<Recording>().0 = Some(c);
+        let scene = scene_name(map.as_deref());
+        if c.segments.last().is_none_or(|s| s.scene != scene) {
+            c.segments.push(Segment {
+                scene,
+                started: frame.t,
+                frames: Vec::new(),
+                cpu: CpuAcc::default(),
+                passes: Passes::default(),
+                counts: None,
+            });
+        }
+        if let Some(seg) = c.segments.last_mut() {
+            seg.frames.push(frame);
+            seg.passes.add(passes.clone());
+            seg.cpu.add(&perf.taken);
+            if perf.scene.is_some() {
+                seg.counts.clone_from(&perf.scene);
+            }
+        }
+        c.frames.push(frame);
+        c.passes.add(passes);
+        c.cpu.add(&perf.taken);
+    }
+    if finished && let Some(c) = recording.0.take() {
+        commands.queue(move |world: &mut World| finish(world, c));
     }
 }
 
+/// The end of a recording: the graphics back, and the file written on a thread of its own (a long
+/// recording is millions of numbers).
 fn finish(world: &mut World, c: Capture) {
     if let Some(g) = &c.restore {
         *world.resource_mut::<Graphics>() = g.clone();
     }
     world.resource_mut::<Perf>().busy = false;
-    let doc = document(world, &c);
-    let summary = summary_lines(&doc);
-    for l in summary.lines() {
-        info!("perf: {l}");
+    let meta = meta(world, &c);
+    let dir = world.resource::<Logs>().0.clone();
+    let quit = c.exit;
+    let job = std::thread::Builder::new()
+        .name("perf-save".into())
+        .spawn(move || save(&c, &meta, dir));
+    match job {
+        Ok(h) => world.resource_mut::<Saving>().0.push((h, quit)),
+        Err(e) => {
+            warn!("perf: cannot start writing the recording: {e}");
+            let (note, exit) = outcome(None, quit);
+            let now = world.resource::<Time>().elapsed_secs();
+            if let Some(n) = note {
+                world.resource_mut::<Session>().note(now, n);
+            }
+            if let Some(e) = exit {
+                world.write_message(e);
+            }
+        }
     }
-    let file = match c.out.clone() {
-        Some(p) => std::fs::File::create(&p).ok().map(|f| (f, p)),
-        None => world
-            .resource::<Logs>()
-            .0
-            .clone()
-            .and_then(|d| logs::create(&d, "perf", "json")),
-    };
-    let saved = file.and_then(|(mut f, p)| {
-        f.write_all(serde_json::to_string(&doc).ok()?.as_bytes()).ok()?;
-        Some(p)
-    });
-    let now = world.resource::<Time>().elapsed_secs();
-    match &saved {
+}
+
+/// The saves that are done: the player is told where the file is, a benchmark quits.
+fn saved(mut saving: ResMut<Saving>, time: Res<Time>, mut session: ResMut<Session>, mut exit: MessageWriter<AppExit>) {
+    let (done, pending): (Vec<_>, Vec<_>) = core::mem::take(&mut saving.0)
+        .into_iter()
+        .partition(|(h, _)| h.is_finished());
+    saving.0 = pending;
+    for (h, quit) in done {
+        let path = h.join().ok().flatten();
+        let (note, quit) = outcome(path.as_deref(), quit);
+        if let Some(n) = note {
+            session.note(time.elapsed_secs(), n);
+        }
+        if let Some(e) = quit {
+            exit.write(e);
+        }
+    }
+}
+
+/// What the log and the player are told once a recording is written (or is not), and the exit of a
+/// benchmark.
+fn outcome(saved: Option<&Path>, quit: bool) -> (Option<String>, Option<AppExit>) {
+    let note = match saved {
         Some(p) => {
             info!("perf: saved {}", p.display());
-            world
-                .resource_mut::<Session>()
-                .note(now, text::perf_saved(&p.display().to_string()));
+            Some(text::perf_saved(&p.display().to_string()))
         }
-        None => warn!("perf: the recording could not be saved"),
-    }
-    if c.exit {
-        world.write_message(if saved.is_some() {
+        None => {
+            warn!("perf: the recording could not be saved");
+            None
+        }
+    };
+    let exit = quit.then(|| {
+        if saved.is_some() {
             AppExit::Success
         } else {
             AppExit::from_code(1)
-        });
+        }
+    });
+    (note, exit)
+}
+
+/// The recording's document and its file (on the saving thread).
+fn save(c: &Capture, meta: &Meta, dir: Option<PathBuf>) -> Option<PathBuf> {
+    let doc = document(c, meta);
+    for l in summary_lines(&doc).lines() {
+        info!("perf: {l}");
     }
+    let (file, path) = match c.out.clone() {
+        Some(p) => (File::create(&p).ok()?, p),
+        None => logs::create(&dir?, "perf", "json")?,
+    };
+    let mut w = BufWriter::new(file);
+    serde_json::to_writer(&mut w, &doc).ok()?;
+    w.flush().ok()?;
+    Some(path)
 }
 
 fn columns(frames: &[Frame]) -> Value {
@@ -446,13 +532,24 @@ fn graphics_json(g: &Graphics) -> Value {
     })
 }
 
-fn document(world: &mut World, c: &Capture) -> Value {
-    let g = c
+/// What the file says about the machine and the game, read from the world as the recording ends.
+struct Meta {
+    graphics: Graphics,
+    quality: Option<Quality>,
+    adapter: Option<Value>,
+    window: Option<Value>,
+    round: Option<Value>,
+    scene: Option<Scene>,
+    profiler: bool,
+}
+
+fn meta(world: &mut World, c: &Capture) -> Meta {
+    let graphics = c
         .restore
         .clone()
         .unwrap_or_else(|| world.resource::<Graphics>().clone());
-    let q = c.quality.clone().or_else(|| world.get_resource::<Quality>().cloned());
-    let info = world.get_resource::<RenderAdapterInfo>().map(|i| {
+    let quality = c.quality.clone().or_else(|| world.get_resource::<Quality>().cloned());
+    let adapter = world.get_resource::<RenderAdapterInfo>().map(|i| {
         json!({
             "name": i.0.name, "backend": format!("{:?}", i.0.backend), "type": format!("{:?}", i.0.device_type),
             "driver": i.0.driver, "driver_info": i.0.driver_info,
@@ -464,25 +561,40 @@ fn document(world: &mut World, c: &Capture) -> Value {
         .next()
         .and_then(Camera::physical_target_size)
         .map(|s| json!([s.x, s.y]));
-    let map = world
+    let round = world
         .get_resource::<Map>()
         .map(|m| json!({"map": m.round.map, "seed": m.round.seed, "kind": format!("{:?}", m.round.kind)}));
     let perf = world.resource::<Perf>();
+    Meta {
+        graphics,
+        quality,
+        adapter,
+        window,
+        round,
+        scene: perf.scene.clone(),
+        profiler: perf.profiler,
+    }
+}
+
+fn document(c: &Capture, m: &Meta) -> Value {
+    let g = &m.graphics;
+    let q = m.quality.as_ref();
     let mut doc = json!({
         "format": 1,
         "kind": format!("{:?}", c.what).to_lowercase(),
         "build": fb_net::build(),
         "time": logs::stamp(logs::now_secs()),
         "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-        "adapter": info,
-        "tier": q.as_ref().map(|q| format!("{:?}", q.tier)),
-        "preset": q.as_ref().map(|q| format!("{:?}", q.preset)),
-        "graphics": graphics_json(&g),
-        "window": window,
-        "round": map,
-        "profiler": super::profiler::BUILT,
-        "scene": perf.scene,
+        "adapter": m.adapter,
+        "tier": q.map(|q| format!("{:?}", q.tier)),
+        "preset": q.map(|q| format!("{:?}", q.preset)),
+        "graphics": graphics_json(g),
+        "window": m.window,
+        "round": m.round,
+        "profiler": m.profiler,
+        "scene": m.scene,
         "spikes": c.spikes,
+        "spike_count": c.spike_count,
     });
     if c.what == What::Sweep {
         doc["steps"] = c
@@ -553,11 +665,21 @@ fn summary_lines(doc: &Value) -> String {
     }
 }
 
-/// A sweep or benchmark cut short by quitting leaves the player's graphics as they were.
-fn restore_on_exit(mut exit: MessageReader<AppExit>, mut recording: ResMut<Recording>, mut g: ResMut<Graphics>) {
-    if exit.read().next().is_some()
-        && let Some(r) = recording.0.take().and_then(|c| c.restore)
-    {
+/// A sweep or benchmark cut short by quitting leaves the player's graphics as they were; a recording still
+/// being written is finished first.
+fn restore_on_exit(
+    mut exit: MessageReader<AppExit>,
+    mut recording: ResMut<Recording>,
+    mut g: ResMut<Graphics>,
+    mut saving: ResMut<Saving>,
+) {
+    if exit.read().next().is_none() {
+        return;
+    }
+    if let Some(r) = recording.0.take().and_then(|c| c.restore) {
         *g = r;
+    }
+    for (h, _) in saving.0.drain(..) {
+        let _ = h.join();
     }
 }

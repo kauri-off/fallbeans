@@ -118,32 +118,43 @@ pub enum Status {
     Down,
 }
 
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(3)))
-        .build()
-        .into()
-}
+/// A `/health` reply is a few dozen bytes; a server that sends more is not one of ours.
+const HEALTH_MAX: u64 = 16 * 1024;
+/// Characters of a server's build shown in the list.
+const BUILD_MAX: usize = 48;
 
 /// Asks `addr`'s candidates in turn (blocking).
 pub fn check(addr: &str) -> Status {
-    let agent = agent();
     for base in candidates(addr) {
-        let Ok(mut r) = agent.get(format!("{base}/health")).call() else {
+        let got = crate::net::agent()
+            .get(format!("{base}/health"))
+            .config()
+            .timeout_global(Some(Duration::from_secs(3)))
+            .build()
+            .call();
+        let Ok(mut r) = got else {
             continue;
         };
-        let Ok(v) = r.body_mut().read_json::<serde_json::Value>() else {
+        let Ok(v) = r
+            .body_mut()
+            .with_config()
+            .limit(HEALTH_MAX)
+            .read_json::<serde_json::Value>()
+        else {
             continue;
         };
         if v.get("version").is_none() {
             continue;
         }
         let n = |k: &str| v[k].as_u64().unwrap_or(0);
+        // (Whatever the server's owner wrote: one short line of visible characters, as a room title.)
+        let name = v["name"].as_str().map(fb_shared::text::sanitize_title);
+        let build = fb_shared::text::sanitize_chat(v["build"].as_str().unwrap_or_default());
         return Status::Up(Info {
             base,
-            name: v["name"].as_str().filter(|s| !s.is_empty()).map(String::from),
+            name: name.filter(|s| !s.is_empty()),
             protocol: n("version") as u32,
-            build: v["build"].as_str().unwrap_or_default().to_string(),
+            build: build.chars().take(BUILD_MAX).collect(),
             rooms: n("rooms"),
             players: n("players"),
         });
@@ -175,7 +186,7 @@ impl States {
 pub struct Target(pub Option<String>);
 
 /// Checks the list's servers while the list is on screen.
-pub fn poll(time: Res<Time>, servers: Res<Servers>, target: Res<Target>, mut states: ResMut<States>) {
+pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, mut states: ResMut<States>) {
     let states = &mut *states;
     let mut done = vec![];
     states.pending.retain(|(addr, rx)| {
@@ -206,9 +217,11 @@ pub fn poll(time: Res<Time>, servers: Res<Servers>, target: Res<Target>, mut sta
         }
         let (tx, rx) = channel();
         let a = addr.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(check(&a));
-        });
+        let _ = std::thread::Builder::new()
+            .name("fb-server-check".into())
+            .spawn(move || {
+                let _ = tx.send(check(&a));
+            });
         states.pending.push((addr.clone(), Mutex::new(rx)));
     }
 }

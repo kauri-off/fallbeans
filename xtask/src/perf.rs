@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use clap::{Args, Subcommand};
 use serde_json::Value;
 
-use crate::{Shared, root};
+use crate::{Shared, target_dir};
 
 #[derive(Args)]
 pub struct PerfArgs {
@@ -19,7 +19,7 @@ pub struct PerfArgs {
 enum PerfCmd {
     /// Server plus one windowed client in a round with bots: records the frames, prints the report.
     Run(RunArgs),
-    /// The report of a recording (`perf-*.json` from the logs folder or `target/perf`).
+    /// The report of a recording (`perf-*.json` from the logs folder, or `target/perf-runs` of `run`).
     Show { file: PathBuf },
     /// What changed from one recording to another.
     Compare { base: PathBuf, new: PathBuf },
@@ -27,13 +27,31 @@ enum PerfCmd {
     Csv { file: PathBuf, out: Option<PathBuf> },
 }
 
+/// `--secs`: what the client takes for `--perf-capture` (more than 0, at most an hour).
+fn record_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (f32::MIN_POSITIVE..=3600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "more than 0, at most 3600".into())
+}
+
+/// `--warmup`: what the client takes for `--perf-warmup`.
+fn warmup_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (0.0..=600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "between 0 and 600".into())
+}
+
 #[derive(Args)]
 struct RunArgs {
     /// Seconds recorded.
-    #[arg(long, default_value_t = 30.0)]
+    #[arg(long, default_value_t = 30.0, value_parser = record_secs)]
     secs: f32,
     /// Seconds of the round before the recording.
-    #[arg(long, default_value_t = 8.0)]
+    #[arg(long, default_value_t = 8.0, value_parser = warmup_secs)]
     warmup: f32,
     /// The graphics features off one at a time instead (about a minute).
     #[arg(long)]
@@ -50,13 +68,16 @@ struct RunArgs {
     /// players run) or `dev`.
     #[arg(long, default_value = "perf")]
     cargo_profile: String,
-    /// Extra flags for the client, e.g. `--client-arg=--backend=gl`.
+    /// Extra flags for the client, e.g. `--client-arg=--backend=vulkan`.
     #[arg(long, allow_hyphen_values = true)]
     client_arg: Vec<String>,
     #[arg(long, default_value = "jump-club")]
     map: String,
     #[arg(long)]
     seed: Option<u32>,
+    /// The bean stays at the start instead of playing (with `--seed`, the frames repeat between runs).
+    #[arg(long)]
+    still: bool,
 }
 
 pub fn perf(a: &PerfArgs) -> bool {
@@ -96,6 +117,36 @@ fn load(path: &Path) -> Option<Value> {
     }
 }
 
+/// DXC beside the built client, as the installer puts it (`backend.rs`): without it DX12 compiles with FXC, which
+/// keeps four threads busy for most of a 30 s recording (portal-panic: 63 fps against 103 with DXC). From
+/// `FB_DXC_DIR` (an unpacked DXC release, as `dist`) or the Windows SDK's bin.
+fn dxc_beside(target: &Path) {
+    if !cfg!(windows) || target.join("dxcompiler.dll").is_file() {
+        return;
+    }
+    let from_env = std::env::var_os("FB_DXC_DIR").map(|d| PathBuf::from(d).join("bin").join("x64"));
+    let sdk = std::fs::read_dir(r"C:\Program Files (x86)\Windows Kits\10\bin")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("x64"))
+        .filter(|d| d.join("dxcompiler.dll").is_file() && d.join("dxil.dll").is_file())
+        .max();
+    let Some(src) = from_env
+        .into_iter()
+        .chain(sdk)
+        .find(|d| d.join("dxcompiler.dll").is_file())
+    else {
+        eprintln!("perf: no DXC (FB_DXC_DIR or the Windows SDK): DX12 compiles shaders with FXC during the recording");
+        return;
+    };
+    for f in ["dxcompiler.dll", "dxil.dll"] {
+        if let Err(e) = std::fs::copy(src.join(f), target.join(f)) {
+            eprintln!("perf: {f}: {e}");
+        }
+    }
+}
+
 fn run(r: &RunArgs) -> bool {
     let shared = Shared {
         lag: 0,
@@ -117,12 +168,13 @@ fn run(r: &RunArgs) -> bool {
     if !built {
         return false;
     }
-    let target = root().join("target").join(match r.cargo_profile.as_str() {
+    let target = target_dir().join(match r.cargo_profile.as_str() {
         "dev" => "debug",
         p => p,
     });
     let bin = |name: &str| target.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    let dir = root().join("target").join("perf-runs");
+    dxc_beside(&target);
+    let dir = target_dir().join("perf-runs");
     let _ = std::fs::create_dir_all(&dir);
     let secs = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
     let kind = if r.sweep { "sweep" } else { "run" };
@@ -152,13 +204,17 @@ fn run(r: &RunArgs) -> bool {
     .args(shared.play_args("perf", 1))
     .args([
         "--fill",
-        "--autopilot",
         "--no-update",
+        // (The spans of systems: the recording's CPU rows.)
+        "--profiler",
         "--perf-warmup",
         &r.warmup.to_string(),
     ])
     .arg("--perf-out")
     .arg(&out);
+    if !r.still {
+        c.arg("--autopilot");
+    }
     if r.sweep {
         c.arg("--perf-sweep");
     } else {
@@ -393,7 +449,9 @@ fn report(d: &Value) -> String {
     }
     let spikes = d["spikes"].as_array().map(Vec::as_slice).unwrap_or_default();
     if !spikes.is_empty() {
-        let _ = writeln!(t, "\nlong frames ({}):", spikes.len());
+        // (A recording keeps the first few hundred; `spike_count` is all of them.)
+        let all = d["spike_count"].as_u64().unwrap_or(spikes.len() as u64);
+        let _ = writeln!(t, "\nlong frames ({all}):");
         for sp in spikes.iter().take(8) {
             let top: Vec<String> = sp["top"]
                 .as_array()
@@ -557,17 +615,39 @@ fn compare(b: &Value, n: &Value) -> String {
             find(n, "passes", name, "gpu"),
         );
     }
-    let mut systems = names(n, "cpu");
-    for x in names(b, "cpu") {
-        if !systems.contains(&x) {
-            systems.push(x);
+    // (By kind and name: a system and its commands, or a schedule, can have one name.)
+    let rows = |d: &Value| -> Vec<(String, String)> {
+        d["cpu"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r["kind"].as_str()?.to_string(), r["name"].as_str()?.to_string())))
+            .collect()
+    };
+    let mut keys = rows(n);
+    for k in rows(b) {
+        if !keys.contains(&k) {
+            keys.push(k);
         }
     }
-    let mut deltas: Vec<(String, Option<f64>, Option<f64>)> = systems
-        .into_iter()
-        .map(|s| {
-            let (x, y) = (find(b, "cpu", &s, "ms"), find(n, "cpu", &s, "ms"));
-            (s, x, y)
+    let ms_of = |d: &Value, (kind, name): &(String, String)| {
+        d["cpu"]
+            .as_array()
+            .and_then(|v| {
+                v.iter()
+                    .find(|r| r["kind"] == kind.as_str() && r["name"] == name.as_str())
+            })
+            .and_then(|r| num(&r["ms"]))
+    };
+    let mut deltas: Vec<(String, Option<f64>, Option<f64>)> = keys
+        .iter()
+        .map(|k| {
+            let label = if k.0 == "system" {
+                k.1.clone()
+            } else {
+                format!("{} ({})", k.1, k.0)
+            };
+            (label, ms_of(b, k), ms_of(n, k))
         })
         .collect();
     deltas.sort_by(|a, b| {

@@ -41,7 +41,7 @@ impl Plugin for MenuPlugin {
 
 /// A press on the game field: on nothing, or on the HUD and name tags over it.
 #[derive(Message)]
-struct FieldClick;
+pub(super) struct FieldClick;
 
 /// Presses bubble from what they hit up to the window: one that started on a panel is not the field's.
 fn on_press(
@@ -165,7 +165,7 @@ fn capture(cursor: &mut CursorOptions, on: bool) {
 
 /// Who has the mouse, and when the menu opens and closes: it opens on entering a room and
 /// with Esc; a round's start, Esc again or a click on the field close it and capture the mouse.
-fn menu_flow(
+pub(super) fn menu_flow(
     mut ui: ResMut<Ui>,
     session: Res<Session>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -173,6 +173,7 @@ fn menu_flow(
     mut clicks: MessageReader<FieldClick>,
     mut focus_events: MessageReader<WindowFocused>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut seen: Local<(u32, Option<u32>)>,
     fields: Query<(), With<EditableText>>,
     focus: Res<InputFocus>,
@@ -208,7 +209,8 @@ fn menu_flow(
     }
     let typing = focus.get().is_some_and(|e| fields.contains(e));
     let esc = keys.just_pressed(KeyCode::Escape) && !ui.chat && ui.rebinding.is_none() && !(typing && !ui.menu);
-    let start = pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
+    // (A pad keeps reporting while another window has the focus.)
+    let start = window_focused(&windows) && pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
     if esc || start {
         if ui.menu {
             ui.menu = false;
@@ -271,15 +273,29 @@ fn sync_names(
     }
 }
 
-/// The game takes keys, mouse and pad only while no menu, chat line or field has them.
+/// The game's window has the focus (no window: a run without one, always).
+fn window_focused(windows: &Query<&Window, With<PrimaryWindow>>) -> bool {
+    windows.single().ok().is_none_or(|w| w.focused)
+}
+
+/// The game gets the keys, mouse and pads only while nothing else takes them: a menu, the chat, a text field,
+/// another window (pads and mouse buttons keep reporting while one has the focus).
 fn gate(
     ui: Res<Ui>,
     session: Res<Session>,
     focus: Res<InputFocus>,
     fields: Query<(), With<EditableText>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut gate: ResMut<Gate>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
 ) {
-    let play = session.room.is_some() && !ui.menu && !ui.chat && !typing(&focus, &fields);
+    // (Nor under the loading screen.)
+    let play = session.room.is_some()
+        && !ui.menu
+        && !ui.chat
+        && !typing(&focus, &fields)
+        && window_focused(&windows)
+        && !warm.is_some_and(|w| w.busy());
     if gate.play != play {
         gate.play = play;
     }

@@ -94,7 +94,7 @@ impl MapDef for WallRush {
             // Split the width into 3–6 pieces of random widths (at least 2.4 m, room for a bean).
             let n = 3 + (b.rng.next() * 4.0).floor() as usize;
             let mut cuts: Vec<f64> = (0..n - 1).map(|_| b.rng.next()).collect();
-            cuts.sort_by(|a, c| a.partial_cmp(c).unwrap_or(core::cmp::Ordering::Equal));
+            cuts.sort_by(f64::total_cmp);
             let mut edges = vec![0.0];
             edges.extend(cuts);
             edges.push(1.0);

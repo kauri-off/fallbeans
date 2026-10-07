@@ -30,10 +30,17 @@ impl Install {
         if std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists() {
             return Some(Self::Flatpak);
         }
-        if let Some(p) = std::env::var_os("APPIMAGE") {
-            return Some(Self::AppImage(p.into()));
-        }
         let exe = std::env::current_exe().ok()?;
+        // (`APPIMAGE` alone may be inherited: a build started from an IDE that runs as an AppImage would
+        // overwrite the IDE. This process must run from the image's own mount.)
+        if let (Some(image), Some(dir)) = (std::env::var_os("APPIMAGE"), std::env::var_os("APPDIR")) {
+            let dir = PathBuf::from(dir);
+            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+            let exe = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+            if exe.starts_with(&dir) {
+                return Some(Self::AppImage(image.into()));
+            }
+        }
         (cfg!(windows) && exe.with_file_name("uninstall.exe").exists()).then_some(Self::Nsis)
     }
 
@@ -92,11 +99,21 @@ impl Plugin for UpdatePlugin {
     }
 }
 
+/// The game's own threads that may fail without ending it are named so (`crash::background`).
+fn spawn_named(name: &str, f: impl FnOnce() + Send + 'static) {
+    if let Err(e) = std::thread::Builder::new().name(format!("fb-{name}")).spawn(f) {
+        warn!("update: no thread for {name}: {e}");
+    }
+}
+
 fn start(mut commands: Commands, opts: Res<Opts>) {
     let install = if opts.no_update { None } else { Install::detect() };
+    if install == Some(Install::Nsis) {
+        spawn_named("update-cleanup", remove_old_installers);
+    }
     let checking = install.clone().map(|i| {
         let (tx, rx) = channel();
-        std::thread::spawn(move || {
+        spawn_named("update-check", move || {
             let r = latest(&i);
             if let Err(e) = &r {
                 warn!("update check: {e}");
@@ -114,6 +131,26 @@ fn start(mut commands: Commands, opts: Res<Opts>) {
         total: 0,
         release: None,
     });
+}
+
+/// An installer is downloaded to `%TEMP%` (`fetch_and_install`) and runs from there while this game is closed:
+/// the next start removes it (one still running is in use and stays until the start after).
+fn remove_old_installers() {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for e in dir.filter_map(Result::ok) {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if is_installer(&name) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// A release's installer as `fetch_and_install` names it (`FallBeans-0.2.0-setup.exe`).
+fn is_installer(name: &str) -> bool {
+    name.starts_with("FallBeans-") && name.ends_with("-setup.exe")
 }
 
 /// `body`: how long a response's body may take (None: as long as the whole call may).
@@ -231,6 +268,11 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
 }
 
 impl Update {
+    /// The release found can be installed here (again, after a failed try).
+    pub fn can_install(&self) -> bool {
+        self.install.is_some() && self.release.as_ref().is_some_and(Release::installable)
+    }
+
     /// Downloads and installs the release found; the game restarts into it (`State::Restarting`: quit now).
     pub fn install(&mut self) {
         // (Two clicks before the next frame would start two downloads into one file.)
@@ -247,7 +289,7 @@ impl Update {
         self.got.store(0, Ordering::Relaxed);
         self.total = size;
         let got = self.got.clone();
-        std::thread::spawn(move || {
+        spawn_named("update", move || {
             let _ = tx.send(fetch_and_install(&install, &name, &url, size, &sums, &got));
         });
         self.working = Some(Mutex::new(rx));
@@ -326,11 +368,22 @@ fn fetch_and_install(
     }
     match install {
         Install::Nsis => {
-            // The installer waits for this process to end, installs quietly and starts the game again.
-            std::process::Command::new(&path)
-                .args(["/S", "/UPDATE"])
-                .spawn()
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            // The installer waits for this process to end, installs quietly and starts the game again, with
+            // this run's arguments (`--profile`: the same player).
+            let mut cmd = std::process::Command::new(&path);
+            cmd.args(["/S", "/UPDATE"]);
+            let args: Vec<String> = std::env::args_os()
+                .skip(1)
+                .filter_map(|a| a.into_string().ok())
+                .collect();
+            if let Some(restart) = restart_args(&args) {
+                // (As it is: NSIS reads the backticks itself, Rust's quoting would hide them.)
+                #[cfg(windows)]
+                std::os::windows::process::CommandExt::raw_arg(&mut cmd, restart);
+                #[cfg(not(windows))]
+                cmd.arg(restart);
+            }
+            cmd.spawn().map_err(|e| format!("{}: {e}", path.display()))?;
         }
         Install::AppImage(target) => {
             #[cfg(unix)]
@@ -348,6 +401,42 @@ fn fetch_and_install(
         Install::Flatpak => return Err("a Flatpak updates from its file".into()),
     }
     Ok(())
+}
+
+/// The installer's `/ARGS=` option: the command line it starts the updated game with, in backticks (none
+/// inside them: an argument with one is left out). None without arguments.
+fn restart_args(args: &[String]) -> Option<String> {
+    let line: Vec<String> = args.iter().filter(|a| !a.contains('`')).map(|a| quote(a)).collect();
+    (!line.is_empty()).then(|| format!("/ARGS=`{}`", line.join(" ")))
+}
+
+/// One argument of a Windows command line, quoted as `CommandLineToArgvW` reads it back.
+fn quote(a: &str) -> String {
+    if !a.is_empty() && !a.contains([' ', '\t', '"']) {
+        return a.to_string();
+    }
+    let mut s = String::from('"');
+    let mut slashes = 0;
+    for c in a.chars() {
+        match c {
+            '\\' => slashes += 1,
+            '"' => {
+                // Backslashes before a quote are doubled, and the quote escaped.
+                s.extend(core::iter::repeat_n('\\', slashes * 2 + 1));
+                slashes = 0;
+                s.push('"');
+            }
+            _ => {
+                s.extend(core::iter::repeat_n('\\', slashes));
+                slashes = 0;
+                s.push(c);
+            }
+        }
+    }
+    // (Before the closing quote: doubled.)
+    s.extend(core::iter::repeat_n('\\', slashes * 2));
+    s.push('"');
+    s
 }
 
 /// Opens a page in the system's browser (web pages only: `explorer` and `xdg-open` open files too).
@@ -401,5 +490,26 @@ mod tests {
             Some("def456")
         );
         assert_eq!(expected_sum(s, "other"), None);
+    }
+
+    #[test]
+    fn installers() {
+        assert!(is_installer("FallBeans-0.2.0-setup.exe"));
+        assert!(!is_installer("FallBeans-0.2.0-x86_64.AppImage"));
+        assert!(!is_installer("other-setup.exe"));
+    }
+
+    #[test]
+    fn the_restart_keeps_the_arguments() {
+        let a = |v: &[&str]| restart_args(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(a(&[]), None);
+        assert_eq!(a(&["--profile", "b"]).as_deref(), Some("/ARGS=`--profile b`"));
+        assert_eq!(
+            a(&["--name", "Боб Ёж", "--x", "a`b"]).as_deref(),
+            Some("/ARGS=`--name \"Боб Ёж\" --x`")
+        );
+        assert_eq!(quote(r#"C:\a b\"#), r#""C:\a b\\""#);
+        assert_eq!(quote(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(quote(""), "\"\"");
     }
 }

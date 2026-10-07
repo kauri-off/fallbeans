@@ -18,19 +18,35 @@ axum.workspace = true
 base64.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
 tokio.workspace = true
 bevy = { workspace = true, features = ["std", "bevy_log"] }
 clap.workspace = true
-lightyear = { workspace = true, features = ["server", "std", "replication", "prediction", "interpolation", "input_native", "netcode", "udp", "websocket"] }
+ctrlc.workspace = true
+lightyear = { workspace = true, features = [
+  "server",
+  "std",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "udp",
+  "websocket",
+] }
 
 [lints]
 workspace = true
 
-# `cargo xtask dist deb|rpm`: a static (musl) server with its systemd unit.
+# `cargo xtask dist deb|rpm`: a static (musl) server with its systemd unit, built with the `dist` profile
+# (`target/release/` is the tools' placeholder for the real profile directory), and the third-party licenses
+# that xtask generates first.
+[features]
+# Bevy as a shared library, for local builds only (`cargo xtask dev`; see fb_client).
+dynamic = ["bevy/dynamic_linking"]
+
 [package.metadata.deb]
 name = "fallbeans-server"
 maintainer = "kauri-off"
@@ -41,11 +57,36 @@ priority = "optional"
 depends = ""
 maintainer-scripts = "../../packaging/server/debian/"
 assets = [
-    ["target/release/fb_server", "usr/bin/", "755"],
-    ["../../packaging/server/fallbeans.service", "usr/lib/systemd/system/", "644"],
-    ["../../packaging/server/setup.sh", "usr/lib/fallbeans/", "755"],
-    ["../../packaging/server/remove.sh", "usr/lib/fallbeans/", "755"],
-    ["../../LICENSE", "usr/share/doc/fallbeans-server/", "644"],
+  [
+    "target/release/fb_server",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "../../packaging/server/fallbeans.service",
+    "usr/lib/systemd/system/",
+    "644",
+  ],
+  [
+    "../../packaging/server/setup.sh",
+    "usr/lib/fallbeans/",
+    "755",
+  ],
+  [
+    "../../packaging/server/remove.sh",
+    "usr/lib/fallbeans/",
+    "755",
+  ],
+  [
+    "../../LICENSE",
+    "usr/share/doc/fallbeans-server/",
+    "644",
+  ],
+  [
+    "../../target/licenses/fb_server/THIRD-PARTY-LICENSES.html",
+    "usr/share/doc/fallbeans-server/",
+    "644",
+  ],
 ]
 
 [package.metadata.generate-rpm]
@@ -56,9 +97,10 @@ post_install_script = "/usr/lib/fallbeans/setup.sh"
 pre_uninstall_script = "if [ $1 -eq 0 ]; then /usr/lib/fallbeans/remove.sh; fi"
 post_uninstall_script = "if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi"
 assets = [
-    { source = "target/release/fb_server", dest = "/usr/bin/fb_server", mode = "755" },
-    { source = "../../packaging/server/fallbeans.service", dest = "/usr/lib/systemd/system/fallbeans.service", mode = "644" },
-    { source = "../../packaging/server/setup.sh", dest = "/usr/lib/fallbeans/setup.sh", mode = "755" },
-    { source = "../../packaging/server/remove.sh", dest = "/usr/lib/fallbeans/remove.sh", mode = "755" },
-    { source = "../../LICENSE", dest = "/usr/share/licenses/fallbeans-server/LICENSE", mode = "644", doc = true },
+  { source = "target/release/fb_server", dest = "/usr/bin/fb_server", mode = "755" },
+  { source = "../../packaging/server/fallbeans.service", dest = "/usr/lib/systemd/system/fallbeans.service", mode = "644" },
+  { source = "../../packaging/server/setup.sh", dest = "/usr/lib/fallbeans/setup.sh", mode = "755" },
+  { source = "../../packaging/server/remove.sh", dest = "/usr/lib/fallbeans/remove.sh", mode = "755" },
+  { source = "../../LICENSE", dest = "/usr/share/licenses/fallbeans-server/LICENSE", mode = "644", doc = true },
+  { source = "../../target/licenses/fb_server/THIRD-PARTY-LICENSES.html", dest = "/usr/share/licenses/fallbeans-server/THIRD-PARTY-LICENSES.html", mode = "644", doc = true },
 ]

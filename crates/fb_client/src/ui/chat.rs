@@ -21,7 +21,8 @@ pub struct ChatPlugin;
 impl Plugin for ChatPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, build_chat.after(super::setup));
-        app.add_systems(Update, (open_close, log).chain());
+        // (After the menu has seen the frame's Esc: the one that closes the chat must not open the menu too.)
+        app.add_systems(Update, (open_close, log).chain().after(super::menu::menu_flow));
     }
 }
 
@@ -133,12 +134,12 @@ fn log(
         return;
     };
     let now = time.elapsed_secs();
-    let fresh = session.chat.last().is_some_and(|l| now - l.at < SHOW_S);
+    let fresh = session.chat.back().is_some_and(|l| now - l.at < SHOW_S);
     let shown: Vec<_> = if ui.chat {
         session.chat.iter().collect()
     } else if fresh {
         let n = session.chat.len().saturating_sub(FRESH_LINES);
-        session.chat[n..].iter().collect()
+        session.chat.range(n..).collect()
     } else {
         Vec::new()
     };
@@ -159,15 +160,18 @@ fn log(
             let name_ink = color.mix(&Color::WHITE, 0.5);
             let mut line = p.spawn((Text::default(), TextLayout::default(), Pickable::IGNORE));
             line.with_children(|t| {
-                t.spawn((
-                    TextSpan::new(format!("{}: ", l.name)),
-                    TextFont {
-                        font: f.black.clone().into(),
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
-                    TextColor(name_ink),
-                ));
+                // (A name may hold emoji too: the Black font has none.)
+                for (run, emoji) in runs(&format!("{}: ", l.name)) {
+                    t.spawn((
+                        TextSpan::new(run),
+                        TextFont {
+                            font: if emoji { f.emoji.clone() } else { f.black.clone() }.into(),
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextColor(name_ink),
+                    ));
+                }
                 for (run, emoji) in runs(&l.text) {
                     t.spawn((
                         TextSpan::new(run),

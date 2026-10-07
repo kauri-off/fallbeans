@@ -1,7 +1,7 @@
 //! The client's side of the control protocol: the hello, where the player is (room list, a room, its lobby
 //! and arena), and what the interface shows of it (results, chat, the feed). `--start` plays a game by
 //! itself as the room's host (stress runs, `xtask dev`).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
@@ -46,7 +46,7 @@ pub struct Session {
     pub results: Option<Results>,
     /// Shown beside the podium.
     pub game_end: Option<GameEnd>,
-    pub chat: Vec<ChatLine>,
+    pub chat: VecDeque<ChatLine>,
     pub feed: Vec<FeedEntry>,
 }
 
@@ -190,6 +190,7 @@ pub fn send(senders: &mut Query<&mut MessageSender<ClientMsg>, With<Client>>, ms
 fn receive(
     mut receivers: Query<&mut MessageReceiver<ServerMsg>, With<Client>>,
     mut session: ResMut<Session>,
+    mut opts: ResMut<Opts>,
     conn: Option<Res<Conn>>,
     mut commands: Commands,
     mut cues: MessageWriter<Cue>,
@@ -204,6 +205,11 @@ fn receive(
                 }
                 ServerMsg::Reject { reason, msg } => {
                     warn!("refused ({reason:?}): {msg}");
+                    // A practice the server would not give (too many on it): the next connection asks for the
+                    // room the player came from, not for that practice again.
+                    if opts.practice.take().is_some() {
+                        opts.room = session.back_to.take();
+                    }
                     session.refused = true;
                     session.reject = Some(msg);
                     if let Some(entity) = conn.as_ref().and_then(|c| c.entity) {
@@ -213,11 +219,14 @@ fn receive(
                 ServerMsg::Rooms { rooms, mine } => {
                     session.me = None;
                     session.room = None;
-                    let list: Vec<String> = rooms
-                        .iter()
-                        .map(|r| format!("{} «{}» {}+{}/{}", r.id, r.title, r.players, r.bots, r.max))
-                        .collect();
-                    debug!("rooms: [{}] mine {mine:?}", list.join(", "));
+                    // (The list is built only for a log that keeps it: the room list comes again and again.)
+                    if bevy::log::tracing::enabled!(bevy::log::Level::DEBUG) {
+                        let list: Vec<String> = rooms
+                            .iter()
+                            .map(|r| format!("{} «{}» {}+{}/{}", r.id, r.title, r.players, r.bots, r.max))
+                            .collect();
+                        debug!("rooms: [{}] mine {mine:?}", list.join(", "));
+                    }
                     session.rooms = Some(rooms);
                     session.mine = mine;
                 }
@@ -253,11 +262,16 @@ fn receive(
                         if resumed { " (resumed)" } else { "" }
                     );
                     session.me = Some(id);
+                    // (Back from practice within the server's lobby grace is a resume of the room, but an entry
+                    // for the player: the menu opens as on any entry.)
+                    let other_room = session.room.as_ref() != Some(&room);
                     session.room = Some(room);
                     session.practice = practice;
                     session.denied = None;
                     if !resumed {
                         session.chat.clear();
+                    }
+                    if !resumed || other_room {
                         session.entries += 1;
                     }
                 }
@@ -319,12 +333,13 @@ fn receive(
                     session.results = None;
                 }
                 ServerMsg::Chat { id, name, text } => {
-                    info!("chat {name}: {text}");
-                    let n = session.chat.last().map_or(0, |l| l.n + 1);
+                    // (Other people's words: not in the logs and reports a player sends.)
+                    debug!("chat {name}: {text}");
+                    let n = session.chat.back().map_or(0, |l| l.n + 1);
                     if session.chat.len() >= CHAT_MAX_LINES {
-                        session.chat.remove(0);
+                        session.chat.pop_front();
                     }
-                    session.chat.push(ChatLine {
+                    session.chat.push_back(ChatLine {
                         n,
                         id,
                         name,

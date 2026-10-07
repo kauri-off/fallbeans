@@ -24,6 +24,24 @@ fn fps(s: &str) -> Result<f64, String> {
         .ok_or_else(|| "between 1 and 1000".into())
 }
 
+/// `--perf-capture`: seconds a benchmark records (NaN or infinity would never end).
+fn capture_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (f32::MIN_POSITIVE..=3600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "more than 0, at most 3600".into())
+}
+
+/// `--perf-warmup`: seconds of a round before a benchmark.
+fn warmup_secs(s: &str) -> Result<f32, String> {
+    let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
+    (0.0..=600.0)
+        .contains(&v)
+        .then_some(v)
+        .ok_or_else(|| "between 0 and 600".into())
+}
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
     /// UDP, then WebSocket if UDP gets no answer within 2 s.
@@ -32,11 +50,12 @@ pub enum Transport {
     Ws,
 }
 
+/// A graphics API the game draws with (`backend.rs`): 1.2 or newer for Vulkan.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Vulkan,
+    /// Windows only.
     Dx12,
-    Gl,
 }
 
 #[derive(Parser, Resource, Clone, Debug)]
@@ -109,7 +128,8 @@ pub struct Opts {
     pub spike: u64,
     #[arg(long, default_value_t = 10.0)]
     pub spike_every: f32,
-    /// Graphics API (default: wgpu's choice, or WGPU_BACKEND).
+    /// Graphics API for this run, over the settings' (default: DirectX 12 on Windows, Vulkan without a DX12 GPU;
+    /// Vulkan elsewhere).
     #[arg(long, value_enum)]
     pub backend: Option<Backend>,
     /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs).
@@ -141,14 +161,18 @@ pub struct Opts {
     #[cfg(feature = "brp")]
     #[arg(long, num_args = 0..=1, default_missing_value = "15702")]
     pub brp: Option<u16>,
-    /// Records this many seconds of a round uncapped, saves and quits (`cargo xtask perf`).
-    #[arg(long, value_name = "SECS")]
+    /// Records this many seconds of a round uncapped, saves and quits (`cargo xtask perf`; F9 stops it early).
+    #[arg(long, value_name = "SECS", value_parser = capture_secs)]
     pub perf_capture: Option<f32>,
     /// Switches the graphics features off one at a time in a round, saves and quits.
     #[arg(long)]
     pub perf_sweep: bool,
-    #[arg(long, value_name = "SECS", default_value_t = 5.0)]
+    #[arg(long, value_name = "SECS", default_value_t = 5.0, value_parser = warmup_secs)]
     pub perf_warmup: f32,
+    /// The spans of every system and schedule, for the F4 profiler and the CPU rows of recordings (also
+    /// `FB_PROFILER=1`). Without it they are filtered out where they are made and cost nothing.
+    #[arg(long)]
+    pub profiler: bool,
     /// `--perf-capture` from the launch on (the menu, the lobby, every round), not from a round's warmup.
     #[arg(long)]
     pub perf_from_start: bool,
@@ -167,6 +191,13 @@ pub struct Opts {
     /// Loads every model through Bevy's glTF loader, reports and quits.
     #[arg(long)]
     pub check_assets: bool,
+    /// No loading screen at the start: every map's scene and shaders are made when first needed, as the
+    /// round starts (quicker to the menu for a quick look; rounds may stutter at first).
+    #[arg(long)]
+    pub no_warmup: bool,
+    /// Tests: the warm-up on the bench too (it is off there).
+    #[arg(long, hide = true)]
+    pub warmup: bool,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
     /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).
@@ -177,6 +208,11 @@ pub struct Opts {
 impl Opts {
     pub fn autopilot(&self) -> bool {
         self.autopilot || self.headless
+    }
+
+    /// `--profiler`, or `FB_PROFILER=1`.
+    pub fn profiler(&self) -> bool {
+        self.profiler || std::env::var("FB_PROFILER").is_ok_and(|v| v == "1")
     }
 
     /// The HTTP API to connect to at the start (None: the player picks a server from the list).
@@ -220,5 +256,25 @@ mod tests {
             Some("http://192.168.1.10:7000/fallbeans")
         );
         assert!(Opts::try_parse_from(["fb_client", "--fps", "0"]).is_err());
+    }
+
+    #[test]
+    fn backends_are_vulkan_and_dx12() {
+        let b = |name: &str| Opts::try_parse_from(["fb_client", "--backend", name]).map(|o| o.backend);
+        assert_eq!(b("vulkan").ok(), Some(Some(Backend::Vulkan)));
+        assert_eq!(b("dx12").ok(), Some(Some(Backend::Dx12)));
+        assert!(b("gl").is_err());
+    }
+
+    #[test]
+    fn benchmark_times_end() {
+        let ok = |args: &[&str]| Opts::try_parse_from([&["fb_client"], args].concat()).is_ok();
+        assert!(ok(&["--perf-capture", "30", "--perf-warmup", "0"]));
+        for bad in ["nan", "inf", "-1", "0"] {
+            assert!(!ok(&["--perf-capture", bad]), "{bad}");
+        }
+        for bad in ["nan", "inf", "-1"] {
+            assert!(!ok(&["--perf-warmup", bad]), "{bad}");
+        }
     }
 }

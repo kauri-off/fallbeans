@@ -1,5 +1,5 @@
 //! Same records, same state on every OS: full rounds of four scripted beans and four bots end in a
-//! recorded hash. Regenerate after an intended change with `FB_BLESS=1 cargo test -p fb_arena --test determinism`.
+//! recorded hash (of the whole state, by the bits). Regenerate after an intended change with `FB_BLESS=1 cargo test -p fb_arena --test determinism`.
 use fb_arena::{Arena, ArenaKind};
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
@@ -40,8 +40,14 @@ fn run(map: &str, seed: u32) -> String {
     for id in 1..=8 {
         arena.add_pawn(id, id > 4);
     }
-    // (The lobby and the podium have no end: a minute of them.)
-    let end = (def.meta().duration.at_most(60.0) * 120.0) as i64;
+    // The whole round; the lobby and the podium have no end: a minute of them.
+    let game = fb_maps::GAMES.iter().any(|g| g.meta().id == map);
+    let secs = if game {
+        def.meta().duration
+    } else {
+        def.meta().duration.at_most(60.0)
+    };
+    let end = (secs * 120.0) as i64;
     let mut events = 0;
     for k in -719..=end {
         events += arena.step(k, |id| script(id, k)).len();

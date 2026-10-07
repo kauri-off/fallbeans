@@ -125,11 +125,11 @@ impl MapDef for HexAGone {
                         if cx.world.st(falls)[i].is_some() || cx.t < 0.0 {
                             return;
                         }
-                        let at = cx.t + FALL_DELAY;
+                        // (A client waits for the server's event, well within FALL_DELAY: a tile only its
+                        // prediction stood on would drop for it alone, for good.)
                         if cx.server {
+                            let at = cx.t + FALL_DELAY;
                             cx.emit(MapEvent::Tile { i: i as u32, at });
-                        } else {
-                            cx.world.st_mut(falls)[i] = Some(at);
                         }
                     });
                     tiles.cols.push(col);

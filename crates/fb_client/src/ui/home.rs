@@ -13,7 +13,7 @@ use crate::net::Conn;
 use crate::opts::Opts;
 use crate::servers::{Servers, States, Status, Target};
 use crate::session::{Denied, Session};
-use crate::settings::{Me, Player};
+use crate::settings::{Identities, Me, Player};
 use crate::update::{State as UpdateState, Update};
 
 pub struct HomePlugin;
@@ -309,25 +309,28 @@ fn update_box(
 ) {
     let Ok((e, mut sec)) = q.single_mut() else { return };
     let state = update.as_ref().map_or(UpdateState::Idle, |u| u.state.clone());
+    let can = update.as_ref().is_some_and(|u| u.can_install());
     // (A download is redrawn when its percentage changes, not with every chunk that comes in.)
     let key = match &state {
         UpdateState::Downloading(got, total) => key_of(&("downloading", (got * 100).checked_div(*total))),
         s => key_of(s),
     };
-    if !sec.stale(key_of(&(key, &crash.0))) {
+    if !sec.stale(key_of(&(key, can, &crash.0))) {
         return;
     }
     let f = &*f;
     rebuild(&mut commands, e, |p| {
-        update_state(p, f, &state);
+        update_state(p, f, &state, can);
         if let Some(path) = &crash.0 {
-            rich(p, f, &text::crashed(&path.display().to_string()), 13.0, RED_INK);
+            let t = rich(p, f, &text::crashed(&path.display().to_string()), 13.0, RED_INK);
+            wrap_anywhere(p, t);
             button(p, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         }
     });
 }
 
-fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState) {
+/// `can`: the release can be installed here, so a failed try may be tried again.
+fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState, can: bool) {
     match state {
         UpdateState::Idle => {
             muted(p, f, &text::version(&fb_net::build()));
@@ -349,8 +352,14 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState) {
         }
         UpdateState::Failed(err) => {
             group(p, |g| {
-                rich(g, f, &text::update_failed(err), 13.0, RED_INK);
-                button(g, f, text::RELEASE_PAGE, Look::Plain, Action::ReleasePage);
+                let t = rich(g, f, &text::update_failed(err), 13.0, RED_INK);
+                wrap_anywhere(g, t);
+                row(g, false, |r| {
+                    if can {
+                        button(r, f, text::RETRY, Look::Go, Action::Update);
+                    }
+                    button(r, f, text::RELEASE_PAGE, Look::Plain, Action::ReleasePage);
+                });
             });
         }
         UpdateState::Restarting => {
@@ -705,16 +714,32 @@ fn banner(
 ) {
     let Ok((e, mut sec)) = q.single_mut() else { return };
     let online = conn.as_ref().is_some_and(|c| c.connected);
-    let newer = update.as_ref().and_then(|u| match &u.state {
-        UpdateState::Available(r) => Some(r.installable()),
-        _ => None,
-    });
+    /// What the out-of-date card offers: the update as it goes, or the release page.
+    #[derive(Debug, PartialEq)]
+    enum Offer {
+        Page,
+        Install,
+        /// Per cent.
+        Downloading(u64),
+        /// Why, and whether it may be tried again.
+        Failed(String, bool),
+        Restarting,
+    }
+    let offer = match update.as_ref().map(|u| (&u.state, u.can_install())) {
+        Some((UpdateState::Available(_), true)) => Offer::Install,
+        Some((UpdateState::Downloading(got, total), _)) => {
+            Offer::Downloading((got * 100).checked_div(*total).unwrap_or(0))
+        }
+        Some((UpdateState::Failed(e), can)) => Offer::Failed(e.clone(), can),
+        Some((UpdateState::Restarting, _)) => Offer::Restarting,
+        _ => Offer::Page,
+    };
     let ever = conn.as_ref().is_some_and(|c| c.ever);
     #[derive(Debug, PartialEq)]
     enum Show {
         None,
         Card(&'static str, Option<String>, bool),
-        Outdated(Option<bool>),
+        Outdated(Offer),
         Line(&'static str),
     }
     let show = if target.0.is_none() {
@@ -722,7 +747,7 @@ fn banner(
     } else if let Some(msg) = &session.reject {
         Show::Card(text::LOGO, Some(msg.clone()), true)
     } else if session.refused {
-        Show::Outdated(newer)
+        Show::Outdated(offer)
     } else if !online && ever {
         Show::Line(text::RECONNECTING)
     } else if !online || (session.room.is_none() && session.rooms.is_none()) {
@@ -736,14 +761,37 @@ fn banner(
     let f = &*f;
     rebuild(&mut commands, e, |p| match show {
         Show::None => {}
-        Show::Outdated(newer) => card(p, |card| {
+        Show::Outdated(offer) => card(p, |card| {
             logo(card, f, 30.0);
             label(card, f, text::OUTDATED);
+            match &offer {
+                Offer::Downloading(pct) => {
+                    label(card, f, &text::downloading(*pct, 100));
+                }
+                Offer::Failed(e, _) => {
+                    let t = rich(card, f, &text::update_failed(e), 13.0, RED_INK);
+                    wrap_anywhere(card, t);
+                }
+                Offer::Restarting => {
+                    label(card, f, text::RESTARTING);
+                }
+                Offer::Page | Offer::Install => {}
+            }
             row(card, false, |r| {
-                match newer {
-                    Some(true) => button(r, f, text::UPDATE, Look::Go, Action::Update),
-                    _ => button(r, f, text::DOWNLOAD, Look::Go, Action::ReleasePage),
-                };
+                // (No «Скачать» while the update is on its way: a second copy from the page would race it.)
+                match &offer {
+                    Offer::Install => {
+                        button(r, f, text::UPDATE, Look::Go, Action::Update);
+                    }
+                    Offer::Failed(_, true) => {
+                        button(r, f, text::RETRY, Look::Go, Action::Update);
+                        button(r, f, text::RELEASE_PAGE, Look::Plain, Action::ReleasePage);
+                    }
+                    Offer::Page | Offer::Failed(_, false) => {
+                        button(r, f, text::DOWNLOAD, Look::Go, Action::ReleasePage);
+                    }
+                    Offer::Downloading(_) | Offer::Restarting => {}
+                }
                 button(r, f, text::TO_SERVERS, Look::Plain, Action::LeaveServer);
             });
         }),
@@ -954,10 +1002,10 @@ fn server_actions(
     mut session: ResMut<Session>,
     mut opts: ResMut<Opts>,
     mut ui: ResMut<Ui>,
-    player: Res<Player>,
+    ids: Res<Identities>,
     conn: Option<Res<Conn>>,
     fields: Query<(&Field, &EditableText)>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut commands: Commands,
 ) {
     let mut opened = false;
@@ -987,10 +1035,8 @@ fn server_actions(
                 let Some(base) = base else { continue };
                 servers.last = addr.clone();
                 crate::settings::save_soon(&mut commands);
-                let identity = opts
-                    .token
-                    .clone()
-                    .or_else(|| Some(player.identity.clone()).filter(|s| !s.is_empty()));
+                // (This server's own: one never sees the player's identity on another.)
+                let identity = opts.token.clone().or_else(|| ids.get(&base));
                 *session = Session::default();
                 target.0 = Some(base.clone());
                 crate::net::open(&mut commands, &opts, identity, base, time.elapsed_secs());

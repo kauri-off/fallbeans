@@ -703,11 +703,17 @@ pub fn coop_gate(w: f64) -> Segment {
     })
 }
 
+/// How long (s) a door a client's prediction broke stays open without the server's word.
+const DOOR_PREDICTED: f64 = 1.0;
+
 struct Door {
     breakable: bool,
     broken: bool,
     /// Sim time it broke: it tips over backwards and is gone 1.4 s later.
     broken_at: f64,
+    /// Client: sim time its own prediction broke it (open for DOOR_PREDICTED; only the server's event
+    /// breaks it for good, a rollback may replay it earlier). −∞: never.
+    predicted: f64,
     obj: NodeId,
     col: ColId,
     x: f64,
@@ -764,6 +770,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     breakable,
                     broken: false,
                     broken_at: 0.0,
+                    predicted: f64::NEG_INFINITY,
                     obj,
                     col,
                     x,
@@ -780,8 +787,25 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
             if d.broken || !d.breakable {
                 return;
             }
+            // (A break the client predicted was heard and seen then: it goes on from there.)
+            let heard = (cx.t - d.predicted).abs() < DOOR_PREDICTED;
             d.broken = true;
-            d.broken_at = cx.t;
+            d.broken_at = if heard { d.predicted } else { cx.t };
+            let col = d.col;
+            cx.world.colliders[col as usize].enabled = false;
+            if !heard {
+                cx.sfx("break");
+            }
+        };
+        let predict_door = move |cx: &mut Cx, id: usize| {
+            let t = cx.t;
+            let Some(d) = cx.world.st_mut(st).get_mut(id) else {
+                return;
+            };
+            if d.broken || !d.breakable || (d.predicted..d.predicted + DOOR_PREDICTED).contains(&t) {
+                return;
+            }
+            d.predicted = t;
             let col = d.col;
             cx.world.colliders[col as usize].enabled = false;
             cx.sfx("break");
@@ -789,10 +813,24 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
         s.b.mover(move |t, ctx| {
             for i in 0..ctx.st(st).len() {
                 let d = &ctx.st(st)[i];
-                if !d.broken {
+                let (obj, col, broken, broken_at, predicted) = (d.obj, d.col, d.broken, d.broken_at, d.predicted);
+                let since = if broken {
+                    broken_at
+                } else if predicted > f64::NEG_INFINITY {
+                    // A client's own predicted break, open until the server's event (or DOOR_PREDICTED).
+                    let open = (predicted..predicted + DOOR_PREDICTED).contains(&t);
+                    ctx.set_enabled(col, !open);
+                    if !open {
+                        let n = ctx.node(obj);
+                        n.rot.x = 0.0;
+                        n.visible = true;
+                        continue;
+                    }
+                    predicted
+                } else {
                     continue;
-                }
-                let (obj, dt) = (d.obj, (t - d.broken_at).at_least(0.0));
+                };
+                let dt = (t - since).at_least(0.0);
                 let n = ctx.node(obj);
                 n.rot.x = (dt * dt * 7.0).at_most(m::PI / 2.0);
                 n.visible = dt <= 1.4;
@@ -804,7 +842,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 if cx.server {
                     seg_emit(cx, seg, SegEvent::Door(id as u32));
                 } else {
-                    break_door(cx, id);
+                    predict_door(cx, id);
                 }
             });
         }
@@ -852,7 +890,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                         let pref = p.x + bot.mem.traits.off * 3.0;
                         options.sort_by(|&a, &c| {
                             let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
-                            da.partial_cmp(&dc).unwrap_or(core::cmp::Ordering::Equal)
+                            da.total_cmp(&dc)
                         });
                         let first = bot.rng.next() < 0.7;
                         let at = if first {

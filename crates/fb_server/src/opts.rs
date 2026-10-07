@@ -10,6 +10,10 @@ use fb_net::{HTTP_PORT, NetSim, UDP_PORT, WS_PORT};
 pub struct Opts {
     #[arg(long, default_value_t = UDP_PORT)]
     pub udp_port: u16,
+    /// Address the UDP socket binds. `::` takes IPv6 too where the system makes it dual-stack (Linux by
+    /// default; not Windows), which is why it is not the default.
+    #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
+    pub udp_addr: IpAddr,
     #[arg(long, default_value_t = WS_PORT)]
     pub ws_port: u16,
     /// Address the WebSocket listener binds (127.0.0.1 behind a reverse proxy's wss).
@@ -33,6 +37,9 @@ pub struct Opts {
     /// The server's name in the players' server lists.
     #[arg(long, env = "FB_NAME")]
     pub name: Option<String>,
+    /// Rooms open at once at most (practice rooms aside; up to 16).
+    #[arg(long, default_value_t = crate::rooms::hub::DEFAULT_MAX_ROOMS)]
+    pub max_rooms: usize,
     /// Seed of the rooms' random choices (games, map seeds, spawn order; default: a new one per room).
     #[arg(long)]
     pub seed: Option<u32>,

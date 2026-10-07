@@ -54,6 +54,8 @@ pub enum Op {
     },
     /// Bot brains run (false: bots stand still).
     Bots(bool),
+    /// The results were decided (`Arena::freeze`).
+    Freeze,
 }
 
 impl Recording {

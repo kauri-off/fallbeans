@@ -21,10 +21,10 @@ fb_net = { path = "crates/fb_net" }
 fb_proto = { path = "crates/fb_proto" }
 # Engine and networking: pinned exactly, they move together.
 bevy = { version = "=0.19.1", default-features = false }
-bevy_render = { version = "=0.19.1", default-features = false }
 # The wgpu types Bevy 0.19.1 builds on (adapter info: backend, device type).
 wgpu-types = { version = "=29.0.3", default-features = false }
-# The wgpu Bevy 0.19.1 builds on; the client's tests take its noop device (no GPU).
+# The wgpu Bevy 0.19.1 builds on: the client picks its graphics API with it before Bevy starts; the client's tests
+# take its noop device (no GPU).
 wgpu = { version = "=29.0.4", default-features = false }
 lightyear = { version = "=0.30.1", default-features = false }
 # What Lightyear 0.30.1 itself builds on; named here for APIs it does not re-export.
@@ -36,10 +36,12 @@ lightyear_transport = { version = "=0.30.1", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
+# SIGTERM and SIGHUP too (`termination`): the server shuts down gracefully on `systemctl stop`.
+ctrlc = { version = "3.4", features = ["termination"] }
 getrandom = "0.3"
-glam = { version = "0.32", default-features = false, features = ["std", "serde"] }
+glam = { version = "=0.32.1", default-features = false, features = ["std", "serde"] }
 hmac = "0.12"
-libm = "0.2"
+libm = "=0.2.16"
 meshopt = "0.6"
 # The glyph rasterizer Bevy's text uses (emoji on the maps' boards).
 swash = "0.2"
@@ -54,10 +56,27 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 
 [profile.dev]
 opt-level = 1
+# Backtraces keep their lines; locals in a debugger go. Much smaller debug info, much faster links.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
 
+# The simulation at full speed in dev builds too (stress and audits without --release): bit-identical, Rust never
+# contracts floating-point operations into FMA at any opt-level.
+[profile.dev.package.fb_shared]
+opt-level = 3
+
+[profile.dev.package.fb_sim]
+opt-level = 3
+
+[profile.dev.package.fb_maps]
+opt-level = 3
+
+[profile.dev.package.fb_arena]
+opt-level = 3
+
+# panic = "unwind" (the default) stays everywhere: the server catches a room's panic (`catch_unwind`).
 [profile.release]
 lto = "thin"
 
@@ -68,10 +87,14 @@ lto = false
 incremental = true
 codegen-units = 256
 
-# Release packages (`cargo xtask dist`). Symbols stay: crash reports name the functions in their backtrace.
+# Release packages (`cargo xtask dist`), client and server: one codegen unit with fat LTO (slow to build, a few %
+# faster). Symbols and line tables stay (nothing is stripped): crash reports name the function and the line in their
+# backtrace. On Windows those come from the PDB, which the installer does not ship.
 [profile.dist]
 inherits = "release"
-strip = "debuginfo"
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -84,5 +107,9 @@ string_slice = "warn"
 
 # Local fixes to dependencies, each to drop once upstream has it.
 [patch.crates-io]
-# The WebSocket server leaves Nagle's algorithm on (only the client can turn it off): +15 ms RTT on wss.
+# The WebSocket server: Nagle off (only the client could turn it off: +15 ms RTT on wss), a handshake timeout,
+# accept errors that do not end the server, connection caps, a small tokio runtime ("fallbeans patch" in the code).
 aeronet_websocket = { path = "vendor/aeronet_websocket" }
+# A fragmented message allocates whatever fragment count the peer declares, and partial reliable messages
+# never expire: one packet could take all memory of the server or a client.
+lightyear_transport = { path = "vendor/lightyear_transport" }

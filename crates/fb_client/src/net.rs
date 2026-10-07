@@ -2,8 +2,8 @@
 //! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::time::Duration;
-use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{LazyLock, Mutex};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -20,7 +20,7 @@ use lightyear::websocket::client::WebSocketTarget;
 use crate::opts::{Opts, Transport};
 use crate::servers::Target;
 use crate::session::Session;
-use crate::settings::{Me, Player};
+use crate::settings::{Identities, Me};
 
 /// How long UDP gets to answer before `auto` goes over WebSocket.
 pub const UDP_TRY_S: f32 = 2.0;
@@ -78,6 +78,7 @@ pub struct NetPlugin;
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_prediction, connect_first).chain());
+        app.add_systems(Update, connect_later.run_if(resource_exists::<ConnectLater>));
         app.add_systems(
             Update,
             (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
@@ -125,14 +126,21 @@ fn despawn_closed(mut commands: Commands, closing: Query<Entity, (With<Closing>,
 
 fn setup_prediction(mut commands: Commands) {
     let mut manager = PredictionManager::default();
-    // A second: at 150 ms RTT plus jitter the default 20 ticks rejects every rollback.
-    manager.rollback_policy.max_rollback_ticks = 120;
+    // At 150 ms RTT plus jitter the default 20 ticks rejects every rollback. No deeper than the input
+    // buffer (a ring of 64 ticks, `lightyear_inputs::input_buffer::INPUT_BUFFER_CAPACITY`): ticks replayed
+    // past it have no inputs, and their replay differs from the server's and rolls back again.
+    manager.rollback_policy.max_rollback_ticks = 63;
     commands.insert_resource(manager);
 }
 
-/// The WebSocket URL when nobody named one: the HTTP API's host on the WebSocket port.
+/// The WebSocket URL when nobody named one (a server too old to say): behind https the proxy's
+/// `wss://…/fallbeans/ws`, as the server names it (`fb_server::http::ws_url`); else the HTTP API's host
+/// on the WebSocket port.
 fn default_ws(http: &str, port: u16) -> String {
-    let rest = http.split_once("://").map_or(http, |(_, r)| r);
+    let (scheme, rest) = http.split_once("://").unwrap_or(("http", http));
+    if scheme == "https" {
+        return format!("wss://{}/ws", rest.trim_end_matches('/'));
+    }
     let authority = rest.split('/').next().unwrap_or(rest);
     let host = match authority.rfind(']') {
         Some(i) => authority.get(..=i).unwrap_or(authority),
@@ -149,14 +157,43 @@ fn session_request(conn: &Conn, transport: Transport) -> SessionRequest {
     }
 }
 
+/// The HTTP client of every request to a game server (session, `/health`): one for the whole game, so
+/// connections are reused. It trusts the system's root certificates, as the WebSocket does
+/// (`with_native_certs`): a server one of them takes, the other takes too. Mozilla's bundled roots
+/// (ureq's default) only when the system has none.
+pub fn agent() -> &'static ureq::Agent {
+    static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+        use ureq::tls::{Certificate, RootCerts, TlsConfig};
+        let native = aeronet_websocket::rustls_native_certs::load_native_certs();
+        let certs: Vec<Certificate<'static>> = native
+            .certs
+            .iter()
+            .map(|c| Certificate::from_der(c.as_ref()).to_owned())
+            .collect();
+        let roots = if certs.is_empty() {
+            warn!(
+                "no system root certificates ({} errors): using the bundled ones",
+                native.errors.len()
+            );
+            RootCerts::WebPki
+        } else {
+            RootCerts::new_with_certs(&certs)
+        };
+        ureq::Agent::config_builder()
+            .tls_config(TlsConfig::builder().root_certs(roots).build())
+            .build()
+            .into()
+    });
+    &AGENT
+}
+
 /// `POST <url>` of the session API (blocking).
 pub fn request(url: &str, req: &SessionRequest) -> Result<SessionReply, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    agent()
+        .post(url)
+        .config()
         .timeout_global(Some(Duration::from_secs(5)))
         .build()
-        .into();
-    agent
-        .post(url)
         .send_json(req)
         .and_then(|mut r| r.body_mut().read_json::<SessionReply>())
         .map_err(|e| format!("{url}: {e}"))
@@ -193,7 +230,7 @@ fn in_spike(opts: &Opts, now: f32) -> bool {
 /// `--spike`: swaps the link's conditioner as a burst starts and ends (packets already delayed keep their time).
 fn spike_link(
     opts: Res<Opts>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     conn: Option<Res<Conn>>,
     mut links: Query<&mut Link>,
     mut was: Local<bool>,
@@ -231,7 +268,8 @@ fn ask(conn: &mut Conn, now: f32) {
     let (tx, rx) = channel();
     let url = format!("{}/api/session", conn.http);
     let req = session_request(conn, conn.transport);
-    std::thread::spawn(move || {
+    // Named: a panic here is not a crash of the game (`crash.rs`); a thread that fails to start drops `tx`.
+    let _ = std::thread::Builder::new().name("fb-session".into()).spawn(move || {
         let _ = tx.send(request(&url, &req));
     });
     conn.asking = Some(Mutex::new(rx));
@@ -300,8 +338,43 @@ fn spawn_client(
     Ok(entity)
 }
 
-fn connect_first(mut commands: Commands, me: Me, target: Res<Target>, time: Res<Time>) {
+fn connect_first(
+    mut commands: Commands,
+    me: Me,
+    target: Res<Target>,
+    time: Res<Time<Real>>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
+) {
+    // (Behind the loading screen nothing is played: the room comes once the warm-up is done.)
+    if warm.is_some_and(|w| w.busy()) {
+        commands.insert_resource(ConnectLater);
+        return;
+    }
     if let Some(http) = target.0.clone() {
+        open(&mut commands, &me.opts, me.identity(), http, time.elapsed_secs());
+    }
+}
+
+/// The connection at the start waits for the warm-up.
+#[derive(Resource)]
+struct ConnectLater;
+
+fn connect_later(
+    mut commands: Commands,
+    me: Me,
+    target: Res<Target>,
+    time: Res<Time<Real>>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
+    conn: Option<Res<Conn>>,
+) {
+    if warm.is_some_and(|w| w.busy()) {
+        return;
+    }
+    commands.remove_resource::<ConnectLater>();
+    // (Unless the player picked a server meanwhile.)
+    if conn.is_none()
+        && let Some(http) = target.0.clone()
+    {
         open(&mut commands, &me.opts, me.identity(), http, time.elapsed_secs());
     }
 }
@@ -350,10 +423,10 @@ pub fn close(commands: &mut Commands, conn: &Conn) {
 fn receive_session(
     mut commands: Commands,
     opts: Res<Opts>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut session: ResMut<Session>,
     conn: Option<ResMut<Conn>>,
-    mut player: ResMut<Player>,
+    mut ids: ResMut<Identities>,
 ) {
     let Some(mut conn) = conn else { return };
     let now = time.elapsed_secs();
@@ -376,9 +449,9 @@ fn receive_session(
     if reply.ws_url.is_some() {
         conn.ws = reply.ws_url.clone();
     }
-    if opts.token.is_none() && player.identity != reply.identity {
-        player.identity = reply.identity.clone();
-        crate::settings::save_now(&mut commands);
+    // (Kept for this server only: another one is never sent it.)
+    if opts.token.is_none() {
+        ids.set(&conn.http, &reply.identity);
     }
     if reply.protocol != PROTOCOL_VERSION {
         error!(
@@ -434,7 +507,7 @@ fn again(slot: &mut Option<(String, u32)>, what: String) -> Option<String> {
 fn watch_link(
     mut commands: Commands,
     opts: Res<Opts>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     session: Res<Session>,
     conn: Option<ResMut<Conn>>,
     links: Query<(Has<Connected>, Option<&Disconnected>)>,
@@ -496,7 +569,7 @@ fn watch_link(
     }
 }
 
-fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time>, conn: Option<ResMut<Conn>>) {
+fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time<Real>>, conn: Option<ResMut<Conn>>) {
     let Some(mut conn) = conn else { return };
     let Some(entity) = conn.entity else { return };
     if conn.connected || opts.transport != Transport::Auto || conn.transport != Transport::Udp {
@@ -507,7 +580,10 @@ fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time>, conn
         return;
     }
     warn!("no answer over UDP in {UDP_TRY_S} s: trying WebSocket");
-    commands.entity(entity).despawn();
+    // As any link that goes (`HangUp`): disconnected next frame, so that its disconnect packets tell the
+    // server (it may hear UDP when its answers do not get through), then despawned.
+    hang_up(&mut commands, entity);
+    commands.entity(entity).insert(Closing);
     conn.entity = None;
     conn.transport = Transport::Ws;
     conn.fallback = Some((Fallback::Silent, now));
@@ -520,7 +596,7 @@ fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time>, conn
 fn back_to_udp(
     mut commands: Commands,
     opts: Res<Opts>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     session: Res<Session>,
     conn: Option<ResMut<Conn>>,
 ) {
@@ -583,7 +659,14 @@ mod tests {
     fn default_ws() {
         let w = |h: &str| super::default_ws(h, 5889);
         assert_eq!(w("http://192.168.1.10:5887/fallbeans"), "ws://192.168.1.10:5889");
-        assert_eq!(w("https://game.example.com/fallbeans"), "ws://game.example.com:5889");
+        assert_eq!(
+            w("https://game.example.com/fallbeans"),
+            "wss://game.example.com/fallbeans/ws"
+        );
+        assert_eq!(
+            w("https://game.example.com/fallbeans/"),
+            "wss://game.example.com/fallbeans/ws"
+        );
         assert_eq!(w("http://[::1]:5887/fallbeans"), "ws://[::1]:5889");
     }
 }

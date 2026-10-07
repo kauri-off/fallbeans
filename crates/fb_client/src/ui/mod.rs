@@ -7,6 +7,7 @@ pub mod text;
 mod chat;
 mod home;
 mod hud;
+mod loading;
 mod menu;
 mod tags;
 
@@ -346,6 +347,14 @@ fn rich_with(
         }
     });
     id
+}
+
+/// The text `t` (just spawned in `p`) breaks inside a word that does not fit on a line, a path or a URL,
+/// instead of running out of its panel.
+pub fn wrap_anywhere(p: &mut ChildSpawnerCommands, t: Entity) {
+    p.commands()
+        .entity(t)
+        .insert(TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter));
 }
 
 pub fn label(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
@@ -767,9 +776,19 @@ pub fn dot(p: &mut ChildSpawnerCommands, color: Color, size: f32) -> Entity {
             ..default()
         },
         BackgroundColor(color),
-        BorderColor::all(Color::WHITE),
+        BorderColor::all(dot_rim(color)),
     ))
     .id()
+}
+
+/// A dot's rim: white, or a faint ink line round a colour too pale to show on the white panels (a white suit).
+pub fn dot_rim(c: Color) -> Color {
+    let rim = if c.luminance() > 0.8 {
+        Color::srgba(0.169, 0.102, 0.361, 0.35)
+    } else {
+        Color::WHITE
+    };
+    rim.with_alpha(rim.alpha() * c.alpha())
 }
 
 /// A folded part: its title toggles it.
@@ -852,6 +871,7 @@ impl Plugin for UiPlugin {
             hud::HudPlugin,
             chat::ChatPlugin,
             tags::TagsPlugin,
+            loading::LoadingPlugin,
         ));
     }
 }
@@ -1142,7 +1162,7 @@ impl Options<'_> {
             ui.open.contains("keys"),
             &*self.gfx,
             ui.open.contains("gfx"),
-            self.quality.as_ref().map(|q| (q.tier, q.dropped)),
+            self.quality.as_ref().map(|q| q.tier),
         ))
     }
 }
@@ -1157,7 +1177,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Knob::MouseSens,
             text::MOUSE_SENS,
             controls.mouse_sensitivity,
-            (0.2, 3.0),
+            crate::settings::SENS_RANGE,
             0.05,
         );
         button(
@@ -1173,7 +1193,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Knob::StickSens,
             text::STICK_SENS,
             controls.stick_sensitivity,
-            (0.2, 3.0),
+            crate::settings::SENS_RANGE,
             0.05,
         );
         button(
@@ -1190,9 +1210,17 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Look::Check(controls.camera_shake),
             Action::Set(Toggle::Shake),
         );
-        slider(c, f, Knob::Fov, text::FOV, display.fov, (55.0, 100.0), 1.0);
+        slider(c, f, Knob::Fov, text::FOV, display.fov, crate::settings::FOV_RANGE, 1.0);
         slider(c, f, Knob::Volume, text::VOLUME, sound.volume, (0.0, 1.0), 0.05);
-        slider(c, f, Knob::UiScale, text::UI_SCALE, display.ui_scale, (0.75, 1.5), 0.05);
+        slider(
+            c,
+            f,
+            Knob::UiScale,
+            text::UI_SCALE,
+            display.ui_scale,
+            crate::settings::UI_SCALE_RANGE,
+            0.05,
+        );
         button(
             c,
             f,
@@ -1238,14 +1266,8 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
 }
 
 fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
-    use crate::render::quality::{Preset, Tier};
+    use crate::opts::Backend;
     let g = &*o.gfx;
-    let tier = o.quality.as_ref().map_or(Tier::T2, |q| q.tier);
-    let most = match tier {
-        Tier::T0 => Preset::Low,
-        Tier::T1 => Preset::Medium,
-        Tier::T2 => Preset::High,
-    };
     let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &[(&str, GfxPick, bool, bool)]| {
         stack(p, |c| {
             muted(c, f, title);
@@ -1257,13 +1279,12 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
         });
     };
     let presets: Vec<(&str, GfxPick, bool, bool)> = [
-        ("auto", text::PRESET_AUTO, None),
-        ("low", text::PRESET_LOW, Some(Preset::Low)),
-        ("medium", text::PRESET_MEDIUM, Some(Preset::Medium)),
-        ("high", text::PRESET_HIGH, Some(Preset::High)),
+        ("low", text::PRESET_LOW),
+        ("medium", text::PRESET_MEDIUM),
+        ("high", text::PRESET_HIGH),
     ]
     .into_iter()
-    .map(|(id, s, p)| (s, GfxPick::Preset(id), g.preset == id, p.is_none_or(|p| p <= most)))
+    .map(|(id, s)| (s, GfxPick::Preset(id), g.preset == id, true))
     .collect();
     chips(p, text::PRESET, &presets);
     if let Some(q) = &o.quality {
@@ -1288,14 +1309,7 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
         Look::Check(g.shadows),
         Action::Set(Toggle::Shadows),
     );
-    button_if(
-        p,
-        f,
-        text::AO,
-        Look::Check(g.ao && tier == Tier::T2),
-        Action::Set(Toggle::Ao),
-        tier == Tier::T2,
-    );
+    button(p, f, text::AO, Look::Check(g.ao), Action::Set(Toggle::Ao));
     button(p, f, text::AA, Look::Check(g.aa), Action::Set(Toggle::Aa));
     button(p, f, text::GRADE, Look::Check(g.grade), Action::Set(Toggle::Grade));
     button(p, f, text::MOTES, Look::Check(g.motes), Action::Set(Toggle::Motes));
@@ -1306,14 +1320,16 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
             .map(|(n, s)| (s, GfxPick::Fps(n), g.fps_limit == n, true))
             .collect();
     chips(p, text::FPS_LIMIT, &fps);
+    // (Only what this system runs; a saved name it cannot, an old "gl" among them, is "auto".)
+    let saved = Backend::from_setting(&g.backend);
     let backends: Vec<(&str, GfxPick, bool, bool)> = [
-        ("", text::BACKEND_AUTO, true),
-        ("vulkan", "Vulkan", true),
-        ("dx12", "DirectX 12", cfg!(target_os = "windows")),
-        ("gl", "OpenGL", true),
+        ("", text::BACKEND_AUTO, None),
+        ("dx12", "DirectX 12", Some(Backend::Dx12)),
+        ("vulkan", "Vulkan", Some(Backend::Vulkan)),
     ]
     .into_iter()
-    .map(|(id, s, ok)| (s, GfxPick::Backend(id), g.backend == id, ok))
+    .filter(|(_, _, b)| b.is_none_or(Backend::available))
+    .map(|(id, s, b)| (s, GfxPick::Backend(id), saved == b, true))
     .collect();
     chips(p, text::BACKEND, &backends);
 }
@@ -1344,7 +1360,7 @@ pub fn rebind(
             ui.rebinding = None;
             return;
         }
-        if crate::keys::label(*k).is_some() {
+        if crate::keys::bindable(*k) {
             binds.bind(b, *k);
             ui.rebinding = None;
             crate::settings::save_soon(&mut commands);

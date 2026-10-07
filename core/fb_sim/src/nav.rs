@@ -7,6 +7,7 @@ use crate::collider::{ColId, Collider, Shape};
 use crate::m::{self, MinMax};
 use crate::math::V3;
 use crate::world::World;
+use fb_shared::hash::Fnv;
 
 pub const NAV_CELL: f64 = 0.5;
 const LAYERS: usize = 4;
@@ -243,6 +244,23 @@ pub struct NavGrid {
     search: Mutex<Search>,
 }
 
+/// A copy for another arena of the same map (the server builds the lobby's once): the same grid, a search
+/// scratch of its own.
+impl Clone for NavGrid {
+    fn clone(&self) -> Self {
+        let mut g = NavGrid::new(self.x0, self.z0, self.nx, self.nz);
+        g.ys.clone_from(&self.ys);
+        g.cols.clone_from(&self.cols);
+        g.pen.clone_from(&self.pen);
+        g
+    }
+}
+
+/// What the grid is built on: static ground that is there now and that it is told about.
+fn solid(c: &Collider) -> bool {
+    c.is_static && c.enabled && !c.nav_skip && !c.trigger
+}
+
 /// The grid together with the world whose colliders it checks (they may be switched off).
 #[derive(Clone, Copy)]
 pub struct Nav<'a> {
@@ -272,9 +290,35 @@ impl NavGrid {
         }
     }
 
+    /// Fingerprint of what `build` reads: the static, solid colliders as they are now. A grid built earlier
+    /// is still the world's while this is the same (a start gate that opens is skipped by the grid, and
+    /// changes nothing here).
+    pub fn key(world: &World) -> String {
+        let mut h = Fnv::default();
+        let mut mix = |v: f64| h.mix(v, 1e3);
+        let mut n = 0;
+        for (i, c) in world.colliders.iter().enumerate() {
+            if !solid(c) {
+                continue;
+            }
+            n += 1;
+            mix(i as f64);
+            for e in c.cur.to_cols_array() {
+                mix(e);
+            }
+            match c.shape {
+                Shape::Box { hx, hy, hz } => mix(hx + hy * 3.0 + hz * 7.0),
+                Shape::Cyl { r, hh } => mix(r + hh * 3.0),
+                Shape::Sphere { r } => mix(r),
+            }
+            mix(c.bounce);
+            mix(c.hit);
+        }
+        format!("{n}:{:016x}", h.finish())
+    }
+
     /// Builds the grid from the world's static, solid colliders as they are now.
     pub fn build(world: &World, forbidden: Option<&dyn Fn(V3) -> bool>) -> NavGrid {
-        let solid = |c: &Collider| c.is_static && c.enabled && !c.nav_skip && !c.trigger;
         let mut x0 = f64::INFINITY;
         let mut x1 = f64::NEG_INFINITY;
         let mut z0 = f64::INFINITY;
@@ -317,8 +361,8 @@ impl NavGrid {
                         list.push(sp);
                     }
                 }
-                // (`hi` is never NaN for a finite top; were it, it would compare equal.)
-                list.sort_by(|a, b| b.hi.partial_cmp(&a.hi).unwrap_or(core::cmp::Ordering::Equal));
+                // (`hi` is never NaN for a finite top.)
+                list.sort_by(|a, b| b.hi.total_cmp(&a.hi));
                 let cell = iz * nx + ix;
                 let mut layer = 0;
                 for (si, s) in list.iter().enumerate() {
@@ -759,5 +803,34 @@ impl<'a> Nav<'a> {
             y = g.ys[id as usize];
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::Builder;
+
+    fn same(a: &NavGrid, b: &NavGrid) -> bool {
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+        a.x0.to_bits() == b.x0.to_bits()
+            && a.z0.to_bits() == b.z0.to_bits()
+            && (a.nx, a.nz) == (b.nx, b.nz)
+            && bits(&a.ys) == bits(&b.ys)
+            && a.cols == b.cols
+            && bits(&a.pen) == bits(&b.pen)
+    }
+
+    #[test]
+    fn the_start_gate_opening_keeps_the_grid_built_before() {
+        let mut b = Builder::new(1, false);
+        b.start_area(0.0);
+        let mut world = b.world;
+        world.finalize(-1.0);
+        let (before, key, hash) = (NavGrid::build(&world, None), NavGrid::key(&world), world.hash(true));
+        world.set_time(0.5);
+        assert_ne!(world.hash(true), hash, "the gate is open");
+        assert_eq!(NavGrid::key(&world), key);
+        assert!(same(&before, &NavGrid::build(&world, None)));
     }
 }

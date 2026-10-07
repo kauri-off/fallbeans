@@ -1,4 +1,5 @@
 # Release v<Cargo.toml version>: packages built in parallel, then one GitHub release with SHA256SUMS.
+# Every action is pinned to a commit (the tag in the comment): the jobs build what every player then installs.
 name: release
 
 on:
@@ -13,45 +14,89 @@ concurrency: release
 env:
   CARGO_TERM_COLOR: always
   LINUX_PACKAGES: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+  # The packaging tools, by version (cargo xtask dist names cargo-about's too).
+  CARGO_ABOUT: 0.9.2
+  CARGO_DEB: 3.8.0
+  CARGO_GENERATE_RPM: 0.21.0
+  # DirectX's shader compiler shipped in the Windows package (DX12 compiles with it instead of FXC).
+  DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
+  DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
 
 jobs:
   version:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.v.outputs.version }}
+      toolchain: ${{ steps.v.outputs.toolchain }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The self-updater installs every release for every player: only master is released.
+          if [ "$GITHUB_REF" != refs/heads/master ]; then
+            echo "::error::releases are made from master only (this run: $GITHUB_REF)"
+            exit 1
+          fi
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+          toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          # A tag without its release is a run that failed after the release job made the tag: build it again.
+          if gh release view "v$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::v$v is already released: raise the version in Cargo.toml"
             exit 1
           fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$v" >/dev/null; then
+            # (An annotated tag's commit is its peeled `^{}` entry.)
+            tagged=$(git ls-remote origin "refs/tags/v$v^{}" | cut -f1)
+            [ -n "$tagged" ] || tagged=$(git ls-remote origin "refs/tags/v$v" | cut -f1)
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::tag v$v is on $tagged, not on this commit: delete the tag or raise the version"
+              exit 1
+            fi
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
 
   check:
     needs: version
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
         with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: packages
+        run: |
+          # shellcheck disable=SC2086 # (a list of packages)
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
       - run: cargo xtask check
 
   nsis:
     needs: version
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
+        with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: choco install nsis --no-progress -y
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
+      - name: dxc
+        shell: bash
+        run: |
+          curl -fsSL -o dxc.zip "$DXC_URL"
+          echo "$DXC_SHA256  dxc.zip" | sha256sum -c -
+          unzip -q dxc.zip -d dxc
+          echo "FB_DXC_DIR=$PWD/dxc" >> "$GITHUB_ENV"
       - run: cargo xtask dist nsis
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: nsis
           path: dist/*.exe
@@ -63,23 +108,38 @@ jobs:
     # container on a current runner, since GitHub retires the ubuntu-22.04 runner image (gone 2027-04-17).
     runs-on: ubuntu-latest
     container: ubuntu:22.04
+    timeout-minutes: 60
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
       # (The bare image: what the runner images have and the steps below need, `file` for appimagetool. Steps run as root here.)
-      - run: >-
-          apt-get update && apt-get install -y --no-install-recommends
-          ca-certificates curl git build-essential pkg-config file $LINUX_PACKAGES
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: appimagetool
+      - name: packages
         run: |
-          curl -sSfL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          # shellcheck disable=SC2086 # (a list of packages)
+          apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config file $LINUX_PACKAGES
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
+        with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: appimagetool
+        # Releases of their own, each file checked against its SHA-256 (not the moving `continuous` tag).
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -sSfL -o "$RUNNER_TEMP/runtime-x86_64" \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          sha256sum -c - <<SUMS
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $RUNNER_TEMP/runtime-x86_64
+          SUMS
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+          echo "APPIMAGE_RUNTIME=$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist appimage
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: appimage
           path: dist/*.AppImage
@@ -88,15 +148,22 @@ jobs:
   flatpak:
     needs: version
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES flatpak flatpak-builder
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
+        with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: packages
+        run: |
+          # shellcheck disable=SC2086 # (a list of packages)
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES flatpak flatpak-builder
       # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist flatpak
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: flatpak
           path: dist/*.flatpak
@@ -105,16 +172,19 @@ jobs:
   deb:
     needs: version
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
         with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
           targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
-      - run: cargo install --locked cargo-deb
+      - run: cargo install --locked cargo-deb --version ${{ env.CARGO_DEB }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist deb
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: deb
           path: dist/*.deb
@@ -123,16 +193,19 @@ jobs:
   rpm:
     needs: version
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
         with:
+          toolchain: ${{ needs.version.outputs.toolchain }}
           targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
-      - run: cargo install --locked cargo-generate-rpm
+      - run: cargo install --locked cargo-generate-rpm --version ${{ env.CARGO_GENERATE_RPM }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist rpm
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: rpm
           path: dist/*.rpm
@@ -141,11 +214,12 @@ jobs:
   release:
     needs: [version, check, nsis, appimage, flatpak, deb, rpm]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: dist
           merge-multiple: true
@@ -157,12 +231,14 @@ jobs:
           cd dist
           # GitHub renames assets with characters other than letters, digits and @-_+. (the `~` of the
           # server packages' version becomes `.`): rename first, so SHA256SUMS names the files as published.
-          for f in *~*; do
+          for f in ./*~*; do
             if [ -e "$f" ]; then mv -- "$f" "${f//\~/.}"; fi
           done
-          sha256sum * > SHA256SUMS
+          sha256sum ./* > SHA256SUMS
+          sed -i 's| \./| |' SHA256SUMS
           cat SHA256SUMS
           title="Fall Beans $(echo "$VERSION" | sed -E 's/-(.*)$/ \U\1/')"
           sed "s/@VERSION@/$VERSION/g" ../packaging/release-notes.md > notes.md
+          # (A tag left by a failed run, on this commit: the release goes on it.)
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md \
             ./*.exe ./*.AppImage ./*.flatpak ./*.deb ./*.rpm SHA256SUMS

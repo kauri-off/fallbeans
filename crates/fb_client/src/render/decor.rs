@@ -1,10 +1,12 @@
 //! The scenery around a map (client only): drifting clouds kept clear
 //! of the course, birds circling far out, hot-air balloons on the horizon, floating islands, the set
 //! pieces of the round's look (castle towers, gears, snowmen, planets, tents, neon rings, lighthouses,
-//! cacti, volcanoes, crowns, lollipops…) and the land far below. Visual only: its own random numbers.
-use std::collections::HashMap;
+//! cacti, volcanoes, crowns, lollipops…) and the land far below. Visual only: its own random numbers. The parts
+//! nothing moves are merged by cell and material.
+use std::collections::{HashMap, HashSet};
 
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{RenderAssetUsages, UntypedAssetId};
+use bevy::camera::primitives::MeshAabb;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -317,6 +319,8 @@ struct Kit<'a> {
     glows: HashMap<String, Handle<StandardMaterial>>,
     assets: AssetServer,
     ticks: Vec<Tick>,
+    /// Every part made (`merge_still` merges the ones nothing moves).
+    parts: Vec<(Entity, Shape, Mat)>,
 }
 
 fn tf(at: [f32; 3], size: [f32; 3], rot: [f32; 3]) -> Transform {
@@ -448,7 +452,9 @@ impl Kit<'_> {
             Mat::S(h) => e.insert(MeshMaterial3d(h.clone())),
             Mat::G(h) => e.insert((MeshMaterial3d(h.clone()), NotShadowReceiver)),
         };
-        e.id()
+        let e = e.id();
+        self.parts.push((e, shape, mat.clone()));
+        e
     }
 
     /// A model (turned at random); a flag's cloth takes `tint`.
@@ -467,6 +473,8 @@ impl Kit<'_> {
                     .with_rotation(Quat::from_rotation_y(yaw))
                     .with_scale(Vec3::splat(scale)),
                 Visibility::default(),
+                // (Given to each mesh by `props::dress`, as the rest of the scenery.)
+                NotShadowCaster,
                 ChildOf(parent),
             ))
             .id()
@@ -495,6 +503,7 @@ impl Kit<'_> {
                 Prop::painted("island", paint),
                 t,
                 Visibility::default(),
+                NotShadowCaster,
                 ChildOf(parent),
             ))
             .id()
@@ -1901,6 +1910,18 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
         .world
         .resource_mut::<Assets<Mesh>>()
         .add(Sphere::new(3.2).mesh().uv(28, 18).scaled_by(Vec3::new(1.0, 1.15, 1.0)));
+    let frustum = |top: f32, bottom: f32, h: f32, seg: u32| {
+        ConicalFrustum {
+            radius_top: top,
+            radius_bottom: bottom,
+            height: h,
+        }
+        .mesh()
+        .resolution(seg)
+        .build()
+    };
+    let sk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(1.1, 0.7, 1.2, 18));
+    let bk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(0.75, 0.6, 0.8, 12));
     for n in 0..count {
         let mut pos = None;
         for _ in 0..20 {
@@ -1928,19 +1949,7 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
                 ChildOf(g),
             ));
         }
-        let frustum = |top: f32, bottom: f32, h: f32, seg: u32| {
-            ConicalFrustum {
-                radius_top: top,
-                radius_bottom: bottom,
-                height: h,
-            }
-            .mesh()
-            .resolution(seg)
-            .build()
-        };
-        let sk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(1.1, 0.7, 1.2, 18));
-        let bk = k.world.resource_mut::<Assets<Mesh>>().add(frustum(0.75, 0.6, 0.8, 12));
-        for (mesh, mat, y) in [(sk, &skirt, 1.9), (bk, &basket, 0.0)] {
+        for (mesh, mat, y) in [(sk.clone(), &skirt, 1.9), (bk.clone(), &basket, 0.0)] {
             if let Mat::S(h) = mat {
                 k.world.spawn((
                     Decor,
@@ -1988,7 +1997,8 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
 /// The land far below the course, in the look's colours.
 fn ground(k: &mut Kit, root: Entity, all: Aabb) {
     let Some(gr) = k.look.look.ground else { return };
-    let kind = if gr.glow { Kind::Glossy } else { Kind::Padded };
+    // (Not padded: its metre-wide cushions read as a fine grid on land seen from 70 m up.)
+    let kind = if gr.glow { Kind::Glossy } else { Kind::Plastic };
     let mut spec = Spec {
         paint: Some(Paint {
             c1: hex(gr.c1).to_linear(),
@@ -2094,6 +2104,157 @@ fn decorate(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
     }
 }
 
+// ---------------------------------------------------------------- merging
+
+/// Times the ticks are tried at to see what they move (s).
+const TRIES: [f32; 6] = [0.0, 0.37, 1.9, 5.3, 13.7, 41.1];
+
+/// The scenery's entities its ticks move, turn, show or hide: each tick is tried at a few times, and what
+/// they changed is put back.
+fn ticked(world: &mut World, ticks: &[Tick]) -> HashSet<Entity> {
+    let mut read = world.query_filtered::<(Entity, &Transform, &Visibility), With<Decor>>();
+    let before: HashMap<Entity, (Transform, Visibility)> = read.iter(world).map(|(e, t, v)| (e, (*t, *v))).collect();
+    let mut write = world.query_filtered::<(&'static mut Transform, &'static mut Visibility), With<Decor>>();
+    let mut moved = HashSet::new();
+    for t in TRIES {
+        {
+            let mut q = write.query_mut(world);
+            let mut tx = Tx { q: &mut q };
+            for f in ticks {
+                f(t, &mut tx);
+            }
+        }
+        for (e, tf, v) in read.iter(world) {
+            if before.get(&e).is_some_and(|(t0, v0)| t0 != tf || v0 != v) {
+                moved.insert(e);
+            }
+        }
+    }
+    for e in &moved {
+        if let (Some((t, v)), Ok(mut e)) = (before.get(e), world.get_entity_mut(*e)) {
+            e.insert((*t, *v));
+        }
+    }
+    moved
+}
+
+/// The parts nothing moves are drawn merged, one mesh per cell and material (`meshes::merge`): the set pieces
+/// are hundreds of small parts.
+fn merge_still(world: &mut World, ticks: &[Tick], parts: &[(Entity, Shape, Mat)], base: Entity) {
+    use super::meshes;
+    let moving = ticked(world, ticks);
+    // World matrices by entity (None: it, or something above it, moves or is hidden).
+    let mut placed: HashMap<Entity, Option<Mat4>> = HashMap::new();
+    fn place(
+        world: &World,
+        e: Entity,
+        moving: &HashSet<Entity>,
+        placed: &mut HashMap<Entity, Option<Mat4>>,
+    ) -> Option<Mat4> {
+        if let Some(m) = placed.get(&e) {
+            return *m;
+        }
+        let local = world.get::<Transform>(e).map(Transform::to_matrix);
+        let m = if moving.contains(&e) || world.get::<Visibility>(e) == Some(&Visibility::Hidden) {
+            None
+        } else {
+            match world.get::<ChildOf>(e) {
+                Some(up) => place(world, up.parent(), moving, placed).zip(local).map(|(p, l)| p * l),
+                None => local,
+            }
+        };
+        placed.insert(e, m);
+        m
+    }
+    let mut materials: HashMap<UntypedAssetId, usize> = HashMap::new();
+    let mut candidates = Vec::with_capacity(parts.len());
+    let mut worlds = Vec::with_capacity(parts.len());
+    for (e, _, mat) in parts {
+        let m = place(world, *e, &moving, &mut placed);
+        // (A part something hangs from goes with what hangs from it: left alone.)
+        let leaf = world.get::<Children>(*e).is_none_or(|c| c.is_empty());
+        // (See-through ones are sorted one by one.)
+        let (id, opaque) = match mat {
+            Mat::S(h) => (
+                h.id().untyped(),
+                world
+                    .resource::<Assets<SurfaceMaterial>>()
+                    .get(h)
+                    .is_some_and(|m| m.base.alpha_mode == AlphaMode::Opaque),
+            ),
+            Mat::G(h) => (
+                h.id().untyped(),
+                world
+                    .resource::<Assets<StandardMaterial>>()
+                    .get(h)
+                    .is_some_and(|m| m.alpha_mode == AlphaMode::Opaque),
+            ),
+        };
+        let n = materials.len();
+        candidates.push(meshes::Candidate {
+            at: m.map_or(Vec3::ZERO, |m| m.w_axis.truncate()),
+            material: *materials.entry(id).or_insert(n),
+            class: u64::from(matches!(mat, Mat::G(_))),
+            still: leaf && opaque && m.is_some_and(|m| meshes::frame(&m).is_some()),
+        });
+        worlds.push(m.unwrap_or(Mat4::IDENTITY));
+    }
+    let mut cpu: HashMap<Shape, Mesh> = HashMap::new();
+    let mut gone = 0;
+    let groups = meshes::groups(&candidates);
+    for group in &groups {
+        let members: Vec<(Entity, Shape, &Mat, Mat4)> = group
+            .iter()
+            .filter_map(|&i| Some((parts.get(i)?, *worlds.get(i)?)))
+            .map(|((e, s, mat), m)| (*e, *s, mat, m))
+            .collect();
+        let Some(&(_, _, mat, _)) = members.first() else {
+            continue;
+        };
+        let (lo, hi) = members
+            .iter()
+            .fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
+                let at = p.3.w_axis.truncate();
+                (lo.min(at), hi.max(at))
+            });
+        let origin = (lo + hi) / 2.0;
+        for p in &members {
+            cpu.entry(p.1).or_insert_with(|| shape_mesh(p.1));
+        }
+        let pieces: Vec<(&Mesh, Mat4)> = members.iter().filter_map(|p| cpu.get(&p.1).map(|m| (m, p.3))).collect();
+        let Some(mesh) = meshes::merge(&pieces, origin, matches!(mat, Mat::S(_))) else {
+            continue;
+        };
+        let aabb = mesh.compute_aabb();
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+        {
+            let mut e = world.spawn((
+                Mesh3d(mesh),
+                Transform::from_translation(origin),
+                Visibility::default(),
+                NotShadowCaster,
+                ChildOf(base),
+            ));
+            match mat {
+                Mat::S(h) => e.insert(MeshMaterial3d(h.clone())),
+                Mat::G(h) => e.insert((MeshMaterial3d(h.clone()), NotShadowReceiver)),
+            };
+            if let Some(aabb) = aabb {
+                e.insert(aabb);
+            }
+        }
+        for p in &members {
+            world.despawn(p.0);
+        }
+        gone += members.len();
+    }
+    debug!(
+        "scenery: {gone} of {} parts merged into {} meshes",
+        parts.len(),
+        groups.len()
+    );
+}
+
 // ---------------------------------------------------------------- systems
 
 /// The scenery's motion for the map shown.
@@ -2152,6 +2313,7 @@ fn build(world: &mut World) {
         glows: HashMap::new(),
         assets,
         ticks: Vec::new(),
+        parts: Vec::new(),
     };
     let base = kit.group(Some(root), Transform::default());
     for req in &requests {
@@ -2167,6 +2329,8 @@ fn build(world: &mut World) {
     ground(&mut kit, base, all);
     decorate(&mut kit, base, &boxes, all);
     let list = core::mem::take(&mut kit.ticks);
+    let parts = core::mem::take(&mut kit.parts);
+    merge_still(world, &list, &parts, base);
     let mut ticks = world.resource_mut::<Ticks>();
     ticks.generation = Some(generation);
     ticks.list = list;

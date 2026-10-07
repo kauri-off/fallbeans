@@ -27,8 +27,11 @@ pub struct RoundStats {
     pub out_at: Option<f64>,
 }
 
+/// The round as the rules see it. Beans that finish or drop out on the same tick come in the arena's pawn
+/// order (the order they joined): such ties go to the one that joined first.
 pub struct RoundView<'a> {
     pub genre: Genre,
+    /// The beans the round started with (a later round of the same game may have more or fewer).
     pub participants: &'a [u32],
     pub connected: &'a dyn Fn(u32) -> bool,
     /// In finishing order.
@@ -38,6 +41,8 @@ pub struct RoundView<'a> {
     pub scores: &'a BTreeMap<u32, f64>,
     pub progress: &'a dyn Fn(u32) -> f64,
     pub time_up: bool,
+    /// One bean in the round. A hint only: the rules go by `participants` and who is still connected,
+    /// since a flag fixed when the game started is wrong once players come or go between rounds.
     pub solo: bool,
     /// Bots among the participants (a round with only bots left in it ends early).
     pub bots: Option<&'a BTreeSet<u32>>,
@@ -94,23 +99,27 @@ pub fn is_round_over(r: &RoundView) -> bool {
     if rem == 0 || only_bots_left(r) {
         return true;
     }
-    // Survival: the last bean standing has nothing left to prove.
-    r.genre == Genre::Survival && !r.solo && rem <= 1
+    // Survival: the last bean standing has nothing left to prove, once somebody has really dropped out
+    // (not when the others only left, nor in a round it plays alone). Nobody drops out before the start.
+    r.genre == Genre::Survival && rem <= 1 && !r.out.is_empty()
 }
 
-/// Ranked groups, best first; players in one group tie. `rng` places the bots left when a round
-/// ends early with only bots in it.
+/// Ranked groups, best first; players in one group tie. When a round ends early with only bots in it,
+/// the bots still racing go by their progress (as everybody does at the time limit), and `rng` places
+/// the bots still standing in a survival round.
 pub fn rank_groups(r: &RoundView, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
     let ids = in_round(r);
     let early = !r.time_up && only_bots_left(r);
-    let bots: Vec<Vec<u32>> = if early {
+    let bots: Vec<Vec<u32>> = if !early {
+        Vec::new()
+    } else if r.genre == Genre::Race {
+        group_by(&remaining(r), |id| (r.progress)(id).round())
+    } else {
         let mut rem = remaining(r);
         if let Some(rng) = rng {
             shuffle(&mut rem, rng);
         }
         rem.into_iter().map(|id| vec![id]).collect()
-    } else {
-        Vec::new()
     };
     match r.genre {
         Genre::Race => {
@@ -118,7 +127,7 @@ pub fn rank_groups(r: &RoundView, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
             let rest: Vec<u32> = ids
                 .iter()
                 .copied()
-                .filter(|id| !fin.contains(id) && !bots.iter().any(|b| b[0] == *id))
+                .filter(|id| !fin.contains(id) && !bots.iter().any(|b| b.contains(id)))
                 .collect();
             let mut out: Vec<Vec<u32>> = fin.iter().map(|&id| vec![id]).collect();
             out.extend(bots);
@@ -151,7 +160,7 @@ fn group_by(ids: &[u32], key: impl Fn(u32) -> f64) -> Vec<Vec<u32>> {
         if k.is_nan() { f64::NEG_INFINITY } else { k }
     };
     let mut sorted = ids.to_vec();
-    sorted.sort_by(|&a, &b| key(b).partial_cmp(&key(a)).unwrap_or(core::cmp::Ordering::Equal));
+    sorted.sort_by(|&a, &b| key(b).total_cmp(&key(a)));
     let mut groups: Vec<Vec<u32>> = Vec::new();
     for id in sorted {
         match groups.last_mut() {
@@ -229,11 +238,7 @@ pub fn score_round(
         for &id in g {
             let s = stats.get(&id).copied().unwrap_or_default();
             let (place, placed_points) = placed[&id];
-            let points = if r.solo || count == 1 {
-                solo_points(id)
-            } else {
-                placed_points
-            };
+            let points = if count == 1 { solo_points(id) } else { placed_points };
             // Falling out of a survival round already costs its place: only races and points games add a fine.
             let fall_fine = if r.genre == Genre::Survival {
                 0
@@ -265,40 +270,49 @@ mod tests {
 
     struct V {
         genre: Genre,
+        ids: Vec<u32>,
+        /// Those of `ids` who left.
+        gone: Vec<u32>,
         finished: Vec<u32>,
         out: Vec<u32>,
         scores: BTreeMap<u32, f64>,
         progress: BTreeMap<u32, f64>,
         time_up: bool,
+        solo: bool,
+        bots: Option<BTreeSet<u32>>,
     }
 
     fn v(genre: Genre) -> V {
         V {
             genre,
+            ids: IDS.to_vec(),
+            gone: vec![],
             finished: vec![],
             out: vec![],
             scores: BTreeMap::new(),
             progress: BTreeMap::new(),
             time_up: false,
+            solo: false,
+            bots: None,
         }
     }
 
     const IDS: [u32; 4] = [1, 2, 3, 4];
 
     fn with<R>(x: &V, f: impl FnOnce(&RoundView) -> R) -> R {
-        let connected = |_| true;
+        let connected = |id| !x.gone.contains(&id);
         let progress = |id| x.progress.get(&id).copied().unwrap_or(0.0);
         let view = RoundView {
             genre: x.genre,
-            participants: &IDS,
+            participants: &x.ids,
             connected: &connected,
             finished: &x.finished,
             out: &x.out,
             scores: &x.scores,
             progress: &progress,
             time_up: x.time_up,
-            solo: false,
-            bots: None,
+            solo: x.solo,
+            bots: x.bots.as_ref(),
         };
         f(&view)
     }
@@ -427,5 +441,55 @@ mod tests {
         assert!(!over(Genre::Race, &[1, 2], &[], false));
         assert!(over(Genre::Race, &[1, 2, 3, 4], &[], false));
         assert!(over(Genre::Race, &[], &[], true));
+    }
+
+    #[test]
+    fn survival_with_one_bean_in_it_is_played_out() {
+        // The game started with others (`solo` is false), but this round has one bean in it.
+        let mut x = v(Genre::Survival);
+        x.ids = vec![1];
+        assert!(!with(&x, is_round_over));
+        x.time_up = true;
+        let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
+        assert_eq!((rows[0].id, rows[0].points, rows[0].ok), (1, TOP_POINTS, true));
+        x.time_up = false;
+        x.out = vec![1];
+        assert!(with(&x, is_round_over));
+    }
+
+    #[test]
+    fn survival_ends_early_only_once_somebody_dropped_out() {
+        let mut x = v(Genre::Survival);
+        x.ids = vec![1, 2];
+        // The other one left (during the intro, say): nobody has been beaten.
+        x.gone = vec![2];
+        assert!(!with(&x, is_round_over));
+        x.gone = vec![];
+        x.out = vec![2];
+        assert!(with(&x, is_round_over));
+    }
+
+    #[test]
+    fn a_stale_solo_flag_neither_holds_up_nor_scores_a_round() {
+        // The game started alone, then two more came.
+        let mut x = v(Genre::Survival);
+        x.ids = vec![1, 2, 3];
+        x.solo = true;
+        x.out = vec![2, 3];
+        assert!(with(&x, is_round_over));
+        let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
+        let pts = |id| rows.iter().find(|r| r.id == id).unwrap().points;
+        assert_eq!([pts(1), pts(3), pts(2)], [10, 5, 0]);
+    }
+
+    #[test]
+    fn bots_left_racing_rank_by_progress() {
+        let mut x = v(Genre::Race);
+        x.bots = Some([2, 3, 4].into());
+        x.finished = vec![1];
+        x.progress = [(2, 10.0), (3, 50.2), (4, 30.0)].into();
+        assert!(with(&x, is_round_over));
+        let groups = with(&x, |r| rank_groups(r, Some(&mut Rng::new(3))));
+        assert_eq!(groups, [vec![1], vec![3], vec![4], vec![2]]);
     }
 }

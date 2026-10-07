@@ -8,7 +8,6 @@ rustc-ice-*.txt
 
 # Claude Code session files
 .claude/*
-!.claude/settings.json
 
 # Secrets and logs
 .env
@@ -23,3 +22,4 @@ rustc-ice-*.txt
 *.blend1
 .DS_Store
 Thumbs.db
+/target-*/

@@ -71,10 +71,17 @@ fn replay_after_running_ahead_matches() {
         live.last().unwrap().pos
     );
 
-    // A rollback to tick 120: the world is at 360, the body back at the state after tick 120.
-    let mut replay = live[119].clone();
-    for k in 121..=360 {
-        step(&mut world, &mut replay, k);
-        assert_eq!(replay, live[k as usize - 1], "tick {k}");
+    // Rollbacks to ticks 118…126 (for some of them k·DT − DT is not (k − 1)·DT): the world is at 360, the
+    // body back at the state after that tick.
+    for from in 118..=126i64 {
+        let mut replay = live[from as usize - 1].clone();
+        for k in from + 1..=360 {
+            step(&mut world, &mut replay, k);
+            assert_eq!(replay, live[k as usize - 1], "rollback to {from}, tick {k}");
+        }
     }
+    assert!(
+        (118..=126i64).any(|k| k as f64 * DT - DT != (k - 1) as f64 * DT),
+        "no tick here where the two times differ"
+    );
 }

@@ -91,31 +91,64 @@ impl Auth {
         (!uid.is_empty() && self.verify(&format!("u1.{uid}"), sig)).then(|| uid.to_string())
     }
 
-    /// Debug API access (production): a week. `now` in seconds since the epoch.
-    pub fn issue_debug_cookie(&self, now: u64) -> String {
-        let payload = format!("d1.{now}");
+    /// A short tag of the debug key, signed into its cookies: a new key and the old cookies stop working.
+    fn key_tag(&self, key: &str) -> String {
+        let mut m = self.mac();
+        m.update(b"debug key:");
+        m.update(key.as_bytes());
+        let tag = m.finalize().into_bytes();
+        B64.encode(tag.get(..9).unwrap_or_default())
+    }
+
+    /// Debug API access (production) with debug key `key`: a week. `now` in seconds since the epoch.
+    pub fn issue_debug_cookie(&self, now: u64, key: &str) -> String {
+        let payload = format!("d2.{now}.{}", self.key_tag(key));
         format!("{payload}.{}", self.sign(&payload))
     }
 
-    pub fn valid_debug_cookie(&self, value: &str, now: u64) -> bool {
+    /// Whether `value` is a cookie of ours for the debug key `key`, and not too old.
+    pub fn valid_debug_cookie(&self, value: &str, now: u64, key: &str) -> bool {
         let mut parts = value.split('.');
-        let (Some("d1"), Some(at), Some(sig), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+        let (Some("d2"), Some(at), Some(tag), Some(sig), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
+        else {
             return false;
         };
         let Ok(at) = at.parse::<u64>() else { return false };
-        if at > now + 60 || now.saturating_sub(at) > DEBUG_TTL_S {
+        if at > now + 60 || now.saturating_sub(at) > DEBUG_TTL_S || tag != self.key_tag(key) {
             return false;
         }
-        self.verify(&format!("d1.{at}"), sig)
+        self.verify(&format!("d2.{at}.{tag}"), sig)
     }
 }
 
-/// Rate limit for wrong guesses: 5 a minute per address, 30 a minute per target (a room's PIN, the debug key).
-/// Right guesses do not count, and one target's guessers cannot lock the others.
+/// Wrong guesses a minute from one guesser (`guesser`) before it is locked out.
+const GUESSES_PER_IP: usize = 5;
+/// Wrong guesses a minute at one target after which only guessers without a recent miss may try.
+pub const GUESSES_PER_TARGET: usize = 30;
+/// The first lockout of a guesser; each one in a row doubles it, up to LOCKOUT_MAX_MS.
+const LOCKOUT_MS: u64 = 60_000;
+const LOCKOUT_MAX_MS: u64 = 3_600_000;
+
+/// Rate limit for wrong guesses at a target (a room's PIN, the debug key). A guesser has 5 a minute, then is
+/// locked out for a minute, two, four… (up to an hour; an hour without a miss starts over). A target takes 30
+/// misses a minute, then only from guessers without a recent miss: many addresses together cannot lock the
+/// right PIN out (the room changes its PIN at that point, `Hub::join`). Right guesses do not count, and one
+/// target's guessers cannot lock the others.
 #[derive(Default)]
 pub struct Limiter {
-    per_ip: BTreeMap<String, Vec<u64>>,
+    per_ip: BTreeMap<String, Guesser>,
     per_target: BTreeMap<String, Vec<u64>>,
+}
+
+#[derive(Default)]
+struct Guesser {
+    /// Misses within the last minute (since the last lockout).
+    misses: Vec<u64>,
+    locked_until: u64,
+    /// Lockouts in a row, and when the last miss was.
+    strikes: u32,
+    last_miss: u64,
 }
 
 /// Who a guess is counted against: the address, or for IPv6 its /64 (one subscriber's network has
@@ -174,26 +207,56 @@ impl Limiter {
     /// Whether `ip` may guess at `target` now; `now` in milliseconds (any monotonic origin).
     pub fn allow(&mut self, ip: &str, target: &str, now: u64) -> bool {
         let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
-        let full = |m: &mut BTreeMap<String, Vec<u64>>, key: &str, cap: usize| {
-            m.get_mut(key).is_some_and(|v| {
-                v.retain(fresh);
-                v.len() >= cap
-            })
-        };
-        !full(&mut self.per_ip, &guesser(ip), 5) && !full(&mut self.per_target, target, 30)
+        let (locked, recent) = self.per_ip.get_mut(&guesser(ip)).map_or((false, false), |g| {
+            g.misses.retain(fresh);
+            (now < g.locked_until, !g.misses.is_empty())
+        });
+        if locked {
+            return false;
+        }
+        let busy = self.per_target.get_mut(target).is_some_and(|v| {
+            v.retain(fresh);
+            v.len() >= GUESSES_PER_TARGET
+        });
+        !(busy && recent)
     }
 
     /// Counts a wrong guess.
     pub fn failed(&mut self, ip: &str, target: &str, now: u64) {
-        self.per_ip.entry(guesser(ip)).or_default().push(now);
+        let g = self.per_ip.entry(guesser(ip)).or_default();
+        if now.saturating_sub(g.last_miss) > LOCKOUT_MAX_MS {
+            g.strikes = 0;
+        }
+        g.last_miss = now;
+        g.misses.retain(|t| now.saturating_sub(*t) < 60_000);
+        g.misses.push(now);
+        if g.misses.len() >= GUESSES_PER_IP {
+            g.locked_until = now + (LOCKOUT_MS << g.strikes.min(6)).min(LOCKOUT_MAX_MS);
+            g.strikes += 1;
+            g.misses.clear();
+        }
         self.per_target.entry(target.to_string()).or_default().push(now);
-        let fresh = |v: &Vec<u64>| v.last().is_some_and(|t| now.saturating_sub(*t) < 60_000);
         if self.per_ip.len() > 10_000 {
-            self.per_ip.retain(|_, v| fresh(v));
+            self.per_ip
+                .retain(|_, g| now < g.locked_until || now.saturating_sub(g.last_miss) < LOCKOUT_MAX_MS);
         }
         if self.per_target.len() > 10_000 {
-            self.per_target.retain(|_, v| fresh(v));
+            self.per_target
+                .retain(|_, v| v.last().is_some_and(|t| now.saturating_sub(*t) < 60_000));
         }
+    }
+
+    /// Wrong guesses at `target` within the last minute.
+    pub fn misses_at(&mut self, target: &str, now: u64) -> usize {
+        self.per_target.get_mut(target).map_or(0, |v| {
+            v.retain(|t| now.saturating_sub(*t) < 60_000);
+            v.len()
+        })
+    }
+
+    /// The target changed (a room's new PIN): its misses no longer count.
+    pub fn forget_target(&mut self, target: &str) {
+        self.per_target.remove(target);
     }
 }
 
@@ -273,13 +336,41 @@ mod tests {
         for _ in 0..10 {
             assert!(l.allow("c", "r1", now));
         }
-        // Many guessers lock one target only.
+        // Many guessers at one target: past its cap only those without a recent miss may try, so the right
+        // PIN still gets in; other targets are not touched.
         for i in 0..30 {
-            l.allow(&format!("10.0.1.{i}"), "r3", now);
-            l.failed(&format!("10.0.1.{i}"), "r3", now);
+            assert!(guess(&mut l, &format!("10.0.1.{i}"), "r3", now));
         }
+        assert_eq!(l.misses_at("r3", now), 30);
+        assert!(!l.allow("10.0.1.1", "r3", now));
+        assert!(l.allow("10.0.1.1", "r4", now));
+        assert!(l.allow("10.0.2.1", "r3", now));
+        l.failed("10.0.2.1", "r3", now);
         assert!(!l.allow("10.0.2.1", "r3", now));
-        assert!(l.allow("10.0.2.1", "r4", now));
+        l.forget_target("r3");
+        assert!(l.allow("10.0.2.1", "r3", now));
+    }
+
+    #[test]
+    fn locks_out_for_longer_each_time() {
+        let mut l = Limiter::default();
+        let ip = "203.0.113.4";
+        let mut now = 0;
+        for lockout in [60_000, 120_000, 240_000] {
+            for _ in 0..5 {
+                assert!(l.allow(ip, "r", now));
+                l.failed(ip, "r", now);
+            }
+            assert!(!l.allow(ip, "r", now + lockout - 1));
+            now += lockout;
+            assert!(l.allow(ip, "r", now));
+        }
+        // An hour and more without a miss: from a minute again.
+        now += 2 * LOCKOUT_MAX_MS;
+        for _ in 0..5 {
+            l.failed(ip, "r", now);
+        }
+        assert!(l.allow(ip, "r", now + 60_000));
     }
 
     #[test]
@@ -310,12 +401,15 @@ mod tests {
         assert_eq!(auth.identity(""), None);
         assert_eq!(other.identity(&token), None);
         let now = 1_700_000_000;
-        let cookie = auth.issue_debug_cookie(now);
-        assert!(auth.valid_debug_cookie(&cookie, now));
-        assert!(!auth.valid_debug_cookie(&format!("{cookie}x"), now));
-        assert!(!other.valid_debug_cookie(&cookie, now));
-        assert!(auth.valid_debug_cookie(&cookie, now + 6 * 24 * 3600));
-        assert!(!auth.valid_debug_cookie(&cookie, now + 8 * 24 * 3600));
+        let cookie = auth.issue_debug_cookie(now, "key");
+        assert!(auth.valid_debug_cookie(&cookie, now, "key"));
+        assert!(!auth.valid_debug_cookie(&format!("{cookie}x"), now, "key"));
+        assert!(!other.valid_debug_cookie(&cookie, now, "key"));
+        assert!(auth.valid_debug_cookie(&cookie, now + 6 * 24 * 3600, "key"));
+        assert!(!auth.valid_debug_cookie(&cookie, now + 8 * 24 * 3600, "key"));
+        // A new debug key revokes the cookies of the old one.
+        assert!(!auth.valid_debug_cookie(&cookie, now, "new key"));
+        assert!(!auth.valid_debug_cookie("d1.1700000000.x", now, "key"));
         assert_eq!(auth.identity(&token), Some(uid));
     }
 

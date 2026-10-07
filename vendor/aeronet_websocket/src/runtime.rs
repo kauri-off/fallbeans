@@ -63,7 +63,12 @@ impl Default for WebSocketRuntime {
 
         #[cfg(not(target_family = "wasm"))]
         {
+            // fallbeans patch: a few sockets' worth of work, not a thread per core: on a many-core host the
+            // default (one worker per core) took the server past systemd's `TasksMax`.
             let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .max_blocking_threads(4)
+                .thread_name("websocket")
                 .enable_all()
                 .build()
                 .expect("failed to create tokio runtime");

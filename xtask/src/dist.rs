@@ -5,10 +5,13 @@ use std::process::Command;
 
 use clap::{Args, ValueEnum};
 
-use crate::{cargo, root, run};
+use crate::{cargo, root, run, target_dir};
 
 pub const APP_ID: &str = "io.github.kauri_off.fallbeans";
 const MUSL: &str = "x86_64-unknown-linux-musl";
+/// The cargo-about the release workflow installs (`release.yml`).
+const CARGO_ABOUT: &str = "0.9.2";
+const THIRD_PARTY: &str = "THIRD-PARTY-LICENSES.html";
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -56,7 +59,7 @@ fn out_dir() -> PathBuf {
 }
 
 fn stage(name: &str) -> PathBuf {
-    let d = root().join("target").join("pkg").join(name);
+    let d = target_dir().join("pkg").join(name);
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).expect("stage");
     d
@@ -81,26 +84,73 @@ fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     fs::copy(&from, to).unwrap_or_else(|e| panic!("{} → {}: {e}", from.display(), to.display()));
 }
 
-/// The release client without the BRP probe (with the profiler of F4), staged with its assets into `dir`.
+/// The client's features in the packages: no BRP probe, the profiler of F4.
+const CLIENT_FEATURES: [&str; 3] = ["--no-default-features", "--features", "profiler"];
+
+/// The licenses of every crate built into `package` (cargo-about, `packaging/about.toml`) as `out`; fails on a
+/// license that `about.toml` does not accept.
+fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
+    let found = cargo()
+        .args(["about", "--version"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !found {
+        eprintln!("cargo-about is missing: cargo install --locked cargo-about --version {CARGO_ABOUT} --features cli");
+        return false;
+    }
+    if let Some(dir) = out.parent() {
+        fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    }
+    run(cargo()
+        .args(["about", "generate", "--locked", "-c", "packaging/about.toml", "-m"])
+        .arg(Path::new("crates").join(package).join("Cargo.toml"))
+        .args(features)
+        .arg("-o")
+        .arg(out)
+        .arg("packaging/about.hbs"))
+}
+
+/// DirectX's shader compiler for the Windows package (`backend.rs`: DX12 compiles with it instead of FXC), from
+/// an unpacked DXC release in `FB_DXC_DIR` (release.yml downloads it); without it the game falls back to FXC.
+fn dxc_into(dir: &Path) {
+    if !cfg!(windows) {
+        return;
+    }
+    let Some(src) = std::env::var_os("FB_DXC_DIR").map(PathBuf::from) else {
+        eprintln!("FB_DXC_DIR is not set: the package compiles DX12 shaders with FXC (slow)");
+        return;
+    };
+    for f in ["dxcompiler.dll", "dxil.dll"] {
+        copy(src.join("bin").join("x64").join(f), dir.join(f));
+    }
+    let licenses = dir.join("dxc-licenses");
+    fs::create_dir_all(&licenses).unwrap_or_else(|e| panic!("{}: {e}", licenses.display()));
+    for f in ["LICENCE-MIT.txt", "LICENSE-LLVM.txt", "LICENSE-MS.txt"] {
+        copy(src.join(f), licenses.join(f));
+    }
+}
+
+/// The release client, staged with its assets and licenses into `dir`.
 fn client_into(dir: &Path) -> bool {
     let mut c = stamped(cargo());
-    c.args([
-        "build",
-        "--profile",
-        "dist",
-        "-p",
-        "fb_client",
-        "--no-default-features",
-        "--features",
-        "profiler",
-    ]);
-    if !run(&mut c) {
+    c.args(["build", "--locked", "--profile", "dist", "-p", "fb_client"])
+        .args(CLIENT_FEATURES);
+    // The C runtime inside the exe: a clean Windows has no VCRUNTIME140.dll and the installer does not ship it.
+    // (Here, not in .cargo/config.toml: there every local build would rebuild everything for it.)
+    if cfg!(windows) {
+        c.env(
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+            "-C target-feature=+crt-static",
+        );
+    }
+    if !run(&mut c) || !third_party("fb_client", &CLIENT_FEATURES, &dir.join(THIRD_PARTY)) {
         return false;
     }
     let exe = format!("fb_client{}", std::env::consts::EXE_SUFFIX);
     copy(Path::new("target/dist").join(&exe), dir.join(&exe));
     copy_dir(&root().join("assets"), &dir.join("assets"));
     copy("LICENSE", dir.join("LICENSE"));
+    dxc_into(dir);
     true
 }
 
@@ -167,11 +217,13 @@ fn appimage() -> bool {
         fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755)).expect("AppRun");
     }
     let out = out_dir().join(format!("FallBeans-{}-x86_64.AppImage", version()));
-    run(tool("APPIMAGETOOL", "appimagetool")
-        .env("ARCH", "x86_64")
-        .env("APPIMAGE_EXTRACT_AND_RUN", "1")
-        .arg(&app)
-        .arg(&out))
+    let mut c = tool("APPIMAGETOOL", "appimagetool");
+    c.env("ARCH", "x86_64").env("APPIMAGE_EXTRACT_AND_RUN", "1");
+    // A runtime of a known release (the workflow checks its sum); else appimagetool downloads the latest one.
+    if let Ok(runtime) = std::env::var("APPIMAGE_RUNTIME") {
+        c.arg("--runtime-file").arg(runtime);
+    }
+    run(c.arg(&app).arg(&out))
 }
 
 fn flatpak() -> bool {
@@ -181,6 +233,7 @@ fn flatpak() -> bool {
     if !client_into(&s) {
         return false;
     }
+    // (client_into staged LICENSE and THIRD_PARTY too: the manifest installs them.)
     for f in [format!("{APP_ID}.desktop"), format!("{APP_ID}.metainfo.xml")] {
         copy(Path::new("packaging/linux").join(&f), s.join(&f));
     }
@@ -204,6 +257,11 @@ fn flatpak() -> bool {
             "--force-clean",
             "--disable-rofiles-fuse",
         ])
+        // Its cache (often gigabytes) under target/, not as .flatpak-builder/ in the repository.
+        .arg(format!(
+            "--state-dir={}",
+            root().join("target/flatpak-builder").display()
+        ))
         .arg(format!("--repo={}", repo.display()))
         .arg(dir.join("build"))
         .arg(&manifest))
@@ -222,9 +280,23 @@ fn package_version() -> String {
     version().replacen('-', "~", 1)
 }
 
+/// The server's third-party licenses, where its package metadata takes them from (`fb_server/Cargo.toml`).
+fn server_licenses() -> bool {
+    third_party(
+        "fb_server",
+        &[],
+        &root().join("target/licenses/fb_server").join(THIRD_PARTY),
+    )
+}
+
 fn deb() -> bool {
+    if !server_licenses() {
+        return false;
+    }
+    // `--no-strip`: the binary keeps the `dist` profile's line tables, as in the rpm.
     let mut c = stamped(cargo());
-    c.args(["deb", "-p", "fb_server", "--target", MUSL, "--deb-version"])
+    c.args(["deb", "--locked", "--profile", "dist", "--no-strip", "-p", "fb_server"])
+        .args(["--target", MUSL, "--deb-version"])
         .arg(package_version())
         .arg("-o")
         .arg(out_dir());
@@ -236,14 +308,34 @@ fn deb() -> bool {
 }
 
 fn rpm() -> bool {
+    if !server_licenses() {
+        return false;
+    }
     let mut b = stamped(cargo());
-    b.args(["build", "--release", "-p", "fb_server", "--target", MUSL])
-        .args(["--config", "profile.release.strip=\"debuginfo\""]);
+    b.args([
+        "build",
+        "--locked",
+        "--profile",
+        "dist",
+        "-p",
+        "fb_server",
+        "--target",
+        MUSL,
+    ]);
     let mut c = cargo();
-    c.args(["generate-rpm", "-p", "crates/fb_server", "--target", MUSL, "-s"])
-        .arg(format!("version = \"{}\"", package_version()))
-        .arg("-o")
-        .arg(out_dir());
+    c.args([
+        "generate-rpm",
+        "--profile",
+        "dist",
+        "-p",
+        "crates/fb_server",
+        "--target",
+        MUSL,
+        "-s",
+    ])
+    .arg(format!("version = \"{}\"", package_version()))
+    .arg("-o")
+    .arg(out_dir());
     let ok = run(&mut b) && run(&mut c);
     if !ok {
         eprintln!("(needs `cargo install cargo-generate-rpm`, `rustup target add {MUSL}`, musl-tools and cmake)");

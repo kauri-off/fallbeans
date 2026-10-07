@@ -21,6 +21,7 @@ use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
 use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
+use lightyear::core::confirmed_history::ConfirmedHistory;
 use lightyear::input::native::prelude::{ActionState, InputMarker};
 use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::*;
@@ -74,7 +75,29 @@ pub struct Map {
     pub sfx: Vec<&'static str>,
     /// How this round looks (`fb_sim::looks`): palettes, sky, light, fog, scenery.
     pub look: fb_sim::looks::ResolvedLook,
+    /// The room it was built in: every room's first lobby is arena 1 with seed 1, another room's is not this.
+    room: Option<String>,
+    /// Built by the warm-up behind the loading screen (`render/warmup.rs`), in no room: nobody plays it.
+    pub warmup: bool,
+    /// The others as the own bean met them at each predicted tick: a rollback replays a tick against the same
+    /// bodies, not against where they are drawn now.
+    others: BTreeMap<i64, Vec<OtherBody>>,
 }
+
+/// The maps built so far, the warm-up's too: each its own `generation`, by which views tell maps apart.
+#[derive(Resource, Default)]
+pub struct Generations(u32);
+
+impl Generations {
+    pub fn next(&mut self) -> u32 {
+        let g = self.0;
+        self.0 = g.wrapping_add(1);
+        g
+    }
+}
+
+/// Ticks of the others kept (`PredictionManager::max_rollback_ticks` and a little).
+const OTHERS_KEPT: usize = 128;
 
 impl Map {
     pub fn time(&self, tick: f64) -> f64 {
@@ -84,6 +107,74 @@ impl Map {
     /// Finished or out: the bean has left the arena.
     pub fn gone(&self, id: Pid) -> bool {
         self.info.finished.contains(&id) || self.info.out.contains(&id)
+    }
+
+    /// `def` as a round of it would be built here, for the warm-up to draw (`render/warmup.rs`): seed 1, eight
+    /// players nobody plays, the look given; time 0 at `zero_tick`.
+    pub fn warmup(
+        def: &'static dyn fb_sim::map::MapDef,
+        kind: ArenaKind,
+        look: fb_sim::looks::ResolvedLook,
+        generation: u32,
+        zero_tick: i64,
+    ) -> Map {
+        const SEED: u32 = 1;
+        let participants: Vec<Pid> = (1..=8).collect();
+        let meta = def.meta();
+        let (mut b, mut spec) = build_map(def, SEED, true, &participants);
+        let bonuses = if kind == ArenaKind::Round {
+            Bonuses::new(&b.bonus_spots, SEED, spec.finish.is_none(), meta.duration)
+        } else {
+            Bonuses::default()
+        };
+        b.world.finalize(-1e3);
+        let static_hash = b.world.hash(true);
+        let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
+        client_start(&mut b.world, &mut spec, &mut scores, None, &mut out);
+        let render = b.world.nodes.clone();
+        let mut map = Map {
+            round: Round {
+                arena: 0,
+                kind,
+                map: meta.id.to_string(),
+                seed: SEED,
+                zero_tick,
+                fall: fb_arena::fall_behaviour(meta.genre),
+                static_hash: static_hash.clone(),
+            },
+            world: b.world,
+            spec,
+            scene: b.scene.unwrap_or_default(),
+            bonuses,
+            render,
+            static_hash,
+            pending: Vec::new(),
+            seen: BTreeSet::new(),
+            generation,
+            info: ArenaInfo {
+                id: 0,
+                kind,
+                game: meta.id.to_string(),
+                participants,
+                index: 0,
+                total: 0,
+                practice: false,
+                late: false,
+                finished: Vec::new(),
+                out: Vec::new(),
+                scores: Vec::new(),
+            },
+            deco: BTreeMap::new(),
+            sfx: Vec::new(),
+            look,
+            room: None,
+            others: BTreeMap::new(),
+            warmup: true,
+        };
+        // (Its decorations, not its sounds: nobody is there to hear them.)
+        map.take_out(out);
+        map.sfx.clear();
+        map
     }
 
     fn take_out(&mut self, out: Vec<MapOut>) {
@@ -174,9 +265,21 @@ impl Plugin for GamePlugin {
         app.init_resource::<Inbox>();
         app.init_resource::<Presses>();
         app.init_resource::<Gate>();
+        app.init_resource::<Generations>();
+        app.init_resource::<LastRollback>();
         app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
-        app.add_systems(PreUpdate, (build_round, latch_presses.after(bevy::input::InputSystems)));
+        app.add_systems(
+            PreUpdate,
+            (
+                (drop_map, build_round, reconcile, pace_pushes)
+                    .chain()
+                    .after(ReplicationSystems::Receive)
+                    .before(RollbackSystems::Check),
+                latch_presses.after(bevy::input::InputSystems),
+            ),
+        );
+        app.add_systems(PreUpdate, note_rollback.after(RollbackSystems::Check));
         app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
         app.add_systems(FixedUpdate, predict);
         app.add_systems(
@@ -202,6 +305,15 @@ fn open_trace(mut commands: Commands, opts: Res<Opts>) {
     }
 }
 
+/// Out of the room (at the room list, on another server): its map goes, and with it what the next room would
+/// take for its own (players, bonuses, decorations). The scene stays drawn until the next map's replaces it. The
+/// warm-up's maps are in no room: they go when it is done with them.
+fn drop_map(map: Option<Res<Map>>, session: Res<Session>, mut commands: Commands) {
+    if map.is_some_and(|m| !m.warmup) && session.room.is_none() {
+        commands.remove_resource::<Map>();
+    }
+}
+
 /// Builds the arena's map once both the replicated `Round` and its `ArenaInfo` (who plays: maps deal
 /// tails and stars from it) are in.
 fn build_round(
@@ -211,10 +323,22 @@ fn build_round(
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
     mut unknown: Local<Option<u32>>,
+    mut generations: ResMut<Generations>,
 ) {
-    let Some(round) = rounds.iter().next() else { return };
+    // (Out of the room, its arena may linger a moment: `drop_map`.)
+    if session.room.is_none() {
+        return;
+    }
+    // The arena the player is in: the last one's `Round` may linger a moment beside it.
+    let in_arena = |r: &&Round| session.arena.as_ref().is_some_and(|a| a.id == r.arena);
+    let Some(round) = rounds.iter().find(in_arena) else {
+        return;
+    };
     let mut map = map;
-    if let Some(m) = map.as_mut().filter(|m| m.round.same_arena(round)) {
+    if let Some(m) = map
+        .as_mut()
+        .filter(|m| m.round.same_arena(round) && m.room == session.room)
+    {
         // The same arena with its clock moved (a dev warp or pause): no new map.
         if m.round != *round {
             m.round = round.clone();
@@ -253,6 +377,8 @@ fn build_round(
     let me = session.me;
     client_start(&mut b.world, &mut spec, &mut session.scores, me, &mut out);
     let render = b.world.nodes.clone();
+    // (Counted here, not from the map before: there may be none, and views tell maps apart by it.)
+    let generation = generations.next();
     let mut next = Map {
         round: round.clone(),
         world: b.world,
@@ -263,14 +389,110 @@ fn build_round(
         static_hash,
         pending: Vec::new(),
         seen: BTreeSet::new(),
-        generation: map.map_or(0, |m| m.generation + 1),
+        generation,
         info,
         deco: BTreeMap::new(),
         sfx: Vec::new(),
         look: fb_sim::looks::look_for(def.looks(), round.seed),
+        room: session.room.clone(),
+        others: BTreeMap::new(),
+        warmup: false,
     };
     next.take_out(out);
     commands.insert_resource(next);
+}
+
+/// Lightyear checks the prediction at completed server ticks only, and only where the prediction history reaches
+/// back that far. Just after the clock is first set (or for a bean given since) it has nothing so old and the
+/// check passes silently, and in an intro where nothing moves no tick completes at all: the own bean kept what it
+/// had (the lobby's place) while the server had it at the round's spawn, until the start. So the newest server
+/// state of the own bean is rolled back to as it comes when the prediction has nothing at its tick, or another
+/// respawn count (a respawn, a new arena); and once more when a new arena's map is built (a rollback in the frame
+/// its `Round` came replayed its first ticks on the old map). Anything else is left to Lightyear.
+fn reconcile(
+    timeline: SyncedLocalTimeline,
+    map: Option<Res<Map>>,
+    manager: Res<PredictionManager>,
+    own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
+    mut meta: ResMut<StateRollbackMetadata>,
+    mut seen: Local<(Option<Tick>, Option<u32>)>,
+) {
+    let tick = timeline.tick();
+    let Ok((predicted, confirmed)) = own.single() else {
+        return;
+    };
+    let Some((at, server)) = confirmed.newest_present() else {
+        return;
+    };
+    if at > tick || tick - at > i32::from(manager.rollback_policy.max_rollback_ticks) {
+        return;
+    }
+    let (last, built) = &mut *seen;
+    let generation = map.map(|m| m.generation);
+    let off = predicted.get(at).is_none_or(|p| p.teleports != server.teleports);
+    if (*last != Some(at) && off) || *built != generation {
+        meta.request_forced_rollback(at);
+        *built = generation;
+    }
+    *last = Some(at);
+}
+
+/// Ticks between rollbacks for a push (below).
+const PUSH_EVERY: i32 = 8;
+/// Closer than this (m, between feet) another bean may be leaning on the own one.
+const PUSH_NEAR: f32 = 2.5;
+/// A difference this small (m) in position can be a push.
+const PUSH_MAX: f64 = 0.3;
+
+/// The last tick a rollback was started at.
+#[derive(Resource, Default)]
+struct LastRollback(Option<Tick>);
+
+fn note_rollback(timeline: Res<LocalTimeline>, manager: Res<PredictionManager>, mut last: ResMut<LastRollback>) {
+    if manager.is_rollback() {
+        last.0 = Some(timeline.tick());
+    }
+}
+
+/// Beans leaning on each other: the client pushes against the others where it draws them, a little in the
+/// past, so while they touch nearly every snapshot finds the own bean a few millimetres off and rolls back
+/// (portal-panic's crowds at a checkpoint: 600–1200 rollbacks in 100 s). A difference only in where the bean
+/// is and how fast it goes, with another bean near, waits until PUSH_EVERY ticks after the last rollback
+/// (state checks are off for the frame); anything else rolls back at once. Waiting loses nothing: the
+/// difference stays in the history, and the next check finds it.
+fn pace_pushes(
+    timeline: SyncedLocalTimeline,
+    checkpoints: Res<ReplicationCheckpointMap>,
+    mutate: Option<Res<ServerMutateTicks>>,
+    mut manager: ResMut<PredictionManager>,
+    meta: Res<StateRollbackMetadata>,
+    last: Res<LastRollback>,
+    own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
+    others: Query<&RemotePose, (With<Interpolated>, Without<Predicted>)>,
+) {
+    let tick = timeline.tick();
+    let recent = last.0.is_some_and(|l| tick - l < PUSH_EVERY);
+    let wait = recent
+        && meta.forced_rollback_tick().is_none()
+        && mutate
+            .and_then(|m| checkpoints.latest_completed_at_or_before(&m, tick))
+            .zip(own.single().ok())
+            .and_then(|(c, (predicted, confirmed))| Some((predicted.get(c.tick)?, confirmed.get_present(c.tick)?)))
+            .is_some_and(|(p, s)| {
+                let mut moved = p.clone();
+                (moved.body.pos, moved.body.vel) = (s.body.pos, s.body.vel);
+                let at = s.body.pos.as_vec3();
+                !body_differs(&moved, s)
+                    && (p.body.pos - s.body.pos).length() < PUSH_MAX
+                    && others.iter().any(|o| o.pos.distance(at) < PUSH_NEAR)
+            });
+    if matches!(manager.rollback_policy.state, RollbackMode::Disabled) != wait {
+        manager.rollback_policy.state = if wait {
+            RollbackMode::Disabled
+        } else {
+            RollbackMode::Check
+        };
+    }
 }
 
 fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Query<(), With<PlayerId>>) {
@@ -388,6 +610,7 @@ fn write_input(
     gate: Res<Gate>,
     binds: Res<Bindings>,
     rollback: Option<Res<Rollback>>,
+    sync: Res<LocalTimelineSync>,
 ) {
     // A rollback replays the buffered input over what is written here: a press taken now would be lost.
     if rollback.is_some() {
@@ -396,6 +619,12 @@ fn write_input(
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
     let pressed = core::mem::take(&mut presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };
+    // Before the clock is set the ticks are not the server's: what is written now is moved onto ticks the
+    // server played without it, and the rollback that follows the setting would replay it there.
+    if !sync.is_synced() {
+        state.0 = InputFrame::IDLE.into();
+        return;
+    }
     if let Some(p) = probe.as_mut().filter(|p| time.elapsed_secs_f64() < p.until) {
         state.0 = p.frame.into();
         p.frame.buttons &= BTN_GRAB;
@@ -470,20 +699,39 @@ fn predict(
     } else {
         BodyInput::default()
     };
-    let extra: Vec<OtherBody> = others
-        .iter()
-        .filter(|(_, p)| p.anim != Anim::Portal)
-        .map(|(o, p)| OtherBody {
-            id: o.0,
-            x: p.pos.x as f64,
-            y: p.pos.y as f64,
-            z: p.pos.z as f64,
-            vx: p.vel.x as f64,
-            vz: p.vel.y as f64,
-            touching: false,
-            size: p.size as f64,
-        })
-        .collect();
+    // The others as drawn, the first time this tick is predicted; a rollback's replay meets them where they
+    // were then. As on the server, a bean that finished or is out (or is in a portal) is in nobody's way.
+    let map = &mut *map;
+    let replayed = rollback.is_some().then(|| map.others.get(&k).cloned()).flatten();
+    let extra = match replayed {
+        Some(extra) => extra,
+        None => {
+            let mut extra = if map.others.len() >= OTHERS_KEPT {
+                map.others.pop_first().map(|(_, v)| v).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            extra.clear();
+            extra.extend(
+                others
+                    .iter()
+                    .filter(|(o, p)| p.anim != Anim::Portal && !map.gone(o.0))
+                    .map(|(o, p)| OtherBody {
+                        id: o.0,
+                        x: p.pos.x as f64,
+                        y: p.pos.y as f64,
+                        z: p.pos.z as f64,
+                        vx: p.vel.x as f64,
+                        vz: p.vel.y as f64,
+                        size: p.size as f64,
+                    }),
+            );
+            // (By id: the query's order may change between a tick and its replay.)
+            extra.sort_by_key(|o| o.id);
+            map.others.insert(k, extra.clone());
+            extra
+        }
+    };
     let full = &mut *full;
     // A body from the previous arena may stand on a collider this world does not have.
     if full.body.ground_col >= map.world.colliders.len() as i32 {
@@ -498,7 +746,6 @@ fn predict(
         input,
     }];
     // Map logic predicted here (a portal, a pane that breaks), and the sounds it asks for.
-    let map = &mut *map;
     let (mut scores, mut out) = (Default::default(), Vec::new());
     let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
     tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
@@ -510,6 +757,9 @@ fn predict(
         }));
     }
     predict_respawn(map, id.0, full);
+    if let Some(f) = map.spec.on_bean.as_ref().filter(|_| !map.gone(id.0)) {
+        f(&map.world, id.0, &mut full.body, t);
+    }
     stats.ticks += 1;
     if rollback.is_none() {
         let (b, e) = (&full.body, &ev.0);
@@ -577,8 +827,10 @@ fn predict_respawn(map: &Map, id: u32, full: &mut BodyFull) {
 #[derive(Resource, Default)]
 struct Inbox(Vec<(MapEventMsg, f64)>);
 
-/// Seconds an event may wait for its arena.
+/// Seconds an event may wait for its arena; for the arena the player is in or one replicated, whose map is
+/// still to be built (a slow machine, a big map), longer.
 const INBOX_WAIT: f64 = 5.0;
+const INBOX_WAIT_BUILDING: f64 = 60.0;
 
 fn receive_map_events(
     mut receivers: Query<&mut MessageReceiver<MapEventMsg>>,
@@ -603,23 +855,38 @@ fn apply_map_events(
     mut inbox: ResMut<Inbox>,
     interp: Option<Res<InterpolationTimeline>>,
     own: Query<&PlayerId, With<Predicted>>,
+    rounds: Query<&Round>,
     mut session: ResMut<Session>,
     time: Res<Time<Real>>,
     mut cues: MessageWriter<Cue>,
 ) {
-    let Some(mut map) = map else { return };
+    let now = time.elapsed_secs_f64();
+    let Some(mut map) = map else {
+        if !inbox.0.is_empty() {
+            inbox.0.retain(|(_, at)| now - at < INBOX_WAIT_BUILDING);
+        }
+        return;
+    };
+    // (Nothing to do: neither `Map` nor `Session` is touched, so neither reads as changed.)
+    if inbox.0.is_empty() && map.pending.is_empty() {
+        return;
+    }
     let map = &mut *map;
     let arena = map.round.arena;
-    let now = time.elapsed_secs_f64();
     let real = time.elapsed_secs();
+    let building = |a: u32| session.arena.as_ref().is_some_and(|s| s.id == a) || rounds.iter().any(|r| r.arena == a);
     // This arena's events go on; others wait a while for their map.
     inbox.0.retain(|(msg, at)| {
         if msg.arena == arena {
             map.pending.push(msg.clone());
             return false;
         }
-        now - at < INBOX_WAIT
+        let age = now - at;
+        age < INBOX_WAIT || (age < INBOX_WAIT_BUILDING && building(msg.arena))
     });
+    if map.pending.is_empty() {
+        return;
+    }
     let me = own.single().ok().map(|p| p.0);
     let now = interp.map(|t| t.tick().0);
     let session = &mut *session;

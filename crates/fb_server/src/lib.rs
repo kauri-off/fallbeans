@@ -9,8 +9,9 @@ mod play;
 mod rooms;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use bevy::app::ScheduleRunnerPlugin;
+use bevy::app::{ScheduleRunnerPlugin, TaskPoolOptions, TaskPoolPlugin};
 use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::ecs::schedule::SingleThreadedExecutor;
 use bevy::log::LogPlugin;
@@ -21,11 +22,23 @@ use lightyear::prelude::*;
 
 pub use crate::opts::Opts;
 
-/// The server's app; `log`: Bevy's logging (a process has one, the client's tests bring their own).
+/// The server's app; `log`: the process is the server's own, with Bevy's logging and task pools sized for it
+/// (a process has one of each: the client's tests bring theirs).
 pub fn app(opts: Opts, log: bool) -> App {
+    // (The one map every room plays: its bots' grid is built now, off the main thread, not in a room's tick.)
+    rooms::room::prebuild_lobby_nav();
     let mut app = App::new();
     // FixedUpdate runs the 120 Hz ticks that are due each frame.
-    app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(SERVER_FRAME)));
+    let plugins = MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(SERVER_FRAME));
+    if log {
+        // One thread per pool (IO, async compute, compute) instead of one per core: every schedule runs on the
+        // main thread (below), and on a many-core host the defaults took the process past systemd's `TasksMax`.
+        app.add_plugins(plugins.set(TaskPoolPlugin {
+            task_pool_options: TaskPoolOptions::with_num_threads(3),
+        }));
+    } else {
+        app.add_plugins(plugins);
+    }
     if log {
         app.add_plugins(LogPlugin {
             filter: "bevy_ecs=warn,lightyear=warn,aeronet=warn".into(),
@@ -41,6 +54,7 @@ pub fn app(opts: Opts, log: bool) -> App {
     app.insert_resource(opts);
     app.insert_resource(http::Keys(Arc::new(auth::Auth::new(&auth::secret()))));
     app.insert_resource(http::HttpShared(Arc::default()));
+    app.init_resource::<net::Shutdown>();
     app.add_plugins((
         net::NetPlugin,
         play::PlayPlugin,
@@ -54,4 +68,18 @@ pub fn app(opts: Opts, log: bool) -> App {
         schedule.set_executor(SingleThreadedExecutor::new());
     }
     app
+}
+
+/// SIGTERM, SIGINT and SIGHUP (`systemctl stop`, a package upgrade, Ctrl+C) shut `app` down gracefully: the
+/// players are told the server is restarting before it goes (`net::shut_down`). A second signal exits at once.
+pub fn exit_on_signals(app: &App) {
+    let signal = app.world().resource::<net::Shutdown>().signal.clone();
+    let handler = move || {
+        if signal.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+    };
+    if let Err(e) = ctrlc::set_handler(handler) {
+        warn!("no signal handler, the server will not shut down gracefully: {e}");
+    }
 }

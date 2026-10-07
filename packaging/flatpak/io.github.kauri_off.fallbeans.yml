@@ -10,17 +10,20 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
+  # GPU and gamepads. Not `--device=dri` + `--device=input`: flatpak before 1.15.6 (Ubuntu 22.04 and 24.04, Debian
+  # 12, the release runner's flatpak-builder) rejects `input`.
   - --device=all
 modules:
   - name: fallbeans
     buildsystem: simple
-    # Keep the symbols cargo left in: crash reports name the functions in their backtrace.
+    # Keep the symbols and line tables cargo left in: crash reports name the function and line in their backtrace.
     build-options:
       no-debuginfo: true
     build-commands:
       - install -Dm755 fb_client /app/bin/fb_client
       - cp -r assets /app/bin/assets
       - install -Dm644 LICENSE /app/share/licenses/io.github.kauri_off.fallbeans/LICENSE
+      - install -Dm644 THIRD-PARTY-LICENSES.html /app/share/licenses/io.github.kauri_off.fallbeans/THIRD-PARTY-LICENSES.html
       - install -Dm644 io.github.kauri_off.fallbeans.desktop /app/share/applications/io.github.kauri_off.fallbeans.desktop
       - install -Dm644 io.github.kauri_off.fallbeans.metainfo.xml /app/share/metainfo/io.github.kauri_off.fallbeans.metainfo.xml
       - install -Dm644 fallbeans-256.png /app/share/icons/hicolor/256x256/apps/io.github.kauri_off.fallbeans.png

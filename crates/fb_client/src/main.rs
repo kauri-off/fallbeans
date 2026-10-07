@@ -2,6 +2,7 @@
 //! `--headless` runs the same game without a window or GPU (stress runs).
 mod assets;
 mod audio;
+mod backend;
 mod bean;
 mod beans;
 #[cfg(feature = "brp")]
@@ -35,6 +36,7 @@ mod settings;
 mod shapes;
 mod specials;
 mod stats;
+mod transforms;
 mod ui;
 mod update;
 mod view;
@@ -43,12 +45,12 @@ mod watch;
 use core::time::Duration;
 use std::path::PathBuf;
 
-use bevy::app::ScheduleRunnerPlugin;
+use bevy::app::{ScheduleRunnerPlugin, TaskPoolOptions, TaskPoolPlugin};
 use bevy::asset::AssetMetaCheck;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{Backends, InstanceFlags, RenderCreation, WgpuLimits, WgpuSettings};
+use bevy::render::settings::RenderCreation;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::{ExitCondition, MonitorSelection, PresentMode, WindowMode};
 use bevy::winit::WinitSettings;
@@ -56,10 +58,20 @@ use clap::Parser;
 use fb_net::{NetStatsPlugin, ProtocolPlugin, TICK};
 use lightyear::prelude::client::ClientPlugins;
 
-use crate::opts::{Backend, Opts};
+use crate::opts::Opts;
 
-// (The two `bevy_ecs` modules: the spans of systems and schedules, for the profiler.)
-const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info,lightyear=warn,aeronet=warn";
+const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,lightyear=warn,aeronet=warn";
+/// `--profiler`: the spans of systems and schedules (`bevy_ecs` above), for the built-in profiler.
+const PROFILER_SPANS: &str = ",bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info";
+/// Without it, Bevy's per-frame spans of the app and the render world go too (a span filtered out where it is
+/// made costs nothing). `bevy_render::renderer` stays: `present_frames` is the swapchain wait of every frame.
+const NO_PROFILER_SPANS: &str = ",bevy_app::sub_app=warn,bevy_render::batching=warn,bevy_render::extract_plugin=warn,bevy_render::pipelined_rendering=warn,bevy_render::renderer::render_context=warn,bevy_render::view::visibility=warn";
+
+/// The log filter: which spans exist is decided here, at the start (a system's span is made once).
+fn log_filter(profiler: bool) -> String {
+    let spans = if profiler { PROFILER_SPANS } else { NO_PROFILER_SPANS };
+    format!("{LOG_FILTER}{spans}")
+}
 
 /// The console log: events only (spans would prefix every line with the system it came from).
 fn fmt_layer(_: &mut App) -> Option<bevy::log::BoxedFmtLayer> {
@@ -86,41 +98,21 @@ fn asset_dir() -> String {
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets").into()
 }
 
-fn wgpu_settings(backend: Option<Backend>) -> WgpuSettings {
-    let backends = backend.map(|b| match b {
-        Backend::Vulkan => Backends::VULKAN,
-        Backend::Dx12 => Backends::DX12,
-        Backend::Gl => Backends::GL,
-    });
-    let mut wgpu = WgpuSettings {
-        backends: backends.or(WgpuSettings::default().backends),
-        ..default()
-    };
-    if wgpu.backends == Some(Backends::GL) {
-        // GL 3.3 has no compute shaders: wgpu's indirect-call validation would fail device creation.
-        wgpu.instance_flags.remove(InstanceFlags::VALIDATION_INDIRECT_CALL);
-        // Bevy compiles the SSAO compute pipelines up front unless this limit is under 5, and naga's GLSL
-        // for them does not compile (textureGatherOffset on a depth texture). T0 has no AO anyway.
-        wgpu.constrained_limits = Some(WgpuLimits {
-            max_storage_textures_per_shader_stage: 4,
-            ..default()
-        });
-    }
-    wgpu
-}
-
 fn main() -> AppExit {
     if let Some(code) = render::quality::intel_gen9_relaunch() {
         return AppExit::from_code(code);
     }
     let mut app = App::new();
     build(&mut app, Opts::parse(), None);
-    app.run()
+    let exit = app.run();
+    logs::flush();
+    exit
 }
 
 /// The whole client. `noop`: tests, with wgpu's noop device and a window nothing opens; they step the app.
 fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
     let test = noop.is_some();
+    let profiler = opts.profiler();
     // (First: the graphics API may come from the settings.)
     app.add_plugins(settings::ClientSettingsPlugin {
         profile: opts.profile.clone(),
@@ -136,21 +128,18 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         app.add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / opts.fps))),
             LogPlugin {
-                filter: LOG_FILTER.into(),
+                filter: log_filter(profiler),
                 fmt_layer,
                 ..default()
             },
             bevy::state::app::StatesPlugin,
         ));
     } else {
-        let backend = opts
-            .backend
-            .or_else(|| match app.world().resource::<settings::Graphics>().backend.as_str() {
-                "vulkan" => Some(Backend::Vulkan),
-                "dx12" => Some(Backend::Dx12),
-                "gl" => Some(Backend::Gl),
-                _ => None,
-            });
+        // (Before the renderer: the graphics API, from the GPUs this machine has.)
+        let render_creation = match noop {
+            Some(noop) => noop,
+            None => RenderCreation::Automatic(Box::new(backend::choose(app, &opts))),
+        };
         let window = if opts.offscreen {
             None
         } else {
@@ -184,15 +173,27 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 ..default()
             })
             .set(RenderPlugin {
-                render_creation: noop.unwrap_or_else(|| RenderCreation::Automatic(Box::new(wgpu_settings(backend)))),
+                render_creation,
                 ..default()
             })
             .set(LogPlugin {
-                filter: LOG_FILTER.into(),
+                filter: log_filter(profiler),
                 custom_layer: logs::layer,
                 fmt_layer,
                 ..default()
             });
+        // At most 4 compute threads (Bevy takes all the cores the IO and async pools leave): every parallel query
+        // and scope of the frame wakes them all and waits, spinning, for the last; the scene's work is small. With
+        // 12 on a 20-thread CPU the client burned ~15 ms of CPU a frame, 10 with 4, at the same frame rate.
+        let mut pools = TaskPoolOptions::default();
+        pools.compute.max_threads = std::env::var("FB_COMPUTE_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4);
+        let plugins = plugins.set(TaskPoolPlugin {
+            task_pool_options: pools,
+        });
         if test {
             // (Silent: tests must not play through the speakers. The render world on the main thread: tests
             // read its pipelines.)
@@ -211,13 +212,19 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_systems(PreStartup, offscreen_target);
         } else {
             app.add_plugins(plugins);
-            app.insert_resource(WinitSettings::continuous());
+            // (In the background at most 60 frames a second, not as many as it can: laptops' batteries. The
+            // loop still runs at that rate without events, so the network and the fixed ticks carry on.)
+            app.insert_resource(WinitSettings {
+                focused_mode: bevy::winit::UpdateMode::Continuous,
+                unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_secs_f64(1.0 / 60.0)),
+            });
         }
         app.insert_resource(bevy::render::error_handler::RenderErrorHandler(crash::render_failed));
         if opts.check_assets {
             app.add_plugins(assets::CheckAssetsPlugin);
             return;
         }
+        app.add_plugins(transforms::TransformsPlugin);
         app.add_plugins((
             view::ViewPlugin,
             beans::BeansPlugin,
@@ -226,10 +233,14 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             report::ReportPlugin,
             ui::UiPlugin,
             camera::CameraPlugin,
-            render::GfxPlugin,
+            render::GfxPlugin {
+                // (Off on the bench, where every test would build every map first; `--warmup` there tests it.)
+                warmup: !opts.no_warmup && (!test || opts.warmup),
+            },
             face::FacePlugin,
             perf::PerfPlugin {
                 gpu_timers: !opts.no_gpu_timers && !test,
+                profiler,
             },
         ));
         if opts.trace_clicks {

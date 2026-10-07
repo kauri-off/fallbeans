@@ -1,5 +1,6 @@
 // The sky: a gradient from the horizon up, the sun's glow, slowly drifting
 // clouds and, at night, twinkling stars. Linear colours, as bright as a lit white surface.
+// (Drawn after the opaque geometry, `SkyMaterial`: covered pixels never get here.)
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::{view, globals}}
 
 struct Sky {
@@ -15,27 +16,69 @@ struct Sky {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: Sky;
 
-fn h2(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+const TAU: f32 = 6.2831853;
+// Bevy's `globals.time` wraps at this: whatever moves repeats a whole number of times over it.
+const HOUR: f32 = 3600.0;
+// The cloud noise repeats over this many cells (x, y); the wind crosses exactly one period an hour. Square: the
+// octaves are turned by an integer matrix (`OCTAVE`), which maps whole periods to whole periods only so.
+const CLOUD_PERIOD = vec2<i32>(36, 36);
+// Each octave turned by 26.6° and scaled by √5 against the one before: axis-aligned octaves stack their cells
+// into rectangles, which the clouds' sharp edge showed as square clouds.
+const OCTAVE = mat2x2<f32>(2.0, -1.0, 1.0, 2.0);
+
+// PCG (Jarzynski and Olano, "Hash Functions for GPU Rendering"): exact at any cell, unlike sin().
+fn pcg3(p: vec3<u32>) -> vec3<u32> {
+    var v = p * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> vec3(16u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return v;
+}
+
+// 0…1 from a cell.
+fn h3(c: vec3<i32>) -> f32 {
+    return f32(pcg3(bitcast<vec3<u32>>(c)).x >> 8u) / 16777216.0;
+}
+
+// A cell of the cloud noise, wrapped to its period.
+fn h2(c: vec2<i32>) -> f32 {
+    let w = ((c % CLOUD_PERIOD) + CLOUD_PERIOD) % CLOUD_PERIOD;
+    return h3(vec3(w, 7));
 }
 
 fn n2(p: vec2<f32>) -> f32 {
-    let i = floor(p);
+    let i = vec2<i32>(floor(p));
     let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), u.x), mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), u.x), u.y);
+    // (Quintic: the cubic's kink at the cell edges shows as creases along the grid.)
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return mix(
+        mix(h2(i), h2(i + vec2(1, 0)), u.x),
+        mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), u.x),
+        u.y,
+    );
 }
 
+// (Octaves through an integer matrix: a shift by whole periods stays whole periods in every one.)
 fn fbm(p0: vec2<f32>) -> f32 {
     var p = p0;
     var s = 0.0;
     var a = 0.5;
     for (var i = 0; i < 5; i++) {
         s += a * n2(p);
-        p = p * 2.03 + vec2(1.7, 9.2);
+        p = OCTAVE * p + vec2(1.7, 9.2);
         a *= 0.5;
     }
     return s;
+}
+
+// sin(rate · t + phase) with the rate rounded to whole turns an hour (seamless where the time wraps).
+fn wave(t: f32, rate: f32, phase: f32) -> f32 {
+    let turns = round(rate * HOUR / TAU);
+    return sin(TAU * fract(t / HOUR * turns) + phase);
 }
 
 @fragment
@@ -50,16 +93,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if stars > 0.0 && d.y > 0.0 {
         // A still field of twinkling stars (night looks), fading towards the horizon.
         let q = d * 220.0;
-        let cell = floor(q);
-        let s = h2(cell.xy + cell.z * 17.13);
+        let s = h3(vec3<i32>(floor(q)));
         var star = step(0.9965, s) * smoothstep(0.35, 0.05, length(fract(q) - 0.5));
-        star *= 0.6 + 0.4 * sin(time * (1.0 + s * 3.0) + s * 90.0);
+        star *= 0.6 + 0.4 * wave(time, 1.0 + s * 3.0, s * 90.0);
         col += vec3(1.0, 0.96, 0.9) * star * stars * smoothstep(0.0, 0.25, d.y);
     }
     if d.y > 0.0 && sky.params.y > 0.5 {
         let uv = d.xz / (d.y + 0.18) * 1.3;
-        let wind = vec2(time * 0.010, time * 0.004);
-        var c = fbm(uv + wind) + 0.25 * fbm(uv * 3.1 - wind * 2.5);
+        // One noise period an hour: (36, 36) cells in 3600 s; the second layer three periods.
+        let wind = vec2<f32>(CLOUD_PERIOD) * fract(time / HOUR);
+        var c = fbm(uv + wind) + 0.25 * fbm(uv * 3.1 - wind * 3.0);
         c = smoothstep(0.62, 0.95, c);
         let fade = smoothstep(0.02, 0.3, d.y);
         let cc = mix(sky.cloud.rgb, sky.horizon.rgb, 0.18) + sky.sun_color.rgb * pow(sd, 4.0) * 0.25;

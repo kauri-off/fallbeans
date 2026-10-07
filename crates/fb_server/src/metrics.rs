@@ -20,8 +20,10 @@ impl Plugin for MetricsPlugin {
         app.insert_resource(Usage {
             sys: System::new(),
             pid: Pid::from_u32(std::process::id()),
-            cpu_ms: 0,
+            cpu_ms: None,
         });
+        // (The tick's time is all between these two: a FixedUpdate system not ordered against `RoomTick` may
+        // fall inside, and counts then, or outside.)
         app.add_systems(FixedUpdate, (start_tick.before(RoomTick), end_tick.after(RoomTick)));
         app.add_systems(Update, (track_frames, report, exit_after).chain());
     }
@@ -44,11 +46,13 @@ struct TickTimes {
 struct Usage {
     sys: System,
     pid: Pid,
-    cpu_ms: u64,
+    /// The process's CPU time at the last call, ms (None before the first).
+    cpu_ms: Option<u64>,
 }
 
 impl Usage {
-    /// Percent of one core since the last call and the resident set in MB.
+    /// Percent of one core since the last call (NaN the first time: that would be the start-up's) and the
+    /// resident set in MB.
     fn sample(&mut self, span: f64) -> (f64, f64) {
         let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
         self.sys
@@ -57,7 +61,10 @@ impl Usage {
             return (f64::NAN, f64::NAN);
         };
         let ms = p.accumulated_cpu_time();
-        let cpu = ms.saturating_sub(core::mem::replace(&mut self.cpu_ms, ms)) as f64 / 10.0 / span;
+        let cpu = self
+            .cpu_ms
+            .replace(ms)
+            .map_or(f64::NAN, |was| ms.saturating_sub(was) as f64 / 10.0 / span);
         (cpu, p.memory() as f64 / 1048576.0)
     }
 }
@@ -137,14 +144,18 @@ fn report(
         return;
     }
     info!(
-        "metrics: players {players} bots {bots} rooms {open} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {:.1}% mem {:.0} MB",
+        "metrics: players {players} bots {bots} rooms {open} | tick µs mean {mean:.0} p50 {} p99 {} max {} ({} ticks) | frame max {frame_max:.0} ms | input missed {missed} ticks (worst player {missed_max}) | out {:.0} B/s ({:.0} per player), {packets:.0} packets/s | cpu {}% mem {:.0} MB",
         pct(0.5),
         pct(0.99),
         us.last().copied().unwrap_or(0),
         us.len(),
         bytes,
         bytes / players.max(1) as f64,
-        cpu,
+        if cpu.is_finite() {
+            format!("{cpu:.1}")
+        } else {
+            "—".into()
+        },
         mem,
     );
 }

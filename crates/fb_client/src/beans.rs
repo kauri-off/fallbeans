@@ -338,7 +338,20 @@ pub fn dress_beans(
     mut wardrobe: ResMut<Wardrobe>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    quality: Option<Res<crate::render::quality::Quality>>,
+    mut coated: Local<Option<bool>>,
 ) {
+    // No clearcoat on Low (a second specular layer in every bean pixel); the suits made already follow a change.
+    let coat = quality.is_none_or(|q| q.preset != crate::render::quality::Preset::Low);
+    if coated.replace(coat).is_some_and(|was| was != coat) {
+        for (key, h) in &paints.mats {
+            if key.starts_with("body ")
+                && let Some(mut m) = materials.get_mut(h)
+            {
+                m.clearcoat = if coat { 0.3 } else { 0.0 };
+            }
+        }
+    }
     for (id, color, rig, mut dress) in &mut beans {
         let Some(parts) = &rig.parts else { continue };
         let player = session
@@ -368,7 +381,7 @@ pub fn dress_beans(
         let body = paints.get(format!("body {suit}"), &mut materials, || StandardMaterial {
             base_color: suit_base(suit),
             perceptual_roughness: 0.5,
-            clearcoat: 0.3,
+            clearcoat: if coat { 0.3 } else { 0.0 },
             clearcoat_perceptual_roughness: 0.35,
             ..template
         });
@@ -397,10 +410,12 @@ pub fn dress_beans(
             commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
         }
         if let Some(t) = outfit.shoes {
+            // (From the model's own shoe: its baked AO stays.)
+            let shoe_template = materials.get(&parts.shoe_mat).cloned().unwrap_or_default();
             let shoe = paints.get(format!("shoe {}", t.hex()), &mut materials, || StandardMaterial {
                 base_color: hex(t.hex()),
                 perceptual_roughness: 0.5,
-                ..default()
+                ..shoe_template
             });
             for e in &parts.shoes {
                 commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
@@ -464,12 +479,23 @@ pub fn dress_beans(
                 ))
                 .id();
             dress.parts.push(parent);
-            for i in 0..5 {
+            // The tail's spheres, made once for every bean.
+            const BALLS: [Handle<Mesh>; 5] = [
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e01"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e02"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e03"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e04"),
+                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e05"),
+            ];
+            for (i, ball) in BALLS.iter().enumerate() {
                 let r = 0.17 - i as f32 * 0.02;
                 let pos = if i > 0 { Vec3::new(0.0, 0.1, -0.15) } else { Vec3::ZERO };
+                if !meshes.contains(ball) {
+                    let _ = meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
+                }
                 parent = commands
                     .spawn((
-                        Mesh3d(meshes.add(Sphere::new(r).mesh().uv(14, 10))),
+                        Mesh3d(ball.clone()),
                         MeshMaterial3d(if i == 4 { tip.clone() } else { fur.clone() }),
                         Transform::from_translation(pos),
                         Visibility::default(),
@@ -483,11 +509,22 @@ pub fn dress_beans(
 }
 
 /// The rainbow suit: its colour runs round the colour wheel.
-fn tick_rainbow(time: Res<Time<Real>>, paints: Res<Paints>, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn tick_rainbow(
+    time: Res<Time<Real>>,
+    paints: Res<Paints>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut last: Local<Option<u32>>,
+) {
     if paints.rainbow.is_empty() {
         return;
     }
-    let hue = Color::hsl((time.elapsed_secs() * 0.15).fract() * 360.0, 0.85, 0.6);
+    // In steps of 3°, about 18 a second: a material changed is uploaded again, not with every frame.
+    const STEP: f32 = 3.0;
+    let step = ((time.elapsed_secs() * 0.15).fract() * 360.0 / STEP) as u32;
+    if last.replace(step) == Some(step) {
+        return;
+    }
+    let hue = Color::hsl(step as f32 * STEP, 0.85, 0.6);
     for (h, belly) in &paints.rainbow {
         if let Some(mut m) = materials.get_mut(h) {
             m.base_color = if *belly { hue.mix(&Color::WHITE, 0.62) } else { hue };
@@ -595,18 +632,25 @@ pub fn animate_beans(
     mut vis: Query<&mut Visibility, Without<BeanAnim>>,
     mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
     paints: Res<Paints>,
+    mut scratch: Local<(Vec<Cue>, HashMap<u32, (Vec3, f32)>)>,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
-    let cues: Vec<Cue> = cues.read().copied().collect();
+    // (Kept from frame to frame: no list and map allocated every frame.)
+    let (cue_list, drawn) = &mut *scratch;
+    cue_list.clear();
+    cue_list.extend(cues.read().copied());
+    let cues = &*cue_list;
     // Where every bean is drawn (for arms reaching for the one held).
-    let drawn: HashMap<u32, (Vec3, f32)> = beans
-        .iter()
-        .map(|(id, a, .., tf, _, _, _, _)| (id.0, (tf.translation, a.out.grow)))
-        .collect();
+    drawn.clear();
+    drawn.extend(
+        beans
+            .iter()
+            .map(|(id, a, .., tf, _, _, _, _)| (id.0, (tf.translation, a.out.grow))),
+    );
     let podium = map.as_ref().is_some_and(|m| m.round.kind == ArenaKind::Podium);
     for (id, mut anim, rig, dress, mut root, full, pose, hold, own) in &mut beans {
-        for c in &cues {
+        for c in cues {
             match *c {
                 Cue::Emote { id: who, e } if who == id.0 => anim.play_emote(e),
                 Cue::Finish(who) if who == id.0 => anim.react(Expr::Laugh, 3.0),

@@ -31,7 +31,13 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 MemoryMax=300M
+# Threads: main, HTTP, 2 WebSocket workers (+ a few blocking), 3 Bevy pools, the signal handler, one per room
+# building its next round.
 TasksMax=64
+# Every WebSocket and HTTP connection is a descriptor (the server caps them: 512 each); the default soft limit
+# is 1024.
+LimitNOFILE=65536
+# Also after the server exits on its own when a transport or the HTTP API stopped (exit code 1).
 Restart=always
 RestartSec=2
 

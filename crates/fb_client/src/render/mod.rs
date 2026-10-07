@@ -1,6 +1,7 @@
 //! How the game is drawn: the camera's pipeline
 //! (HDR, PBR Neutral tone mapping, the grade), the sun, fog, sky and ambient light of the round's look,
 //! and the graphics settings: the hardware tier, presets and switches (`quality.rs`).
+mod cloth;
 mod decor;
 pub mod emoji;
 mod env;
@@ -12,7 +13,9 @@ pub mod portal;
 pub mod props;
 pub mod quality;
 pub mod surface;
-mod warmup;
+pub mod warmup;
+
+use std::collections::HashMap;
 
 use bevy::asset::embedded_asset;
 use bevy::camera::{Exposure, Hdr};
@@ -24,7 +27,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::render::view::{ColorGrading, ColorGradingGlobal};
 use bevy::shader::ShaderRef;
-use fb_sim::looks::ResolvedLook;
+use fb_sim::looks::{Look, ResolvedLook};
 
 use crate::game::Map;
 use crate::view::MainCamera;
@@ -59,6 +62,20 @@ impl Material for SkyMaterial {
         "embedded://fb_client/render/sky.wgsl".into()
     }
 
+    // (Alpha-masked, though nothing is cut away: the alpha-mask phase is drawn after the opaque one in the
+    // same pass, so the sky comes last and the depth test skips its maths wherever the map covers it.)
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Mask(0.5)
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
     fn specialize(
         _: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -82,7 +99,10 @@ const SKY_R: f32 = 900.0;
 /// How far the sun's position is from what it lights (only its direction counts).
 const SUN_DISTANCE: f32 = 42.0;
 
-pub struct GfxPlugin;
+pub struct GfxPlugin {
+    /// The loading screen's warm-up at the start and after a change of the graphics (`warmup.rs`).
+    pub warmup: bool,
+}
 
 impl Plugin for GfxPlugin {
     fn build(&self, app: &mut App) {
@@ -96,11 +116,12 @@ impl Plugin for GfxPlugin {
             decor::DecorPlugin,
             motes::MotesPlugin,
             fsr::FsrPlugin,
-            warmup::WarmupPlugin,
+            warmup::WarmupPlugin { on: self.warmup },
         ));
         app.init_resource::<LookShown>();
+        app.init_resource::<EnvLights>();
         app.add_systems(Startup, setup.after(crate::view::setup_camera));
-        app.add_systems(Update, apply_look);
+        app.add_systems(Update, (apply_look, sky_clouds).chain());
         app.add_systems(
             PostUpdate,
             follow_camera
@@ -118,10 +139,14 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut skies: ResMut<Assets<SkyMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut env: ResMut<EnvLights>,
     camera: Query<Entity, With<MainCamera>>,
 ) {
     if let Ok(cam) = camera.single() {
         commands.entity(cam).insert((
+            // (From the start, as in every round: the shaders warmed up before it are the round's.)
+            env.of(fb_sim::looks::classic().look, &mut images),
             Hdr,
             Tonemapping::KhronosPbrNeutral,
             Exposure {
@@ -201,6 +226,7 @@ fn apply_look(
     mut camera: Query<(Entity, &mut DistanceFog, &mut ColorGrading), With<MainCamera>>,
     mut images: ResMut<Assets<Image>>,
     mut clear: ResMut<ClearColor>,
+    mut env: ResMut<EnvLights>,
 ) {
     let Some(map) = map else { return };
     if shown.0 == Some(map.generation) {
@@ -233,22 +259,69 @@ fn apply_look(
         ..default()
     };
     clear.0 = crate::view::hex(l.sky.horizon);
-    let c = |hex: &str| {
-        let c = linear(hex);
-        [c.red, c.green, c.blue]
+    commands.entity(cam).insert(env.of(l, &mut images));
+}
+
+/// The looks' ambient light (`env.rs`), made once per look (≈70 KB each) and kept: a round of a look seen
+/// before makes none.
+#[derive(Resource, Default)]
+pub struct EnvLights(HashMap<&'static str, EnvironmentMapLight>);
+
+impl EnvLights {
+    pub fn of(&mut self, l: &'static Look, images: &mut Assets<Image>) -> EnvironmentMapLight {
+        self.0
+            .entry(l.id)
+            .or_insert_with(|| {
+                let c = |hex: &str| {
+                    let c = linear(hex);
+                    [c.red, c.green, c.blue]
+                };
+                let mut cube = |map| {
+                    images.add(env::cube(
+                        c(l.hemi.sky),
+                        c(l.hemi.ground),
+                        l.hemi.intensity as f32,
+                        l.env as f32,
+                        map,
+                    ))
+                };
+                EnvironmentMapLight {
+                    diffuse_map: cube(env::Map::Diffuse),
+                    specular_map: cube(env::Map::Specular),
+                    intensity: LUX,
+                    ..default()
+                }
+            })
+            .clone()
+    }
+
+    /// Every look's, ahead (the warm-up).
+    pub fn make_all(&mut self, images: &mut Assets<Image>) -> usize {
+        for l in fb_sim::looks::LOOKS {
+            self.of(l, images);
+        }
+        self.0.len()
+    }
+}
+
+/// No clouds on Low (ten octaves of noise over most of the screen); the look sets the rest of the sky.
+fn sky_clouds(
+    quality: Option<Res<quality::Quality>>,
+    sky: Query<&MeshMaterial3d<SkyMaterial>, With<Sky>>,
+    mut skies: ResMut<Assets<SkyMaterial>>,
+) {
+    let on = if quality.is_some_and(|q| q.preset == quality::Preset::Low) {
+        0.0
+    } else {
+        1.0
     };
-    let cube = images.add(env::cube(
-        c(l.hemi.sky),
-        c(l.hemi.ground),
-        l.hemi.intensity as f32,
-        l.env as f32,
-    ));
-    commands.entity(cam).insert(EnvironmentMapLight {
-        diffuse_map: cube.clone(),
-        specular_map: cube,
-        intensity: LUX,
-        ..default()
-    });
+    let Ok(h) = sky.single() else { return };
+    // (Looked at first: touching the material would prepare it again.)
+    if skies.get(&h.0).is_some_and(|m| m.u.params.y != on)
+        && let Some(mut m) = skies.get_mut(&h.0)
+    {
+        m.u.params.y = on;
+    }
 }
 
 fn follow_camera(
