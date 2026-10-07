@@ -113,12 +113,14 @@ jobs:
           here=$(pwd -W)
           sparse() { # repository, tag, directory, paths…
             git clone --quiet --filter=blob:none --no-checkout --depth 1 --branch "$2" "$1" "$3"
-            git -C "$3" sparse-checkout set --no-cone "${@:4}"
+            # (MSYS would turn the leading-slash patterns into C:/Program Files/Git/… paths.)
+            MSYS_NO_PATHCONV=1 git -C "$3" sparse-checkout set --no-cone "${@:4}"
             git -C "$3" checkout --quiet
           }
           sparse https://github.com/NVIDIA/DLSS.git "$DLSS_SDK_TAG" dlss-sdk \
             /include/ /lib/Windows_x86_64/x64/ /doc/DLSS_Programming_Guide_Release.pdf /LICENSE.txt
           test "$(git -C dlss-sdk rev-parse HEAD)" = "$DLSS_SDK_COMMIT"
+          test -d dlss-sdk/include -a -d dlss-sdk/lib/Windows_x86_64/x64 -a -f dlss-sdk/doc/DLSS_Programming_Guide_Release.pdf
           sparse https://github.com/NVIDIA/DLSS.git "$DLSS_DLL_TAG" dlss-dll /lib/Windows_x86_64/rel/nvngx_dlss.dll
           echo "$DLSS_DLL_SHA256  dlss-dll/lib/Windows_x86_64/rel/nvngx_dlss.dll" | sha256sum -c -
           git clone --quiet --depth 1 --branch "$VULKAN_HEADERS_TAG" \
