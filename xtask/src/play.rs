@@ -8,7 +8,7 @@ use crate::{cargo, dlss_features, run, start_server, target_dir, with_features};
 
 #[derive(Args)]
 pub struct PlayArgs {
-    /// The client exactly as the packages ship it (`dist` profile, fat LTO: minutes per change) instead of `perf`.
+    /// The client exactly as the packages ship it (`dist` profile: thin LTO, a minute or more per change) instead of `perf`.
     #[arg(long)]
     dist: bool,
     /// More arguments for the client, e.g. `-- --windowed`.

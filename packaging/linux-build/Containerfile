@@ -3,10 +3,14 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git build-essential pkg-config file unzip patch \
+      ca-certificates curl git build-essential pkg-config file unzip patch software-properties-common gpg-agent \
       libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
       clang libclang-dev cmake glslang-tools libvulkan-dev poppler-utils \
-      flatpak flatpak-builder \
+    && rm -rf /var/lib/apt/lists/*
+# flatpak-builder 1.4 from Flatpak's PPA: 22.04's own (1.2) composes the AppStream data with `appstream-compose`,
+# which the freedesktop 25.08 SDK no longer has (1.4 runs its `appstreamcli compose`).
+RUN add-apt-repository -y ppa:flatpak/stable \
+    && apt-get update && apt-get install -y --no-install-recommends flatpak flatpak-builder \
     && rm -rf /var/lib/apt/lists/*
 ENV CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path \

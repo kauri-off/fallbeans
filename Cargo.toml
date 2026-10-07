@@ -87,13 +87,12 @@ lto = false
 incremental = true
 codegen-units = 256
 
-# Release packages (`cargo xtask dist`), client and server: one codegen unit with fat LTO (slow to build, a few %
-# faster). Symbols and line tables stay (nothing is stripped): crash reports name the function and the line in their
-# backtrace. On Windows those come from the PDB, which the installer does not ship.
+# Release packages (`cargo xtask dist`), client and server: the release profile's thin LTO (fat LTO with one codegen
+# unit took a single core for 10+ minutes a package, for an unmeasured few %). Symbols and line tables stay (nothing
+# is stripped): crash reports name the function and the line in their backtrace. On Windows those come from the PDB,
+# which the installer does not ship.
 [profile.dist]
 inherits = "release"
-lto = "fat"
-codegen-units = 1
 debug = "line-tables-only"
 
 [workspace.lints.rust]
