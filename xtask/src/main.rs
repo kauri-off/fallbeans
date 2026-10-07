@@ -164,7 +164,7 @@ pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
-/// Where cargo builds: `CARGO_TARGET_DIR` (worktrees may share one), else target/.
+/// Cargo's target directory: `CARGO_TARGET_DIR` (relative to the root), else `target`.
 pub fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
