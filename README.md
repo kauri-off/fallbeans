@@ -85,6 +85,8 @@ F9 — запись замера производительности.
 название в списке серверов, `FB_ARGS` — флаги из `fb_server --help`), затем `sudo systemctl restart fallbeans`.
 Логи — `journalctl -u fallbeans` (например, `journalctl -u fallbeans --since "10 min ago"` к отчёту F8 игрока).
 Секрет `FB_SECRET` создаётся при установке один раз: новый секрет даст всем игрокам новые identity.
+Обновить на Debian/Ubuntu до последнего релиза и перезапустить: `sudo sh update.sh`
+([packaging/server/update.sh](packaging/server/update.sh), `-f` — переустановить ту же версию).
 
 Отладочный API (`/fallbeans/api/debug/…`: `state`, `health`, `logs`, `trace`, `replay`, `maps`) без ключа выключен.
 Чтобы включить, задайте в том же файле длинный случайный `FB_DEBUG_KEY=…` и перезапустите службу; затем войдите
