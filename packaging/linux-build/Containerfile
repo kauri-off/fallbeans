@@ -1,4 +1,4 @@
-# The Linux client packages (`cargo xtask release build`): built on Ubuntu 22.04, whose glibc (2.35) is then the
+# The Linux client packages (`cargo xtask dist <kind> --container`): built on Ubuntu 22.04, whose glibc (2.35) is then the
 # oldest they need. Rust comes from rust-toolchain.toml at run time, into target/linux-build (kept between runs).
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive

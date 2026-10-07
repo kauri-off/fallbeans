@@ -1,11 +1,10 @@
-//! Project tasks: `cargo xtask <check|play|doctor|setup|release|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
+//! Project tasks: `cargo xtask <check|play|doctor|setup|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
 mod check;
 mod dist;
 mod doctor;
 mod fuzz;
 mod perf;
 mod play;
-mod release;
 mod sdk;
 mod stress;
 
@@ -32,8 +31,6 @@ enum Task {
     Doctor,
     /// The pinned SDKs and tools of toolchain/deps.toml into target/sdk (`--dist`: the packaging tools too).
     Setup(sdk::SetupArgs),
-    /// A release from this machine: `prepare` (the draft), `build` (this OS's packages into it), `publish`.
-    Release(release::ReleaseArgs),
     /// Map and system audits (`fb_audit`): [map…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics]
     /// [--notes] [--json]; `--baseline` / `--bless-baseline`: the game's feel against `baseline.json`.
     Audit {
@@ -361,7 +358,6 @@ fn main() -> ExitCode {
         Task::Play(a) => play::play(&a),
         Task::Doctor => doctor::doctor(),
         Task::Setup(a) => sdk::setup(&a),
-        Task::Release(a) => release::release(&a),
         Task::Audit { args } => run(cargo().args(["run", "--release", "-p", "fb_audit", "--"]).args(args)),
         Task::Assets { export } => (!export || export_models()) && check_assets(),
         Task::Dev(a) => dev(&a),

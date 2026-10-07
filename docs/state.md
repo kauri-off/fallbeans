@@ -56,14 +56,11 @@ DLSS; `dist` без апскейлеров не собирается.
   неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят.  В
   `release.yml` не проверен `pdftotext` на раннере (теги и архивы — те же, что `setup` скачивает и проверяет). Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
   для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
-- `cargo xtask release prepare|build|publish` и `dist --container`. Проверено: черновик на GitHub, AppImage в
-  контейнере (клиент требует GLIBC_2.35), flatpak-builder под `--privileged` от не-root. Flatpak падал на
-  `appstream-compose` (flatpak-builder 1.2 из 22.04; в SDK 25.08 его нет): Containerfile теперь ставит 1.4 из
-  `ppa:flatpak/stable` — не проверено. Собирать Flatpak на хосте нельзя: в рантайме 25.08 glibc 2.42, клиент с
-  Arch требует 2.44. Не запускались: загрузка с Windows (contributor'у нужен `gh` с правом записи), `publish`.
-  Релиз собирается только из каталога, где никто не правит код (`build` проверяет дерево до сборки и перед
-  загрузкой). Профиль `dist` — thin LTO вместо fat с одной единицей кодогенерации: разница в fps не мерена;
-  комментарий о fat LTO в `release.yml` устарел.
+- `dist --container`. Проверено: AppImage в контейнере (клиент требует GLIBC_2.35), flatpak-builder под
+  `--privileged` от не-root. Flatpak падал на `appstream-compose` (flatpak-builder 1.2 из 22.04; в SDK 25.08 его
+  нет): Containerfile теперь ставит 1.4 из `ppa:flatpak/stable` — не проверено. Собирать Flatpak на хосте нельзя: в
+  рантайме 25.08 glibc 2.42, клиент с Arch требует 2.44. Профиль `dist` — thin LTO вместо fat с одной единицей
+  кодогенерации: разница в fps не мерена; комментарий о fat LTO в `release.yml` устарел.
 - Режим масштабирования в настройках графики («Ультра-качество» 0,77, «Качество» 0,67, «Баланс» 0,59;
   `Graphics::upscale`, на лету, сохраняется): вживую не смотрен. DLSS на «Балансе» делает контекст в режиме
   Balanced (`dlss::mode`), на остальных — Quality; смена режима пересоздаёт контекст DLSS или FSR 3.1. Не мерено,
