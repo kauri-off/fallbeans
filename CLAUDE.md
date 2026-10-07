@@ -28,7 +28,12 @@ English. License: AGPL-3.0-or-later.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
 - `cargo xtask fuzz-ui` — plays the whole client at random, prints the path to a crash.
 - `cargo xtask assets [--export]` — check models (`--export` needs Blender).
-- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — build a release package.
+- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm> [--container]` — build a release package (`--container`: in the
+  Ubuntu 22.04 image of `packaging/linux-build`; Linux clients built on a newer distro need its newer glibc).
+- `cargo xtask release <prepare|build|publish> [--dry-run]` — a release from the authors' machines: `prepare` opens
+  the draft of this commit (master, pushed, clean), `build [kinds]` uploads this OS's packages to it (Linux:
+  AppImage and Flatpak in the container, deb and rpm natively; Windows: nsis, by the contributor), `publish` adds
+  SHA256SUMS once all five are there and publishes. The `release` workflow does the same on GitHub's runners.
 
 ## Rules
 

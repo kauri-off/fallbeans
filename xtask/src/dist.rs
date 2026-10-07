@@ -30,9 +30,12 @@ pub enum Kind {
 #[derive(Args)]
 pub struct DistArgs {
     kind: Kind,
+    /// In the Ubuntu 22.04 container of the releases (packaging/linux-build): Linux clients that run on older systems.
+    #[arg(long)]
+    container: bool,
 }
 
-fn version() -> &'static str {
+pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
@@ -522,7 +525,7 @@ fn flatpak() -> bool {
 }
 
 /// Debian versions sort `~` before anything: 0.1.0~alpha < 0.1.0. RPM does the same.
-fn package_version() -> String {
+pub fn package_version() -> String {
     version().replacen('-', "~", 1)
 }
 
@@ -590,7 +593,14 @@ fn rpm() -> bool {
 }
 
 pub fn dist(a: &DistArgs) -> bool {
-    match a.kind {
+    if a.container {
+        return crate::release::in_container(&[a.kind]);
+    }
+    build(a.kind)
+}
+
+pub fn build(kind: Kind) -> bool {
+    match kind {
         Kind::Nsis => nsis(),
         Kind::Appimage => appimage(),
         Kind::Flatpak => flatpak(),

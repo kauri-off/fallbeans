@@ -56,6 +56,10 @@ DLSS; `dist` без апскейлеров не собирается.
   неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят.  В
   `release.yml` не проверен `pdftotext` на раннере (теги и архивы — те же, что `setup` скачивает и проверяет). Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
   для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
+- `cargo xtask release prepare|build|publish` и `dist --container`: проверены только отказы (грязное дерево, нет
+  черновика). Не запускались: черновик на GitHub, сборка в контейнере (`packaging/linux-build`: образ, rustup в
+  `target/linux-build`, `--privileged` и bubblewrap для flatpak-builder под не-root, flathub-рантайм в HOME
+  контейнера), загрузка с Windows (contributor'у нужен `gh` с правом записи в репозиторий), `publish` целиком.
 - Выбор апскейлера в настройках графики («Авто», DLSS 4.5, FSR 3.1, FSR 1; `Graphics::upscaler`, на лету). На RTX
   5070 Laptop (Vulkan, 2560×1600) проверено: 15 переключений пресета и апскейлера посреди раунда через BRP
   (`world.mutate_resources` по `fb_client::settings::Graphics`) — без ошибок, снимки чистые. Замеры (`perf run`,

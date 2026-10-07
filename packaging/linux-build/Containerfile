@@ -1,0 +1,13 @@
+# The Linux client packages (`cargo xtask release build`): built on Ubuntu 22.04, whose glibc (2.35) is then the
+# oldest they need. Rust comes from rust-toolchain.toml at run time, into target/linux-build (kept between runs).
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git build-essential pkg-config file unzip patch \
+      libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+      clang libclang-dev cmake glslang-tools libvulkan-dev poppler-utils \
+      flatpak flatpak-builder \
+    && rm -rf /var/lib/apt/lists/*
+ENV CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path \
+    && chmod -R a+rwX /opt/cargo
