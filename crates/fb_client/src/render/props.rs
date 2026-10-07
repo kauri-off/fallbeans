@@ -1,16 +1,18 @@
 //! The map's models: their materials get surfaces by material name (a flag's
-//! pennant and a mushroom's cap take the map's tint), and the props move: pennants sway, fans
-//! spin, stars twirl and bob over the finish, mushroom caps squash like jelly.
+//! pennant and a mushroom's cap take the map's tint), and the props move: pennants wave as cloth
+//! (`cloth.rs`) and sway a little, fans spin, stars twirl and bob over the finish, mushroom caps squash
+//! like jelly, trees and pines near the camera sway with the wind's gusts.
 use std::collections::HashMap;
 
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
+use super::cloth::{ClothMaterial, Cloths, WIND, gust, pennant_bounds};
 use super::lod::{ModelLods, add_levels};
 use super::surface::{Kind, SurfaceMaterial, Surfaces};
 use crate::game::Map;
-use crate::view::frame_tick;
+use crate::view::{MainCamera, frame_tick};
 
 /// A map model: what it is, its tint, and the phase of its motion (from where it stands).
 #[derive(Component)]
@@ -77,12 +79,30 @@ struct Moving {
 #[derive(Component)]
 struct Dressed;
 
+/// A tree swaying with the wind over its foot: its pose as placed, the phase of its own sway, how far it
+/// tips (rad), its turn among the frames it moves in (`SWAY_EVERY`), whether it is off its pose.
+#[derive(Component)]
+struct Sway {
+    rest: Quat,
+    phase: f32,
+    amount: f32,
+    slot: u32,
+    moved: bool,
+}
+
+/// Trees sway within this distance of the camera (m), fading out over the last stretch.
+const SWAY_NEAR: f32 = 45.0;
+const SWAY_FAR: f32 = 75.0;
+/// A tree moves every this many frames (its sway is slow: no steps show), the trees taking turns.
+const SWAY_EVERY: u32 = 3;
+
 pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ModelLods>();
-        app.add_systems(Update, (dress, find_moving, animate).chain());
+        app.add_plugins(super::cloth::ClothPlugin);
+        app.add_systems(Update, (dress, find_moving, animate, sway).chain());
         app.add_systems(Update, (super::lod::finish_levels, super::meshes::refresh_bands));
     }
 }
@@ -127,12 +147,15 @@ fn dress(
     ),
     shapes: Query<(&Mesh3d, &Transform, &ChildOf)>,
     transforms: Query<&Transform>,
+    cloth: (ResMut<Cloths>, ResMut<Assets<ClothMaterial>>),
 ) {
     let (mut lods, mesh_assets, display, quality) = lod;
+    let (mut cloths, mut cloth_mats) = cloth;
     let k = super::meshes::lod_k(display.fov, quality.map(|q| q.preset));
     if !meshes.is_empty() {
         // (Materials of a model unloaded between maps come back under new ids: forget the old ones.)
         done.retain(|(id, _), _| standard.contains(*id));
+        cloths.retain(|id| done.values().any(|h| h.id() == id));
     }
     for (e, mat, mat_name, name) in &meshes {
         let Some(p) = prop_of(e, &parents, &props) else {
@@ -177,6 +200,17 @@ fn dress(
                 surfaces.material_from(base, kind, None, mat_name == "Glint", None, &mut images, &mut materials)
             })
             .clone();
+        // A pennant waves: its surface's cloth twin, and bounds that hold the swing.
+        if part.starts_with("Pennant")
+            && let Some(c) = cloths.pennant(&h, &materials, &mut cloth_mats)
+        {
+            commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert((
+                MeshMaterial3d(c),
+                pennant_bounds(),
+                Dressed,
+            ));
+            continue;
+        }
         let shadow = !shadowless.contains(p);
         let mut dressed = commands.entity(e);
         dressed
@@ -215,13 +249,32 @@ fn dress(
     }
 }
 
-/// The parts that move (by node name), once the model's scene is in.
+/// The parts that move (by node name), once the model's scene is in; the trees that sway.
 fn find_moving(
     mut commands: Commands,
     named: Query<(Entity, &Name, &Transform), (Added<Name>, Without<Moving>)>,
     parents: Query<&ChildOf>,
     props: Query<&Prop>,
+    trees: Query<(Entity, &Prop, &Transform), Added<Prop>>,
+    mut slots: Local<u32>,
 ) {
+    for (e, p, tf) in &trees {
+        let amount = match p.name {
+            "tree" => 0.03,
+            "pine" => 0.022,
+            _ => continue,
+        };
+        // (The map's props stand at the origin of their piece and have a phase; the scenery's are placed.)
+        let phase = p.phase + tf.translation.x * 1.7 + tf.translation.z * 2.3;
+        *slots = slots.wrapping_add(1);
+        commands.entity(e).insert(Sway {
+            rest: tf.rotation,
+            phase,
+            amount,
+            slot: *slots,
+            moved: false,
+        });
+    }
     for (e, name, tf) in &named {
         if !matches!(name.as_str(), "Pennant" | "FanBlades") {
             continue;
@@ -236,7 +289,7 @@ fn animate(
     map: Option<Res<Map>>,
     timeline: Res<lightyear::prelude::LocalTimeline>,
     fixed: Res<Time<Fixed>>,
-    mut props: Query<(&Prop, &mut Transform), Without<Moving>>,
+    mut props: Query<(&Prop, &mut Transform), (Without<Moving>, Without<Sway>)>,
     mut parts: Query<(&Moving, &Name, &mut Transform), Without<Prop>>,
 ) {
     let Some(map) = map else { return };
@@ -263,13 +316,8 @@ fn animate(
         let ph = p.phase;
         match name.as_str() {
             "Pennant" => {
-                // One wind over the map: gusts travel across it, so neighbouring flags swing together a moment
-                // apart (each on a phase of its own looked like flags in different weathers); a flag's own
-                // phase only adds its flutter.
-                let gust = prop_tf.translation.x * 0.3 + prop_tf.translation.z * 0.18;
-                let a = (t * 2.2 - gust).sin() * 0.2
-                    + (t * 0.7 - gust * 0.4).sin() * 0.08
-                    + (t * 6.3 - gust * 2.0 + ph).sin() * 0.045;
+                // (The cloth waves by itself: the pennant only swings a little about the pole.)
+                let a = (t * 1.3 + ph).sin() * 0.07 + (t * 3.4 + ph * 2.0).sin() * 0.025;
                 tf.rotation = m.rest.rotation * Quat::from_rotation_y(a);
             }
             "FanBlades" => {
@@ -277,5 +325,47 @@ fn animate(
             }
             _ => {}
         }
+    }
+}
+
+/// Trees near the camera tip over their foot with the wind: downwind with the gusts (on the cloth's
+/// clock: the flags wave with the same gusts), a little across it.
+fn sway(
+    time: Res<Time>,
+    camera: Query<&GlobalTransform, With<MainCamera>>,
+    mut trees: Query<(&mut Sway, &ChildOf, &GlobalTransform, &mut Transform)>,
+    placed: Query<&GlobalTransform, Without<Sway>>,
+    mut frame: Local<u32>,
+) {
+    let Ok(cam) = camera.single() else { return };
+    let eye = cam.translation();
+    let t = time.elapsed_secs_wrapped();
+    *frame = frame.wrapping_add(1);
+    // Turning about these world axes tips the top downwind, and across the wind.
+    let down = Vec3::new(WIND.y, 0.0, -WIND.x);
+    let across = Vec3::new(WIND.x, 0.0, WIND.y);
+    for (mut s, parent, at, mut tf) in &mut trees {
+        if (*frame).wrapping_add(s.slot) % SWAY_EVERY != 0 {
+            continue;
+        }
+        let p = at.translation();
+        let near = ((SWAY_FAR - p.distance(eye)) / (SWAY_FAR - SWAY_NEAR)).clamp(0.0, 1.0);
+        if near <= 0.0 {
+            if s.moved {
+                tf.rotation = s.rest;
+                s.moved = false;
+            }
+            continue;
+        }
+        let a = s.amount * near;
+        let lean = a * gust(t, Vec2::new(p.x, p.z)) * (0.65 + 0.35 * (t * 1.7 + s.phase).sin());
+        let side = a * 0.35 * (t * 1.1 + s.phase * 1.3).sin();
+        let tilt = Quat::from_axis_angle(down, lean) * Quat::from_axis_angle(across, side);
+        // (The tilt is in the world: brought into the parent's frame.)
+        let up = placed
+            .get(parent.parent())
+            .map_or(Quat::IDENTITY, GlobalTransform::rotation);
+        tf.rotation = up.inverse() * tilt * up * s.rest;
+        s.moved = true;
     }
 }

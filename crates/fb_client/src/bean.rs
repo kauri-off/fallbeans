@@ -1,7 +1,8 @@
 //! The bean's procedural animation: damped springs on the limbs and the
 //! body, poses by what the bean is doing, emotes, podium poses, arms reaching for whom it holds, the
-//! tumble's spin, squash and stretch, and the eyes (blinking, opening by expression). The mouth and brows
-//! (`face.rs`) follow the expression and eye opening set here.
+//! tumble's spin, squash and stretch (a crouch into the jump, a jiggling landing, a bob in each step), the
+//! body's jelly wobble when it stops, turns or is knocked, and the eyes (blinking, glancing about,
+//! opening by expression). The mouth and brows (`face.rs`) follow the expression and eye opening set here.
 use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
@@ -15,6 +16,14 @@ const STRIDE: f32 = 2.2;
 const SHOULDER_X: f32 = 0.5;
 const SHOULDER_Y: f32 = 1.08;
 const ARM_LEN: f32 = 0.5;
+/// Horizontal acceleration a bean's own running can reach (m/s²; the sim's is 60): beyond it, a knock.
+const RUN_ACCEL: f32 = 70.0;
+/// The jelly wobble: stiffness and damping (loose: it rings for about a second), and how far it may go.
+const JELLY_K: f32 = 150.0;
+const JELLY_C: f32 = 4.5;
+const JELLY_MAX: f32 = 0.3;
+/// A blink: shut in 0.05 s, held to 0.08 s, open again by 0.17 s.
+const BLINK_S: f32 = 0.17;
 
 fn smooth(x: f32, a: f32, b: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
@@ -137,6 +146,8 @@ struct Targets {
     roll: f32,
     twist: f32,
     lift: f32,
+    /// Squash added straight to the body's (the bob of the steps: too quick for its spring).
+    bob: f32,
     /// Limb spring stiffness and damping.
     k: f32,
     c: f32,
@@ -157,6 +168,7 @@ impl Default for Targets {
             roll: 0.0,
             twist: 0.0,
             lift: 0.0,
+            bob: 0.0,
             k: 240.0,
             c: 20.0,
         }
@@ -212,12 +224,20 @@ pub struct BeanAnim {
     roll: Spring,
     twist: Spring,
     lift: Spring,
+    /// The body's wobble on top of its lean and roll.
+    jelly: [Spring; 2],
     tilt_now: f32,
     spin: f32,
     spin_rate: f32,
     emote: u8,
     emote_t: f32,
     blink_at: f32,
+    /// Time into the blink under way (below 0: none).
+    blink_t: f32,
+    /// Where the eyes look (pupil offset), where they are turning to, and when they next glance.
+    gaze: Vec2,
+    glance: Vec2,
+    glance_at: f32,
     seed: f32,
     rng: u32,
     last_vel: Vec3,
@@ -226,6 +246,8 @@ pub struct BeanAnim {
     last_anim: Option<Anim>,
     fidget: u8,
     fidget_at: f32,
+    /// Which way the next look round turns.
+    look_side: f32,
     step_side: bool,
     phase: f32,
     expr: Expr,
@@ -255,12 +277,17 @@ impl BeanAnim {
             roll: Spring::default(),
             twist: Spring::default(),
             lift: Spring::default(),
+            jelly: [Spring::default(); 2],
             tilt_now: 0.0,
             spin: 0.0,
             spin_rate: 0.0,
             emote: 0,
             emote_t: 0.0,
             blink_at: 0.0,
+            blink_t: -1.0,
+            gaze: Vec2::ZERO,
+            glance: Vec2::ZERO,
+            glance_at: 0.0,
             seed: 0.0,
             rng: id.wrapping_mul(2_654_435_761) | 1,
             last_vel: Vec3::ZERO,
@@ -269,6 +296,7 @@ impl BeanAnim {
             last_anim: None,
             fidget: 0,
             fidget_at: 0.0,
+            look_side: 1.0,
             step_side: false,
             phase: 0.0,
             expr: Expr::Smile,
@@ -284,6 +312,7 @@ impl BeanAnim {
         a.seed = a.random() * 100.0;
         a.blink_at = 1.0 + a.random() * 3.0;
         a.fidget_at = 4.0 + a.random() * 6.0;
+        a.glance_at = 1.0 + a.random() * 2.0;
         a
     }
 
@@ -351,7 +380,9 @@ impl BeanAnim {
         let fwd = f.vel.x * sy + f.vel.z * cy;
         let side = f.vel.x * cy - f.vel.z * sy;
         let speed = f.vel.x.hypot(f.vel.z);
-        let accel = (f.vel - self.last_vel) / dt;
+        let prev_vel = self.last_vel;
+        let dv = f.vel - prev_vel;
+        let accel = dv / dt;
         let a_fwd = accel.x * sy + accel.z * cy;
         let a_side = accel.x * cy - accel.z * sy;
         self.last_vel = f.vel;
@@ -373,14 +404,51 @@ impl BeanAnim {
         };
 
         // Squash and stretch impulses on events.
-        if f.land_impact > 0.1 {
-            self.squash.v -= f.land_impact * 11.0;
+        let mut impact = f.land_impact;
+        let airborne = matches!(a, Anim::Air | Anim::Tumble | Anim::Dive);
+        if impact <= 0.1 && prev == Some(Anim::Air) && !airborne {
+            // (A bean drawn from snapshots has no impact: from how fast it came down.)
+            impact = (-prev_vel.y / 20.0).min(1.0);
+            if impact <= 0.3 {
+                impact = 0.0;
+            }
+        }
+        if impact > 0.1 {
+            // Squashed flat, it bounces back past its shape and settles (an underdamped spring); the
+            // body tips on with its speed, the arms flop out, the eyes squeeze on a hard one.
+            self.squash.v -= impact * 11.0;
+            self.jelly[0].v += impact * (fwd * 0.1).clamp(-1.0, 1.0);
+            self.limbs[0].sz.v -= impact * 8.0;
+            self.limbs[1].sz.v += impact * 8.0;
+            if impact > 0.5 {
+                self.blink_t = 0.0;
+            }
         }
         if entered && a == Anim::Air && f.vel.y > 3.0 {
-            self.squash.v += 4.5;
+            // Take-off: a quick crouch first, then the stretch of the jump.
+            self.squash.x = self.squash.x.min(-0.06);
+            self.squash.v = self.squash.v.max(0.0) + 4.5;
         }
         if entered && a == Anim::Dive {
             self.squash.v += 3.0;
+        }
+        // The body wobbles like jelly against changes of speed: a little when it starts, stops or turns,
+        // much more when knocked (a change no running could make: a push, a bumper, a wall).
+        if prev.is_some() && matches!(a, Anim::Idle | Anim::Air | Anim::Grab | Anim::Reach | Anim::Stun) {
+            let dh = dv.with_y(0.0);
+            let n = dh.length();
+            let knock = (n - RUN_ACCEL * dt).clamp(0.0, 8.0);
+            if n > 1e-4 {
+                let k = 0.06 * n + 0.3 * knock;
+                let (d_fwd, d_side) = ((dh.x * sy + dh.z * cy) / n, (dh.x * cy - dh.z * sy) / n);
+                // (The top lags behind the push: back against forward, and to the side away from it.)
+                self.jelly[0].v -= d_fwd * k;
+                self.jelly[1].v += d_side * k;
+                self.squash.v -= knock * 0.25;
+            }
+            if knock > 2.0 {
+                self.blink_t = 0.0;
+            }
         }
 
         let mut tg = match f.pose {
@@ -421,7 +489,6 @@ impl BeanAnim {
         if tumbling && entered {
             self.spin_rate = (speed * 1.3).clamp(5.0, 13.0);
         }
-        let airborne = matches!(a, Anim::Air | Anim::Tumble | Anim::Dive);
         if tumbling && f.vel.y.abs() > 1.5 && airborne {
             self.spin += self.spin_rate * dt;
         } else {
@@ -442,49 +509,80 @@ impl BeanAnim {
             q *= Quat::from_axis_angle(along, (t * 7.0 + self.seed).sin() * (speed * 0.08).min(0.5));
         }
         self.out.pivot = q;
-        self.out.lean = self.lean.step(tg.lean, 110.0, 14.0, dt);
-        self.out.roll = self.roll.step(tg.roll, 110.0, 13.0, dt);
+        for j in &mut self.jelly {
+            j.step(0.0, JELLY_K, JELLY_C, dt);
+        }
+        let [jl, jr] = self.jelly.map(|j| j.x.clamp(-JELLY_MAX, JELLY_MAX));
+        self.out.lean = self.lean.step(tg.lean, 110.0, 14.0, dt) + jl;
+        self.out.roll = self.roll.step(tg.roll, 110.0, 13.0, dt) + jr;
         self.out.twist = self.twist.step(tg.twist, 90.0, 12.0, dt);
         self.out.lift = self.lift.step(tg.lift, 220.0, 20.0, dt);
 
-        // Squash and stretch: a spring around 0, plus stretch with vertical speed in the air.
-        let air_stretch = if a == Anim::Air {
-            (f.vel.y.abs() / 40.0).clamp(0.0, 0.12)
-        } else {
-            0.0
+        // Squash and stretch: an underdamped spring around 0 (it rings after a landing), plus stretch with
+        // vertical speed in the air and along a dive, and the bob of the steps.
+        let stretch = match a {
+            Anim::Air => (f.vel.y.abs() / 40.0).clamp(0.0, 0.12),
+            Anim::Dive => (speed / 60.0).clamp(0.0, 0.1),
+            _ => 0.0,
         };
-        let sq = (self.squash.step(0.0, 260.0, 12.0, dt) + air_stretch).clamp(-0.32, 0.28);
+        let sq = (self.squash.step(0.0, 260.0, 10.0, dt) + stretch + tg.bob).clamp(-0.32, 0.28);
         let breathe = if a == Anim::Idle && speed < 1.0 {
-            (t * 2.6 + self.seed).sin() * 0.014
+            (t * 2.6 + self.seed).sin() * 0.016
         } else {
             0.0
         };
         let w = 1.0 - sq * 0.5 - breathe * 0.5;
         self.out.squash = Vec3::new(w, 1.0 + sq + breathe, w);
 
-        // Eyes: blink every few seconds; squeezed shut when tumbling.
+        // Eyes: a quick blink every few seconds (now and then two in a row); squeezed shut when tumbling.
         self.blink_at -= dt;
-        let blink = if self.blink_at < 0.12 && self.blink_at > 0.0 {
-            0.12
-        } else {
-            1.0
-        };
         if self.blink_at < 0.0 {
-            self.blink_at = 2.0 + self.random() * 3.5;
+            let twice = self.random() < 0.2;
+            self.blink_at = if twice { 0.3 } else { 2.0 + self.random() * 3.5 };
+            self.blink_t = 0.0;
         }
+        let shut = if self.blink_t >= 0.0 {
+            let b = self.blink_t;
+            self.blink_t = if b + dt > BLINK_S { -1.0 } else { b + dt };
+            if b < 0.05 {
+                b / 0.05
+            } else if b < 0.08 {
+                1.0
+            } else {
+                (1.0 - (b - 0.08) / (BLINK_S - 0.08)).max(0.0)
+            }
+        } else {
+            0.0
+        };
         self.expr = self.pick_expr(a, f, speed);
         let squeeze = if tumbling { 0.3 } else { 1.0 };
         let (open, pupil) = self.expr.eyes();
         let k = (dt * 18.0).min(1.0);
-        self.open += (open * blink * squeeze - self.open) * k;
+        self.open += (open * squeeze - self.open) * k;
         self.pupil += (pupil - self.pupil) * k;
-        self.out.eye_open = self.open;
+        self.out.eye_open = self.open * (1.0 - 0.88 * shut);
         self.out.pupil = self.pupil;
         self.out.expr = self.expr;
         self.out.wide += (open * squeeze - self.out.wide) * k;
         let (lift, tilt) = self.expr.brows();
         self.out.brow_lift += (lift - self.out.brow_lift) * k;
         self.out.brow_tilt += (tilt - self.out.brow_tilt) * k;
+        // Gaze: standing, a glance aside now and then (and along a look round); moving, ahead into the turn.
+        self.glance_at -= dt;
+        if self.glance_at < 0.0 {
+            self.glance_at = 1.2 + self.random() * 3.0;
+            self.glance = if self.random() < 0.35 {
+                Vec2::ZERO
+            } else {
+                Vec2::new((self.random() - 0.5) * 0.028, (self.random() - 0.5) * 0.012)
+            };
+        }
+        let look = if speed < 1.2 && a == Anim::Idle {
+            self.glance + Vec2::new(self.out.twist * 0.025, 0.0)
+        } else {
+            Vec2::new((self.yaw_rate * 0.004).clamp(-0.012, 0.012), 0.0)
+        };
+        self.gaze += (look.clamp(Vec2::splat(-0.016), Vec2::splat(0.016)) - self.gaze) * (dt * 14.0).min(1.0);
         self.out.pupil_roll = if self.expr == Expr::Dizzy {
             // Eyes rolling in circles (in opposite directions).
             [1.0f32, -1.0].map(|s| {
@@ -492,7 +590,7 @@ impl BeanAnim {
                 Vec2::new(a.cos() * 0.018, a.sin() * 0.022)
             })
         } else {
-            [Vec2::ZERO; 2]
+            [self.gaze; 2]
         };
         self.out.crying = self.expr == Expr::Cry;
         // Giants grow (and shrink back) with a wobble.
@@ -682,8 +780,10 @@ impl BeanAnim {
         tg.arm_lz = 0.22 + 0.28 * run;
         tg.arm_rz = tg.arm_lz;
         tg.lean = 0.26 * run * back + (a_fwd * 0.012).clamp(-0.22, 0.3);
-        // Two bounces per cycle; hips twist and roll.
+        // Two bounces per cycle, a little squashed as each foot lands and stretched at the top; hips twist
+        // and roll.
         tg.lift = (1.0 - c.abs()) * 0.13 * run;
+        tg.bob = (0.5 - c.abs()) * 0.07 * run;
         tg.twist = s * 0.2 * run;
         tg.roll = c * 0.08 * run + (-self.yaw_rate * speed * 0.012).clamp(-0.32, 0.32);
         if side.abs() > 1.0 && fwd.abs() < 2.0 {
@@ -711,20 +811,26 @@ impl BeanAnim {
         if self.emote_t > 0.0 {
             return self.emote_pose(tg, t);
         }
-        // Idle: breathing, weight shifting, every now and then a look around or a stretch.
+        // Idle: breathing, weight shifting, every now and then a look around (either way), a stretch, a
+        // tap of the foot or a little double hop.
         let idle = 1.0 - smooth(speed, 0.2, 1.2);
         self.fidget_at -= dt;
         if self.fidget_at < 0.0 {
-            self.fidget = 1 + (self.random() * 3.0) as u8;
+            self.fidget = 1 + (self.random() * 4.0) as u8;
             self.fidget_at = 5.0 + self.random() * 7.0;
+            self.look_side = if self.random() < 0.5 { 1.0 } else { -1.0 };
         }
         let since = 5.0 + 7.0 - self.fidget_at;
         tg.arm_lx = 0.12 + (t * 1.9 + self.seed).sin() * 0.05;
         tg.arm_rx = 0.12 + (t * 1.9 + self.seed + 0.5).sin() * 0.05;
+        // (The arms rise a little out from the sides with each breath.)
+        let breath = (t * 2.6 + self.seed).sin() * 0.04 * idle;
+        tg.arm_lz += breath;
+        tg.arm_rz += breath;
         tg.roll += (t * 0.9 + self.seed).sin() * 0.04 * idle;
         tg.lift += (t * 2.6 + self.seed).sin() * 0.006 * idle;
         if self.fidget == 1 && since < 2.0 {
-            tg.twist = (since * PI).sin() * 0.45 * if self.seed.sin() > 0.0 { 1.0 } else { -1.0 };
+            tg.twist = (since * PI).sin() * 0.45 * self.look_side;
         } else if self.fidget == 2 && since < 1.4 {
             let k = (since / 1.4 * PI).sin();
             (tg.arm_lx, tg.arm_rx, tg.arm_lz, tg.arm_rz) = (-2.9 * k, -2.9 * k, 0.3, 0.3);
@@ -732,6 +838,12 @@ impl BeanAnim {
         } else if self.fidget == 3 && since < 1.0 {
             tg.leg_rx = -0.4 * (since * PI).sin();
             tg.roll -= 0.1 * (since * PI).sin();
+        } else if self.fidget == 4 && since < 0.9 {
+            let hop = (since / 0.45 * PI).sin().abs();
+            tg.lift += hop * 0.07;
+            tg.bob += hop * 0.04;
+            tg.arm_lz += hop * 0.35;
+            tg.arm_rz += hop * 0.35;
         }
         tg
     }
@@ -883,6 +995,89 @@ mod tests {
             }
             assert!(o.pivot.is_finite() && o.squash.is_finite(), "{anim:?}");
         }
+    }
+
+    fn still(anim: Anim, vel: Vec3, t: f32) -> Frame {
+        Frame {
+            vel,
+            anim,
+            t,
+            land_impact: 0.0,
+            tilt: 0.0,
+            tilt_dir: 0.0,
+            yaw: 0.0,
+            grab_at: None,
+            size: 1.0,
+            power: 0,
+            pose: None,
+        }
+    }
+
+    /// The body's height after a landing at `fps`: settled, then squashed at t = 1 s; sampled every frame.
+    fn landing(fps: f32) -> Vec<(f32, f32)> {
+        let dt = 1.0 / fps;
+        let mut a = BeanAnim::new(3);
+        let mut out = Vec::new();
+        for i in 0..(fps * 2.0) as u32 {
+            let t = i as f32 * dt;
+            let mut f = still(Anim::Idle, Vec3::ZERO, t);
+            if i == fps as u32 {
+                f.land_impact = 0.8;
+            }
+            a.animate(dt, &f);
+            if i >= fps as u32 {
+                out.push((t + dt - 1.0, a.out.squash.y));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_landing_squashes_and_jiggles_back() {
+        let h = landing(60.0);
+        let low = h.iter().map(|p| p.1).fold(f32::MAX, f32::min);
+        let high = h.iter().filter(|p| p.0 > 0.1).map(|p| p.1).fold(f32::MIN, f32::max);
+        assert!(low < 0.85, "{low}");
+        assert!(high > 1.03, "{high}");
+        // Within the bounds of the squash, and settled again a second later.
+        assert!(low > 0.6 && high < 1.3, "{low} {high}");
+        let end = h.last().map_or(0.0, |p| p.1);
+        assert!((end - 1.0).abs() < 0.03, "{end}");
+    }
+
+    #[test]
+    fn the_squash_does_not_depend_on_the_frame_rate() {
+        let (a, b) = (landing(60.0), landing(144.0));
+        for at in [0.05, 0.12, 0.25, 0.4] {
+            let near = |h: &[(f32, f32)]| {
+                h.iter()
+                    .min_by(|x, y| (x.0 - at).abs().total_cmp(&(y.0 - at).abs()))
+                    .map_or(0.0, |p| p.1)
+            };
+            let (ya, yb) = (near(&a), near(&b));
+            assert!((ya - yb).abs() < 0.06, "{at}: {ya} {yb}");
+        }
+    }
+
+    #[test]
+    fn a_knock_wobbles_the_body_both_ways() {
+        // Holding on (a fixed lean), standing, then shoved forward at 6 m/s in one frame.
+        let dt = 1.0 / 60.0;
+        let mut a = BeanAnim::new(9);
+        for i in 0..120 {
+            a.animate(dt, &still(Anim::Grab, Vec3::ZERO, i as f32 * dt));
+        }
+        let rest = a.out.lean;
+        let (mut low, mut high) = (0.0f32, 0.0f32);
+        for i in 120..210 {
+            a.animate(dt, &still(Anim::Grab, Vec3::new(0.0, 0.0, 6.0), i as f32 * dt));
+            low = low.min(a.out.lean - rest);
+            high = high.max(a.out.lean - rest);
+        }
+        // Thrown back first, then past upright the other way; never further than the wobble may go.
+        assert!(low < -0.06, "{low}");
+        assert!(high > 0.02, "{high}");
+        assert!(low > -JELLY_MAX - 0.01, "{low}");
     }
 
     #[test]
