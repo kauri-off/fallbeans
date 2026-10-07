@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
-use bevy::render::error_handler::{RenderError, RenderErrorPolicy};
+use bevy::render::error_handler::{ErrorType, RenderError, RenderErrorPolicy};
 
 use crate::logs::{self, Logs};
 
@@ -19,7 +19,14 @@ const MARKER: &str = "last-crash";
 
 /// The report of the previous run's crash, if there was one.
 #[derive(Resource, Default)]
-pub struct LastCrash(pub Option<PathBuf>);
+pub struct LastCrash(pub Option<Crash>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Crash {
+    pub report: PathBuf,
+    /// The GPU was lost (a driver reset or a hang): the player's driver, not the game, is the first suspect.
+    pub gpu_lost: bool,
+}
 
 pub struct CrashPlugin;
 
@@ -34,7 +41,7 @@ impl Plugin for CrashPlugin {
         std::panic::set_hook(Box::new(move |info| {
             next(info);
             if !background(std::thread::current().name()) {
-                write_report(&dir, &panic_text(info));
+                write_report(&dir, &panic_text(info), device_lost());
             }
         }));
     }
@@ -70,20 +77,35 @@ fn redact_home(s: &str, home: &str) -> String {
 /// the usual one.
 pub fn render_failed(error: &RenderError, main: &mut World, _: &mut World) -> RenderErrorPolicy {
     if let Some(dir) = main.get_resource::<Logs>().and_then(|l| l.0.clone()) {
-        write_report(&dir, &format!("GPU error ({:?}): {}\n", error.ty, error.description));
+        let what = format!("GPU error ({:?}): {}\n", error.ty, error.description);
+        write_report(&dir, &what, error.ty == ErrorType::DeviceLost);
     }
     main.write_message(AppExit::error());
     RenderErrorPolicy::StopRendering
 }
 
-fn take_marker(dir: &Path) -> Option<PathBuf> {
-    let marker = dir.join(MARKER);
-    let path = fs::read_to_string(&marker).ok()?;
-    let _ = fs::remove_file(&marker);
-    Some(PathBuf::from(path.trim()))
+/// Bevy's render systems run on after a lost device until its handler sees it, and the first buffer they
+/// create on it panics: such a panic is the lost GPU's, which Bevy has logged just before.
+fn device_lost() -> bool {
+    fb_net::logbook::tail(LOG_LINES)
+        .iter()
+        .any(|l| l.target == "bevy_render::error_handler" && l.msg.starts_with("Caught DeviceLost"))
 }
 
-fn write_report(dir: &Path, what: &str) {
+/// The marker: the report's path, then `gpu-lost` on a line of its own if the GPU was lost.
+fn take_marker(dir: &Path) -> Option<Crash> {
+    let marker = dir.join(MARKER);
+    let text = fs::read_to_string(&marker).ok()?;
+    let _ = fs::remove_file(&marker);
+    let mut lines = text.lines();
+    let report = PathBuf::from(lines.next()?.trim());
+    let gpu_lost = lines.any(|l| l.trim() == GPU_LOST);
+    Some(Crash { report, gpu_lost })
+}
+
+const GPU_LOST: &str = "gpu-lost";
+
+fn write_report(dir: &Path, what: &str, gpu_lost: bool) {
     // (Only the first: the others are usually its consequences.)
     static WRITTEN: AtomicBool = AtomicBool::new(false);
     if WRITTEN.swap(true, Ordering::Relaxed) {
@@ -92,8 +114,17 @@ fn write_report(dir: &Path, what: &str) {
     let Some((mut file, path)) = logs::create(dir, "crash", "txt") else {
         return;
     };
-    if file.write_all(redact(&report(what)).as_bytes()).is_ok() {
-        let _ = fs::write(dir.join(MARKER), path.to_string_lossy().as_bytes());
+    let what = if gpu_lost {
+        format!("cause: the GPU was lost (a driver reset or a GPU hang); anything below follows from it\n{what}")
+    } else {
+        what.to_string()
+    };
+    if file.write_all(redact(&report(&what)).as_bytes()).is_ok() {
+        let mut marker = path.to_string_lossy().into_owned();
+        if gpu_lost {
+            marker = format!("{marker}\n{GPU_LOST}");
+        }
+        let _ = fs::write(dir.join(MARKER), marker.as_bytes());
         eprintln!("crash report: {}", path.display());
     }
 }
@@ -145,8 +176,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fb-crash-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(MARKER), "/x/crash-1.txt\n").unwrap();
-        assert_eq!(take_marker(&dir), Some(PathBuf::from("/x/crash-1.txt")));
+        let crash = |gpu_lost| Some(Crash { report: PathBuf::from("/x/crash-1.txt"), gpu_lost });
+        assert_eq!(take_marker(&dir), crash(false));
         assert_eq!(take_marker(&dir), None);
+        fs::write(dir.join(MARKER), format!("/x/crash-1.txt\n{GPU_LOST}")).unwrap();
+        assert_eq!(take_marker(&dir), crash(true));
         fs::remove_dir_all(&dir).unwrap();
     }
 

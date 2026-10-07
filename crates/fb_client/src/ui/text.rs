@@ -33,6 +33,12 @@ pub fn update_failed(e: &str) -> String {
 pub fn crashed(report: &str) -> String {
     format!("В прошлый раз игра упала. Отчёт: {report}")
 }
+pub fn gpu_lost(report: &str) -> String {
+    format!(
+        "В прошлый раз видеокарта перестала отвечать (сброс видеодрайвера), и игра закрылась. Обновите драйвер; \
+если повторится — выберите в «Графике» другое масштабирование. Отчёт: {report}"
+    )
+}
 pub const OPEN_LOGS: &str = "Открыть папку с логами";
 pub const PROBLEMS: &str = "Если что-то сломалось";
 pub const PROBLEMS_NOTE: &str = "F8 в игре сохраняет отчёт: что было с сетью и вашим бобом в последние секунды. \
