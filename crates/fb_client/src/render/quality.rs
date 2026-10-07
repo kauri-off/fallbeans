@@ -359,10 +359,11 @@ fn apply(
         Preset::High => ShadowFilteringMethod::Gaussian,
         _ => ShadowFilteringMethod::Hardware2x2,
     });
-    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over three cascades,
-    // Medium 2048 over one; the cascades overlap by a third, so their seams blend instead of showing.)
+    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over two cascades,
+    // Medium 2048 over one; the cascades overlap by a third, so their seams blend instead of showing. A third
+    // cascade on High looked the same and cost a view: 2.5–4 ms of the render thread on DX12, without bindless.)
     let (size, cascades, reach) = match preset {
-        Preset::High => (4096, 3, 80.0),
+        Preset::High => (4096, 2, 80.0),
         Preset::Medium => (2048, 1, 40.0),
         Preset::Low => (1024, 1, 30.0),
     };
