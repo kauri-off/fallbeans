@@ -52,8 +52,9 @@ impl Backend {
 }
 
 /// The automatic choice, in order. Windows too tries Vulkan first: measured on an RTX 5060 Ti (portal-panic,
-/// High), wgpu's DX12 backend spent 14.8 ms of render-thread CPU a frame against Vulkan's 3.5 ms for the same
-/// picture (63 against 245 fps). DX12 remains for machines without a usable Vulkan 1.2 driver.
+/// High, DX12 with DXC), wgpu's DX12 backend spent ~9.4 ms of render-thread CPU a frame against Vulkan's 3.0 ms
+/// for the same picture (102 against 288 fps): on DX12 Bevy cannot use bindless materials (D3D12's sampler heap
+/// is too small for the standard material's samplers). DX12 remains for machines without a usable Vulkan 1.2.
 fn auto_order() -> &'static [Backend] {
     if cfg!(target_os = "windows") {
         &[Backend::Vulkan, Backend::Dx12]
