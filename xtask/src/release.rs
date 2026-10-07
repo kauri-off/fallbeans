@@ -274,6 +274,15 @@ fn build(kinds: &[Kind], native: bool, o: &Opts) -> Step {
     for k in &kinds {
         files.push(made(*k, started)?);
     }
+    // (Again: the draft may have been made anew of another commit while this built.)
+    let now = draft()?;
+    if now.target != head {
+        return Err(format!(
+            "the draft of {} is of {} now, these packages are of {head}: not uploaded",
+            tag(),
+            now.target
+        ));
+    }
     let names: Vec<String> = files.iter().map(|f| f.to_string_lossy().into_owned()).collect();
     let tag = tag();
     let mut args = vec!["release", "upload", tag.as_str(), "--clobber"];

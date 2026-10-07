@@ -24,7 +24,7 @@ modules:
       - cp -r assets /app/bin/assets
       # The upscalers' libraries beside the client, when the build had their SDKs (`cargo xtask dist`).
       - for f in libamd_fidelityfx_vk.so libnvidia-ngx-dlss.so.*; do [ ! -e "$f" ] || install -Dm755 "$f" "/app/bin/$f"; done
-      - if [ -d upscaler-licenses ]; then cp -r upscaler-licenses /app/share/licenses/io.github.kauri_off.fallbeans/; fi
+      - if [ -d upscaler-licenses ]; then install -d /app/share/licenses/io.github.kauri_off.fallbeans && cp -r upscaler-licenses /app/share/licenses/io.github.kauri_off.fallbeans/; fi
       - install -Dm644 LICENSE /app/share/licenses/io.github.kauri_off.fallbeans/LICENSE
       - install -Dm644 THIRD-PARTY-LICENSES.html /app/share/licenses/io.github.kauri_off.fallbeans/THIRD-PARTY-LICENSES.html
       - install -Dm644 io.github.kauri_off.fallbeans.desktop /app/share/applications/io.github.kauri_off.fallbeans.desktop
