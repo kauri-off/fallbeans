@@ -79,7 +79,8 @@ DLSS; `dist` без апскейлеров не собирается.
   `FidelityFX_SC` под Linux, ffx-api только с FSR 3.1 Upscale (без генерации кадров, FSR 2 и провайдеров драйвера
   AMD), подмассивы scratch-буфера VK-бэкенда выровнены на 64 (у AMD — на 4, а `EffectContext` — `alignas(32)`: GCC
   пишет туда `movaps`, без правки падение в `CreateBackendContextVK`), контекст FSR 3.1 вдвое больше (`wchar_t` —
-  4 байта). Не проверены в CI: сборка FidelityFX в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
+  4 байта), размер в `snprintf` у `MD5HashString` (с `_FORTIFY_SOURCE` Ubuntu 24.04 компилятор
+  шейдеров падал «buffer overflow detected»). Не проверены в CI: сборка FidelityFX в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
   и на ubuntu-24.04 для Flatpak; DLSS во Flatpak (видит ли песочница `libnvidia-ngx.so` драйвера через расширение
   GL NVIDIA). С фичей `dlss` клиент на Linux зависит от `libstdc++.so.6` (`dlss_wgpu` линкует её динамически).
 - `scenarios::round_drum_roll` раз упал в `cargo xtask check` по таймауту «not within 15 s: in the dev room's lobby»
