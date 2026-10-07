@@ -892,15 +892,19 @@ impl Arena {
     }
 
     fn map_tick(&mut self, t: f64, events: &mut Vec<ArenaEvent>) {
-        if self.spec.tick.is_none() {
-            return;
+        if self.spec.tick.is_some() {
+            self.with_cx(t, |spec, cx| {
+                if let Some(f) = spec.tick.as_mut() {
+                    f(cx, t);
+                }
+            });
+            self.flush(events);
         }
-        self.with_cx(t, |spec, cx| {
-            if let Some(f) = spec.tick.as_mut() {
-                f(cx, t);
+        if let Some(f) = &self.spec.on_bean {
+            for p in self.pawns.iter_mut().filter(|p| p.status == PawnStatus::Play) {
+                f(&self.world, p.id, &mut p.body, t);
             }
-        });
-        self.flush(events);
+        }
     }
 
     fn trace_pawn(&mut self, i: usize, t: f64) {

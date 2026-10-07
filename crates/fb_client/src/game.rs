@@ -21,6 +21,7 @@ use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
 use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
+use lightyear::core::confirmed_history::ConfirmedHistory;
 use lightyear::input::native::prelude::{ActionState, InputMarker};
 use lightyear::prelude::client::input::InputSystems;
 use lightyear::prelude::*;
@@ -265,15 +266,20 @@ impl Plugin for GamePlugin {
         app.init_resource::<Presses>();
         app.init_resource::<Gate>();
         app.init_resource::<Generations>();
+        app.init_resource::<LastRollback>();
         app.add_message::<Cue>();
         app.add_systems(Startup, open_trace);
         app.add_systems(
             PreUpdate,
             (
-                (drop_map, build_round).chain(),
+                (drop_map, build_round, reconcile, pace_pushes)
+                    .chain()
+                    .after(ReplicationSystems::Receive)
+                    .before(RollbackSystems::Check),
                 latch_presses.after(bevy::input::InputSystems),
             ),
         );
+        app.add_systems(PreUpdate, note_rollback.after(RollbackSystems::Check));
         app.add_systems(FixedPreUpdate, write_input.in_set(InputSystems::WriteClientInputs));
         app.add_systems(FixedUpdate, predict);
         app.add_systems(
@@ -396,6 +402,100 @@ fn build_round(
     commands.insert_resource(next);
 }
 
+/// Lightyear checks the prediction at each completed server tick, but only where the prediction history reaches
+/// back that far: just after the clock is first set (or for a bean given since) it has nothing so old and the
+/// check passes silently, until the server's tick passes the first one predicted (in an intro where nothing
+/// moves, until the start). Meanwhile the own bean kept what it had: the lobby's place while the server had it at
+/// the round's spawn. Such a tick is rolled back to instead; so is the newest one once a new arena's map is built
+/// (a rollback in the frame its `Round` came replayed its first ticks on the old map).
+fn reconcile(
+    timeline: SyncedLocalTimeline,
+    map: Option<Res<Map>>,
+    checkpoints: Res<ReplicationCheckpointMap>,
+    mutate: Option<Res<ServerMutateTicks>>,
+    manager: Res<PredictionManager>,
+    own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
+    mut meta: ResMut<StateRollbackMetadata>,
+    mut built: Local<Option<u32>>,
+) {
+    let tick = timeline.tick();
+    let Some(c) = mutate
+        .and_then(|m| checkpoints.latest_completed_at_or_before(&m, tick))
+        .map(|c| c.tick)
+    else {
+        return;
+    };
+    let generation = map.map(|m| m.generation);
+    if tick - c > i32::from(manager.rollback_policy.max_rollback_ticks) {
+        return;
+    }
+    for (predicted, confirmed) in &own {
+        let gap = predicted.oldest().is_none_or(|(t, _)| *t > c);
+        if (gap || *built != generation) && confirmed.get_state_at_or_before(c).is_some() {
+            meta.request_forced_rollback(c);
+            *built = generation;
+        }
+    }
+}
+
+/// Ticks between rollbacks for a push (below).
+const PUSH_EVERY: i32 = 8;
+/// Closer than this (m, between feet) another bean may be leaning on the own one.
+const PUSH_NEAR: f32 = 2.5;
+/// A difference this small (m) in position can be a push.
+const PUSH_MAX: f64 = 0.3;
+
+/// The last tick a rollback was started at.
+#[derive(Resource, Default)]
+struct LastRollback(Option<Tick>);
+
+fn note_rollback(timeline: Res<LocalTimeline>, manager: Res<PredictionManager>, mut last: ResMut<LastRollback>) {
+    if manager.is_rollback() {
+        last.0 = Some(timeline.tick());
+    }
+}
+
+/// Beans leaning on each other: the client pushes against the others where it draws them, a little in the
+/// past, so while they touch nearly every snapshot finds the own bean a few millimetres off and rolls back
+/// (portal-panic's crowds at a checkpoint: 600–1200 rollbacks in 100 s). A difference only in where the bean
+/// is and how fast it goes, with another bean near, waits until PUSH_EVERY ticks after the last rollback
+/// (state checks are off for the frame); anything else rolls back at once. Waiting loses nothing: the
+/// difference stays in the history, and the next check finds it.
+fn pace_pushes(
+    timeline: SyncedLocalTimeline,
+    checkpoints: Res<ReplicationCheckpointMap>,
+    mutate: Option<Res<ServerMutateTicks>>,
+    mut manager: ResMut<PredictionManager>,
+    meta: Res<StateRollbackMetadata>,
+    last: Res<LastRollback>,
+    own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
+    others: Query<&RemotePose, (With<Interpolated>, Without<Predicted>)>,
+) {
+    let tick = timeline.tick();
+    let recent = last.0.is_some_and(|l| tick - l < PUSH_EVERY);
+    let wait = recent
+        && meta.forced_rollback_tick().is_none()
+        && mutate
+            .and_then(|m| checkpoints.latest_completed_at_or_before(&m, tick))
+            .zip(own.single().ok())
+            .and_then(|(c, (predicted, confirmed))| Some((predicted.get(c.tick)?, confirmed.get_present(c.tick)?)))
+            .is_some_and(|(p, s)| {
+                let mut moved = p.clone();
+                (moved.body.pos, moved.body.vel) = (s.body.pos, s.body.vel);
+                let at = s.body.pos.as_vec3();
+                !body_differs(&moved, s)
+                    && (p.body.pos - s.body.pos).length() < PUSH_MAX
+                    && others.iter().any(|o| o.pos.distance(at) < PUSH_NEAR)
+            });
+    if matches!(manager.rollback_policy.state, RollbackMode::Disabled) != wait {
+        manager.rollback_policy.state = if wait {
+            RollbackMode::Disabled
+        } else {
+            RollbackMode::Check
+        };
+    }
+}
+
 fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Query<(), With<PlayerId>>) {
     if pawns.get(trigger.entity).is_ok() {
         commands.entity(trigger.entity).insert((
@@ -511,6 +611,7 @@ fn write_input(
     gate: Res<Gate>,
     binds: Res<Bindings>,
     rollback: Option<Res<Rollback>>,
+    sync: Res<LocalTimelineSync>,
 ) {
     // A rollback replays the buffered input over what is written here: a press taken now would be lost.
     if rollback.is_some() {
@@ -519,6 +620,12 @@ fn write_input(
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
     let pressed = core::mem::take(&mut presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };
+    // Before the clock is set the ticks are not the server's: what is written now is moved onto ticks the
+    // server played without it, and the rollback that follows the setting would replay it there.
+    if !sync.is_synced() {
+        state.0 = InputFrame::IDLE.into();
+        return;
+    }
     if let Some(p) = probe.as_mut().filter(|p| time.elapsed_secs_f64() < p.until) {
         state.0 = p.frame.into();
         p.frame.buttons &= BTN_GRAB;
@@ -651,6 +758,9 @@ fn predict(
         }));
     }
     predict_respawn(map, id.0, full);
+    if let Some(f) = map.spec.on_bean.as_ref().filter(|_| !map.gone(id.0)) {
+        f(&map.world, id.0, &mut full.body, t);
+    }
     stats.ticks += 1;
     if rollback.is_none() {
         let (b, e) = (&full.body, &ev.0);

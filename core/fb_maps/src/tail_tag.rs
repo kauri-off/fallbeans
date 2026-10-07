@@ -245,28 +245,30 @@ impl MapDef for TailTag {
                     }
                     cx.world.st_mut(st).held.extend(keep);
                 }
-                // Tails weigh you down a little: the chasers can catch up.
-                let tails = cx.world.st(st).tails.clone();
-                for &id in &tails {
-                    let Some(body) = cx.bodies.get_mut(id) else { continue };
-                    body.slow_k = if t < body.slow_until {
-                        body.slow_k.at_most(TAIL_SLOW)
-                    } else {
-                        TAIL_SLOW
-                    };
-                    body.slow_until = body.slow_until.at_least(t + 0.25);
-                }
                 let s = t.floor();
                 if s == cx.world.st(st).last_second {
                     return;
                 }
                 cx.world.st_mut(st).last_second = s;
+                let tails = cx.world.st(st).tails.clone();
                 for &id in &tails {
                     if cx.bodies.get(id).is_some() {
                         let v = cx.score(id) + 1.0;
                         cx.set_score(id, v);
                     }
                 }
+            })),
+            // Tails weigh you down a little: the chasers can catch up.
+            on_bean: Some(Box::new(move |world, id, body, t| {
+                if t < 0.0 || !world.st(st).has(id) {
+                    return;
+                }
+                body.slow_k = if t < body.slow_until {
+                    body.slow_k.at_most(TAIL_SLOW)
+                } else {
+                    TAIL_SLOW
+                };
+                body.slow_until = body.slow_until.at_least(t + 0.25);
             })),
             on_grab: Some(Box::new(move |cx, actor, target| {
                 let t = cx.t;

@@ -125,6 +125,7 @@ pub type OnGrab = Box<dyn FnMut(&mut Cx, u32, u32) + Send + Sync>;
 pub type OnFall = Box<dyn FnMut(&mut Cx, u32, Option<u32>) + Send + Sync>;
 pub type OnHud = Box<dyn Fn(&Cx) -> Option<String> + Send + Sync>;
 pub type OnStart = Box<dyn FnMut(&mut Cx) + Send + Sync>;
+pub type OnBean = Box<dyn Fn(&World, u32, &mut Body, f64) + Send + Sync>;
 /// A collider's touch (or stand-on) handler, run inside the step of the body that touched it.
 pub type TouchFn = Box<dyn FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync>;
 
@@ -225,6 +226,9 @@ pub struct MapSpec {
     pub on_event: Option<OnEvent>,
     /// Server: per-tick game logic.
     pub tick: Option<OnTick>,
+    /// Both sides, after `tick`: what the map does to a bean in play each tick from the world's state alone
+    /// (a tail slows its holder). A client predicts it for its own bean.
+    pub on_bean: Option<OnBean>,
     /// Server: `actor` grabbed `target` (grab button, target in reach).
     pub on_grab: Option<OnGrab>,
     /// Server: `id` fell off during the round (and respawns); `by` is the player credited with it.

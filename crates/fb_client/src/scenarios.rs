@@ -1051,3 +1051,57 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
         "the client has its bean at {client:?}, the server at {server:?}"
     );
 }
+
+/// Every stress client's one unexplained divergence: a client that joins as a round starts has its clock set in
+/// the intro, and Lightyear checks no server tick before the first one it predicted. The own bean stood where it
+/// was in the lobby until the server's tick came that far (in an intro where nothing moves, until the start). It
+/// must be where the server has it from the first ticks after the clock is set.
+#[test]
+fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
+    use bevy::prelude::*;
+    use fb_net::{BodyFull, PlayerId};
+    use lightyear::prelude::{Predicted, PredictionHistory};
+
+    #[rustfmt::skip]
+    let mut g = Game::new(&[
+        "--room", "dev", "--lag", "40", "--jitter", "5", "--start", "door-dash", "--start-players", "1",
+    ]);
+    let set = |w: &mut World| {
+        let mut q = w.query_filtered::<&PredictionHistory<BodyFull>, With<Predicted>>();
+        q.iter(w).any(|h| !h.is_empty())
+    };
+    g.until(20.0, "the clock is set", set);
+    let in_round = g
+        .client()
+        .world()
+        .get_resource::<crate::game::Map>()
+        .is_some_and(|m| m.round.kind == ArenaKind::Round);
+    assert!(
+        in_round,
+        "the round began only after the clock was set: nothing to check"
+    );
+    let me = g.res::<Session>().me.expect("in a room");
+    let mut off = Vec::new();
+    for _ in 0..60 {
+        g.step();
+        let w = g.client().world_mut();
+        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let client = q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos);
+        let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+        let server = q
+            .iter(g.server.world())
+            .find(|(p, _)| p.0 == me)
+            .map(|(_, f)| f.body.pos);
+        if let (Some(c), Some(s)) = (client, server)
+            && (c - s).length() > 0.5
+        {
+            off.push((c, s));
+        }
+    }
+    assert!(
+        off.len() <= 3,
+        "{} of 60 frames the client had its bean elsewhere (client, server): {:?}",
+        off.len(),
+        off.first()
+    );
+}
