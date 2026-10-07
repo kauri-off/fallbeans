@@ -14,28 +14,8 @@ concurrency: release
 env:
   CARGO_TERM_COLOR: always
   LINUX_PACKAGES: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-  # The Linux client packages' upscalers: bindgen for DLSS, FidelityFX's build, the DLSS guide as text.
+  # The Linux client packages' upscalers: bindgen for DLSS, FidelityFX's build, the DLSS guide as text, unzip for `setup`.
   UPSCALER_PACKAGES: clang libclang-dev cmake glslang-tools libvulkan-dev patch poppler-utils unzip
-  # The packaging tools, by version (cargo xtask dist names cargo-about's too).
-  CARGO_ABOUT: 0.9.2
-  CARGO_DEB: 3.8.0
-  CARGO_GENERATE_RPM: 0.21.0
-  # DirectX's shader compiler shipped in the Windows package (DX12 compiles with it instead of FXC).
-  DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
-  DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
-  # The client packages' upscalers (`render/upscale.rs`). NVIDIA's DLSS SDK at the version dlss_wgpu 4.0.0 is
-  # built against (headers, the static NGX library, the guide whose notices the package carries), checked by
-  # commit; the library shipped is a newer one of NVIDIA's (backward compatible), checked by SHA-256; the Vulkan
-  # headers bindgen reads for it; AMD's FidelityFX SDK for its signed Vulkan DLL (FSR 3.1) and its license, and on
-  # Linux for the sources `cargo xtask dist` builds the library from (`packaging/fidelityfx-linux`).
-  DLSS_SDK_TAG: v310.5.3
-  DLSS_SDK_COMMIT: 982b0d19f9e35fef8e1b3109efa6b95470563866
-  DLSS_DLL_TAG: v310.9.1
-  DLSS_DLL_SHA256: 3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983
-  DLSS_SO_SHA256: 7561f16cab74e2b7ccf791bf44bb9cc43abb44bcf78f33c5663520ad4e857e02
-  VULKAN_HEADERS_TAG: vulkan-sdk-1.4.363.0
-  FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
-  FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952
 
 jobs:
   version:
@@ -94,8 +74,7 @@ jobs:
   nsis:
     needs: version
     runs-on: windows-latest
-    # (Fat LTO of the client on the 4-core Windows runner: past an hour without a warm cache.)
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
@@ -103,38 +82,17 @@ jobs:
           toolchain: ${{ needs.version.outputs.toolchain }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: choco install nsis --no-progress -y
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
-      - name: dxc
+      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/sdk
+          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
+      - run: cargo xtask setup --dist
+      - name: DLSS guide as text
         shell: bash
         run: |
-          curl -fsSL -o dxc.zip "$DXC_URL"
-          echo "$DXC_SHA256  dxc.zip" | sha256sum -c -
-          unzip -q dxc.zip -d dxc || [ $? -eq 1 ] # 1 = warning: the zip uses backslashes
-          echo "FB_DXC_DIR=$(pwd -W)/dxc" >> "$GITHUB_ENV"
-      - name: upscalers
-        shell: bash
-        run: |
-          # (Windows paths for the build: cargo and the game read them, not this shell.)
-          here=$(pwd -W)
-          sparse() { # repository, tag, directory, paths…
-            git clone --quiet --filter=blob:none --no-checkout --depth 1 --branch "$2" "$1" "$3"
-            # (MSYS would turn the leading-slash patterns into C:/Program Files/Git/… paths.)
-            MSYS_NO_PATHCONV=1 git -C "$3" sparse-checkout set --no-cone "${@:4}"
-            git -C "$3" checkout --quiet
-          }
-          sparse https://github.com/NVIDIA/DLSS.git "$DLSS_SDK_TAG" dlss-sdk \
-            /include/ /lib/Windows_x86_64/x64/ /doc/DLSS_Programming_Guide_Release.pdf /LICENSE.txt
-          test "$(git -C dlss-sdk rev-parse HEAD)" = "$DLSS_SDK_COMMIT"
-          test -d dlss-sdk/include -a -d dlss-sdk/lib/Windows_x86_64/x64 -a -f dlss-sdk/doc/DLSS_Programming_Guide_Release.pdf
-          sparse https://github.com/NVIDIA/DLSS.git "$DLSS_DLL_TAG" dlss-dll /lib/Windows_x86_64/rel/nvngx_dlss.dll
-          echo "$DLSS_DLL_SHA256  dlss-dll/lib/Windows_x86_64/rel/nvngx_dlss.dll" | sha256sum -c -
-          git clone --quiet --depth 1 --branch "$VULKAN_HEADERS_TAG" \
-            https://github.com/KhronosGroup/Vulkan-Headers.git vulkan-headers
-          curl -fsSL -o ffx.zip "$FFX_URL"
-          echo "$FFX_SHA256  ffx.zip" | sha256sum -c -
-          unzip -q ffx.zip 'PrebuiltSignedDLL/*' 'docs/license.md' -d ffx
-          # The guide as text: the package carries its notices (`cargo xtask dist`). Poppler's pdftotext, else pypdf.
-          pdf=dlss-sdk/doc/DLSS_Programming_Guide_Release.pdf
+          # The package carries its notices: poppler's pdftotext, else pypdf (the runner may lack poppler).
+          pdf=$(ls target/sdk/dlss-sdk-windows-*/doc/DLSS_Programming_Guide_Release.pdf)
           if command -v pdftotext >/dev/null; then
             pdftotext -layout -enc UTF-8 "$pdf" dlss-guide.txt
           else
@@ -142,15 +100,7 @@ jobs:
             python -c 'import sys, pypdf; print("\n".join(p.extract_text() for p in pypdf.PdfReader(sys.argv[1]).pages))' \
               "$pdf" > dlss-guide.txt
           fi
-          # (clang for bindgen: the runner's LLVM.)
-          {
-            echo "DLSS_SDK=$here/dlss-sdk"
-            echo "DLSS_DLL=$here/dlss-dll/lib/Windows_x86_64/rel/nvngx_dlss.dll"
-            echo "DLSS_GUIDE_TEXT=$here/dlss-guide.txt"
-            echo "VULKAN_SDK=$here/vulkan-headers"
-            echo "FFX_SDK=$here/ffx"
-            echo "LIBCLANG_PATH=C:/Program Files/LLVM/bin"
-          } >> "$GITHUB_ENV"
+          echo "DLSS_GUIDE_TEXT=$(pwd -W)/dlss-guide.txt" >> "$GITHUB_ENV"
       - run: cargo xtask dist nsis
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -179,23 +129,12 @@ jobs:
         with:
           toolchain: ${{ needs.version.outputs.toolchain }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: appimagetool
-        # Releases of their own, each file checked against its SHA-256 (not the moving `continuous` tag).
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          curl -sSfL -o "$RUNNER_TEMP/runtime-x86_64" \
-            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-          sha256sum -c - <<SUMS
-          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool
-          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $RUNNER_TEMP/runtime-x86_64
-          SUMS
-          chmod +x "$RUNNER_TEMP/appimagetool"
-          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
-          echo "APPIMAGE_RUNTIME=$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
-      - name: upscalers
-        run: sh .github/upscalers-linux.sh
+      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/sdk
+          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
+      - run: cargo xtask setup --dist
       - run: cargo xtask dist appimage
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -219,9 +158,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES $UPSCALER_PACKAGES flatpak flatpak-builder
       # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
-      - name: upscalers
-        run: sh .github/upscalers-linux.sh
+      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/sdk
+          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
+      - run: cargo xtask setup --dist
       - run: cargo xtask dist flatpak
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -240,9 +182,13 @@ jobs:
           toolchain: ${{ needs.version.outputs.toolchain }}
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
-      - run: cargo install --locked cargo-deb --version ${{ env.CARGO_DEB }}
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake unzip
+      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/sdk
+          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
+      - run: cargo xtask setup --dist
       - run: cargo xtask dist deb
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -261,9 +207,13 @@ jobs:
           toolchain: ${{ needs.version.outputs.toolchain }}
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
-      - run: cargo install --locked cargo-generate-rpm --version ${{ env.CARGO_GENERATE_RPM }}
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake unzip
+      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/sdk
+          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
+      - run: cargo xtask setup --dist
       - run: cargo xtask dist rpm
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

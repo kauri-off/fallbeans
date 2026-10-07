@@ -53,14 +53,15 @@ DLSS; `dist` без апскейлеров не собирается.
   реактивной маски — следующий шаг `ffxDispatchDescUpscaleGenerateReactiveMask`), сброс истории на склейках.
   Слой валидации: на первом кадре DLSS два внутренних образа NGX в `UNDEFINED` (внутри NGX); один раз за прогон
   FSR 3.1 был залп `vkDestroyImageView` образов, ещё занятых его командным буфером (не повторился за два раунда с
-  неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят.  В
-  `release.yml` не проверен `pdftotext` на раннере (теги и архивы — те же, что `setup` скачивает и проверяет). Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
-  для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
-- `dist --container`. Проверено: AppImage в контейнере (клиент требует GLIBC_2.35), flatpak-builder под
-  `--privileged` от не-root. Flatpak падал на `appstream-compose` (flatpak-builder 1.2 из 22.04; в SDK 25.08 его
-  нет): Containerfile теперь ставит 1.4 из `ppa:flatpak/stable` — не проверено. Собирать Flatpak на хосте нельзя: в
-  рантайме 25.08 glibc 2.42, клиент с Arch требует 2.44. Профиль `dist` — thin LTO вместо fat с одной единицей
-  кодогенерации: разница в fps не мерена; комментарий о fat LTO в `release.yml` устарел.
+  неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят. Лицензия:
+  DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение для связывания (§7), решает автор; `PROJECT_ID` DLSS —
+  свой GUID.
+- `release.yml` берёт SDK и инструменты упаковки через `cargo xtask setup --dist` (кэш `target/sdk` по хешу
+  `toolchain/deps.toml`, свой у каждого job) — ещё не запускался. Непроверенное в нём: `setup` на Windows-раннере
+  (распаковка zip через bsdtar, `cargo install` cargo-about), `pdftotext`/pypdf для заметок DLSS в nsis,
+  `setup --dist` в контейнере Ubuntu 22.04 job'а appimage. Job `check` идёт без SDK апскейлеров: clippy с фичей
+  `dlss` в CI нет. Профиль `dist` — thin LTO (fat с одной единицей кодогенерации не укладывался в часы раннеров):
+  разница в fps не мерена.
 - Режим масштабирования в настройках графики («Ультра-качество» 0,77, «Качество» 0,67, «Баланс» 0,59;
   `Graphics::upscale`, на лету, сохраняется): вживую не смотрен. DLSS на «Балансе» делает контекст в режиме
   Balanced (`dlss::mode`), на остальных — Quality; смена режима пересоздаёт контекст DLSS или FSR 3.1. Не мерено,
@@ -78,7 +79,7 @@ DLSS; `dist` без апскейлеров не собирается.
   `FidelityFX_SC` под Linux, ffx-api только с FSR 3.1 Upscale (без генерации кадров, FSR 2 и провайдеров драйвера
   AMD), подмассивы scratch-буфера VK-бэкенда выровнены на 64 (у AMD — на 4, а `EffectContext` — `alignas(32)`: GCC
   пишет туда `movaps`, без правки падение в `CreateBackendContextVK`), контекст FSR 3.1 вдвое больше (`wchar_t` —
-  4 байта). Не проверены в CI: шаги `.github/upscalers-linux.sh` в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
+  4 байта). Не проверены в CI: сборка FidelityFX в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
   и на ubuntu-24.04 для Flatpak; DLSS во Flatpak (видит ли песочница `libnvidia-ngx.so` драйвера через расширение
   GL NVIDIA). С фичей `dlss` клиент на Linux зависит от `libstdc++.so.6` (`dlss_wgpu` линкует её динамически).
 - `scenarios::round_drum_roll` раз упал в `cargo xtask check` по таймауту «not within 15 s: in the dev room's lobby»

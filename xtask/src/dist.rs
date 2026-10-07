@@ -5,12 +5,10 @@ use std::process::Command;
 
 use clap::{Args, ValueEnum};
 
-use crate::{cargo, root, run, sdk, target_dir};
+use crate::{cargo, root, run, target_dir};
 
 pub const APP_ID: &str = "io.github.kauri_off.fallbeans";
 const MUSL: &str = "x86_64-unknown-linux-musl";
-/// The cargo-about the release workflow installs (`release.yml`).
-const CARGO_ABOUT: &str = "0.9.2";
 const THIRD_PARTY: &str = "THIRD-PARTY-LICENSES.html";
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,12 +28,9 @@ pub enum Kind {
 #[derive(Args)]
 pub struct DistArgs {
     kind: Kind,
-    /// In the Ubuntu 22.04 container of the releases (packaging/linux-build): Linux clients that run on older systems.
-    #[arg(long)]
-    container: bool,
 }
 
-pub fn version() -> &'static str {
+fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
@@ -102,7 +97,7 @@ fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
         .output()
         .is_ok_and(|o| o.status.success());
     if !found {
-        eprintln!("cargo-about is missing: cargo install --locked cargo-about --version {CARGO_ABOUT} --features cli");
+        eprintln!("cargo-about is missing: cargo xtask setup --dist");
         return false;
     }
     if let Some(dir) = out.parent() {
@@ -118,7 +113,7 @@ fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
 }
 
 /// DirectX's shader compiler for the Windows package (`backend.rs`: DX12 compiles with it instead of FXC), from
-/// an unpacked DXC release in `FB_DXC_DIR` (release.yml downloads it); without it the game falls back to FXC.
+/// an unpacked DXC release in `FB_DXC_DIR` (`setup` puts it in target/sdk); without it the game falls back to FXC.
 fn dxc_into(dir: &Path) {
     if !cfg!(windows) {
         return;
@@ -525,7 +520,7 @@ fn flatpak() -> bool {
 }
 
 /// Debian versions sort `~` before anything: 0.1.0~alpha < 0.1.0. RPM does the same.
-pub fn package_version() -> String {
+fn package_version() -> String {
     version().replacen('-', "~", 1)
 }
 
@@ -592,78 +587,8 @@ fn rpm() -> bool {
     ok
 }
 
-const IMAGE: &str = "fallbeans-linux-build";
-
-/// `cargo xtask dist` of `kinds` in the Ubuntu 22.04 container (packaging/linux-build), the repository at /src:
-/// its own target dir (target/linux-build), this machine's SDKs (their paths moved under /src).
-pub fn in_container(kinds: &[Kind]) -> bool {
-    let image = root().join("packaging/linux-build");
-    let built = run(Command::new("docker")
-        .args(["build", "-q", "-t", IMAGE, "-f"])
-        .arg(image.join("Containerfile"))
-        .arg(&image));
-    if !built {
-        return false;
-    }
-    let uid = id("-u");
-    let gid = id("-g");
-    let work = "/src/target/linux-build";
-    let mut c = Command::new("docker");
-    // (`--privileged`: flatpak-builder's bubblewrap makes namespaces of its own.)
-    c.args(["run", "--rm", "--privileged", "--user", &format!("{uid}:{gid}")])
-        .arg("-v")
-        .arg(format!("{}:/src", root().display()))
-        .args(["-w", "/src"])
-        .args(["-e", &format!("HOME={work}/home")])
-        .args(["-e", &format!("RUSTUP_HOME={work}/rustup")])
-        .args(["-e", &format!("CARGO_HOME={work}/cargo")])
-        .args(["-e", "CARGO_TARGET_DIR=target/linux-build"]);
-    for (var, path) in sdk::exported() {
-        match inside(&path) {
-            Some(p) => {
-                c.args(["-e", &format!("{var}={p}")]);
-            }
-            None => eprintln!(
-                "{var}={}: outside the repository, the container does without it",
-                path.display()
-            ),
-        }
-    }
-    let dists: Vec<String> = kinds
-        .iter()
-        .map(|k| format!("cargo xtask dist {}", format!("{k:?}").to_lowercase()))
-        .collect();
-    let script = format!("cargo xtask setup --dist && {}", dists.join(" && "));
-    c.args([IMAGE, "sh", "-c", &script]);
-    run(&mut c)
-}
-
-/// This user's `id -u` or `id -g`.
-fn id(flag: &str) -> String {
-    Command::new("id")
-        .arg(flag)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "1000".into())
-}
-
-/// `path` as the container sees it (the repository is /src there).
-fn inside(path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(root()).ok()?;
-    Some(format!("/src/{}", rel.to_string_lossy()))
-}
-
 pub fn dist(a: &DistArgs) -> bool {
-    if a.container {
-        return in_container(&[a.kind]);
-    }
-    build(a.kind)
-}
-
-pub fn build(kind: Kind) -> bool {
-    match kind {
+    match a.kind {
         Kind::Nsis => nsis(),
         Kind::Appimage => appimage(),
         Kind::Flatpak => flatpak(),

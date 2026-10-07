@@ -95,16 +95,6 @@ pub fn var(var: &str) -> Option<PathBuf> {
         .find_map(|(n, d)| d.installed(n).map(|dir| d.target(&dir)))
 }
 
-/// Every variable this machine has a path for (the environment's, else target/sdk's).
-pub fn exported() -> Vec<(String, PathBuf)> {
-    let mut vars: Vec<&String> = deps().values().filter_map(|d| d.env.as_ref()).collect();
-    vars.sort();
-    vars.dedup();
-    vars.into_iter()
-        .filter_map(|v| var(v).map(|p| (v.clone(), p)))
-        .collect()
-}
-
 /// What target/sdk has for a child process: the variables the environment does not set, the cargo tools on PATH,
 /// and LLVM's libclang where its Windows installer puts it.
 pub fn apply(c: &mut Command) {
@@ -253,7 +243,7 @@ fn checked(path: &Path, want: &str) -> bool {
     got == want
 }
 
-pub fn sha256_of(path: &Path) -> Option<String> {
+fn sha256_of(path: &Path) -> Option<String> {
     let mut f = fs::File::open(path).ok()?;
     let mut h = Sha256::new();
     let mut buf = vec![0; 1 << 16];

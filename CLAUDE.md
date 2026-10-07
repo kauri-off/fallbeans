@@ -21,15 +21,15 @@ English. License: AGPL-3.0-or-later.
   from its menu; `perf` profile, or the packages' exact client with `--dist`.
 - `cargo xtask doctor` — what this machine has for the build, the upscalers and each package, with install hints.
 - `cargo xtask setup [--dist]` — the pinned SDKs and tools of `toolchain/deps.toml` into `target/sdk`; xtask passes
-  their paths on, an environment variable (`DLSS_SDK`…) overrides them. Versions change only in `deps.toml` (and
-  release.yml's `env:`, which pins its own).
+  their paths on, an environment variable (`DLSS_SDK`…) overrides them. Versions change only in `deps.toml` (the
+  `release` workflow runs `setup --dist` too).
 - `cargo xtask dev [--clients N] [--autopilot] [--fill]` — server plus windowed clients locally.
 - `cargo xtask audit [map…] [--quick]` — map audits.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
 - `cargo xtask fuzz-ui` — plays the whole client at random, prints the path to a crash.
 - `cargo xtask assets [--export]` — check models (`--export` needs Blender).
-- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm> [--container]` — build a release package (`--container`: in the
-  Ubuntu 22.04 image of `packaging/linux-build`; Linux clients built on a newer distro need its newer glibc).
+- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — build a release package. Releases come from the `release`
+  workflow: Linux clients built on a newer distro need its newer glibc (the AppImage job builds on Ubuntu 22.04).
 
 ## Rules
 

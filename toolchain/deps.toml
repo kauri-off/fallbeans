@@ -1,6 +1,6 @@
 # Pinned third-party SDKs and tools. `cargo xtask setup` puts them in target/sdk/<name>-<version>, `cargo xtask
-# doctor` checks them; `env` names the variable that overrides the copy in target/sdk. release.yml pins the same
-# versions in its own `env:`: change both.
+# doctor` checks them; `env` names the variable that overrides the copy in target/sdk. The release workflow runs
+# `setup --dist` too: this file is the only place their versions change.
 #
 # kind = "git": a shallow clone of `tag` (sparse to `paths` when given), checked against `commit`.
 # kind = "zip": `url` checked against `sha256`, the `extract` entries unpacked (a trailing / is a directory).
