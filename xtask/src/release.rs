@@ -274,7 +274,11 @@ fn build(kinds: &[Kind], native: bool, o: &Opts) -> Step {
     for k in &kinds {
         files.push(made(*k, started)?);
     }
-    // (Again: the draft may have been made anew of another commit while this built.)
+    // (Again: the tree may have changed while this built, the draft may have been made anew of another commit.)
+    clean().map_err(|e| format!("not uploaded, the packages may hold what changed: {e}"))?;
+    if self::head()? != head {
+        return Err("HEAD moved while this built: not uploaded".into());
+    }
     let now = draft()?;
     if now.target != head {
         return Err(format!(

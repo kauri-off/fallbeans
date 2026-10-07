@@ -127,6 +127,7 @@ pub enum GfxPick {
     Fps(u32),
     Backend(&'static str),
     Upscaler(&'static str),
+    Upscale(&'static str),
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1108,6 +1109,7 @@ fn ui_actions(
                     GfxPick::Fps(n) => gfx.fps_limit = n,
                     GfxPick::Backend(b) => gfx.backend = b.into(),
                     GfxPick::Upscaler(u) => gfx.upscaler = u.into(),
+                    GfxPick::Upscale(m) => gfx.upscale = m.into(),
                 }
                 crate::settings::save_soon(&mut commands);
             }
@@ -1332,6 +1334,11 @@ fn upscalers(
         )
     }));
     chips(p, text::UPSCALER, &items);
+    let modes: Vec<(&str, GfxPick, bool, bool)> = crate::render::quality::UPSCALES
+        .into_iter()
+        .map(|m| (text::upscale(m), GfxPick::Upscale(m), o.gfx.upscale == m, true))
+        .collect();
+    chips(p, text::UPSCALE, &modes);
     let failed = (up.active != up.chosen).then_some(up.chosen.name());
     muted(p, f, &text::upscaler_now(up.active.name(), failed));
     if !Upscaler::ALL.into_iter().all(|u| up.offer.has(u)) {

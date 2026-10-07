@@ -123,7 +123,16 @@ pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
 pub const PRESET_LOW: &str = "Низкое";
 pub const PRESET_HIGH: &str = "Высокое";
-pub const UPSCALER: &str = "Масштабирование (ультра-качество, включено всегда)";
+pub const UPSCALER: &str = "Масштабирование (включено всегда)";
+pub const UPSCALE: &str = "Режим масштабирования";
+/// The upscaling modes' chips (`render/quality.rs`'s `UPSCALES`).
+pub fn upscale(id: &str) -> &'static str {
+    match id {
+        "quality" => "Качество",
+        "balanced" => "Баланс",
+        _ => "Ультра-качество",
+    }
+}
 pub const UPSCALER_AUTO: &str = "Авто";
 /// The upscalers' chips (`render/upscale.rs`), by their vendors' names.
 pub fn upscaler(u: crate::render::upscale::Upscaler) -> &'static str {

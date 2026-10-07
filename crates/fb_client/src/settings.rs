@@ -125,8 +125,8 @@ impl Default for Display {
     }
 }
 
-/// Graphics (`render/quality.rs`): one of two presets, the upscaler, the frame pacing and the API. The rest is not
-/// the player's: upscaling is always on in its ultra quality mode, and the switches below are only for the perf sweep, which
+/// Graphics (`render/quality.rs`): one of two presets, the upscaler and its mode, the frame pacing and the API. The
+/// rest is not the player's: upscaling is always on, and the switches below are only for the perf sweep, which
 /// takes the features away one at a time (`perf/capture.rs`); they are never saved, and an old file's are ignored.
 #[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
@@ -143,6 +143,9 @@ pub struct Graphics {
     /// "" (automatic: the best offered), "dlss", "fsr3" or "fsr1" (`render/upscale.rs`): switched in play; one this
     /// machine does not offer is automatic.
     pub upscaler: String,
+    /// The upscaling mode: "ultra", "quality" or "balanced" (`quality::UPSCALES`; anything else is "ultra"),
+    /// switched in play; the sweep tries "performance".
+    pub upscale: String,
     #[reflect(ignore)]
     pub shadows: bool,
     /// Anti-aliasing (SMAA on High, FXAA on Low).
@@ -154,9 +157,6 @@ pub struct Graphics {
     /// Specks drifting in the air.
     #[reflect(ignore)]
     pub motes: bool,
-    /// Render scale with FSR 1 upscaling: "ultra" (`quality::UPSCALE`); the sweep tries "performance".
-    #[reflect(ignore)]
-    pub upscale: String,
 }
 
 impl Default for Graphics {
@@ -167,11 +167,11 @@ impl Default for Graphics {
             fps_limit: 0,
             backend: String::new(),
             upscaler: String::new(),
+            upscale: crate::render::quality::UPSCALE.into(),
             shadows: true,
             aa: true,
             grade: true,
             motes: true,
-            upscale: crate::render::quality::UPSCALE.into(),
         }
     }
 }
@@ -566,6 +566,9 @@ fn sanitize(world: &mut World) {
     if crate::render::quality::Preset::of(&world.resource::<Graphics>().preset).is_none() {
         world.resource_mut::<Graphics>().preset = Graphics::default().preset;
     }
+    if !crate::render::quality::UPSCALES.contains(&world.resource::<Graphics>().upscale.as_str()) {
+        world.resource_mut::<Graphics>().upscale = Graphics::default().upscale;
+    }
 }
 
 /// What loading the files found (a broken file set aside, the identity moved): logged once the log is up.
@@ -800,6 +803,18 @@ mod tests {
         });
         sanitize(&mut w);
         assert_eq!(w.resource::<Graphics>().preset, "high");
+        w.insert_resource(Graphics {
+            upscale: "performance".into(),
+            ..default()
+        });
+        sanitize(&mut w);
+        assert_eq!(w.resource::<Graphics>().upscale, "ultra");
+        w.insert_resource(Graphics {
+            upscale: "balanced".into(),
+            ..default()
+        });
+        sanitize(&mut w);
+        assert_eq!(w.resource::<Graphics>().upscale, "balanced");
     }
 
     /// The perf sweep's switches are never written to the file, and an old file's are not read.
@@ -809,7 +824,7 @@ mod tests {
         registry.register::<Graphics>();
         let g = Graphics {
             shadows: false,
-            upscale: "performance".into(),
+            upscale: "balanced".into(),
             upscaler: "fsr3".into(),
             ..default()
         };
@@ -817,8 +832,9 @@ mod tests {
         let text = toml::to_string(&ser).unwrap();
         assert!(text.contains("preset") && text.contains("vsync"), "{text}");
         assert!(text.contains("upscaler = \"fsr3\""), "{text}");
+        assert!(text.contains("upscale = \"balanced\""), "{text}");
         let key = |l: &str| l.split('=').next().unwrap_or("").trim().to_string();
-        for gone in ["shadows", "upscale", "aa", "grade", "motes", "ao"] {
+        for gone in ["shadows", "aa", "grade", "motes", "ao"] {
             assert!(!text.lines().any(|l| key(l) == gone), "{gone} in {text}");
         }
     }

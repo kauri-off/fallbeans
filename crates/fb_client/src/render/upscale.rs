@@ -1,8 +1,9 @@
 //! Which upscaler draws the frame: the graphics setting's (`Graphics::upscaler`, switched in play) when this machine
 //! offers it, else the best offered, told in the log: NVIDIA DLSS 4.5 Super Resolution on an RTX GPU (Vulkan, the
 //! `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, AMD's library beside the game: `fsr3.rs`), else FSR 1
-//! (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at `quality::UPSCALE`'s scale (0.77,
-//! the "ultra quality" of both vendors) and bring it to the full resolution. A temporal one (DLSS, FSR 3.1) failing
+//! (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at the scale of the player's mode
+//! (`Graphics::upscale`, switched in play: the vendors' ultra quality 0.77, quality 0.67 or balanced 0.59) and bring
+//! it to the full resolution. A temporal one (DLSS, FSR 3.1) failing
 //! at run time is not offered again this session: the next best takes over.
 //!
 //! A temporal upscaler is the anti-aliasing too: no SMAA, FXAA or CAS with it (`quality.rs`, `fsr.rs`). It needs
@@ -312,7 +313,7 @@ fn decide(
     info!(
         "upscaling: {} at {:.0}% of the resolution (setting {:?}; Vulkan {}, DLSS {}, FSR 3.1 {})",
         up.active.name(),
-        Quality::scale(super::quality::UPSCALE) * 100.0,
+        Quality::scale(&g.upscale) * 100.0,
         g.upscaler,
         offer.vulkan,
         offer.dlss,
@@ -484,6 +485,9 @@ mod tests {
         assert_eq!(render_size(UVec2::ONE, s), UVec2::ONE);
         // log2(0.77) − 1 ≈ −1.377.
         assert!((mip_bias(s) + 1.377).abs() < 1e-3);
+        let full = UVec2::new(1920, 1080);
+        assert_eq!(render_size(full, Quality::scale("quality")), UVec2::new(1286, 724));
+        assert_eq!(render_size(full, Quality::scale("balanced")), UVec2::new(1133, 637));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 //! NVIDIA DLSS 4.5 Super Resolution (`upscale.rs` chooses it; the `dlss` feature), through the crate Bevy's own
 //! binding is built on (`dlss_wgpu`, patched in `vendor/`). Bevy's `DlssInitPlugin` asks the Vulkan instance and
 //! device for what NGX needs; its `DlssPlugin` is left out (`add_anti_alias`): it panics on any error and can only
-//! render at a mode's own size. Here the context is made in the quality mode with preset M, DLSS 4.5's
-//! second-generation transformer model, and fed the main pass at 0.77 of the resolution: DLSS takes any size in
-//! the range a mode gives (dynamic resolution); one outside it is brought inside. An error falls back to FSR 1.
+//! render at a mode's own size. Here the context is made in the quality or the balanced mode (`mode`) with preset
+//! M, DLSS 4.5's second-generation transformer model, and fed the main pass at the setting's scale: DLSS takes any
+//! size in the range a mode gives (dynamic resolution); one outside it is brought inside. An error falls back to
+//! FSR 1.
 use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::contrast_adaptive_sharpening::CasPlugin;
@@ -32,9 +33,15 @@ use super::upscale::{Available, Faults, TemporalView, Upscaler};
 /// The id NGX knows the game by: a GUID of its own (NVIDIA's guide: any, for a title it has not registered).
 const PROJECT_ID: u128 = 0x3c7a_a498_eec2_493c_ba9f_a106_4e2a_6ebf;
 
-/// The mode the context is made in: its range holds 0.77 where the quality mode's own size (0.67) is the
-/// optimum.
-const MODE: DlssPerfQualityMode = DlssPerfQualityMode::Quality;
+/// The mode the context is made in for a main pass of `render` out of `out`: quality for ultra quality (0.77, in
+/// its range) and quality (0.67, its optimum), balanced for balanced (0.59).
+fn mode(render: UVec2, out: UVec2) -> DlssPerfQualityMode {
+    if render.x * 100 >= out.x * 63 {
+        DlssPerfQualityMode::Quality
+    } else {
+        DlssPerfQualityMode::Balanced
+    }
+}
 
 /// `NVSDK_NGX_DLSS_Hint_Render_Preset_M` (`nvsdk_ngx_defs.h`): DLSS 4.5's second-generation transformer, the
 /// one NVIDIA made for the sharper modes (L is the heavier one meant for ultra performance).
@@ -79,6 +86,7 @@ struct Sdk(Arc<Mutex<DlssSdk>>);
 struct DlssContext {
     sr: Mutex<DlssSuperResolution>,
     out: UVec2,
+    mode: DlssPerfQualityMode,
 }
 
 pub struct DlssPlugin;
@@ -122,7 +130,9 @@ impl Plugin for DlssPlugin {
             }
         };
         if let Ok(mut s) = sdk.lock() {
-            s.set_render_preset(MODE, PRESET_M);
+            for m in [DlssPerfQualityMode::Quality, DlssPerfQualityMode::Balanced] {
+                s.set_render_preset(m, PRESET_M);
+            }
         }
         info!("upscaling: NVIDIA DLSS offered (Super Resolution, preset M)");
         app.world_mut().resource_mut::<Available>().dlss = true;
@@ -169,12 +179,13 @@ fn prepare(
         if view.kind != Upscaler::Dlss || faults.failed(Upscaler::Dlss) {
             continue;
         }
+        let want = mode(view.render, view.out);
         let fresh = match ctx {
-            Some(c) if c.out == view.out => None,
+            Some(c) if c.out == view.out && c.mode == want => None,
             _ => {
                 let made = DlssSuperResolution::new(
                     view.out.to_array(),
-                    MODE,
+                    want,
                     flags(),
                     Arc::clone(&sdk.0),
                     device.wgpu_device(),
@@ -208,7 +219,7 @@ fn prepare(
         if *told != Some((view.out, r)) {
             *told = Some((view.out, r));
             info!(
-                "upscaling: NVIDIA DLSS {}×{} → {}×{} (it takes {}×{} to {}×{})",
+                "upscaling: NVIDIA DLSS {}×{} → {}×{} ({want:?} mode: it takes {}×{} to {}×{})",
                 r.x, r.y, view.out.x, view.out.y, lo.x, lo.y, hi.x, hi.y
             );
             if r != view.render {
@@ -225,6 +236,7 @@ fn prepare(
             commands.entity(e).insert(DlssContext {
                 sr: Mutex::new(sr),
                 out: view.out,
+                mode: want,
             });
         }
     }

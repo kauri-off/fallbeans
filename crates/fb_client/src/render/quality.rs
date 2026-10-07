@@ -1,5 +1,5 @@
 //! Graphics presets and the hardware tier: two presets, High (every machine's until the player picks Low) and Low,
-//! both upscaled in the ultra quality mode (DLSS 4.5, FSR 3.1 or FSR 1: `upscale.rs`). The tier is read from the
+//! both upscaled in the player's mode, ultra quality, quality or balanced (DLSS 4.5, FSR 3.1 or FSR 1: `upscale.rs`). The tier is read from the
 //! adapter at start (T0: a software device; T1: an integrated GPU, or one that says neither; T2: a discrete GPU)
 //! and only told: it changes nothing.
 use core::time::Duration;
@@ -54,8 +54,11 @@ impl Preset {
     }
 }
 
-/// The upscaling mode on every preset and upscaler, ultra quality: the main pass at 77% of the resolution.
+/// The upscaling mode until the player picks another, ultra quality: the main pass at 77% of the resolution.
 pub const UPSCALE: &str = "ultra";
+
+/// The upscaling modes the player picks among (the perf sweep also tries "performance").
+pub const UPSCALES: [&str; 3] = ["ultra", "quality", "balanced"];
 
 /// What the graphics run with now: the tier and the preset in effect.
 #[derive(Resource, Clone, Debug)]
