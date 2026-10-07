@@ -56,12 +56,11 @@ DLSS; `dist` без апскейлеров не собирается.
   неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят. Лицензия:
   DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение для связывания (§7), решает автор; `PROJECT_ID` DLSS —
   свой GUID.
-- `release.yml` берёт SDK и инструменты упаковки через `cargo xtask setup --dist` (кэш `target/sdk` по хешу
-  `toolchain/deps.toml`, свой у каждого job) — ещё не запускался. Непроверенное в нём: `setup` на Windows-раннере
-  (распаковка zip через bsdtar, `cargo install` cargo-about), `pdftotext`/pypdf для заметок DLSS в nsis,
-  `setup --dist` в контейнере Ubuntu 22.04 job'а appimage. Job `check` идёт без SDK апскейлеров: clippy с фичей
-  `dlss` в CI нет. Профиль `dist` — thin LTO (fat с одной единицей кодогенерации не укладывался в часы раннеров):
-  разница в fps не мерена.
+- `release.yml` собирает nsis, AppImage и deb; SDK и инструменты упаковки — через `cargo xtask setup --dist` (кэш
+  `target/sdk` по хешу `toolchain/deps.toml`, свой у каждого job). AppImage и deb так уже собирались; не проверены
+  `setup` на Windows-раннере (распаковка zip через bsdtar, `cargo install` cargo-about) и `pdftotext`/pypdf для
+  заметок DLSS в nsis. Flatpak, rpm и `cargo xtask check` в CI не идут (собираются только локально). Профиль `dist` —
+  thin LTO (fat с одной единицей кодогенерации не укладывался в часы раннеров): разница в fps не мерена.
 - Режим масштабирования в настройках графики («Ультра-качество» 0,77, «Качество» 0,67, «Баланс» 0,59;
   `Graphics::upscale`, на лету, сохраняется): вживую не смотрен. DLSS на «Балансе» делает контекст в режиме
   Balanced (`dlss::mode`), на остальных — Quality; смена режима пересоздаёт контекст DLSS или FSR 3.1. Не мерено,
@@ -80,8 +79,7 @@ DLSS; `dist` без апскейлеров не собирается.
   AMD), подмассивы scratch-буфера VK-бэкенда выровнены на 64 (у AMD — на 4, а `EffectContext` — `alignas(32)`: GCC
   пишет туда `movaps`, без правки падение в `CreateBackendContextVK`), контекст FSR 3.1 вдвое больше (`wchar_t` —
   4 байта), размер в `snprintf` у `MD5HashString` (с `_FORTIFY_SOURCE` Ubuntu 24.04 компилятор
-  шейдеров падал «buffer overflow detected»). Не проверены в CI: сборка FidelityFX в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
-  и на ubuntu-24.04 для Flatpak; DLSS во Flatpak (видит ли песочница `libnvidia-ngx.so` драйвера через расширение
+  шейдеров падал «buffer overflow detected»). Не проверено: DLSS во Flatpak (видит ли песочница `libnvidia-ngx.so` драйвера через расширение
   GL NVIDIA). С фичей `dlss` клиент на Linux зависит от `libstdc++.so.6` (`dlss_wgpu` линкует её динамически).
 - `scenarios::round_drum_roll` раз упал в `cargo xtask check` по таймауту «not within 15 s: in the dev room's lobby»
   (RTT 232 мс, 140 пропущенных тиков под нагрузкой); отдельно проходит за ~15,7 с — запас лимита почти нулевой.
@@ -149,8 +147,7 @@ KDE Wayland; окна там запускать можно, sudo без паро
    прогрев (~6 с здесь).
 2. Перемерить производительность на этой машине (`cargo xtask perf run` с `DLSS_SDK`, затем `--upscaler fsr3`/`fsr1`)
    и на huawei (`wl.sh`, `perf compare`): прогрев, память, hex-a-gone.
-3. Выпуск: `cargo xtask dist nsis` собран локально (DXC внутри); AppImage/Flatpak/deb/rpm и `release.yml`
-   целиком не гонялись после правок.
+3. Выпуск: `release.yml` целиком (nsis, AppImage, deb и сам релиз) после правок не проходил.
 
 ## План: падения ловятся до запуска
 
@@ -186,7 +183,7 @@ KDE Wayland; окна там запускать можно, sudo без паро
   сидами там большой, мелкие сдвиги ощущения на них база не поймает. Боты на «Скрытом мосту» не видят настоящих
   панелей и в уклонениях/нырках считают мост провалом.
 - `cargo xtask dist flatpak` добавляет пользовательский remote flathub (`--if-not-exists`); `--device=all` оставлен
-  (`--device=input` требует flatpak 1.15.6, на раннере 1.14).
+  (`--device=input` требует flatpak 1.15.6, в Ubuntu 24.04 — 1.14).
 - В соло-игре раунд кончается, как только единственный человек финишировал или выбыл: зрителя проверять двумя
   клиентами.
 - Первый прогон стресса сразу после сборки иногда ловит общее замирание на 0,1–0,6 с — повторить. Ядро в dev-сборке

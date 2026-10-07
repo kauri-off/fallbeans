@@ -11,7 +11,6 @@
 | --- | --- | --- |
 | Windows 10/11 | `FallBeans-<версия>-setup.exe` | запустить; ставится в профиль пользователя без прав администратора. SmartScreen: «Подробнее» → «Выполнить в любом случае» |
 | Linux | `FallBeans-<версия>-x86_64.AppImage` | `chmod +x` и запустить |
-| Linux (Flatpak) | `FallBeans-<версия>-x86_64.flatpak` | `flatpak install --user <файл>` |
 
 Нужно минимум 2 ядра, 2 ГБ памяти и видеокарта с Vulkan 1.2 (на Windows без него — DirectX 12, Windows 10 и
 новее). Подписей у файлов нет, контрольные суммы — `SHA256SUMS` в релизе.
@@ -21,9 +20,7 @@
 за ним она строит все карты и готовит шейдеры, чтобы в раунде ничего не догружалось (на слабой машине — до
 полуминуты). После смены настроек графики экран загрузки появляется ещё раз, ненадолго.
 
-Windows и AppImage обновляются сами: при новой версии на главном экране появится кнопка «Обновить». Flatpak
-показывает ссылку на релиз; новый файл ставится через `flatpak install --user --reinstall <файл>`, настройки
-сохраняются.
+Windows и AppImage обновляются сами: при новой версии на главном экране появится кнопка «Обновить».
 
 При первом запуске добавьте сервер: IP, имя машины, домен или `хост:порт`, которые скажет тот, кто его запустил.
 Дальше — список комнат: зайти в чужую или создать свою (у игрока одна комната; он в ней хост, а пока его нет,
@@ -58,8 +55,7 @@ F9 — запись замера производительности.
 главном экране. Где она лежит:
 
 - Windows: `%LOCALAPPDATA%\io.github.kauri-off.fallbeans\logs`;
-- Linux: `~/.config/io.github.kauri-off.fallbeans/logs`;
-- Flatpak: `~/.var/app/io.github.kauri_off.fallbeans/config/io.github.kauri-off.fallbeans/logs`.
+- Linux: `~/.config/io.github.kauri-off.fallbeans/logs`.
 
 Если в игре происходит странное (боба отбрасывает назад, он не слушается, всё дёргается), нажмите **F8** сразу, как
 заметили: в папке появится `report-<время>.txt` с состоянием сети, поправками сервера и последними секундами вашего
@@ -72,13 +68,11 @@ F9 — запись замера производительности.
 
 ## Свой сервер
 
-Пакеты сервера — в том же релизе:
+Пакет сервера — в том же релизе:
 
 | Система | Файл | Как поставить |
 | --- | --- | --- |
 | Debian, Ubuntu | `fallbeans-server_*_amd64.deb` | `sudo apt install ./fallbeans-server_*_amd64.deb` |
-| Fedora, RHEL | `fallbeans-server-*.x86_64.rpm` | `sudo dnf install ./fallbeans-server-*.x86_64.rpm` |
-| openSUSE | `fallbeans-server-*.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./fallbeans-server-*.x86_64.rpm` |
 
 Служба `fallbeans` запускается сразу. Открыть в файерволе: **5887/tcp** (HTTP API), **5888/udp** (игра),
 **5889/tcp** (WebSocket, запасной путь, если UDP режется). Настройки — `/etc/fallbeans/fallbeans.env` (`FB_NAME` —
@@ -168,8 +162,7 @@ DLSS, через `pdftotext` или `DLSS_GUIDE_TEXT`) и лицензию AMD �
 
 Библиотеки на Rust, встроенные в клиент и сервер, — под своими разрешительными лицензиями (MIT, Apache-2.0, BSD,
 ISC, Zlib и другие): их список и тексты лежат в каждом пакете в `THIRD-PARTY-LICENSES.html` рядом с `LICENSE`
-(Windows — в папке игры, AppImage — рядом с бинарником в `usr/bin`, Flatpak — в `share/licenses`, сервер —
-`/usr/share/doc/fallbeans-server/` или `/usr/share/licenses/fallbeans-server/`). Файл собирает `cargo xtask dist`
+(Windows — в папке игры, AppImage — рядом с бинарником в `usr/bin`, сервер — `/usr/share/doc/fallbeans-server/`). Файл собирает `cargo xtask dist`
 через [cargo-about](https://github.com/EmbarkStudios/cargo-about) (`packaging/about.toml`).
 
 Прежняя браузерная версия на TypeScript — тег [`ts-final`](https://github.com/kauri-off/fallbeans/tree/ts-final).

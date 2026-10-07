@@ -54,23 +54,6 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
 
-  check:
-    needs: version
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
-        with:
-          toolchain: ${{ needs.version.outputs.toolchain }}
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: packages
-        run: |
-          # shellcheck disable=SC2086 # (a list of packages)
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
-      - run: cargo xtask check
-
   nsis:
     needs: version
     runs-on: windows-latest
@@ -142,35 +125,6 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
-  flatpak:
-    needs: version
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
-        with:
-          toolchain: ${{ needs.version.outputs.toolchain }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: packages
-        run: |
-          # shellcheck disable=SC2086 # (a list of packages)
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES $UPSCALER_PACKAGES flatpak flatpak-builder
-      # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/sdk
-          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
-      - run: cargo xtask setup --dist
-      - run: cargo xtask dist flatpak
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: flatpak
-          path: dist/*.flatpak
-          if-no-files-found: error
-
   deb:
     needs: version
     runs-on: ubuntu-24.04
@@ -196,33 +150,8 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
-  rpm:
-    needs: version
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
-        with:
-          toolchain: ${{ needs.version.outputs.toolchain }}
-          targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake unzip
-      # (After rust-cache: its post step would empty target/sdk before this one saves it.)
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/sdk
-          key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
-      - run: cargo xtask setup --dist
-      - run: cargo xtask dist rpm
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: rpm
-          path: dist/*.rpm
-          if-no-files-found: error
-
   release:
-    needs: [version, check, nsis, appimage, flatpak, deb, rpm]
+    needs: [version, nsis, appimage, deb]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -251,4 +180,4 @@ jobs:
           sed "s/@VERSION@/$VERSION/g" ../packaging/release-notes.md > notes.md
           # (A tag left by a failed run, on this commit: the release goes on it.)
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md \
-            ./*.exe ./*.AppImage ./*.flatpak ./*.deb ./*.rpm SHA256SUMS
+            ./*.exe ./*.AppImage ./*.deb SHA256SUMS

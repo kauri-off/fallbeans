@@ -28,8 +28,9 @@ English. License: AGPL-3.0-or-later.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
 - `cargo xtask fuzz-ui` — plays the whole client at random, prints the path to a crash.
 - `cargo xtask assets [--export]` — check models (`--export` needs Blender).
-- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — build a release package. Releases come from the `release`
-  workflow: Linux clients built on a newer distro need its newer glibc (the AppImage job builds on Ubuntu 22.04).
+- `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — build a package. Releases come from the `release` workflow
+  (nsis, AppImage, deb; flatpak and rpm are local only): Linux clients built on a newer distro need its newer glibc
+  (the AppImage job builds on Ubuntu 22.04).
 
 ## Rules
 
