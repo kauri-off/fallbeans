@@ -87,7 +87,7 @@ fn place_tags(
         &mut BorderColor,
     )>,
     children: Query<&Children>,
-    mut dots: Query<(&mut BackgroundColor, &mut BorderColor), Without<Tag>>,
+    mut dots: Query<(&mut BackgroundColor, &mut BorderColor), (Without<Tag>, Without<Text>)>,
     mut texts: Query<&mut TextColor>,
     session: Res<Session>,
     map: Option<Res<Map>>,
