@@ -95,7 +95,7 @@ fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
         .output()
         .is_ok_and(|o| o.status.success());
     if !found {
-        eprintln!("cargo-about is missing: cargo install --locked cargo-about --version {CARGO_ABOUT}");
+        eprintln!("cargo-about is missing: cargo install --locked cargo-about --version {CARGO_ABOUT} --features cli");
         return false;
     }
     if let Some(dir) = out.parent() {

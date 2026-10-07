@@ -47,12 +47,19 @@ fn in_phase(g: &mut Game, secs: f32, phase: Phase) {
     });
 }
 
-/// The menu, opened with Esc if it is closed.
+/// The menu, opened with Esc if it is closed. (Entering a room opens it by itself: an Esc in the same frame
+/// closes it again, so it is checked over a few frames.)
 fn menu(g: &mut Game) {
-    if !g.res::<Ui>().menu {
-        g.escape();
+    for _ in 0..3 {
+        if !g.res::<Ui>().menu {
+            g.escape();
+        }
+        g.frames(3);
+        if g.res::<Ui>().menu {
+            return;
+        }
     }
-    assert!(g.res::<Ui>().menu, "Esc opens the menu");
+    panic!("Esc opens the menu");
 }
 
 /// A game of one round of `map` begun with the dev command, past its intro.

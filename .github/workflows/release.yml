@@ -87,7 +87,7 @@ jobs:
           toolchain: ${{ needs.version.outputs.toolchain }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: choco install nsis --no-progress -y
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - name: dxc
         shell: bash
         run: |
@@ -137,7 +137,7 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_RUNTIME=$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist appimage
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -161,7 +161,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES flatpak flatpak-builder
       # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist flatpak
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -182,7 +182,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
       - run: cargo install --locked cargo-deb --version ${{ env.CARGO_DEB }}
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist deb
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -203,7 +203,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools cmake
       - run: cargo install --locked cargo-generate-rpm --version ${{ env.CARGO_GENERATE_RPM }}
-      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }}
+      - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
       - run: cargo xtask dist rpm
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
