@@ -47,6 +47,14 @@ struct SurfaceIndices {
 @group(#{MATERIAL_BIND_GROUP}) @binding(52) var detail_smp: sampler;
 #endif
 
+#ifdef OBJECT_FRAME
+// A vector turned by a unit quaternion (x, y, z, w).
+fn turned(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+#endif
+
 // One projection of the detail texture.
 fn sample_detail(slot: u32, uv: vec2<f32>, gx: vec2<f32>, gy: vec2<f32>) -> vec4<f32> {
 #ifdef BINDLESS
@@ -68,6 +76,13 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var in = vertex_output;
+#ifdef OBJECT_FRAME
+    // Merged static pieces (`meshes::merge`): each vertex carries its piece's frame, the rotation in the colour
+    // and the position in it in the UVs. The colour is no tint.
+    let piece_rot = normalize(in.color);
+    let piece_pos = vec3(in.uv_b, in.uv.x);
+    in.color = vec4(1.0);
+#endif
 #ifdef VISIBILITY_RANGE_DITHER
     visibility_range_dither(in.position, in.visibility_range_dither);
 #endif
@@ -90,6 +105,12 @@ fn fragment(
     var rough = 0.5;
     // (The branches are the material's: uniform over a triangle, as the derivatives in them want.)
     if sampled || kind >= 0 {
+#ifdef OBJECT_FRAME
+        let ax = turned(piece_rot, vec3(1.0, 0.0, 0.0));
+        let ay = turned(piece_rot, vec3(0.0, 1.0, 0.0));
+        let az = turned(piece_rot, vec3(0.0, 0.0, 1.0));
+        let p = piece_pos;
+#else
         // The object's frame: its axes (scale removed) and origin.
         let m = mesh_functions::get_world_from_local(in.instance_index);
         let ax = normalize(m[0].xyz);
@@ -98,6 +119,7 @@ fn fragment(
         let rel = in.world_position.xyz - m[3].xyz;
         // The position in the object's space at world scale.
         let p = vec3(dot(rel, ax), dot(rel, ay), dot(rel, az));
+#endif
         if sampled {
             let nw = normalize(in.world_normal);
             let n = vec3(dot(nw, ax), dot(nw, ay), dot(nw, az));

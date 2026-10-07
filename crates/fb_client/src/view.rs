@@ -1,7 +1,9 @@
-//! Drawing: the map from its `SceneDesc` (primitives, glTF models and specials), beans, bonuses, camera.
+//! Drawing: the map from its `SceneDesc` (primitives, the static ones merged by cell and material; glTF models
+//! and specials), beans, bonuses, camera.
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
+use bevy::camera::primitives::MeshAabb;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -12,13 +14,13 @@ use fb_sim::V3;
 use fb_sim::math::Affine;
 use fb_sim::nodes::Nodes;
 use fb_sim::physics::power;
-use fb_sim::scene::{PrimKind, SceneItem};
+use fb_sim::scene::{LookOut, PrimKind, SceneItem};
 use lightyear::prelude::*;
 
 use crate::beans;
 use crate::camera::{PITCH_MAX, PITCH_MIN};
 use crate::game::{CameraAngles, Gate, Map};
-use crate::render::meshes;
+use crate::render::meshes::{self, BandPad, Candidate, LodBand};
 use crate::render::props::Prop;
 use crate::render::quality::Quality;
 use crate::render::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
@@ -50,6 +52,7 @@ impl Plugin for ViewPlugin {
         );
         app.init_resource::<Spectate>();
         app.init_resource::<SpecialCache>();
+        app.init_resource::<Drawn>();
         app.add_systems(Update, (spectate, mouse_look).chain());
     }
 }
@@ -128,6 +131,274 @@ fn world_bounds(m: &Mat4, half: Vec3) -> (Vec3, Vec3) {
     (lo, hi)
 }
 
+/// What `spawn_map` drew of the map shown: the static primitives merged by cell, material and levels of
+/// detail, so that `pose_map` can take a group apart should one of its nodes move after all.
+#[derive(Resource, Default)]
+pub struct Drawn {
+    generation: Option<u32>,
+    root: Option<Entity>,
+    /// By scene item: a primitive's paint, material and lift step.
+    prims: Vec<Option<(Spec, Handle<SurfaceMaterial>, u32)>>,
+    /// By scene item: the merged group it is drawn in.
+    group_of: Vec<Option<usize>>,
+    /// Each group's entities (one per level of detail) and items.
+    groups: Vec<(Vec<Entity>, Vec<usize>)>,
+    /// By node: a primitive on it is drawn merged.
+    merged: Vec<bool>,
+    /// The shared meshes of the primitives drawn by themselves.
+    meshes: HashMap<LevelKey, Handle<Mesh>>,
+}
+
+/// A primitive's mesh at a level: identical primitives share it.
+type LevelKey = (PrimKind, [u64; 3], u32);
+
+fn level_key(kind: PrimKind, dims: [f64; 3], band: usize) -> LevelKey {
+    (kind, dims.map(f64::to_bits), meshes::level_id(kind, dims, band))
+}
+
+/// A primitive `spawn_map` may merge: its levels' world matrix (the lift in it) and its world bounds.
+struct Placed {
+    item: usize,
+    kind: PrimKind,
+    dims: [f64; 3],
+    world: Mat4,
+    lo: Vec3,
+    hi: Vec3,
+}
+
+/// Nodes that never move, turn or vanish, and are never tinted: no moving collider is on them, and neither
+/// the movers nor the looks change them or a node above them at any time of the round tried (`PROBES`). The
+/// world is not touched: the movers pose a copy. (What the trial misses, `pose_map` still catches.)
+fn still_nodes(map: &Map) -> Vec<bool> {
+    let base = &map.render;
+    let n = base.0.len();
+    let mut moves = vec![false; n];
+    // Only what primitives hang from is compared.
+    let mut watched = vec![false; n];
+    for item in &map.scene.items {
+        let SceneItem::Prim { node, .. } = item else { continue };
+        let mut at = Some(*node);
+        while let Some(i) = at {
+            match watched.get_mut(i as usize) {
+                Some(w) if !*w => *w = true,
+                _ => break,
+            }
+            at = base.0[i as usize].parent;
+        }
+    }
+    let watch: Vec<usize> = (0..n).filter(|&i| watched[i]).collect();
+    for &c in &map.world.dynamic {
+        if let Some(col) = map.world.colliders.get(c as usize)
+            && let Some(m) = moves.get_mut(col.node as usize)
+        {
+            *m = true;
+        }
+    }
+    let looks: Vec<_> = map
+        .scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SceneItem::Special { look: Some(l), .. } => Some(l),
+            _ => None,
+        })
+        .collect();
+    let mut probe = base.clone();
+    let mut out = LookOut::default();
+    for t in PROBES
+        .iter()
+        .flat_map(|&(from, to, step)| (0..((to - from) / step) as usize).map(move |k| from + k as f64 * step))
+    {
+        map.world.pose_locals(t, &mut probe);
+        for &i in &watch {
+            let (a, b) = (&probe.0[i], &base.0[i]);
+            if a.pos != b.pos || a.rot != b.rot || a.scale != b.scale || a.visible != b.visible {
+                moves[i] = true;
+            }
+        }
+        for l in &looks {
+            out.pieces.clear();
+            out.tints.clear();
+            (l.0)(&map.world, t, &mut out);
+            for tint in &out.tints {
+                if let Some(m) = moves.get_mut(tint.node as usize) {
+                    *m = true;
+                }
+            }
+        }
+    }
+    // Hidden ones stay out too, and what hangs from a moving node moves (parents come before children).
+    for (i, node) in base.0.iter().enumerate() {
+        let up = node.parent.is_some_and(|p| moves.get(p as usize) == Some(&true));
+        moves[i] |= !node.visible || up;
+    }
+    moves.into_iter().map(|m| !m).collect()
+}
+
+/// The times of the round `still_nodes` tries (from, to, step; s): finely through the start, coarser after.
+const PROBES: [(f64, f64, f64); 2] = [(-10.0, 60.0, 0.25), (60.0, 300.0, 1.0)];
+
+/// A merged group of static primitives: one mesh per level of detail around the group's centre, its
+/// distances padded by how far its pieces lie from the centre (`BandPad`) and taken at its biggest piece's
+/// size (`meshes::level_class` keeps the sizes close). None: a piece that does not merge.
+fn spawn_group(
+    commands: &mut Commands,
+    assets: &mut Assets<Mesh>,
+    cpu: &mut HashMap<LevelKey, Mesh>,
+    group: &[&Placed],
+    mat: &Handle<SurfaceMaterial>,
+    root: Entity,
+    lod_k: f32,
+) -> Option<Vec<Entity>> {
+    let first = group.first()?;
+    let (lo, hi) = group.iter().fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
+        (lo.min(p.lo), hi.max(p.hi))
+    });
+    let origin = (lo + hi) / 2.0;
+    let pad = group
+        .iter()
+        .map(|p| p.world.w_axis.truncate().distance(origin))
+        .fold(0.0, f32::max);
+    let r = group.iter().map(|p| meshes::radius(p.kind, p.dims)).fold(0.0, f32::max);
+    let levels = meshes::prim_levels(first.kind, first.dims);
+    let mut made = Vec::with_capacity(levels.len());
+    for band in &levels {
+        for p in group {
+            cpu.entry(level_key(p.kind, p.dims, band.first))
+                .or_insert_with(|| meshes::prim(p.kind, p.dims, band.first));
+        }
+        let pieces: Vec<(&Mesh, Mat4)> = group
+            .iter()
+            .filter_map(|p| cpu.get(&level_key(p.kind, p.dims, band.first)).map(|m| (m, p.world)))
+            .collect();
+        made.push(meshes::merge(&pieces, origin, true)?);
+    }
+    let single = levels.len() == 1;
+    let mut out = Vec::with_capacity(made.len());
+    for (band, mesh) in levels.into_iter().zip(made) {
+        let aabb = mesh.compute_aabb();
+        let mut e = commands.spawn((
+            Mesh3d(assets.add(mesh)),
+            MeshMaterial3d(mat.clone()),
+            Transform::from_translation(origin),
+            Visibility::default(),
+            ChildOf(root),
+        ));
+        if let Some(aabb) = aabb {
+            e.insert(aabb);
+        }
+        if !single {
+            let band = LodBand { r, ..band };
+            e.insert((band, BandPad(pad), band.range_padded(lod_k, pad)));
+        }
+        out.push(e.id());
+    }
+    Some(out)
+}
+
+/// A primitive drawn by itself: its levels of detail are children (shown by the camera's distance) of an entity
+/// that follows its node.
+fn spawn_prim(
+    commands: &mut Commands,
+    drawn: &mut Drawn,
+    assets: &mut Assets<Mesh>,
+    map: &Map,
+    item: usize,
+    lod_k: f32,
+    shown: bool,
+) {
+    let (Some(root), Some(SceneItem::Prim { node, kind, dims, .. }), Some(Some((spec, mat, lift)))) =
+        (drawn.root, map.scene.items.get(item), drawn.prims.get(item))
+    else {
+        return;
+    };
+    let piece = commands
+        .spawn((
+            MapPrim(spec.clone(), mat.clone()),
+            MapPiece { node: *node },
+            Transform::from_matrix(mat4(&map.render.get(*node).world)),
+            if shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            ChildOf(root),
+        ))
+        .id();
+    let lift = Transform::from_xyz(0.0, *lift as f32 * meshes::LIFT, 0.0);
+    let levels = meshes::prim_levels(*kind, *dims);
+    let single = levels.len() == 1;
+    for band in levels {
+        let mesh = drawn
+            .meshes
+            .entry(level_key(*kind, *dims, band.first))
+            .or_insert_with(|| assets.add(meshes::prim(*kind, *dims, band.first)))
+            .clone();
+        let mut child = commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat.clone()),
+            PrimLevel,
+            lift,
+            ChildOf(piece),
+        ));
+        if !single {
+            child.insert((band, band.range(lod_k)));
+        }
+    }
+}
+
+/// A merged group with a node that moved, appeared or vanished after all (the trial of `still_nodes` missed
+/// it) is drawn piece by piece from now on.
+fn split_moved(
+    commands: &mut Commands,
+    drawn: &mut Drawn,
+    assets: &mut Assets<Mesh>,
+    map: &Map,
+    posed: &Posed,
+    lod_k: f32,
+) {
+    let changed = |i: usize| posed.moved.get(i) == Some(&true) || posed.flipped.get(i) == Some(&true);
+    if !drawn.merged.iter().enumerate().any(|(i, &m)| m && changed(i)) {
+        return;
+    }
+    let node_of = |item: usize| match map.scene.items.get(item) {
+        Some(SceneItem::Prim { node, .. }) => Some(*node as usize),
+        _ => None,
+    };
+    let mut hit: Vec<usize> = Vec::new();
+    for (item, g) in drawn.group_of.iter().enumerate() {
+        if let Some(g) = *g
+            && node_of(item).is_some_and(changed)
+            && !hit.contains(&g)
+        {
+            hit.push(g);
+        }
+    }
+    for g in hit {
+        let Some((entities, items)) = drawn.groups.get_mut(g).map(core::mem::take) else {
+            continue;
+        };
+        warn!("map: a merged group of {} primitives moved, drawn apart", items.len());
+        for e in entities {
+            commands.entity(e).despawn();
+        }
+        for item in items {
+            drawn.group_of[item] = None;
+            let shown = node_of(item).is_none_or(|n| posed.shown.get(n) != Some(&false));
+            spawn_prim(commands, drawn, assets, map, item, lod_k, shown);
+        }
+    }
+    drawn.merged.fill(false);
+    for (item, g) in drawn.group_of.iter().enumerate() {
+        if g.is_some()
+            && let Some(n) = node_of(item)
+            && let Some(m) = drawn.merged.get_mut(n)
+        {
+            *m = true;
+        }
+    }
+}
+
 fn spawn_map(
     mut commands: Commands,
     map: Option<Res<Map>>,
@@ -140,6 +411,7 @@ fn spawn_map(
     mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
     quality: Option<Res<Quality>>,
     display: Res<crate::settings::Display>,
+    mut drawn: ResMut<Drawn>,
 ) {
     let Some(map) = map else { return };
     if roots.iter().any(|(_, r)| r.0 == map.generation) {
@@ -151,9 +423,22 @@ fn spawn_map(
     let root = commands
         .spawn((MapRoot(map.generation), Transform::default(), Visibility::default()))
         .id();
-    // Shared handles: identical primitives and materials batch into one draw.
-    let mut prims: HashMap<(PrimKind, [u64; 3], u32), Handle<Mesh>> = HashMap::new();
     let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
+    let items = map.scene.items.len();
+    let drawn = &mut *drawn;
+    *drawn = Drawn {
+        generation: Some(map.generation),
+        root: Some(root),
+        prims: vec![None; items],
+        group_of: vec![None; items],
+        merged: vec![false; map.render.0.len()],
+        ..default()
+    };
+    let still = still_nodes(&map);
+    // Primitives that may merge, with the candidates `meshes::groups` weighs.
+    let mut placed: Vec<Placed> = Vec::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut material_ids: HashMap<AssetId<SurfaceMaterial>, usize> = HashMap::new();
     // Primitives that touch are lifted apart (by their transform: identical ones still share a mesh).
     let bounds: Vec<(Vec3, Vec3)> = map
         .scene
@@ -168,6 +453,7 @@ fn spawn_map(
         })
         .collect();
     let mut lifts = meshes::lifts(&bounds).into_iter();
+    let mut prim_bounds = bounds.iter();
     for (i, item) in map.scene.items.iter().enumerate() {
         let (node, child) = match item {
             SceneItem::Prim {
@@ -179,34 +465,33 @@ fn spawn_map(
                 surface,
                 pattern,
             } => {
-                let lift = Transform::from_xyz(0.0, lifts.next().unwrap_or(0) as f32 * meshes::LIFT, 0.0);
+                let lift = lifts.next().unwrap_or(0);
+                let (lo, hi) = prim_bounds.next().copied().unwrap_or_default();
                 let spec = prim_spec(&map.look, *kind, *dims, *pal, *freq, *surface, *pattern);
                 let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
-                let piece = commands.spawn(MapPrim(spec, mat.clone())).id();
-                // Each level of detail a child, shown by the camera's distance.
-                let levels = meshes::prim_levels(*kind, *dims);
-                let single = levels.len() == 1;
-                for band in levels {
-                    let mesh = prims
-                        .entry((
-                            *kind,
-                            dims.map(f64::to_bits),
-                            meshes::level_id(*kind, *dims, band.first),
-                        ))
-                        .or_insert_with(|| meshes.add(meshes::prim(*kind, *dims, band.first)))
-                        .clone();
-                    let mut child = commands.spawn((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(mat.clone()),
-                        PrimLevel,
-                        lift,
-                        ChildOf(piece),
-                    ));
-                    if !single {
-                        child.insert((band, band.range(lod_k)));
-                    }
-                }
-                (*node, piece)
+                let world = mat4(&map.render.get(*node).world)
+                    * Mat4::from_translation(Vec3::new(0.0, lift as f32 * meshes::LIFT, 0.0));
+                let n = material_ids.len();
+                candidates.push(Candidate {
+                    at: (lo + hi) / 2.0,
+                    material: *material_ids.entry(mat.id()).or_insert(n),
+                    class: meshes::level_class(&meshes::prim_levels(*kind, *dims)),
+                    // (Nothing a look tints, nothing see-through: a merged mesh is sorted as one.)
+                    still: still.get(*node as usize) == Some(&true)
+                        && spec.alpha == AlphaMode::Opaque
+                        && meshes::frame(&world).is_some(),
+                });
+                placed.push(Placed {
+                    item: i,
+                    kind: *kind,
+                    dims: *dims,
+                    world,
+                    lo,
+                    hi,
+                });
+                drawn.prims[i] = Some((spec, mat, lift));
+                // (Drawn below: merged, or by itself.)
+                continue;
             }
             SceneItem::Model { node, name, tint } => {
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
@@ -236,6 +521,40 @@ fn spawn_map(
             ChildOf(root),
         ));
     }
+    // Static primitives merge by cell, material and levels of detail; the rest are drawn by themselves.
+    let mut cpu: HashMap<LevelKey, Mesh> = HashMap::new();
+    let mut alone = vec![true; placed.len()];
+    for group in meshes::groups(&candidates) {
+        let members: Vec<&Placed> = group.iter().filter_map(|&c| placed.get(c)).collect();
+        let Some(Some((_, mat, _))) = members.first().and_then(|p| drawn.prims.get(p.item)) else {
+            continue;
+        };
+        let Some(entities) = spawn_group(&mut commands, &mut meshes, &mut cpu, &members, mat, root, lod_k) else {
+            continue;
+        };
+        let g = drawn.groups.len();
+        for p in &members {
+            drawn.group_of[p.item] = Some(g);
+            if let Some(SceneItem::Prim { node, .. }) = map.scene.items.get(p.item)
+                && let Some(m) = drawn.merged.get_mut(*node as usize)
+            {
+                *m = true;
+            }
+        }
+        drawn.groups.push((entities, members.iter().map(|p| p.item).collect()));
+        for &c in &group {
+            alone[c] = false;
+        }
+    }
+    for (p, _) in placed.iter().zip(&alone).filter(|(_, a)| **a) {
+        spawn_prim(&mut commands, drawn, &mut meshes, &map, p.item, lod_k, true);
+    }
+    let merged: usize = drawn.groups.iter().map(|g| g.1.len()).sum();
+    info!(
+        "map drawn: {} primitives, {merged} of them merged into {} groups",
+        placed.len(),
+        drawn.groups.len()
+    );
     if map.bonuses.list.is_empty() {
         return;
     }
@@ -418,10 +737,15 @@ impl Posed {
 
 /// The map's movers pose the nodes for the frame; the pieces on nodes that moved, appeared or vanished follow.
 fn pose_map(
+    mut commands: Commands,
     map: Option<ResMut<Map>>,
     timeline: Res<LocalTimeline>,
     fixed: Res<Time<Fixed>>,
     mut posed: Local<Posed>,
+    mut drawn: ResMut<Drawn>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    quality: Option<Res<Quality>>,
+    display: Res<crate::settings::Display>,
     mut pieces: Query<(Ref<MapPiece>, &mut Transform, &mut Visibility)>,
 ) {
     let Some(mut map) = map else { return };
@@ -432,6 +756,10 @@ fn pose_map(
     map.world.pose_locals(t, &mut map.render);
     posed.generation = Some(map.generation);
     posed.update(&mut map.render, all);
+    if !all && drawn.generation == Some(map.generation) {
+        let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
+        split_moved(&mut commands, &mut drawn, &mut meshes, map, &posed, lod_k);
+    }
     for (piece, mut tf, mut vis) in &mut pieces {
         let n = piece.node as usize;
         let fresh = piece.is_added();

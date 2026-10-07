@@ -613,14 +613,26 @@ impl MaterialExtension for Surface {
     fn specialize(
         _: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         _: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         // The fragment shader reads the mesh's transform (object-space mapping).
         let def = "VERTEX_OUTPUT_INSTANCE_INDEX";
         descriptor.vertex.shader_defs.push(def.into());
+        // Merged static geometry has its pieces' frames in its vertices instead (`meshes::merge`).
+        let framed = [
+            super::meshes::ATTRIBUTE_FRAME,
+            Mesh::ATTRIBUTE_COLOR,
+            Mesh::ATTRIBUTE_UV_0,
+            Mesh::ATTRIBUTE_UV_1,
+        ]
+        .into_iter()
+        .all(|a| layout.0.contains(a));
         if let Some(f) = &mut descriptor.fragment {
             f.shader_defs.push(def.into());
+            if framed {
+                f.shader_defs.push("OBJECT_FRAME".into());
+            }
         }
         Ok(())
     }
