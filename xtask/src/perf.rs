@@ -120,11 +120,11 @@ fn load(path: &Path) -> Option<Value> {
 /// DXC beside the built client, as the installer puts it (`backend.rs`): without it DX12 compiles with FXC, which
 /// keeps four threads busy for most of a 30 s recording (portal-panic: 63 fps against 103 with DXC). From
 /// `FB_DXC_DIR` (an unpacked DXC release, as `dist`) or the Windows SDK's bin.
-fn dxc_beside(target: &Path) {
+pub fn dxc_beside(target: &Path) {
     if !cfg!(windows) || target.join("dxcompiler.dll").is_file() {
         return;
     }
-    let from_env = std::env::var_os("FB_DXC_DIR").map(|d| PathBuf::from(d).join("bin").join("x64"));
+    let from_env = crate::sdk::var("FB_DXC_DIR").map(|d| d.join("bin").join("x64"));
     let sdk = std::fs::read_dir(r"C:\Program Files (x86)\Windows Kits\10\bin")
         .into_iter()
         .flatten()
@@ -185,19 +185,14 @@ fn run(r: &RunArgs) -> bool {
     let secs = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
     let kind = if r.sweep { "sweep" } else { "run" };
     let out = dir.join(format!("{}-{kind}-{secs}.json", r.map));
-    let Ok(mut server) = Command::new(bin("fb_server"))
-        .args(shared.server_args())
-        .args(["--dev", "--solo", "--open-rooms", "perf"])
-        .spawn()
-    else {
-        eprintln!("cannot start the server");
+    let Some(mut server) = crate::start_server(Command::new(bin("fb_server")).args(shared.server_args()).args([
+        "--dev",
+        "--solo",
+        "--open-rooms",
+        "perf",
+    ])) else {
         return false;
     };
-    std::thread::sleep(Duration::from_millis(500));
-    if let Ok(Some(status)) = server.try_wait() {
-        eprintln!("the server exited at once ({status})");
-        return false;
-    }
     let mut c = Command::new(bin("fb_client"));
     c.args([
         "--profile",

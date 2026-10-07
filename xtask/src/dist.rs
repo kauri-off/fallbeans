@@ -120,7 +120,7 @@ fn dxc_into(dir: &Path) {
     if !cfg!(windows) {
         return;
     }
-    let Some(src) = std::env::var_os("FB_DXC_DIR").map(PathBuf::from) else {
+    let Some(src) = env_path("FB_DXC_DIR") else {
         eprintln!("FB_DXC_DIR is not set: the package compiles DX12 shaders with FXC (slow)");
         return;
     };
@@ -134,12 +134,11 @@ fn dxc_into(dir: &Path) {
     }
 }
 
-/// The release client, staged with its assets and licenses into `dir`.
-fn client_into(dir: &Path) -> bool {
-    let features = client_features();
+/// The packages' client, built into target/dist (`cargo xtask play --dist` runs it from there).
+pub fn build_client() -> Option<PathBuf> {
     let mut c = stamped(cargo());
     c.args(["build", "--locked", "--profile", "dist", "-p", "fb_client"])
-        .args(features);
+        .args(client_features());
     // The C runtime inside the exe: a clean Windows has no VCRUNTIME140.dll and the installer does not ship it.
     // (Here, not in .cargo/config.toml: there every local build would rebuild everything for it.)
     if cfg!(windows) {
@@ -148,11 +147,49 @@ fn client_into(dir: &Path) -> bool {
             "-C target-feature=+crt-static",
         );
     }
-    if !run(&mut c) || !third_party("fb_client", &features, &dir.join(THIRD_PARTY)) {
+    run(&mut c).then(|| {
+        target_dir()
+            .join("dist")
+            .join(format!("fb_client{}", std::env::consts::EXE_SUFFIX))
+    })
+}
+
+/// The client packages ship every upscaler: a missing one fails the package instead of a quiet build without it.
+fn upscalers_ready() -> bool {
+    let mut missing = Vec::new();
+    if !crate::dlss() {
+        missing.push("DLSS SDK (DLSS_SDK)");
+    }
+    if dlss_runtime().is_none() {
+        missing.push("DLSS library (DLSS_DLL)");
+    }
+    if env_path("FFX_SDK").is_none() {
+        missing.push("FidelityFX SDK (FFX_SDK)");
+    }
+    if cfg!(windows) && env_path("FB_DXC_DIR").is_none() {
+        missing.push("DXC (FB_DXC_DIR)");
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "the client packages need {}: cargo xtask setup (cargo xtask doctor lists the rest)",
+            missing.join(", ")
+        );
+    }
+    missing.is_empty()
+}
+
+/// The release client, staged with its assets and licenses into `dir`.
+fn client_into(dir: &Path) -> bool {
+    if !upscalers_ready() {
         return false;
     }
-    let exe = format!("fb_client{}", std::env::consts::EXE_SUFFIX);
-    copy(Path::new("target/dist").join(&exe), dir.join(&exe));
+    let Some(exe) = build_client() else {
+        return false;
+    };
+    if !third_party("fb_client", &client_features(), &dir.join(THIRD_PARTY)) {
+        return false;
+    }
+    copy(&exe, dir.join(exe.file_name().expect("exe name")));
     copy_dir(&root().join("assets"), &dir.join("assets"));
     copy("LICENSE", dir.join("LICENSE"));
     dxc_into(dir);
@@ -163,7 +200,7 @@ fn client_into(dir: &Path) -> bool {
 const UPSCALER_LICENSES: &str = "upscaler-licenses";
 
 fn env_path(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var).map(PathBuf::from)
+    crate::sdk::var(var)
 }
 
 /// NVIDIA's DLSS library the game loads at run time: `DLSS_DLL`, else the SDK's own in `DLSS_SDK`
@@ -283,11 +320,14 @@ pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
                     ok &= notices_into(l);
                 }
             }
-            None => eprintln!("no DLSS library (DLSS_DLL or DLSS_SDK): the client cannot use DLSS"),
+            None => {
+                eprintln!("no DLSS library (DLSS_DLL or DLSS_SDK): the client cannot use DLSS");
+                ok &= licenses.is_none();
+            }
         }
     }
     let Some(lib) = fidelityfx() else {
-        return ok;
+        return ok && licenses.is_none();
     };
     let name = if cfg!(windows) {
         "amd_fidelityfx_vk.dll"
@@ -329,7 +369,7 @@ fn put(src: &Path, to: &Path) -> bool {
 fn notices_into(dir: &Path) -> bool {
     let text = match std::env::var_os("DLSS_GUIDE_TEXT") {
         Some(f) => fs::read_to_string(f).ok(),
-        None => std::env::var_os("DLSS_SDK").and_then(|sdk| {
+        None => env_path("DLSS_SDK").and_then(|sdk| {
             let pdf = Path::new(&sdk).join("doc/DLSS_Programming_Guide_Release.pdf");
             let out = Command::new("pdftotext")
                 .args(["-layout", "-enc", "UTF-8"])
@@ -361,7 +401,7 @@ fn notices_of(text: &str) -> Option<String> {
 }
 
 fn tool(var: &str, name: &str) -> Command {
-    Command::new(std::env::var(var).unwrap_or_else(|_| name.into()))
+    Command::new(env_path(var).unwrap_or_else(|| name.into()))
 }
 
 fn nsis() -> bool {
@@ -426,7 +466,7 @@ fn appimage() -> bool {
     let mut c = tool("APPIMAGETOOL", "appimagetool");
     c.env("ARCH", "x86_64").env("APPIMAGE_EXTRACT_AND_RUN", "1");
     // A runtime of a known release (the workflow checks its sum); else appimagetool downloads the latest one.
-    if let Ok(runtime) = std::env::var("APPIMAGE_RUNTIME") {
+    if let Some(runtime) = env_path("APPIMAGE_RUNTIME") {
         c.arg("--runtime-file").arg(runtime);
     }
     run(c.arg(&app).arg(&out))
@@ -466,7 +506,7 @@ fn flatpak() -> bool {
         // Its cache (often gigabytes) under target/, not as .flatpak-builder/ in the repository.
         .arg(format!(
             "--state-dir={}",
-            root().join("target/flatpak-builder").display()
+            target_dir().join("flatpak-builder").display()
         ))
         .arg(format!("--repo={}", repo.display()))
         .arg(dir.join("build"))

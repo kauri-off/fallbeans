@@ -123,10 +123,25 @@ pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
 pub const PRESET_LOW: &str = "Низкое";
 pub const PRESET_HIGH: &str = "Высокое";
-/// The upscaler in use (`render/upscale.rs`), by its vendor's name: always on, in the ultra quality mode.
-pub fn upscale_note(name: &str) -> String {
-    format!("Масштабирование: {name} (ультра-качество), включено всегда")
+pub const UPSCALER: &str = "Масштабирование (ультра-качество, включено всегда)";
+pub const UPSCALER_AUTO: &str = "Авто";
+/// The upscalers' chips (`render/upscale.rs`), by their vendors' names.
+pub fn upscaler(u: crate::render::upscale::Upscaler) -> &'static str {
+    use crate::render::upscale::Upscaler;
+    match u {
+        Upscaler::Dlss => "DLSS 4.5",
+        Upscaler::Fsr3 => "FSR 3.1",
+        Upscaler::Fsr1 => "FSR 1",
+    }
 }
+/// The upscaler at work, and the one chosen when it failed this session.
+pub fn upscaler_now(name: &str, failed: Option<&str>) -> String {
+    match failed {
+        Some(chosen) => format!("Сейчас: {name} ({chosen} дал сбой, до перезапуска)"),
+        None => format!("Сейчас: {name}"),
+    }
+}
+pub const UPSCALER_NOTE: &str = "DLSS — видеокарты NVIDIA RTX, DLSS и FSR 3.1 — только на Vulkan";
 pub const VSYNC: &str = "Вертикальная синхронизация";
 pub const FPS_LIMIT: &str = "Ограничение кадров в секунду";
 pub const NO_LIMIT: &str = "Нет";

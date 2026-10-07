@@ -1,7 +1,11 @@
-//! Project tasks: `cargo xtask <check|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
+//! Project tasks: `cargo xtask <check|play|doctor|setup|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
+mod check;
 mod dist;
+mod doctor;
 mod fuzz;
 mod perf;
+mod play;
+mod sdk;
 mod stress;
 
 use std::path::{Path, PathBuf};
@@ -18,8 +22,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Task {
-    /// fmt, clippy (warnings are errors), tests.
-    Check,
+    /// fmt, clippy (warnings are errors), tests; a summary on screen, everything in target/check.log.
+    Check(check::CheckArgs),
+    /// The game from its menu as a player gets it (`perf` build, `--dist`: the packages' client), a dev server on
+    /// localhost.
+    Play(play::PlayArgs),
+    /// What this machine has for each task (build, upscalers, packages), and how to get what it lacks.
+    Doctor,
+    /// The pinned SDKs and tools of toolchain/deps.toml into target/sdk (`--dist`: the packaging tools too).
+    Setup(sdk::SetupArgs),
     /// Map and system audits (`fb_audit`): [map…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics]
     /// [--notes] [--json]; `--baseline` / `--bless-baseline`: the game's feel against `baseline.json`.
     Audit {
@@ -104,19 +115,13 @@ impl Shared {
     pub fn build(&self) -> bool {
         let mut c = cargo();
         c.args(["build", "-p", "fb_server", "-p", "fb_client"]);
-        let mut features = Vec::new();
-        if self.release {
+        let features = if self.release {
             c.arg("--release");
+            dlss_features()
         } else {
-            // (Bevy as a DLL: relinks in seconds. `command` puts the DLLs on the PATH.)
-            features.extend(["fb_client/dynamic", "fb_server/dynamic"]);
-        }
-        if dlss() {
-            features.push("fb_client/dlss");
-        }
-        if !features.is_empty() {
-            c.args(["--features", &features.join(",")]);
-        }
+            dev_features()
+        };
+        with_features(&mut c, &features);
         let built = run(&mut c);
         if built && let Some(dir) = self.bin("fb_client").parent() {
             dist::upscalers_into(dir, None);
@@ -124,12 +129,11 @@ impl Shared {
         built
     }
 
-    /// The built `name` to run: a debug build finds Bevy's DLL (target/debug/deps) and Rust's own (the
-    /// toolchain's bin) on the PATH, as `cargo run` would give it.
+    /// The built `name` to run: a debug build finds Bevy's and Rust's shared libraries, as under `cargo run`.
     pub fn command(&self, name: &str) -> Command {
         let mut c = Command::new(self.bin(name));
         if !self.release {
-            c.env("PATH", dll_path());
+            dylib_env(&mut c);
         }
         c
     }
@@ -152,8 +156,15 @@ struct DevArgs {
     shared: Shared,
 }
 
-/// The PATH with the debug build's deps and the toolchain's bin in front (Bevy's and Rust's DLLs).
-pub fn dll_path() -> std::ffi::OsString {
+/// Bevy's and Rust's shared libraries of a dev build (`dynamic`) on the loader's path, as `cargo run` puts them.
+pub fn dylib_env(c: &mut Command) {
+    let var = if cfg!(windows) {
+        "PATH"
+    } else if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
     let sysroot = Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
         .current_dir(root())
         .args(["--print", "sysroot"])
@@ -164,24 +175,63 @@ pub fn dll_path() -> std::ffi::OsString {
     if let Some(s) = sysroot {
         dirs.push(s.join("bin"));
         dirs.push(s.join("lib"));
+        let targets = std::fs::read_dir(s.join("lib").join("rustlib"))
+            .into_iter()
+            .flatten()
+            .flatten();
+        dirs.extend(targets.map(|t| t.path().join("lib")).filter(|d| d.is_dir()));
     }
-    if let Some(p) = std::env::var_os("PATH") {
+    if let Some(p) = std::env::var_os(var) {
         dirs.extend(std::env::split_paths(&p));
     }
-    std::env::join_paths(dirs).unwrap_or_default()
+    c.env(var, std::env::join_paths(dirs).unwrap_or_default());
+}
+
+/// `fb_client/dlss` when its SDK is there.
+pub fn dlss_features() -> Vec<&'static str> {
+    if dlss() { vec!["fb_client/dlss"] } else { Vec::new() }
+}
+
+/// Every dev-profile build, tests too: Bevy as a shared library (relinks in seconds), one feature set, one cache.
+/// No DLSS: Bevy's shared library cannot link the SDK's static NGX library (`perf` and `dist` builds have it).
+pub fn dev_features() -> Vec<&'static str> {
+    vec!["fb_client/dynamic", "fb_server/dynamic"]
+}
+
+pub fn with_features(c: &mut Command, features: &[&str]) {
+    if !features.is_empty() {
+        c.args(["--features", &features.join(",")]);
+    }
+}
+
+/// Starts a server and gives it half a second: gone by then (its ports held by another one), it is an error.
+pub fn start_server(c: &mut Command) -> Option<std::process::Child> {
+    let mut server = match c.spawn() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot start the server: {e}");
+            return None;
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if let Ok(Some(status)) = server.try_wait() {
+        eprintln!("the server exited at once ({status}): another one on its ports?");
+        return None;
+    }
+    Some(server)
 }
 
 /// The client's `dlss` feature (NVIDIA DLSS 4.5 before AMD FSR 3.1): on when the DLSS SDK is there to build it
 /// with (`DLSS_SDK`; the build needs the Vulkan headers, `VULKAN_SDK`, and clang too: `README.md`).
 pub fn dlss() -> bool {
-    let Some(sdk) = std::env::var_os("DLSS_SDK") else {
+    let Some(sdk) = sdk::var("DLSS_SDK") else {
         return false;
     };
     if !Path::new(&sdk).join("include").join("nvsdk_ngx.h").is_file() {
         eprintln!("DLSS_SDK has no include/nvsdk_ngx.h: the client is built without DLSS");
         return false;
     }
-    if std::env::var_os("VULKAN_SDK").is_none() {
+    if sdk::var("VULKAN_SDK").is_none() {
         eprintln!("DLSS_SDK is set but VULKAN_SDK is not: the DLSS build needs the Vulkan headers");
     }
     true
@@ -204,21 +254,8 @@ pub fn run(cmd: &mut Command) -> bool {
 pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(root());
+    sdk::apply(&mut c);
     c
-}
-
-fn check() -> bool {
-    run(cargo().args(["fmt", "--all", "--check"]))
-        && run(cargo().args([
-            "clippy",
-            "--locked",
-            "--workspace",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-        ]))
-        && run(cargo().args(["test", "--locked", "--workspace"]))
 }
 
 /// A client's tag from its index, as spreadsheet columns: a…z, aa, ab, …
@@ -239,22 +276,14 @@ fn dev(a: &DevArgs) -> bool {
     if !a.shared.build() {
         return false;
     }
-    let Ok(mut server) = a
-        .shared
-        .command("fb_server")
-        .args(a.shared.server_args())
-        .args(["--dev", "--solo"])
-        .spawn()
-    else {
-        eprintln!("cannot start the server");
+    let Some(mut server) = start_server(
+        a.shared
+            .command("fb_server")
+            .args(a.shared.server_args())
+            .args(["--dev", "--solo"]),
+    ) else {
         return false;
     };
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    // Gone already (its ports held by a server left running): the windows would join that one instead.
-    if let Ok(Some(status)) = server.try_wait() {
-        eprintln!("the server exited at once ({status})");
-        return false;
-    }
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = a.shared.command("fb_client");
@@ -310,13 +339,27 @@ fn export_models() -> bool {
     ok
 }
 
+/// Loads every model in a dev build of the client (the build `dev` and `check` share).
+fn check_assets() -> bool {
+    let s = Shared {
+        lag: 0,
+        jitter: 0,
+        loss: 0.0,
+        map: String::new(),
+        seed: None,
+        release: false,
+    };
+    s.build() && run(s.command("fb_client").arg("--check-assets"))
+}
+
 fn main() -> ExitCode {
     let ok = match Cli::parse().task {
-        Task::Check => check(),
+        Task::Check(a) => check::check(&a),
+        Task::Play(a) => play::play(&a),
+        Task::Doctor => doctor::doctor(),
+        Task::Setup(a) => sdk::setup(&a),
         Task::Audit { args } => run(cargo().args(["run", "--release", "-p", "fb_audit", "--"]).args(args)),
-        Task::Assets { export } => {
-            (!export || export_models()) && run(cargo().args(["run", "-p", "fb_client", "--", "--check-assets"]))
-        }
+        Task::Assets { export } => (!export || export_models()) && check_assets(),
         Task::Dev(a) => dev(&a),
         Task::Stress(a) => stress::stress(&a),
         Task::Perf(a) => perf::perf(&a),

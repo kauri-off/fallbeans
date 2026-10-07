@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::stress::wait_or_kill;
-use crate::{cargo, root, target_dir};
+use crate::{cargo, dev_features, dylib_env, root, target_dir, with_features};
 
 #[derive(Args)]
 pub struct FuzzArgs {
@@ -22,7 +22,6 @@ pub struct FuzzArgs {
     jobs: u32,
 }
 
-const TEST: [&str; 5] = ["test", "-p", "fb_client", "--bin", "fb_client"];
 /// Past its seconds of play a seed has this long to finish, then it counts as hung and is killed.
 const GRACE: Duration = Duration::from_secs(120);
 
@@ -30,7 +29,10 @@ const GRACE: Duration = Duration::from_secs(120);
 /// `cargo test` would leave it running).
 fn test_binary() -> Option<PathBuf> {
     let mut c = cargo();
-    c.args(TEST).args(["--no-run", "--message-format=json"]);
+    // (The workspace and `check`'s features: its build, not one of its own.)
+    c.args(["test", "--locked", "--workspace", "--bin", "fb_client"]);
+    with_features(&mut c, &dev_features());
+    c.args(["--no-run", "--message-format=json"]);
     eprintln!("$ {c:?}");
     let out = c.stderr(Stdio::inherit()).output().ok()?;
     if !out.status.success() {
@@ -67,7 +69,9 @@ pub fn fuzz(a: &FuzzArgs) -> bool {
             let path = dir.join(format!("{seed}.log"));
             let log = File::create(&path).ok()?;
             // (The package's folder, as under `cargo test`.)
-            let child = Command::new(&exe)
+            let mut child = Command::new(&exe);
+            dylib_env(&mut child);
+            let child = child
                 .current_dir(root().join("crates/fb_client"))
                 .args(["monkey::monkey_long", "--exact", "--ignored", "--nocapture"])
                 .env("FB_MONKEY_SECS", a.secs.to_string())

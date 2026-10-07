@@ -112,39 +112,38 @@ POST-запросом с ключом в теле: `curl -c jar -d "<ключ>" 
 
 ## Сборка из исходников
 
-Нужен rustup: версию Rust задаёт `rust-toolchain.toml`, rustup поставит её сам. На Linux ещё `libasound2-dev
-libudev-dev libwayland-dev libxkbcommon-dev`. Первая сборка долгая (Bevy).
+Нужен rustup: версию Rust задаёт `rust-toolchain.toml`, rustup поставит её сам. Что ещё нужно этой машине и как
+это поставить (пакеты Linux, Visual Studio Build Tools на Windows), покажет `cargo xtask doctor`. Первая сборка
+долгая (Bevy).
 
 ```sh
-cargo build --release -p fb_server -p fb_client
-target/release/fb_server --name "Дома"
-target/release/fb_client
+cargo xtask doctor        # что есть и чего не хватает для сборки, апскейлеров и пакетов
+cargo xtask setup         # SDK апскейлеров нужных версий в target/sdk (необязательно)
+cargo xtask play          # сервер на localhost и клиент с главного меню; сервер в списке — 127.0.0.1
 ```
+
+`play` собирает быструю оптимизированную сборку (профиль `perf`), `play --dist` — ровно клиент из пакетов. Свой
+сервер без xtask: `cargo build --release -p fb_server -p fb_client`, затем `target/release/fb_server --name "Дома"`
+и `target/release/fb_client`.
 
 Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`). В `vendor/` — копии `aeronet_websocket`,
 `lightyear_transport` и `dlss_wgpu` с нашими исправлениями (подключены через `[patch.crates-io]` в `Cargo.toml`).
 
-Масштабирование кадра выбирается при запуске: NVIDIA DLSS 4.5 на видеокартах RTX (Vulkan), иначе AMD FSR 3.1
-(Vulkan, библиотека AMD рядом с игрой), иначе AMD FSR 1 (DirectX 12, нет библиотеки, любой сбой). Что выбрано,
-пишется в лог и видно в F4 и в настройках графики. Обычная сборка обходится без SDK — в ней FSR 3.1 (если рядом
-`amd_fidelityfx_vk.dll` или на Linux `libamd_fidelityfx_vk.so`) и FSR 1. Сборка с DLSS (фича клиента `dlss`):
+Масштабирование кадра выбирается в настройках графики прямо в игре: «Авто» — NVIDIA DLSS 4.5 на видеокартах RTX
+(Vulkan), иначе AMD FSR 3.1 (Vulkan, библиотека AMD рядом с игрой), иначе AMD FSR 1; или любой из них, если эта
+машина его поддерживает. Апскейлер, давший сбой, до перезапуска не используется — его заменяет следующий. Что
+работает, пишется в лог и видно в F4 и в настройках. Без SDK сборка обходится FSR 1.
 
-- [DLSS SDK](https://github.com/NVIDIA/DLSS) версии `v310.5.3` (её ждёт `dlss_wgpu` 4.0.0) — путь в `DLSS_SDK`;
-  условия — `LICENSE.txt` SDK;
-- заголовки Vulkan — путь в `VULKAN_SDK` (Vulkan SDK от LunarG или клон
-  [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers); на Linux подойдёт `/usr` с `libvulkan-dev`);
-- clang (bindgen ищет libclang; если не найдёт — `LIBCLANG_PATH`).
-
-`cargo xtask dev`, `perf` и `dist` сами включают `dlss`, когда задан `DLSS_SDK`, и кладут рядом с клиентом
-библиотеку DLSS (из `DLSS_DLL`, иначе из SDK: `nvngx_dlss.dll` на Windows, `libnvidia-ngx-dlss.so.<версия>` на
-Linux) и библиотеку FidelityFX из `FFX_SDK` — распакованного
-[FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4. На Windows это подписанная
-`PrebuiltSignedDLL/amd_fidelityfx_vk.dll`; для Linux AMD библиотеки не выпускает, и `xtask` собирает
-`libamd_fidelityfx_vk.so` из исходников того же SDK с патчем из `packaging/fidelityfx-linux` (только FSR 3.1;
-нужны cmake, компилятор C++17, `glslangValidator`, заголовки и загрузчик Vulkan, `patch`).
-Пакеты несут их вместе с уведомлениями NVIDIA (разделы 9.5–9.6 руководства DLSS: `dist` берёт их из PDF
-через `pdftotext` или из `DLSS_GUIDE_TEXT`) и лицензией AMD — в папке `upscaler-licenses`. Ни SDK, ни библиотек в
-репозитории нет.
+Версии SDK и инструментов, их адреса и контрольные суммы — в `toolchain/deps.toml`. `cargo xtask setup` скачивает
+их в `target/sdk` и проверяет (`--dist` — ещё инструменты пакетов: cargo-about, cargo-deb, appimagetool…); xtask
+сам передаёт их пути сборке. Переменная среды (`DLSS_SDK`, `DLSS_DLL`, `VULKAN_SDK`, `FFX_SDK`, `FB_DXC_DIR`,
+`APPIMAGETOOL`…) заменяет копию из `target/sdk`. С DLSS SDK сборки xtask включают фичу клиента `dlss` (нужен ещё
+libclang: LLVM на Windows, clang на Linux) и кладут рядом с клиентом библиотеки DLSS и FidelityFX. На Linux AMD
+библиотеки не выпускает: `xtask` собирает `libamd_fidelityfx_vk.so` из исходников SDK с патчем из
+`packaging/fidelityfx-linux` (cmake, компилятор C++17, `glslangValidator`, `patch`). Пакеты (`cargo xtask dist`)
+без DLSS, FSR 3.1 или (на Windows) DXC не собираются; они несут уведомления NVIDIA (разделы 9.5–9.6 руководства
+DLSS, через `pdftotext` или `DLSS_GUIDE_TEXT`) и лицензию AMD в папке `upscaler-licenses`. Условия DLSS SDK — его
+`LICENSE.txt`. Ни SDK, ни библиотек в репозитории нет.
 
 ## Известные проблемы
 

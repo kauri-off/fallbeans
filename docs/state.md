@@ -15,11 +15,10 @@ hex-a-gone, frost-sky, door-dash с DLSS, jump-club с FSR 3.1, FSR 1 и на DX
 Перемерить: prepass глубины и векторов движения теперь на обоих пресетах, апскейлер, AO-капсулы, дымка, больше
 треугольников (hex-a-gone: тайлы ~13k → ~141k).
 
-Сборка с DLSS: переменные `DLSS_SDK` (SDK 310.5.3 — им собран `dlss_wgpu` 4.0), `VULKAN_SDK`, clang (LLVM,
-`LIBCLANG_PATH`); `DLSS_DLL` (библиотека 310.9.1 кладётся рядом с exe: `nvngx_dlss.dll` или
-`libnvidia-ngx-dlss.so.310.9.1`) и `FFX_SDK` (FidelityFX SDK 1.1.4 распакованный целиком: на Windows
-`amd_fidelityfx_vk.dll`, на Linux `xtask` собирает `libamd_fidelityfx_vk.so` из его исходников с патчем
-`packaging/fidelityfx-linux` в `target/fidelityfx-linux`). Без `DLSS_SDK` xtask собирает без DLSS.
+Сборка с DLSS: `cargo xtask setup` кладёт в `target/sdk` SDK 310.5.3 (им собран `dlss_wgpu` 4.0), библиотеку
+310.9.1, заголовки Vulkan и FidelityFX SDK 1.1.4 (версии — `toolchain/deps.toml`); нужен ещё libclang. Переменные
+(`DLSS_SDK`, `DLSS_DLL`, `VULKAN_SDK`, `FFX_SDK`) заменяют копии из `target/sdk`. Без DLSS SDK xtask собирает без
+DLSS; `dist` без апскейлеров не собирается.
 `--upscaler dlss|fsr3|fsr1` (скрытый) — для проверки других путей на машине с RTX.
 
 Не проверено вживую (автор смотрит сам):
@@ -54,10 +53,17 @@ hex-a-gone, frost-sky, door-dash с DLSS, jump-club с FSR 3.1, FSR 1 и на DX
   реактивной маски — следующий шаг `ffxDispatchDescUpscaleGenerateReactiveMask`), сброс истории на склейках.
   Слой валидации: на первом кадре DLSS два внутренних образа NGX в `UNDEFINED` (внутри NGX); один раз за прогон
   FSR 3.1 был залп `vkDestroyImageView` образов, ещё занятых его командным буфером (не повторился за два раунда с
-  неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят. В
-  `release.yml` не проверены: тег `v310.9.1` у NVIDIA/DLSS, тег `vulkan-sdk-1.4.363.0` у Vulkan-Headers, адрес
-  архива FidelityFX, `pdftotext` на раннере. Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
+  неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят.  В
+  `release.yml` не проверен `pdftotext` на раннере (теги и архивы — те же, что `setup` скачивает и проверяет). Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
   для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
+- Выбор апскейлера в настройках графики («Авто», DLSS 4.5, FSR 3.1, FSR 1; `Graphics::upscaler`, на лету). На RTX
+  5070 Laptop (Vulkan, 2560×1600) проверено: 15 переключений пресета и апскейлера посреди раунда через BRP
+  (`world.mutate_resources` по `fb_client::settings::Graphics`) — без ошибок, снимки чистые. Замеры (`perf run`,
+  jump-club, 30 с, автопилот, fps / GPU мс): High — DLSS 93 / 9.8, FSR 3.1 162 / 5.3, FSR 1 172 / 4.8; Low — DLSS
+  121 / 7.7, FSR 3.1 293 / 2.9, FSR 1 432 / 1.4 (упор в CPU). Сам проход DLSS (пресет M) — ~6 мс GPU против 1.6 мс
+  у FSR 3.1: «Авто» на RTX сейчас выбирает самый медленный. Решить: пресет K (DLSS 4) вместо M, или FSR 3.1 первым
+  в «Авто». Прозрачный проход на High — 1.6–2.6 мс при 9–13 фрагментах на пиксель (облака). Не проверено: AMD и
+  Intel, DX12 на Windows.
 - Апскейлеры на Linux: DLSS 4.5 и FSR 3.1 (своя сборка `libamd_fidelityfx_vk.so`) проверены offscreen-снимками
   jump-club на RTX 5070 (Arch, драйвер 615); на AMD и Intel под Linux FSR 3.1 не запускался. Патч FidelityFX: GLSL-путь
   `FidelityFX_SC` под Linux, ffx-api только с FSR 3.1 Upscale (без генерации кадров, FSR 2 и провайдеров драйвера
@@ -148,6 +154,14 @@ KDE Wayland; окна там запускать можно, sudo без паро
 ## Не закончено и известные странности
 
 Проблемы, описанные в `README.md`, здесь не повторяются.
+
+- Сборка: `check`, `dev`, `stress`, `assets` и `fuzz-ui` собирают один набор (воркспейс, `dynamic`, без `dlss`:
+  Bevy как .so/.dll не линкует статическую NGX; `noop` у wgpu — обычная зависимость клиента), clippy в `check` —
+  ещё и с `dlss`; `play` и `perf run` — профиль `perf` с DLSS. На Linux проверено: `check` проходит, `dev` после
+  `check` Bevy не пересобирает, `setup` ставит апскейлеры, `doctor`. Не проверено: то же на Windows (тесты клиента с
+  Bevy как DLL, `setup`: `tar` для zip, git-sparse, путь LLVM; `doctor`: vswhere, rc.exe, makensis), `setup --dist`
+  (cargo install трёх инструментов, musl), `play`/`play --dist` вживую (сборка `perf` с DLSS из `target/sdk`),
+  `dist` с копиями из `target/sdk`, `fuzz-ui` с `dylib_env`, путь повтора `scenarios::` в `check`.
 
 - Иконка окна не задана (Bevy рисует свою): в Windows на панели задач её нет (у exe иконка есть, `build.rs`), ярлыки
   NSIS — с иконкой. На Linux иконка берётся из desktop-файла по app id `io.github.kauri_off.fallbeans`.

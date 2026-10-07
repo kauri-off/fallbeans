@@ -1,0 +1,142 @@
+# Pinned third-party SDKs and tools. `cargo xtask setup` puts them in target/sdk/<name>-<version>, `cargo xtask
+# doctor` checks them; `env` names the variable that overrides the copy in target/sdk. release.yml pins the same
+# versions in its own `env:`: change both.
+#
+# kind = "git": a shallow clone of `tag` (sparse to `paths` when given), checked against `commit`.
+# kind = "zip": `url` checked against `sha256`, the `extract` entries unpacked (a trailing / is a directory).
+# kind = "file": `url` checked against `sha256`, saved as `name`.
+# kind = "cargo": `cargo install --locked` of `version` (with `features`) into the entry's directory.
+# `points_to`: the file inside the entry that `env` names; `file_sha256` checks it. `group`: "upscalers" (plain
+# `setup`) or "dist" (`setup --dist`). `os`: only on "windows" or "linux".
+
+# NVIDIA DLSS SDK at the version dlss_wgpu 4.0.0 is built against: headers, the static NGX library, the guide whose
+# notices the packages carry, its license.
+[dlss-sdk-windows]
+os = "windows"
+group = "upscalers"
+env = "DLSS_SDK"
+version = "310.5.3"
+kind = "git"
+repo = "https://github.com/NVIDIA/DLSS.git"
+tag = "v310.5.3"
+commit = "982b0d19f9e35fef8e1b3109efa6b95470563866"
+paths = ["/include/", "/lib/Windows_x86_64/x64/", "/doc/DLSS_Programming_Guide_Release.pdf", "/LICENSE.txt"]
+
+[dlss-sdk-linux]
+os = "linux"
+group = "upscalers"
+env = "DLSS_SDK"
+version = "310.5.3"
+kind = "git"
+repo = "https://github.com/NVIDIA/DLSS.git"
+tag = "v310.5.3"
+commit = "982b0d19f9e35fef8e1b3109efa6b95470563866"
+paths = ["/include/", "/lib/Linux_x86_64/libnvsdk_ngx.a", "/doc/DLSS_Programming_Guide_Release.pdf", "/LICENSE.txt"]
+
+# The DLSS library shipped beside the client: a newer one of NVIDIA's (backward compatible with the SDK above).
+[dlss-runtime-windows]
+os = "windows"
+group = "upscalers"
+env = "DLSS_DLL"
+version = "310.9.1"
+kind = "git"
+repo = "https://github.com/NVIDIA/DLSS.git"
+tag = "v310.9.1"
+commit = "374959484e79a640feaba44c93ac8cfb0a03f5b5"
+paths = ["/lib/Windows_x86_64/rel/nvngx_dlss.dll"]
+points_to = "lib/Windows_x86_64/rel/nvngx_dlss.dll"
+file_sha256 = "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983"
+
+[dlss-runtime-linux]
+os = "linux"
+group = "upscalers"
+env = "DLSS_DLL"
+version = "310.9.1"
+kind = "git"
+repo = "https://github.com/NVIDIA/DLSS.git"
+tag = "v310.9.1"
+commit = "374959484e79a640feaba44c93ac8cfb0a03f5b5"
+paths = ["/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.1"]
+points_to = "lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.1"
+file_sha256 = "7561f16cab74e2b7ccf791bf44bb9cc43abb44bcf78f33c5663520ad4e857e02"
+
+# The Vulkan headers bindgen reads for DLSS.
+[vulkan-headers]
+group = "upscalers"
+env = "VULKAN_SDK"
+version = "1.4.363.0"
+kind = "git"
+repo = "https://github.com/KhronosGroup/Vulkan-Headers.git"
+tag = "vulkan-sdk-1.4.363.0"
+commit = "6802bb4733b63ed5efd3adb308a6c885ef180ea1"
+
+# AMD FidelityFX SDK (FSR 3.1): its signed Vulkan DLL on Windows; on Linux the sources `dist` builds the library
+# from (packaging/fidelityfx-linux).
+[fidelityfx-windows]
+os = "windows"
+group = "upscalers"
+env = "FFX_SDK"
+version = "1.1.4"
+kind = "zip"
+url = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip"
+sha256 = "0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952"
+extract = ["PrebuiltSignedDLL/", "docs/license.md"]
+
+[fidelityfx-linux]
+os = "linux"
+group = "upscalers"
+env = "FFX_SDK"
+version = "1.1.4"
+kind = "zip"
+url = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip"
+sha256 = "0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952"
+extract = ["ffx-api/", "sdk/include/", "sdk/src/", "sdk/tools/ffx_shader_compiler/", "docs/license.md"]
+
+# DirectX's shader compiler beside the Windows client (DX12 compiles with it instead of FXC).
+[dxc]
+os = "windows"
+group = "upscalers"
+env = "FB_DXC_DIR"
+version = "1.9.2609"
+kind = "zip"
+url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
+sha256 = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
+
+[appimagetool]
+os = "linux"
+group = "dist"
+env = "APPIMAGETOOL"
+version = "1.9.1"
+kind = "file"
+url = "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+sha256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+name = "appimagetool"
+
+[appimage-runtime]
+os = "linux"
+group = "dist"
+env = "APPIMAGE_RUNTIME"
+version = "20251108"
+kind = "file"
+url = "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
+sha256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+name = "runtime-x86_64"
+
+# The third-party licenses file of every package.
+[cargo-about]
+group = "dist"
+version = "0.9.2"
+kind = "cargo"
+features = ["cli"]
+
+[cargo-deb]
+os = "linux"
+group = "dist"
+version = "3.8.0"
+kind = "cargo"
+
+[cargo-generate-rpm]
+os = "linux"
+group = "dist"
+version = "0.21.0"
+kind = "cargo"

@@ -75,8 +75,9 @@ bevy = { workspace = true, features = [
 ] }
 wgpu-types.workspace = true
 # The graphics API is chosen before Bevy's renderer starts (`backend.rs`): the adapters of DX12 and Vulkan.
-# (Bevy builds wgpu with DX12, Vulkan and Metal only: no OpenGL.)
-wgpu.workspace = true
+# (Bevy builds wgpu with DX12, Vulkan and Metal only: no OpenGL.) `noop` for the tests, here so that tests and
+# builds share one wgpu and one Bevy in the cache; it stays off unless asked for (`harness.rs`).
+wgpu = { workspace = true, features = ["noop"] }
 aeronet_websocket = { workspace = true, features = ["client"] }
 bevy_replicon = { workspace = true, features = ["client"] }
 base64.workspace = true
@@ -121,7 +122,6 @@ libloading = "0.8"
 [dev-dependencies]
 # The client's tests: a real server in their process, drawing on wgpu's noop device.
 fb_server = { path = "../fb_server" }
-wgpu = { workspace = true, features = ["noop"] }
 
 [build-dependencies]
 winresource = "0.1"

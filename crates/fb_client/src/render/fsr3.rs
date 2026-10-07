@@ -55,7 +55,7 @@ impl Plugin for Fsr3Plugin {
 
     /// Offered when the DLL loads and makes a context on this device (made and dropped here, at 1600×900).
     fn finish(&self, app: &mut App) {
-        if app.world().resource::<Available>().dlss || super::upscale::asked_for_other(app, "fsr3") {
+        if super::upscale::asked_for_other(app, "fsr3") {
             return;
         }
         let Some(rd) = app.world().get_resource::<RenderDevice>() else {

@@ -9820,7 +9820,10 @@ name = "xtask"
 version = "0.1.1-alpha.1"
 dependencies = [
  "clap",
+ "serde",
  "serde_json",
+ "sha2",
+ "toml",
 ]
 
 [[package]]

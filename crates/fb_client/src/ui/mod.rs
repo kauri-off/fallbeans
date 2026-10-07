@@ -126,6 +126,7 @@ pub enum GfxPick {
     Preset(&'static str),
     Fps(u32),
     Backend(&'static str),
+    Upscaler(&'static str),
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1106,6 +1107,7 @@ fn ui_actions(
                     GfxPick::Preset(p) => gfx.preset = p.into(),
                     GfxPick::Fps(n) => gfx.fps_limit = n,
                     GfxPick::Backend(b) => gfx.backend = b.into(),
+                    GfxPick::Upscaler(u) => gfx.upscaler = u.into(),
                 }
                 crate::settings::save_soon(&mut commands);
             }
@@ -1288,8 +1290,7 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     if let Some(q) = &o.quality {
         muted(p, f, &text::adapter(&q.adapter, &format!("{:?}", q.tier)));
     }
-    let upscaler = o.upscaling.as_ref().map_or("AMD FSR 1", |u| u.active.name());
-    muted(p, f, &text::upscale_note(upscaler));
+    upscalers(p, f, o, &chips);
     button(p, f, text::VSYNC, Look::Check(g.vsync), Action::Set(Toggle::Vsync));
     let fps: Vec<(&str, GfxPick, bool, bool)> =
         [(0, text::NO_LIMIT), (30, "30"), (60, "60"), (120, "120"), (144, "144")]
@@ -1309,6 +1310,33 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     .map(|(id, s, b)| (s, GfxPick::Backend(id), saved == b, true))
     .collect();
     chips(p, text::BACKEND, &backends);
+}
+
+/// The upscaler: automatic or one of those this machine offers (the others shown, not pressable), and the one at work.
+fn upscalers(
+    p: &mut ChildSpawnerCommands,
+    f: &Fonts,
+    o: &Options,
+    chips: &dyn Fn(&mut ChildSpawnerCommands, &str, &[(&str, GfxPick, bool, bool)]),
+) {
+    use crate::render::upscale::Upscaler;
+    let up = o.upscaling.as_deref().copied().unwrap_or_default();
+    let saved = Upscaler::from_id(&o.gfx.upscaler).filter(|u| up.offer.has(*u));
+    let mut items = vec![(text::UPSCALER_AUTO, GfxPick::Upscaler(""), saved.is_none(), true)];
+    items.extend(Upscaler::ALL.into_iter().map(|u| {
+        (
+            text::upscaler(u),
+            GfxPick::Upscaler(u.id()),
+            saved == Some(u),
+            up.offer.has(u),
+        )
+    }));
+    chips(p, text::UPSCALER, &items);
+    let failed = (up.active != up.chosen).then_some(up.chosen.name());
+    muted(p, f, &text::upscaler_now(up.active.name(), failed));
+    if !Upscaler::ALL.into_iter().all(|u| up.offer.has(u)) {
+        muted(p, f, text::UPSCALER_NOTE);
+    }
 }
 
 /// Rebinding: the next key pressed becomes the action's (Esc lets it be). It ends when the keys are no

@@ -14,7 +14,15 @@ English. License: AGPL-3.0-or-later.
 
 ## Commands
 
-- `cargo xtask check` — fmt, clippy, all tests and quick audits; run before calling a change done.
+- `cargo xtask check [-v]` — fmt, clippy, all tests and quick audits; run before calling a change done. Prints only
+  diagnostics, failures and a summary line; the full output is in `target/check.log`. A failure of only
+  `scenarios::` tests (wall-clock client harness) is retried once and reported as flaky.
+- `cargo xtask play [--dist] [-- client args]` — the author's local test: dev server (`--dev --solo`) and one client
+  from its menu; `perf` profile, or the packages' exact client with `--dist`.
+- `cargo xtask doctor` — what this machine has for the build, the upscalers and each package, with install hints.
+- `cargo xtask setup [--dist]` — the pinned SDKs and tools of `toolchain/deps.toml` into `target/sdk`; xtask passes
+  their paths on, an environment variable (`DLSS_SDK`…) overrides them. Versions change only in `deps.toml` (and
+  release.yml's `env:`, which pins its own).
 - `cargo xtask dev [--clients N] [--autopilot] [--fill]` — server plus windowed clients locally.
 - `cargo xtask audit [map…] [--quick]` — map audits.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
@@ -34,6 +42,10 @@ English. License: AGPL-3.0-or-later.
 
 ## Tooling habits
 
+- Dev-profile builds share one feature set (`dev_features()` in xtask: workspace, `dynamic`): call cargo through
+  xtask, or pass the same `--features`, or Bevy rebuilds. No `dlss` with `dynamic` (Bevy's shared library cannot
+  link NGX's static library); `check`'s clippy adds `dlss` when the SDK is there. Optimized builds, with DLSS:
+  `perf` (iteration, `play`, `perf run`), `dist` (packages).
 - One build at a time: a cold Bevy build takes every core and many GB. Sub-agents working in parallel (worktrees
   with their own `target/`) only read and edit code; the lead merges and builds once. Ask the author before builds
   and runs on their machine, and before performance measurements (they may have heavy work running).

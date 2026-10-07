@@ -125,8 +125,8 @@ impl Default for Display {
     }
 }
 
-/// Graphics (`render/quality.rs`): one of two presets, the frame pacing and the API. The rest is not the player's:
-/// FSR 1 upscaling is always on in its ultra quality mode, and the switches below are only for the perf sweep, which
+/// Graphics (`render/quality.rs`): one of two presets, the upscaler, the frame pacing and the API. The rest is not
+/// the player's: upscaling is always on in its ultra quality mode, and the switches below are only for the perf sweep, which
 /// takes the features away one at a time (`perf/capture.rs`); they are never saved, and an old file's are ignored.
 #[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
@@ -140,6 +140,9 @@ pub struct Graphics {
     /// "" (automatic), "vulkan" or "dx12" (Windows): takes effect on the next start. Other names (an old
     /// "gl") are automatic (`backend.rs`).
     pub backend: String,
+    /// "" (automatic: the best offered), "dlss", "fsr3" or "fsr1" (`render/upscale.rs`): switched in play; one this
+    /// machine does not offer is automatic.
+    pub upscaler: String,
     #[reflect(ignore)]
     pub shadows: bool,
     /// Anti-aliasing (SMAA on High, FXAA on Low).
@@ -163,6 +166,7 @@ impl Default for Graphics {
             vsync: true,
             fps_limit: 0,
             backend: String::new(),
+            upscaler: String::new(),
             shadows: true,
             aa: true,
             grade: true,
@@ -806,13 +810,16 @@ mod tests {
         let g = Graphics {
             shadows: false,
             upscale: "performance".into(),
+            upscaler: "fsr3".into(),
             ..default()
         };
         let ser = bevy::reflect::serde::TypedReflectSerializer::new(g.as_partial_reflect(), &registry);
         let text = toml::to_string(&ser).unwrap();
         assert!(text.contains("preset") && text.contains("vsync"), "{text}");
+        assert!(text.contains("upscaler = \"fsr3\""), "{text}");
+        let key = |l: &str| l.split('=').next().unwrap_or("").trim().to_string();
         for gone in ["shadows", "upscale", "aa", "grade", "motes", "ao"] {
-            assert!(!text.lines().any(|l| l.starts_with(gone)), "{gone} in {text}");
+            assert!(!text.lines().any(|l| key(l) == gone), "{gone} in {text}");
         }
     }
 

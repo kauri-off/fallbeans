@@ -1,8 +1,9 @@
-//! Which upscaler draws the frame, chosen once at the start and told in the log: NVIDIA DLSS 4.5 Super Resolution
-//! on an RTX GPU (Vulkan, the `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, AMD's library beside the game:
-//! `fsr3.rs`), else FSR 1 (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at
-//! `quality::UPSCALE`'s scale (0.77, the "ultra quality" of both vendors) and bring it to the full resolution. A
-//! temporal one (DLSS, FSR 3.1) failing at run time hands over to FSR 1 for the rest of the session.
+//! Which upscaler draws the frame: the graphics setting's (`Graphics::upscaler`, switched in play) when this machine
+//! offers it, else the best offered, told in the log: NVIDIA DLSS 4.5 Super Resolution on an RTX GPU (Vulkan, the
+//! `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, AMD's library beside the game: `fsr3.rs`), else FSR 1
+//! (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at `quality::UPSCALE`'s scale (0.77,
+//! the "ultra quality" of both vendors) and bring it to the full resolution. A temporal one (DLSS, FSR 3.1) failing
+//! at run time is not offered again this session: the next best takes over.
 //!
 //! A temporal upscaler is the anti-aliasing too: no SMAA, FXAA or CAS with it (`quality.rs`, `fsr.rs`). It needs
 //! the depth and motion vector prepasses (every material writes its motion, the cloth's waves too:
@@ -42,6 +43,22 @@ impl Upscaler {
         self != Upscaler::Fsr1
     }
 
+    pub const ALL: [Upscaler; 3] = [Upscaler::Dlss, Upscaler::Fsr3, Upscaler::Fsr1];
+
+    /// Its name in the settings file and `--upscaler`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Upscaler::Dlss => "dlss",
+            Upscaler::Fsr3 => "fsr3",
+            Upscaler::Fsr1 => "fsr1",
+        }
+    }
+
+    /// The setting's upscaler: `None` (automatic) for "" and any other name.
+    pub fn from_id(id: &str) -> Option<Upscaler> {
+        Upscaler::ALL.into_iter().find(|u| u.id() == id)
+    }
+
     /// Its name, as the vendors write it (the log, F4, the graphics settings).
     pub fn name(self) -> &'static str {
         match self {
@@ -61,6 +78,30 @@ pub struct Offer {
     pub dlss: bool,
     /// AMD's DLL loaded and made an upscaling context.
     pub fsr3: bool,
+}
+
+impl Offer {
+    pub fn has(self, u: Upscaler) -> bool {
+        match u {
+            Upscaler::Dlss => self.vulkan && self.dlss,
+            Upscaler::Fsr3 => self.vulkan && self.fsr3,
+            Upscaler::Fsr1 => true,
+        }
+    }
+
+    /// Without what failed this session.
+    fn without_failed(self, faults: &Faults) -> Offer {
+        Offer {
+            dlss: self.dlss && !faults.failed(Upscaler::Dlss),
+            fsr3: self.fsr3 && !faults.failed(Upscaler::Fsr3),
+            ..self
+        }
+    }
+}
+
+/// The one asked for when it is offered, else the best offered.
+pub fn pick(o: Offer, want: Option<Upscaler>) -> Upscaler {
+    want.filter(|u| o.has(*u)).unwrap_or_else(|| choose(o))
 }
 
 /// The upscaler for what is offered: DLSS, then FSR 3.1, then FSR 1.
@@ -107,11 +148,12 @@ pub struct Available {
     pub fsr3: bool,
 }
 
-/// The upscaler in use, and the one chosen at the start.
+/// The upscaler in use, the one the setting chose (they differ once it failed), and what this machine offers.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct Upscaling {
     pub active: Upscaler,
     pub chosen: Upscaler,
+    pub offer: Offer,
 }
 
 impl Default for Upscaling {
@@ -119,6 +161,7 @@ impl Default for Upscaling {
         Self {
             active: Upscaler::Fsr1,
             chosen: Upscaler::Fsr1,
+            offer: Offer::default(),
         }
     }
 }
@@ -150,11 +193,7 @@ impl Faults {
             return;
         }
         let why = why.into();
-        error!(
-            "upscaling: {} failed ({why}): {} from now on",
-            who.name(),
-            Upscaler::Fsr1.name()
-        );
+        error!("upscaling: {} failed ({why}): not used again this session", who.name());
         log.failed.push(who);
         log.pending.push((who, why));
     }
@@ -244,12 +283,12 @@ impl Plugin for UpscalePlugin {
             .init_resource::<Upscaling>()
             .add_plugins(ExtractComponentPlugin::<Temporal>::default())
             .add_systems(Startup, decide)
-            .add_systems(Update, fall_back)
+            .add_systems(Update, follow)
             .add_systems(PostUpdate, apply.after(crate::camera::place_camera));
         if let Some(r) = app.get_sub_app_mut(RenderApp) {
             r.insert_resource(faults);
         }
-        // (DLSS first: FSR 3.1 is not even tried where DLSS runs.)
+        // (Both are offered where they run: the setting switches between them in play.)
         #[cfg(feature = "dlss")]
         app.add_plugins(super::dlss::DlssPlugin);
         #[cfg(any(windows, target_os = "linux"))]
@@ -257,38 +296,60 @@ impl Plugin for UpscalePlugin {
     }
 }
 
-fn decide(available: Res<Available>, info: Option<Res<RenderAdapterInfo>>, mut up: ResMut<Upscaling>) {
+fn decide(
+    available: Res<Available>,
+    info: Option<Res<RenderAdapterInfo>>,
+    g: Res<Graphics>,
+    faults: Res<Faults>,
+    mut up: ResMut<Upscaling>,
+) {
     let offer = Offer {
         vulkan: info.is_some_and(|i| i.0.backend == wgpu_types::Backend::Vulkan),
         dlss: available.dlss,
         fsr3: available.fsr3,
     };
-    let pick = choose(offer);
-    *up = Upscaling {
-        active: pick,
-        chosen: pick,
-    };
+    *up = resolve(offer, &g, &faults);
     info!(
-        "upscaling: {} at {:.0}% of the resolution (Vulkan {}, DLSS {}, FSR 3.1 {})",
-        pick.name(),
+        "upscaling: {} at {:.0}% of the resolution (setting {:?}; Vulkan {}, DLSS {}, FSR 3.1 {})",
+        up.active.name(),
         Quality::scale(super::quality::UPSCALE) * 100.0,
+        g.upscaler,
         offer.vulkan,
         offer.dlss,
         offer.fsr3
     );
 }
 
-/// An upscaler the render world gave up on: FSR 1 from now on.
-fn fall_back(faults: Res<Faults>, mut up: ResMut<Upscaling>) {
-    for (who, why) in faults.take() {
-        if up.active == who {
+fn resolve(offer: Offer, g: &Graphics, faults: &Faults) -> Upscaling {
+    let want = Upscaler::from_id(&g.upscaler);
+    Upscaling {
+        active: pick(offer.without_failed(faults), want),
+        chosen: pick(offer, want),
+        offer,
+    }
+}
+
+/// The setting changed, or an upscaler the render world gave up on: the one to use now.
+fn follow(faults: Res<Faults>, g: Res<Graphics>, mut up: ResMut<Upscaling>) {
+    let failed = faults.take();
+    if failed.is_empty() && !g.is_changed() {
+        return;
+    }
+    let next = resolve(up.offer, &g, &faults);
+    for (who, why) in &failed {
+        if *who == up.active {
             warn!(
                 "upscaling: {} gave up ({why}): {} instead",
                 who.name(),
-                Upscaler::Fsr1.name()
+                next.active.name()
             );
-            up.active = Upscaler::Fsr1;
         }
+    }
+    if next.active != up.active || next.chosen != up.chosen {
+        if failed.is_empty() {
+            info!("upscaling: {} (setting {:?})", next.active.name(), g.upscaler);
+        }
+        *up = next;
     }
 }
 
@@ -383,6 +444,33 @@ mod tests {
         assert!(Upscaler::Dlss.temporal());
         assert!(Upscaler::Fsr3.temporal());
         assert!(!Upscaler::Fsr1.temporal());
+    }
+
+    #[test]
+    fn the_setting_picks_among_what_is_offered() {
+        let rtx = Offer {
+            vulkan: true,
+            dlss: true,
+            fsr3: true,
+        };
+        assert_eq!(pick(rtx, None), Upscaler::Dlss);
+        assert_eq!(pick(rtx, Some(Upscaler::Fsr3)), Upscaler::Fsr3);
+        assert_eq!(pick(rtx, Some(Upscaler::Fsr1)), Upscaler::Fsr1);
+        let dx12 = Offer { vulkan: false, ..rtx };
+        assert_eq!(pick(dx12, Some(Upscaler::Dlss)), Upscaler::Fsr1);
+        for u in Upscaler::ALL {
+            assert_eq!(Upscaler::from_id(u.id()), Some(u));
+        }
+        assert_eq!(Upscaler::from_id(""), None);
+        // DLSS failed: the setting's DLSS goes to the next best, FSR 3.1.
+        let faults = Faults::default();
+        faults.report(Upscaler::Dlss, "evaluate");
+        let g = Graphics {
+            upscaler: "dlss".into(),
+            ..Graphics::default()
+        };
+        let up = resolve(rtx, &g, &faults);
+        assert_eq!((up.chosen, up.active), (Upscaler::Dlss, Upscaler::Fsr3));
     }
 
     #[test]
