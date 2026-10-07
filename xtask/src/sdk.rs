@@ -62,9 +62,9 @@ impl Dep {
         sdk_dir().join(format!("{name}-{}", self.version))
     }
 
-    /// Its directory in target/sdk once `setup` has finished it.
+    /// Its directory in target/sdk once `setup` has finished it (CI's rust-cache can leave it emptied).
     pub fn installed(&self, name: &str) -> Option<PathBuf> {
-        Some(self.dir(name)).filter(|d| d.is_dir())
+        Some(self.dir(name)).filter(|d| has_file(d) && self.target(d).exists())
     }
 
     /// What `env` names: a file inside the entry, or the entry's directory.
@@ -78,6 +78,13 @@ impl Dep {
     pub fn is_dist(&self) -> bool {
         self.group == "dist"
     }
+}
+
+fn has_file(dir: &Path) -> bool {
+    fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+        e.file_type()
+            .is_ok_and(|t| t.is_file() || (t.is_dir() && has_file(&e.path())))
+    })
 }
 
 fn sdk_dir() -> PathBuf {
@@ -141,7 +148,7 @@ pub fn setup(a: &SetupArgs) -> bool {
     let mut ok = true;
     for (name, d) in deps().iter().filter(|(_, d)| a.dist || !d.is_dist()) {
         let dir = d.dir(name);
-        if dir.is_dir() && !a.force {
+        if d.installed(name).is_some() && !a.force {
             eprintln!("{name} {}: there", d.version);
             continue;
         }
