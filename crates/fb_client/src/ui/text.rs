@@ -120,7 +120,6 @@ pub const SHOW_FPS: &str = "Показывать частоту кадров";
 pub const KEYS: &str = "Клавиши";
 pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
-pub const PRESET_AUTO: &str = "Авто";
 pub const PRESET_LOW: &str = "Низкое";
 pub const PRESET_MEDIUM: &str = "Среднее";
 pub const PRESET_HIGH: &str = "Высокое";
@@ -203,7 +202,13 @@ pub const VPN_LOST: &str = "UDP пропал посреди игры (переп
      Раз в минуту игра проверяет UDP и вернётся на него между раундами.\n\
      Чтобы UDP не пропадал, пустите адрес сервера мимо VPN (direct).";
 
-pub const QUALITY_LOWERED: &str = "Качество графики снижено, чтобы игра шла плавнее";
+pub const LOADING: &str = "Загрузка…";
+pub const LOADING_ASSETS: &str = "Модели и текстуры";
+pub const LOADING_SHADERS: &str = "Шейдеры";
+pub const LOADING_SETTINGS: &str = "Шейдеры для новых настроек графики";
+pub fn loading_maps(done: usize, all: usize) -> String {
+    format!("Карты: {done} из {all}")
+}
 
 pub const PERF_RECORDING: &str = "Идёт запись производительности: F9 — остановить и сохранить";
 pub const PERF_SWEEP: &str = "Замер графики (~1 мин): стойте на месте, настройки вернутся сами. F9 — прервать";

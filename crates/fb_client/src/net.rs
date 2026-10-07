@@ -78,6 +78,7 @@ pub struct NetPlugin;
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_prediction, connect_first).chain());
+        app.add_systems(Update, connect_later.run_if(resource_exists::<ConnectLater>));
         app.add_systems(
             Update,
             (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
@@ -337,8 +338,43 @@ fn spawn_client(
     Ok(entity)
 }
 
-fn connect_first(mut commands: Commands, me: Me, target: Res<Target>, time: Res<Time<Real>>) {
+fn connect_first(
+    mut commands: Commands,
+    me: Me,
+    target: Res<Target>,
+    time: Res<Time<Real>>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
+) {
+    // (Behind the loading screen nothing is played: the room comes once the warm-up is done.)
+    if warm.is_some_and(|w| w.busy()) {
+        commands.insert_resource(ConnectLater);
+        return;
+    }
     if let Some(http) = target.0.clone() {
+        open(&mut commands, &me.opts, me.identity(), http, time.elapsed_secs());
+    }
+}
+
+/// The connection at the start waits for the warm-up.
+#[derive(Resource)]
+struct ConnectLater;
+
+fn connect_later(
+    mut commands: Commands,
+    me: Me,
+    target: Res<Target>,
+    time: Res<Time<Real>>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
+    conn: Option<Res<Conn>>,
+) {
+    if warm.is_some_and(|w| w.busy()) {
+        return;
+    }
+    commands.remove_resource::<ConnectLater>();
+    // (Unless the player picked a server meanwhile.)
+    if conn.is_none()
+        && let Some(http) = target.0.clone()
+    {
         open(&mut commands, &me.opts, me.identity(), http, time.elapsed_secs());
     }
 }

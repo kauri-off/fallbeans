@@ -191,6 +191,13 @@ pub struct Opts {
     /// Loads every model through Bevy's glTF loader, reports and quits.
     #[arg(long)]
     pub check_assets: bool,
+    /// No loading screen at the start: every map's scene and shaders are made when first needed, as the
+    /// round starts (quicker to the menu for a quick look; rounds may stutter at first).
+    #[arg(long)]
+    pub no_warmup: bool,
+    /// Tests: the warm-up on the bench too (it is off there).
+    #[arg(long, hide = true)]
+    pub warmup: bool,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
     /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).

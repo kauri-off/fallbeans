@@ -74,6 +74,20 @@ fn the_client_runs_without_a_gpu() {
     g.until(10.0, "the room list", |w| w.resource::<Session>().rooms.is_some());
 }
 
+/// The loading screen's warm-up (off on the bench but here): every map built and drawn as a round's, beans in
+/// every hat, then its last map gone and the room list, whose connection waited for it.
+#[test]
+fn the_warm_up_builds_every_map() {
+    use crate::render::warmup::Warmup;
+    let mut g = Game::new(&["--warmup"]);
+    g.until(300.0, "the warm-up's end", |w| !w.resource::<Warmup>().busy());
+    assert!(
+        !g.client().world().contains_resource::<crate::game::Map>(),
+        "the warm-up's last map stays"
+    );
+    on_room_list(&mut g);
+}
+
 /// fb3af03: after a line was sent, the next one typed panicked (a cursor past the end of the cleared text).
 /// Also: Enter opens the chat while the window holds the input focus (Bevy's default, and after a click on
 /// nothing focusable).
@@ -911,7 +925,7 @@ fn every_setting_mid_round() {
     let n = press_every(&mut g, |a| matches!(a, Action::Set(_) | Action::Gfx(_)));
     assert!(n >= 20, "only {n} options on screen");
     // Back through the presets, each with a few frames of the round behind the menu.
-    for p in ["low", "medium", "high", "auto"] {
+    for p in ["low", "medium", "high"] {
         g.press(
             2.0,
             p,

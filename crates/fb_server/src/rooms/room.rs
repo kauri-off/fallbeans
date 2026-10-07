@@ -1,6 +1,8 @@
 //! A lobby and the games played from it: players and bots, the host,
 //! rounds, scores, chat, dev commands. Time is in server ticks; the arena runs on the room's game clock.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::{Once, OnceLock};
+use std::thread::JoinHandle;
 
 use bevy::log::{info, warn};
 use fb_arena::{Arena, ArenaEvent, ArenaKind, DevPlace, FallBehaviour, PawnStatus, Recording, RoundStats};
@@ -14,6 +16,7 @@ use fb_shared::rules::{RoundView, is_round_over, score_round};
 use fb_shared::text::{sanitize_chat, sanitize_person_name};
 use fb_shared::*;
 use fb_sim::math::V3;
+use fb_sim::nav::NavGrid;
 use serde_json::json;
 
 use super::awards::{GameStats, compute_awards};
@@ -173,6 +176,9 @@ pub struct Room {
     /// Dev: seed of the next round's map.
     next_seed: Option<u32>,
     upcoming: Option<Upcoming>,
+    /// The bots' grid of a round built on the tick, being built on another thread (`nav_ahead`), and the
+    /// arena it is for.
+    nav_job: Option<(u32, JoinHandle<Option<(NavGrid, String)>>)>,
     /// Dev: the last rounds as played (newest last).
     pub replays: VecDeque<Recording>,
     /// Map events of this arena that someone arriving later must hear of.
@@ -193,6 +199,37 @@ fn arena_map(id: &str) -> &'static dyn fb_sim::map::MapDef {
     fb_maps::by_id(id).unwrap_or_else(|| panic!("map {id} is registered"))
 }
 
+/// The bots' grid of the lobby, which is the same map with the same seed in every room: built once, off the
+/// tick (`prebuild_lobby_nav`), and copied into each lobby.
+static LOBBY_NAV: OnceLock<(NavGrid, String)> = OnceLock::new();
+
+/// Builds the lobby's grid on a thread of its own at the server's start (a lobby made before it is done builds
+/// its own on first need, as without it).
+pub fn prebuild_lobby_nav() {
+    static STARTED: Once = Once::new();
+    STARTED.call_once(|| {
+        let built = std::thread::Builder::new().name("lobby nav".into()).spawn(|| {
+            let (mut arena, _) = Arena::new(arena_map("lobby"), ArenaKind::Lobby, 1, -1, &[], false);
+            arena.prepare_nav();
+            if let Some(pre) = arena.prepared_nav() {
+                let _ = LOBBY_NAV.set(pre.clone());
+            }
+        });
+        if let Err(e) = built {
+            warn!("no thread for the lobby's bot grid: {e}");
+        }
+    });
+}
+
+/// A lobby's arena, with the bots' grid from the start if it is built.
+fn lobby_arena(ids: &[Pid]) -> Arena {
+    let (mut arena, _) = Arena::new(arena_map("lobby"), ArenaKind::Lobby, 1, -1, ids, false);
+    if let Some(pre) = LOBBY_NAV.get() {
+        arena.give_nav(pre.clone());
+    }
+    arena
+}
+
 impl Room {
     pub fn new(opts: RoomOptions, real: u64) -> Self {
         if let Some(p) = &opts.practice {
@@ -200,7 +237,7 @@ impl Room {
         }
         let clock = GameClock::new(real);
         let zero = clock.now().floor();
-        let (arena, _) = Arena::new(arena_map("lobby"), ArenaKind::Lobby, 1, -1, &[], false);
+        let arena = lobby_arena(&[]);
         Self {
             id: opts.id.clone(),
             title: opts.title.clone(),
@@ -227,6 +264,7 @@ impl Room {
             rng: Rng::new(opts.seed.unwrap_or_else(random_u32)),
             next_seed: None,
             upcoming: None,
+            nav_job: None,
             replays: VecDeque::new(),
             history: Vec::new(),
             out: Vec::new(),
@@ -937,7 +975,7 @@ impl Room {
     fn make_lobby_arena(&mut self) -> (Arena, f64) {
         let zero = self.now().floor();
         let ids: Vec<Pid> = self.players.iter().map(|p| p.id).collect();
-        let (mut arena, _) = Arena::new(arena_map("lobby"), ArenaKind::Lobby, 1, -1, &ids, false);
+        let mut arena = lobby_arena(&ids);
         for p in &self.players {
             arena.add_pawn(p.id, p.bot);
         }
@@ -1133,6 +1171,7 @@ impl Room {
             index,
             total,
         });
+        let on_tick = built.is_none();
         let mut arena = built
             .unwrap_or_else(|| Arena::new(arena_map(game.id), ArenaKind::Round, seed, start, &participants, false).0);
         if !self.opts.eliminate && arena.fall == FallBehaviour::Out {
@@ -1146,8 +1185,40 @@ impl Room {
             arena.add_pawn_at(*id, bot, Some(i));
         }
         info!(room = %self.id, game = game.id, seed, players = participants.len(), "round");
+        let bots = participants.iter().any(|&id| self.player(id).is_some_and(|p| p.bot));
         self.set_arena((arena, zero));
+        if on_tick && bots {
+            self.nav_ahead(game.id, seed, start, participants);
+        }
         self.send_lobby();
+    }
+
+    /// A round's arena built on the tick (none drawn ahead for these players): its bots' grid is built from a
+    /// twin of it on another thread meanwhile and handed over when done (`take_nav`), before the intro ends.
+    fn nav_ahead(&mut self, game: &'static str, seed: u32, start: i64, ids: Vec<Pid>) {
+        let map = arena_map(game);
+        let built = std::thread::Builder::new().name("round nav".into()).spawn(move || {
+            let (mut twin, _) = Arena::new(map, ArenaKind::Round, seed, start, &ids, false);
+            twin.prepare_nav();
+            twin.prepared_nav().cloned()
+        });
+        match built {
+            Ok(job) => self.nav_job = Some((self.arena_id, job)),
+            Err(e) => warn!(room = %self.id, "no thread for the bots' grid: {e}"),
+        }
+    }
+
+    /// The grid `nav_ahead` built, to its arena if that is still the one played.
+    fn take_nav(&mut self) {
+        if !self.nav_job.as_ref().is_some_and(|(_, job)| job.is_finished()) {
+            return;
+        }
+        let Some((id, job)) = self.nav_job.take() else { return };
+        if let Ok(Some(pre)) = job.join()
+            && id == self.arena_id
+        {
+            self.arena.give_nav(pre);
+        }
     }
 
     fn time_up(&self) -> bool {
@@ -1356,6 +1427,7 @@ impl Room {
     }
 
     fn tick_room(&mut self, inputs: &mut dyn Inputs, all: bool) {
+        self.take_nav();
         if let Some((at, t)) = self.timer
             && self.now() >= at
         {

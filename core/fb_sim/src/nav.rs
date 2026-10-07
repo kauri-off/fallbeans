@@ -244,6 +244,18 @@ pub struct NavGrid {
     search: Mutex<Search>,
 }
 
+/// A copy for another arena of the same map (the server builds the lobby's once): the same grid, a search
+/// scratch of its own.
+impl Clone for NavGrid {
+    fn clone(&self) -> Self {
+        let mut g = NavGrid::new(self.x0, self.z0, self.nx, self.nz);
+        g.ys.clone_from(&self.ys);
+        g.cols.clone_from(&self.cols);
+        g.pen.clone_from(&self.pen);
+        g
+    }
+}
+
 /// What the grid is built on: static ground that is there now and that it is told about.
 fn solid(c: &Collider) -> bool {
     c.is_static && c.enabled && !c.nav_skip && !c.trigger

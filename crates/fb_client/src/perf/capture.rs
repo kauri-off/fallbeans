@@ -19,7 +19,7 @@ use super::{CpuAcc, Perf, RenderShared, Spike};
 use crate::game::Map;
 use crate::logs::{self, Logs};
 use crate::opts::Opts;
-use crate::render::quality::{Preset, Quality, Tier};
+use crate::render::quality::{Preset, Quality};
 use crate::session::Session;
 use crate::settings::Graphics;
 use crate::ui::text;
@@ -198,7 +198,7 @@ fn steps(g: &Graphics, q: &Quality) -> Vec<(&'static str, Graphics)> {
     if base.shadows {
         v.push(("shadows off", with(&|g| g.shadows = false)));
     }
-    if base.ao && q.preset == Preset::High && q.tier == Tier::T2 && Quality::scale(&base.upscale) >= 1.0 {
+    if base.ao && q.preset == Preset::High && Quality::scale(&base.upscale) >= 1.0 {
         v.push(("AO off", with(&|g| g.ao = false)));
     }
     if base.aa {
@@ -294,16 +294,18 @@ fn auto_start(
     q: Option<Res<Quality>>,
     mut round_since: Local<Option<f32>>,
     mut done: Local<bool>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
 ) {
     if *done || (opts.perf_capture.is_none() && !opts.perf_sweep) {
         return;
     }
     let now = real.elapsed_secs();
-    if recording.0.is_some() {
+    // (Not while the loading screen is up, nor over the maps it builds.)
+    if recording.0.is_some() || warm.is_some_and(|w| w.busy()) {
         return;
     }
     if !opts.perf_from_start {
-        if !map.is_some_and(|m| m.round.kind == ArenaKind::Round) {
+        if !map.is_some_and(|m| m.round.kind == ArenaKind::Round && !m.warmup) {
             *round_since = None;
             return;
         }

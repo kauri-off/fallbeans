@@ -770,6 +770,11 @@ fn flat_image() -> Image {
 }
 
 impl Surfaces {
+    /// Detail textures still being made (the warm-up waits for them).
+    pub fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Every surface material, made and to be made, with or without its detail texture.
     pub fn set_plain(&mut self, plain: bool, materials: &mut Assets<SurfaceMaterial>) {
         if self.plain == plain {
@@ -936,7 +941,8 @@ fn take_textures(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<SurfaceMaterial>>,
 ) {
-    if surfaces.pending.is_empty() {
+    // (Not before the preset has set the filtering: a texture keeps the one it was finished with.)
+    if surfaces.pending.is_empty() || surfaces.anisotropy == 0 {
         return;
     }
     let ready: Vec<Kind> = surfaces

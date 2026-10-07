@@ -120,6 +120,33 @@ pub struct ModelLods {
     making: HashMap<AssetId<Mesh>, (Task<Option<Vec<Mesh>>>, Vec<Placed>)>,
 }
 
+impl ModelLods {
+    /// Meshes still being simplified.
+    pub fn making(&self) -> usize {
+        self.making.len()
+    }
+
+    /// Starts a model mesh's levels before anything places it (the warm-up: every model at the start).
+    pub fn prepare(&mut self, mesh: &Handle<Mesh>, meshes: &Assets<Mesh>) {
+        let id = mesh.id();
+        if self.levels.contains_key(&id) || self.making.contains_key(&id) {
+            return;
+        }
+        let Some(m) = meshes.get(mesh) else { return };
+        if m.try_indices_option()
+            .ok()
+            .flatten()
+            .is_none_or(|i| i.len() < MIN_TRIS * 3)
+        {
+            self.levels.insert(id, None);
+            return;
+        }
+        let m = m.clone();
+        let task = AsyncComputeTaskPool::get().spawn(async move { simplify(&m) });
+        self.making.insert(id, (task, Vec::new()));
+    }
+}
+
 /// Gives a placed model mesh (entity `e`, a child of `parent`) its levels of detail: siblings shown at their
 /// distances, now or once they are made. `scale`: of the mesh and all above it.
 pub fn add_levels(

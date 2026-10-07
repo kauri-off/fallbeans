@@ -287,8 +287,15 @@ fn gate(
     fields: Query<(), With<EditableText>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut gate: ResMut<Gate>,
+    warm: Option<Res<crate::render::warmup::Warmup>>,
 ) {
-    let play = session.room.is_some() && !ui.menu && !ui.chat && !typing(&focus, &fields) && window_focused(&windows);
+    // (Nor under the loading screen.)
+    let play = session.room.is_some()
+        && !ui.menu
+        && !ui.chat
+        && !typing(&focus, &fields)
+        && window_focused(&windows)
+        && !warm.is_some_and(|w| w.busy());
     if gate.play != play {
         gate.play = play;
     }
