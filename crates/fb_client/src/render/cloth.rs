@@ -54,15 +54,15 @@ pub fn pennant_bounds() -> (Aabb, NoAutoAabb) {
     )
 }
 
-/// A surface (bindings 100–102 as `Surface`) that waves (103).
+/// A surface (bindings 50–52 as `Surface` without bindless, which surface.wgsl reads then) that waves (53).
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 pub struct Cloth {
-    #[uniform(100)]
+    #[uniform(50)]
     pub u: SurfaceUniform,
-    #[texture(101)]
-    #[sampler(102)]
+    #[texture(51)]
+    #[sampler(52)]
     pub detail: Handle<Image>,
-    #[uniform(103)]
+    #[uniform(53)]
     pub wave: ClothUniform,
 }
 

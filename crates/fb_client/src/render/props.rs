@@ -312,7 +312,7 @@ fn animate(
         }
     }
     for (m, name, mut tf) in &mut parts {
-        let Ok((p, prop_tf)) = props.get(m.prop) else { continue };
+        let Ok((p, _)) = props.get(m.prop) else { continue };
         let ph = p.phase;
         match name.as_str() {
             "Pennant" => {

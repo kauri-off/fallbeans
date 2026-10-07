@@ -25,7 +25,7 @@ struct Cloth {
     motion: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> cloth: Cloth;
+@group(#{MATERIAL_BIND_GROUP}) @binding(53) var<uniform> cloth: Cloth;
 
 // Where the wind blows (world x, z): `WIND` in `cloth.rs`.
 const WIND: vec2<f32> = vec2(0.9439, 0.3303);
