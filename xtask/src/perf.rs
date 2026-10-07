@@ -75,6 +75,9 @@ struct RunArgs {
     map: String,
     #[arg(long)]
     seed: Option<u32>,
+    /// The bean stays at the start instead of playing (with `--seed`, the frames repeat between runs).
+    #[arg(long)]
+    still: bool,
 }
 
 pub fn perf(a: &PerfArgs) -> bool {
@@ -114,6 +117,36 @@ fn load(path: &Path) -> Option<Value> {
     }
 }
 
+/// DXC beside the built client, as the installer puts it (`backend.rs`): without it DX12 compiles with FXC, which
+/// keeps four threads busy for most of a 30 s recording (portal-panic: 63 fps against 103 with DXC). From
+/// `FB_DXC_DIR` (an unpacked DXC release, as `dist`) or the Windows SDK's bin.
+fn dxc_beside(target: &Path) {
+    if !cfg!(windows) || target.join("dxcompiler.dll").is_file() {
+        return;
+    }
+    let from_env = std::env::var_os("FB_DXC_DIR").map(|d| PathBuf::from(d).join("bin").join("x64"));
+    let sdk = std::fs::read_dir(r"C:\Program Files (x86)\Windows Kits\10\bin")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("x64"))
+        .filter(|d| d.join("dxcompiler.dll").is_file() && d.join("dxil.dll").is_file())
+        .max();
+    let Some(src) = from_env
+        .into_iter()
+        .chain(sdk)
+        .find(|d| d.join("dxcompiler.dll").is_file())
+    else {
+        eprintln!("perf: no DXC (FB_DXC_DIR or the Windows SDK): DX12 compiles shaders with FXC during the recording");
+        return;
+    };
+    for f in ["dxcompiler.dll", "dxil.dll"] {
+        if let Err(e) = std::fs::copy(src.join(f), target.join(f)) {
+            eprintln!("perf: {f}: {e}");
+        }
+    }
+}
+
 fn run(r: &RunArgs) -> bool {
     let shared = Shared {
         lag: 0,
@@ -140,6 +173,7 @@ fn run(r: &RunArgs) -> bool {
         p => p,
     });
     let bin = |name: &str| target.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    dxc_beside(&target);
     let dir = target_dir().join("perf-runs");
     let _ = std::fs::create_dir_all(&dir);
     let secs = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
@@ -170,7 +204,6 @@ fn run(r: &RunArgs) -> bool {
     .args(shared.play_args("perf", 1))
     .args([
         "--fill",
-        "--autopilot",
         "--no-update",
         // (The spans of systems: the recording's CPU rows.)
         "--profiler",
@@ -179,6 +212,9 @@ fn run(r: &RunArgs) -> bool {
     ])
     .arg("--perf-out")
     .arg(&out);
+    if !r.still {
+        c.arg("--autopilot");
+    }
     if r.sweep {
         c.arg("--perf-sweep");
     } else {
