@@ -1,20 +1,24 @@
-//! Meshes of map primitives: boxes with rounded edges, cylinders whose first segment faces +z, UV spheres; a few
-//! levels of detail with fewer segments, switched by size on screen; the millimetre lifts that keep
-//! overlapping primitives from z-fighting; and static geometry merged into one mesh per cell and material.
+//! Meshes of map primitives: soft, toy-like boxes and cylinders (rounded edges and corners, a lip round broad
+//! slabs; the cylinders' first segment faces +z), UV spheres; a few levels of detail with fewer segments,
+//! switched by size on screen; the millimetre lifts that keep overlapping primitives from z-fighting; and static
+//! geometry merged into one mesh per cell and material.
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology, VertexAttributeValues, VertexFormat};
 use bevy::prelude::*;
+use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use fb_sim::scene::PrimKind;
 
 /// Distance bands B0…B6 (by size on screen); a level of detail spans one or more of them.
 pub const BANDS: usize = 7;
 const SPHERE_SEG: [(u32, u32); BANDS] = [(32, 20), (32, 20), (20, 12), (20, 12), (10, 7), (10, 7), (10, 7)];
 const CYL_SEG: [u32; BANDS] = [48, 48, 24, 24, 12, 12, 12];
-/// Boxes are rounded up to this band, plain from it on.
-const BOX_PLAIN: usize = 4;
+/// Segments per rounded quarter (edges, corners, rims) by band, at most: 1 is a chamfer.
+const ARCS: [u32; BANDS] = [4, 4, 2, 2, 1, 1, 1];
+/// Cylinders of this many sides or fewer are polygons with rounded corners (hexagonal tiles, rungs).
+const POLYGON: u32 = 8;
 /// Height of one lift step (m).
 pub const LIFT: f32 = 0.0025;
 const LIFTS: u32 = 6;
@@ -71,25 +75,304 @@ pub fn rounded_box(size: Vec3, segments: u32, radius: f32) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-/// A cylinder whose first segment faces +z: hexagonal tiles line up.
-pub fn cylinder(r: f32, h: f32, seg: u32) -> Mesh {
-    Cylinder::new(r, h)
-        .mesh()
-        .resolution(seg)
-        .build()
-        .rotated_by(Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2))
+// ---------------------------------------------------------------- soft boxes and cylinders
+//
+// Both are an outline seen from above (a rounded rectangle, a rounded polygon, a circle) swept along a profile
+// from the bottom up: each point of the profile is the outline moved in by its inset, at its height. Moving a
+// rounded outline in by no more than its corners' radius keeps it a rounded outline with the same normals,
+// so the normals of the sides are the outline's tilted by the profile's.
+
+/// A point of a profile: how far in from the outline (m), its height, and its normal in the (out, up) plane.
+#[derive(Clone, Copy, Debug)]
+struct Step {
+    inset: f32,
+    y: f32,
+    n: Vec2,
+}
+
+/// The sides of a soft piece of height `h`, centred on y = 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rim {
+    h: f32,
+    /// The radii of the rounded top and bottom edges.
+    top: f32,
+    bottom: f32,
+    /// A lip round the top: how far it stands out over the body below (0: none), how far its underside is
+    /// below the top, and the radius of its lower edge.
+    lip: f32,
+    band: f32,
+    curl: f32,
+}
+
+/// How round the edges along a piece's thinnest side `a` are (m): soft on small pieces, nearly a half round on
+/// thin plates, capped on big ones (the seams between the pieces of a floor stay narrow).
+pub fn edge_radius(a: f32) -> f32 {
+    (0.45 * a).min(0.1 + 0.15 * a).min(0.3)
+}
+
+/// The rim of a piece of height `h` with edges of radius `e`, its insets within `room` (what the outline's
+/// corners allow); with a lip (its shaded underside a darker band under the top) round a broad slab, but not at
+/// a chamfer's detail.
+fn rim(h: f32, e: f32, room: f32, slab: bool, arcs: u32) -> Rim {
+    let e = e.min(room);
+    let plain = Rim {
+        h,
+        top: e,
+        bottom: e,
+        lip: 0.0,
+        band: 0.0,
+        curl: 0.0,
+    };
+    if !slab || arcs < 2 || h < 0.45 {
+        return plain;
+    }
+    let lip = (0.03 + 0.25 * e).min(0.1);
+    let bottom = (0.6 * e).min(room - lip);
+    let band = (e + (0.15 * h).clamp(0.08, 0.25)).min(0.6 * h);
+    let curl = (0.5 * lip).min(0.04).min(0.4 * (band - e));
+    if bottom < 0.01 || curl < 0.005 {
+        return plain;
+    }
+    Rim {
+        h,
+        top: e,
+        bottom,
+        lip,
+        band,
+        curl,
+    }
+}
+
+/// A quarter round (or another arc) of a profile: centre (inset, y), radius, normal angles from and to.
+fn arc(out: &mut Vec<Step>, centre: Vec2, r: f32, from: f32, to: f32, segs: u32) {
+    for s in 0..=segs {
+        let n = Vec2::from_angle(from + (to - from) * s as f32 / segs as f32);
+        out.push(Step {
+            inset: centre.x - r * n.x,
+            y: centre.y + r * n.y,
+            n,
+        });
+    }
+}
+
+/// A rim's profile from the bottom up, as runs of smooth steps; runs meet at creases (under the lip).
+fn profile(rim: &Rim, arcs: u32) -> Vec<Vec<Step>> {
+    let (lo, hi) = (-rim.h / 2.0, rim.h / 2.0);
+    let mut runs = Vec::with_capacity(2);
+    let mut run = Vec::new();
+    arc(
+        &mut run,
+        Vec2::new(rim.lip + rim.bottom, lo + rim.bottom),
+        rim.bottom,
+        -FRAC_PI_2,
+        0.0,
+        arcs,
+    );
+    if rim.lip > 0.0 {
+        // Up the body to under the lip; out along its underside and round its edge.
+        let y = hi - rim.band;
+        run.push(Step {
+            inset: rim.lip,
+            y,
+            n: Vec2::X,
+        });
+        runs.push(core::mem::take(&mut run));
+        run.push(Step {
+            inset: rim.lip,
+            y,
+            n: Vec2::NEG_Y,
+        });
+        arc(
+            &mut run,
+            Vec2::new(rim.curl, y + rim.curl),
+            rim.curl,
+            -FRAC_PI_2,
+            0.0,
+            arcs.div_ceil(2),
+        );
+    }
+    let top = rim.top;
+    arc(&mut run, Vec2::new(top, hi - top), top, 0.0, FRAC_PI_2, arcs);
+    runs.push(run);
+    runs
+}
+
+/// The direction (x, z) at angle `a` round the y axis, from +z towards −x (as Bevy's cylinder turned so that its
+/// first segment faces +z).
+fn dir(a: f32) -> Vec2 {
+    let (s, c) = a.sin_cos();
+    Vec2::new(-s, c)
+}
+
+/// An outline: points (x, z) with their outward normals, round the y axis by that angle.
+type Outline = Vec<(Vec2, Vec2)>;
+
+/// A rectangle of half size `half` with corners of radius `r`.
+fn rect_outline(half: Vec2, r: f32, segs: u32) -> Outline {
+    let mut out = Vec::with_capacity(4 * (segs as usize + 1));
+    for k in 0..4 {
+        let a = k as f32 * FRAC_PI_2;
+        let centre = (half - Vec2::splat(r)) * dir(a + FRAC_PI_4).signum();
+        for s in 0..=segs {
+            let n = dir(a + FRAC_PI_2 * s as f32 / segs as f32);
+            out.push((centre + n * r, n));
+        }
+    }
+    out
+}
+
+/// A regular polygon of `sides` with its corners on a circle of `radius`, the first at +z, rounded by `r`.
+fn polygon_outline(sides: u32, radius: f32, r: f32, segs: u32) -> Outline {
+    let half = PI / sides as f32;
+    let reach = radius - r / half.cos();
+    let mut out = Vec::with_capacity((sides * (segs + 1)) as usize);
+    for k in 0..sides {
+        let a = k as f32 * 2.0 * half;
+        let centre = dir(a) * reach;
+        for s in 0..=segs {
+            let n = dir(a - half + 2.0 * half * s as f32 / segs as f32);
+            out.push((centre + n * r, n));
+        }
+    }
+    out
+}
+
+/// A circle of `seg` points, the first at +z, shaded smooth.
+fn circle_outline(seg: u32, radius: f32) -> Outline {
+    (0..seg)
+        .map(|k| {
+            let n = dir(k as f32 * TAU / seg as f32);
+            (n * radius, n)
+        })
+        .collect()
+}
+
+/// An outline swept along a profile, closed by flat caps (fans round the centre) at its first and last steps.
+fn sweep(outline: &[(Vec2, Vec2)], runs: &[Vec<Step>]) -> Mesh {
+    let n = outline.len() as u32;
+    let steps: usize = runs.iter().map(Vec::len).sum();
+    let count = steps * outline.len() + 2;
+    let mut pos: Vec<[f32; 3]> = Vec::with_capacity(count);
+    let mut nrm: Vec<[f32; 3]> = Vec::with_capacity(count);
+    let mut idx: Vec<u32> = Vec::with_capacity((steps + 1) * outline.len() * 6);
+    for run in runs {
+        let first = pos.len() as u32;
+        for s in run {
+            for &(p, d) in outline {
+                let q = p - d * s.inset;
+                pos.push([q.x, s.y, q.y]);
+                nrm.push([d.x * s.n.x, s.n.y, d.y * s.n.x]);
+            }
+        }
+        for j in 0..(run.len() as u32).saturating_sub(1) {
+            let row = first + j * n;
+            for i in 0..n {
+                let (a, b) = (row + i, row + (i + 1) % n);
+                let (c, d) = (a + n, b + n);
+                idx.extend_from_slice(&[a, c, d, a, d, b]);
+            }
+        }
+    }
+    let lo = runs.first().and_then(|r| r.first()).map_or(0.0, |s| s.y);
+    let hi = runs.last().and_then(|r| r.last()).map_or(0.0, |s| s.y);
+    let top = (pos.len() as u32).saturating_sub(n);
+    for (ring, y, up) in [(0, lo, false), (top, hi, true)] {
+        let centre = pos.len() as u32;
+        pos.push([0.0, y, 0.0]);
+        nrm.push([0.0, if up { 1.0 } else { -1.0 }, 0.0]);
+        for i in 0..n {
+            let (a, b) = (ring + i, ring + (i + 1) % n);
+            idx.extend_from_slice(&if up { [centre, b, a] } else { [centre, a, b] });
+        }
+    }
+    let uv = vec![[0.0f32, 0.0]; pos.len()];
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_indices(Indices::U32(idx))
+}
+
+/// A soft box of `size`: edges rounded to the piece, vertical corners a little rounder, a lip round a broad slab;
+/// `arcs` segments per rounded quarter. Its bounds are the box's.
+pub fn soft_box(size: Vec3, arcs: u32) -> Mesh {
+    if size.min_element() <= 1e-3 {
+        return Cuboid::from_size(size).into();
+    }
+    let arcs = arcs.max(1);
+    let foot = size.x.min(size.z);
+    let e = edge_radius(size.min_element());
+    let corner = (1.3 * e).min(0.45 * foot);
+    let slab = size.y <= 0.75 * foot && foot >= 1.5;
+    let sides = rim(size.y, e, corner / 1.3, slab, arcs);
+    let outline = rect_outline(Vec2::new(size.x, size.z) / 2.0, corner, arcs);
+    sweep(&outline, &profile(&sides, arcs))
+}
+
+/// A soft cylinder of `radius` and height `h`: rims rounded to the piece, a lip round a broad disc. Up to
+/// `POLYGON` sides it is a polygon with rounded corners (the first at +z: hexagonal tiles line up; half the
+/// segments, as their normals turn smoothly round them), smooth otherwise; `arcs` segments per rounded quarter.
+pub fn soft_cylinder(radius: f32, h: f32, seg: u32, arcs: u32) -> Mesh {
+    if radius <= 1e-3 || h <= 1e-3 || seg < 3 {
+        return Cylinder::new(radius.max(1e-3), h.max(1e-3))
+            .mesh()
+            .resolution(seg.max(3))
+            .build()
+            .rotated_by(Quat::from_rotation_y(-FRAC_PI_2));
+    }
+    let arcs = arcs.max(1);
+    let e = edge_radius(h.min(2.0 * radius));
+    let slab = h <= 1.5 * radius && radius >= 0.75;
+    let (outline, room) = if seg <= POLYGON {
+        let corner = (1.3 * e).min(0.6 * radius * (PI / seg as f32).cos());
+        (polygon_outline(seg, radius, corner, arcs.div_ceil(2)), corner / 1.3)
+    } else {
+        (circle_outline(seg, radius), 0.9 * radius)
+    };
+    sweep(&outline, &profile(&rim(h, e, room, slab, arcs), arcs))
+}
+
+/// The sides a cylinder was made with.
+fn cyl_sides(dims: [f64; 3]) -> u32 {
+    if dims[2] > 0.0 { dims[2] as u32 } else { 48 }
 }
 
 fn cyl_seg(dims: [f64; 3], band: usize) -> u32 {
-    let seg = if dims[2] > 0.0 { dims[2] as u32 } else { 48 };
-    seg.min(seg.min(8).max(CYL_SEG[band]))
+    let seg = cyl_sides(dims);
+    let base = seg.min(seg.min(POLYGON).max(CYL_SEG[band]));
+    // (A round one, no sides asked for: a big disc gets more of them near, its rim's facets at most 0.6 m;
+    // jump-club's 12 m floor showed 1.6 m ones.)
+    if dims[2] > 0.0 || CYL_SEG[band] < 24 {
+        return base;
+    }
+    let by_size = (core::f64::consts::TAU * dims[0] / 0.6).ceil() as u32;
+    base.max(by_size.min(CYL_SEG[band] * 3))
+}
+
+/// A box's or cylinder's segments per rounded quarter at a band: fewer for small roundings (their normals still
+/// turn smoothly round them), so that rungs and rails stay cheap.
+fn prim_arcs(kind: PrimKind, dims: [f64; 3], band: usize) -> u32 {
+    let [a, b, c] = dims.map(|v| v as f32);
+    let e = match kind {
+        PrimKind::Box => edge_radius(a.min(b).min(c)),
+        PrimKind::Cyl => edge_radius(b.min(2.0 * a)),
+        PrimKind::Sphere => return 0,
+    };
+    let most = if e >= 0.12 {
+        4
+    } else if e >= 0.05 {
+        2
+    } else {
+        1
+    };
+    ARCS[band].min(most)
 }
 
 /// What sets a band's mesh apart (bands that come out the same are one level, one mesh).
 pub fn level_id(kind: PrimKind, dims: [f64; 3], band: usize) -> u32 {
     match kind {
-        PrimKind::Box => u32::from(band >= BOX_PLAIN),
-        PrimKind::Cyl => cyl_seg(dims, band),
+        PrimKind::Box => prim_arcs(kind, dims, band),
+        PrimKind::Cyl => cyl_seg(dims, band) * 8 + prim_arcs(kind, dims, band),
         PrimKind::Sphere => SPHERE_SEG[band].0,
     }
 }
@@ -158,7 +441,6 @@ pub fn lod_k(fov_deg: f32, preset: Option<super::quality::Preset>) -> f32 {
     let bias = match preset {
         Some(Preset::High) => 1.6,
         None => 1.0,
-        Some(Preset::Medium) => 0.9,
         Some(Preset::Low) => 0.6,
     };
     1.0 / ((fov_deg.to_radians() / 2.0).tan() * bias)
@@ -205,16 +487,11 @@ pub fn prim_levels(kind: PrimKind, dims: [f64; 3]) -> Vec<LodBand> {
 pub fn prim(kind: PrimKind, dims: [f64; 3], band: usize) -> Mesh {
     let f = |v: f64| v as f32;
     match kind {
-        PrimKind::Box => {
-            let size = Vec3::new(f(dims[0]), f(dims[1]), f(dims[2]));
-            let r = 0.25f32.min(size.x / 4.0).min(size.y / 4.0).min(size.z / 4.0);
-            if band < BOX_PLAIN {
-                rounded_box(size, 2, r)
-            } else {
-                Cuboid::from_size(size).into()
-            }
-        }
-        PrimKind::Cyl => cylinder(f(dims[0]), f(dims[1]), cyl_seg(dims, band)),
+        PrimKind::Box => soft_box(
+            Vec3::new(f(dims[0]), f(dims[1]), f(dims[2])),
+            prim_arcs(kind, dims, band),
+        ),
+        PrimKind::Cyl => soft_cylinder(f(dims[0]), f(dims[1]), cyl_seg(dims, band), prim_arcs(kind, dims, band)),
         PrimKind::Sphere => {
             let (w, h) = SPHERE_SEG[band];
             Sphere::new(f(dims[0])).mesh().uv(w, h)
@@ -265,7 +542,8 @@ pub const CELL: f32 = 20.0;
 
 /// Marks a merged mesh whose vertices carry the frames of the pieces they came from, for the surface shader's
 /// object-space mapping (`OBJECT_FRAME` in surface.wgsl): the piece's rotation in COLOR, the position in its
-/// frame (at world scale) in UV_1 and UV_0.x. (The value itself is unused.)
+/// frame (at world scale) in UV_1 and UV_0.x; UV_0.y is the sky hidden from the vertex, 0 until a bake writes it
+/// (`ao.rs`, `decor.rs`). (The value itself is unused.)
 pub const ATTRIBUTE_FRAME: MeshVertexAttribute =
     MeshVertexAttribute::new("Fb_ObjectFrame", 0x4642_4652_414d_4500, VertexFormat::Float32);
 
@@ -403,6 +681,12 @@ pub fn cell(p: Vec3) -> [i32; 3] {
 /// The candidates drawn merged, as groups (indices, in order): still ones in one cell with the same material
 /// and class, two at least. The rest are drawn by themselves.
 pub fn groups(candidates: &[Candidate]) -> Vec<Vec<usize>> {
+    groups_of(candidates, 2)
+}
+
+/// `groups` of `least` candidates or more (one: every still piece gets a mesh of its own, which the baked
+/// occlusion is written into, `ao.rs`).
+pub fn groups_of(candidates: &[Candidate], least: usize) -> Vec<Vec<usize>> {
     let mut index: HashMap<([i32; 3], usize, u64), usize> = HashMap::new();
     let mut out: Vec<Vec<usize>> = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
@@ -415,7 +699,7 @@ pub fn groups(candidates: &[Candidate]) -> Vec<Vec<usize>> {
         });
         out[g].push(i);
     }
-    out.retain(|g| g.len() >= 2);
+    out.retain(|g| g.len() >= least);
     out
 }
 
@@ -439,10 +723,12 @@ mod tests {
     fn levels_are_few_and_follow_on() {
         let k = lod_k(70.0, None);
         for (kind, dims, count) in [
-            (PrimKind::Box, [4.0, 1.0, 2.0], 2),
+            (PrimKind::Box, [4.0, 1.0, 2.0], 3),
             (PrimKind::Sphere, [1.0, 0.0, 0.0], 3),
             (PrimKind::Cyl, [1.0, 2.0, 0.0], 3),
-            (PrimKind::Cyl, [1.0, 0.5, 6.0], 1),
+            (PrimKind::Cyl, [1.0, 0.5, 6.0], 3),
+            (PrimKind::Cyl, [0.045, 0.9, 8.0], 1),
+            (PrimKind::Box, [0.11, 3.0, 0.11], 1),
         ] {
             let levels = prim_levels(kind, dims);
             assert_eq!(levels.len(), count, "{kind:?}");
@@ -495,6 +781,128 @@ mod tests {
         match m.attribute(id) {
             Some(VertexAttributeValues::Float32x2(v)) => v.iter().map(|p| Vec2::from(*p)).collect(),
             _ => panic!("no {}", id.name),
+        }
+    }
+
+    /// A soft mesh's checks (mergeable, unit normals, no degenerate triangles, each turned the way its normals
+    /// point); its bounds (min, max).
+    fn check(what: &str, m: &Mesh) -> (Vec3, Vec3) {
+        assert!(mergeable(m), "{what}: not mergeable");
+        let p = v3(m, Mesh::ATTRIBUTE_POSITION);
+        let n = v3(m, Mesh::ATTRIBUTE_NORMAL);
+        assert_eq!(p.len(), n.len(), "{what}");
+        for v in &n {
+            assert!((v.length() - 1.0).abs() < 1e-4, "{what}: normal {v}");
+        }
+        let idx: Vec<usize> = m.indices().unwrap().iter().collect();
+        assert!(!idx.is_empty() && idx.len().is_multiple_of(3), "{what}");
+        for t in idx.as_chunks::<3>().0 {
+            let [a, b, c] = [p[t[0]], p[t[1]], p[t[2]]];
+            let face = (b - a).cross(c - a);
+            assert!(face.length() > 1e-9, "{what}: degenerate {t:?}");
+            assert!(
+                face.dot(n[t[0]] + n[t[1]] + n[t[2]]) > 0.0,
+                "{what}: turned inwards {t:?}"
+            );
+        }
+        let (mut lo, mut hi) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
+        for v in &p {
+            lo = lo.min(*v);
+            hi = hi.max(*v);
+        }
+        (lo, hi)
+    }
+
+    #[test]
+    fn soft_boxes_are_sound_and_keep_the_colliders_bounds() {
+        for size in [
+            Vec3::new(4.0, 1.0, 2.0),
+            Vec3::ONE,
+            Vec3::new(0.3, 3.0, 0.3),
+            Vec3::new(40.0, 2.0, 40.0),
+            Vec3::new(8.0, 0.1, 8.0),
+            Vec3::new(0.5, 4.0, 6.0),
+            Vec3::new(2.6, 0.14, 0.12),
+        ] {
+            for arcs in [1, 2, 3, 4] {
+                let what = format!("box {size} × {arcs}");
+                let (lo, hi) = check(&what, &soft_box(size, arcs));
+                assert!((hi - size / 2.0).abs().max_element() < 1e-4, "{what}: {hi}");
+                assert!((lo + size / 2.0).abs().max_element() < 1e-4, "{what}: {lo}");
+            }
+        }
+    }
+
+    #[test]
+    fn soft_cylinders_are_sound_and_keep_the_colliders_bounds() {
+        for (r, h, seg) in [
+            (13.0, 2.0, 48),
+            (13.05, 0.1, 48),
+            (0.3, 10.0, 48),
+            (1.0, 2.0, 24),
+            (0.75, 1.0, 32),
+            (1.455, 0.5, 6),
+            (1.0, 0.5, 8),
+            (0.5, 0.3, 3),
+        ] {
+            for arcs in [1, 2, 3, 4] {
+                let what = format!("cylinder {r} {h} {seg} × {arcs}");
+                let (lo, hi) = check(&what, &soft_cylinder(r, h, seg, arcs));
+                let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+                assert!(near(hi.y, h / 2.0) && near(lo.y, -h / 2.0), "{what}");
+                let reach = Vec3::new(r, h, r) + 1e-4;
+                assert!(hi.cmple(reach).all() && lo.cmpge(-reach).all(), "{what}");
+                if seg % 4 == 0 && seg > POLYGON {
+                    // Points on the axes: as wide as the collider.
+                    assert!(near(hi.x, r) && near(lo.z, -r), "{what}: {lo} {hi}");
+                }
+            }
+        }
+        // A hexagon's flat sides (±x) are where they were; its rounded corners (±z) a little in.
+        let (lo, hi) = check("hexagon", &soft_cylinder(1.5, 0.5, 6, 2));
+        let apothem = 1.5 * (PI / 6.0).cos();
+        assert!((hi.x - apothem).abs() < 1e-4, "{hi}");
+        assert!((lo.x + apothem).abs() < 1e-4, "{lo}");
+        assert!(hi.z < 1.5 && hi.z > 1.3, "{hi}");
+    }
+
+    #[test]
+    fn broad_slabs_have_a_lip_and_thin_plates_none() {
+        // (Faces looking down above the bottom: the lip's underside.)
+        let under = |m: &Mesh, h: f32| {
+            let p = v3(m, Mesh::ATTRIBUTE_POSITION);
+            let n = v3(m, Mesh::ATTRIBUTE_NORMAL);
+            p.iter().zip(&n).any(|(p, n)| n.y < -0.99 && p.y > -h / 2.0 + 0.05)
+        };
+        assert!(under(&soft_box(Vec3::new(6.0, 1.0, 6.0), 4), 1.0));
+        assert!(under(&soft_cylinder(13.0, 2.0, 48, 2), 2.0));
+        assert!(under(&soft_cylinder(1.455, 0.5, 6, 2), 0.5));
+        // (Not at a chamfer's detail.)
+        assert!(!under(&soft_box(Vec3::new(6.0, 1.0, 6.0), 1), 1.0));
+        assert!(!under(&soft_box(Vec3::new(8.0, 0.2, 8.0), 4), 0.2));
+        assert!(!under(&soft_box(Vec3::new(1.0, 3.0, 1.0), 4), 3.0));
+        assert!(!under(&soft_cylinder(0.3, 10.0, 48, 4), 10.0));
+    }
+
+    #[test]
+    fn every_level_of_every_primitive_is_sound() {
+        for (kind, dims) in [
+            (PrimKind::Box, [4.0, 1.0, 2.0]),
+            (PrimKind::Box, [30.0, 1.0, 12.0]),
+            (PrimKind::Cyl, [13.0, 2.0, 0.0]),
+            (PrimKind::Cyl, [1.1, 3.0, 32.0]),
+            (PrimKind::Cyl, [1.0, 0.5, 6.0]),
+            (PrimKind::Cyl, [0.045, 0.9, 8.0]),
+            (PrimKind::Box, [0.11, 3.0, 0.11]),
+            (PrimKind::Cyl, [0.9, 0.8, 16.0]),
+        ] {
+            for level in prim_levels(kind, dims) {
+                let m = prim(kind, dims, level.first);
+                let (lo, hi) = check(&format!("{kind:?} {dims:?} from B{}", level.first), &m);
+                let half = half_extents(kind, dims);
+                assert!(hi.cmple(half + 1e-4).all() && lo.cmpge(-half - 1e-4).all());
+                assert!((hi.y - half.y).abs() < 1e-4 && (lo.y + half.y).abs() < 1e-4);
+            }
         }
     }
 
@@ -596,15 +1004,20 @@ mod tests {
             c(CELL + 2.0, 0, 0, true),
         ]);
         assert_eq!(g, vec![vec![0, 1, 6], vec![4, 7]]);
-        // Levels: boxes of four times the size switch apart; single-level cylinders of any size go together.
+        // One at least: a still piece alone in its cell is a group of its own, a moving one none.
+        let one = groups_of(&[c(1.0, 0, 0, true), c(2.0, 1, 0, true), c(3.0, 0, 0, false)], 1);
+        assert_eq!(one, vec![vec![0], vec![1]]);
+        // Levels: boxes of four times the size switch apart; single-level cylinders (rungs) of any size go
+        // together; pieces whose levels start at the same bands, of a size, go together whatever their kind.
         let class = |kind, dims| level_class(&prim_levels(kind, dims));
         assert_ne!(class(PrimKind::Box, [1.0; 3]), class(PrimKind::Box, [4.0; 3]));
         assert_eq!(class(PrimKind::Box, [1.0; 3]), class(PrimKind::Box, [1.1, 1.0, 1.0]));
         assert_eq!(
-            class(PrimKind::Cyl, [1.0, 0.5, 6.0]),
-            class(PrimKind::Cyl, [5.0, 0.5, 6.0])
+            class(PrimKind::Cyl, [0.045, 0.9, 8.0]),
+            class(PrimKind::Cyl, [0.04, 2.0, 8.0])
         );
-        assert_ne!(class(PrimKind::Box, [1.0; 3]), class(PrimKind::Sphere, [0.9, 0.0, 0.0]));
+        assert_ne!(class(PrimKind::Box, [1.0; 3]), class(PrimKind::Cyl, [0.045, 0.9, 8.0]));
+        assert_eq!(class(PrimKind::Box, [1.0; 3]), class(PrimKind::Sphere, [0.9, 0.0, 0.0]));
     }
 
     #[test]

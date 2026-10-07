@@ -1,16 +1,18 @@
 //! The map's models: their materials get surfaces by material name (a flag's
 //! pennant and a mushroom's cap take the map's tint), and the props move: pennants wave as cloth
 //! (`cloth.rs`) and sway a little, fans spin, stars twirl and bob over the finish, mushroom caps squash
-//! like jelly, trees and pines near the camera sway with the wind's gusts.
+//! like jelly, trees and pines near the camera sway with the wind's gusts; stars twinkle, bumpers wobble
+//! when a bean touches them.
 use std::collections::HashMap;
 
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use super::cloth::{ClothMaterial, Cloths, WIND, gust, pennant_bounds};
+use super::cloth::{ClothMaterial, Cloths, Cut, WIND, gust, pennant_bounds};
 use super::lod::{ModelLods, add_levels};
 use super::surface::{Kind, SurfaceMaterial, Surfaces};
+use super::vfx::{Burst, Pool};
 use crate::game::Map;
 use crate::view::{MainCamera, frame_tick};
 
@@ -104,6 +106,7 @@ impl Plugin for PropsPlugin {
         app.add_plugins(super::cloth::ClothPlugin);
         app.add_systems(Update, (dress, find_moving, animate, sway).chain());
         app.add_systems(Update, (super::lod::finish_levels, super::meshes::refresh_bands));
+        app.add_systems(Update, (twinkle_stars, bumpers.after(animate)));
     }
 }
 
@@ -200,18 +203,25 @@ fn dress(
                 surfaces.material_from(base, kind, None, mat_name == "Glint", None, &mut images, &mut materials)
             })
             .clone();
-        // A pennant waves: its surface's cloth twin, and bounds that hold the swing.
+        let shadow = !shadowless.contains(p);
+        // A pennant waves: the model's flat one gives way to a cloth of its cut sewn round the pole, in its
+        // surface's cloth twin, with bounds that hold the swing.
         if part.starts_with("Pennant")
             && let Some(c) = cloths.pennant(&h, &materials, &mut cloth_mats)
+            && let Some(cloth) = cloths.mesh(cut_of(prop))
         {
-            commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert((
+            let mut pennant = commands.entity(e);
+            pennant.remove::<MeshMaterial3d<StandardMaterial>>().insert((
+                Mesh3d(cloth),
                 MeshMaterial3d(c),
                 pennant_bounds(),
                 Dressed,
             ));
+            if !shadow {
+                pennant.insert(NotShadowCaster);
+            }
             continue;
         }
-        let shadow = !shadowless.contains(p);
         let mut dressed = commands.entity(e);
         dressed
             .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -246,6 +256,15 @@ fn dress(
                 k,
             );
         }
+    }
+}
+
+/// The cut of a flag's cloth: swallowtails over the scenery, the map's flags one or the other by where they
+/// stand.
+fn cut_of(prop: Option<&Prop>) -> Cut {
+    match prop {
+        Some(p) if p.still || (p.phase * 5.0).sin() > 0.0 => Cut::Swallowtail,
+        _ => Cut::Pennant,
     }
 }
 
@@ -367,5 +386,69 @@ fn sway(
             .map_or(Quat::IDENTITY, GlobalTransform::rotation);
         tf.rotation = up.inverse() * tilt * up * s.rest;
         s.moved = true;
+    }
+}
+
+/// The map's stars twinkle (`vfx.rs`): a shell of flaring points about each.
+fn twinkle_stars(mut commands: Commands, stars: Query<(Entity, &Prop), Added<Prop>>, pool: Option<Res<Pool>>) {
+    let Some(pool) = pool else { return };
+    for (e, p) in &stars {
+        if p.name == "star" && !p.still {
+            commands.entity(e).with_child(pool.twinkle());
+        }
+    }
+}
+
+/// How long a bumper wobbles after a bean touches it (s).
+const BUMP_S: f32 = 0.6;
+
+/// Bumpers squash and wobble like jelly when a bean touches them, and a ring of light flies off where it did:
+/// seen from where the beans are drawn, so the others' bumps too. Per bumper: when it was last touched (s), and
+/// whether a bean touches it now.
+#[allow(clippy::type_complexity)]
+fn bumpers(
+    time: Res<Time>,
+    mut props: Query<(Entity, &Prop, &GlobalTransform, &mut Transform), (Without<Moving>, Without<Sway>)>,
+    beans: Query<&GlobalTransform, With<crate::beans::BeanView>>,
+    mut hits: Local<HashMap<Entity, (f32, bool)>>,
+    mut bursts: MessageWriter<Burst>,
+) {
+    let now = time.elapsed_secs();
+    hits.retain(|e, _| props.contains(*e));
+    for (e, p, at, mut tf) in &mut props {
+        if p.name != "bumper" || p.still {
+            continue;
+        }
+        // (Its collider: 0.9 of its scale round and 1.9 high, from its foot.)
+        let foot = at.translation();
+        let s = at.scale().x.abs().max(0.1);
+        let touch = beans.iter().map(GlobalTransform::translation).find(|b| {
+            let d = Vec2::new(b.x - foot.x, b.z - foot.z).length();
+            d < 0.9 * s + 0.55 && b.y > foot.y - 0.4 && b.y < foot.y + 1.9 * s + 0.3
+        });
+        let (last, was) = hits.entry(e).or_insert((-BUMP_S, false));
+        if let Some(b) = touch
+            && !*was
+            && now - *last > 0.25
+        {
+            *last = now;
+            let out = Vec2::new(b.x - foot.x, b.z - foot.z).normalize_or_zero() * 0.9 * s;
+            let y = b.y.clamp(foot.y + 0.2, foot.y + 0.2 + 1.5 * s);
+            bursts.write(Burst {
+                kind: super::vfx::Kind::Ring,
+                at: Vec3::new(foot.x + out.x, y, foot.z + out.y),
+                color: LinearRgba::rgb(1.0, 0.9, 0.6),
+                size: s,
+            });
+        }
+        *was = touch.is_some();
+        let k = now - *last;
+        if (0.0..BUMP_S).contains(&k) {
+            // Squashed at once, ringing back out.
+            let a = 0.16 * (-k * 7.0).exp() * (k * 28.0).cos();
+            tf.scale = Vec3::new(1.0 + a, 1.0 - a, 1.0 + a);
+        } else if tf.scale != Vec3::ONE {
+            tf.scale = Vec3::ONE;
+        }
     }
 }

@@ -110,6 +110,8 @@ pub struct Display {
     /// Interface size on top of the one that follows the window (0.75…1.5).
     pub ui_scale: f32,
     pub show_fps: bool,
+    /// Borderless fullscreen on the current monitor (F11 or Alt+Enter); off: a 1280×720 window.
+    pub fullscreen: bool,
 }
 
 impl Default for Display {
@@ -118,48 +120,54 @@ impl Default for Display {
             fov: 70.0,
             ui_scale: 1.0,
             show_fps: false,
+            fullscreen: true,
         }
     }
 }
 
-/// Graphics (`render/quality.rs`): a preset, and switches that only ever take work away from it.
+/// Graphics (`render/quality.rs`): one of two presets, the frame pacing and the API. The rest is not the player's:
+/// FSR 1 upscaling is always on in its ultra quality mode, and the switches below are only for the perf sweep, which
+/// takes the features away one at a time (`perf/capture.rs`); they are never saved, and an old file's are ignored.
 #[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "graphics")]
 pub struct Graphics {
-    /// "low", "medium" or "high" (anything else, an old "auto" among them, is brought back to "high").
+    /// "high" or "low" (anything else, an old "auto" or "medium" among them, is brought back to "high").
     pub preset: String,
-    pub shadows: bool,
-    pub ao: bool,
-    /// Anti-aliasing (TAA, SMAA or FXAA, by the preset).
-    pub aa: bool,
-    /// Saturation, contrast and vignette.
-    pub grade: bool,
-    /// Specks drifting in the air.
-    pub motes: bool,
-    /// Render scale with FSR 1 upscaling: "off", "ultra", "quality", "balanced", "performance".
-    pub upscale: String,
     pub vsync: bool,
     /// Frames a second at most (0: no limit).
     pub fps_limit: u32,
     /// "" (automatic), "vulkan" or "dx12" (Windows): takes effect on the next start. Other names (an old
     /// "gl") are automatic (`backend.rs`).
     pub backend: String,
+    #[reflect(ignore)]
+    pub shadows: bool,
+    /// Anti-aliasing (SMAA on High, FXAA on Low).
+    #[reflect(ignore)]
+    pub aa: bool,
+    /// Saturation, contrast, vignette and bloom.
+    #[reflect(ignore)]
+    pub grade: bool,
+    /// Specks drifting in the air.
+    #[reflect(ignore)]
+    pub motes: bool,
+    /// Render scale with FSR 1 upscaling: "ultra" (`quality::UPSCALE`); the sweep tries "performance".
+    #[reflect(ignore)]
+    pub upscale: String,
 }
 
 impl Default for Graphics {
     fn default() -> Self {
         Self {
             preset: "high".into(),
-            shadows: true,
-            ao: true,
-            aa: true,
-            grade: true,
-            motes: true,
-            upscale: String::new(),
             vsync: true,
             fps_limit: 0,
             backend: String::new(),
+            shadows: true,
+            aa: true,
+            grade: true,
+            motes: true,
+            upscale: crate::render::quality::UPSCALE.into(),
         }
     }
 }
@@ -550,7 +558,7 @@ fn sanitize(world: &mut World) {
     if fixed != d {
         *world.resource_mut::<Display>() = fixed;
     }
-    // (There is no "auto" any more: every machine starts on the best preset, the player lowers it.)
+    // (There is no "auto" or "medium" any more: every machine starts on High, the player may pick Low.)
     if crate::render::quality::Preset::of(&world.resource::<Graphics>().preset).is_none() {
         world.resource_mut::<Graphics>().preset = Graphics::default().preset;
     }
@@ -767,6 +775,7 @@ mod tests {
             fov: -5.0,
             ui_scale: f32::NAN,
             show_fps: true,
+            fullscreen: false,
         });
         // (A file from before the presets lost "auto".)
         w.insert_resource(Graphics {
@@ -780,6 +789,31 @@ mod tests {
         let d = w.resource::<Display>();
         assert_eq!((d.fov, d.ui_scale, d.show_fps), (FOV_RANGE.0, 1.0, true));
         assert_eq!(w.resource::<Graphics>().preset, "high");
+        // (And from before Medium went.)
+        w.insert_resource(Graphics {
+            preset: "medium".into(),
+            ..default()
+        });
+        sanitize(&mut w);
+        assert_eq!(w.resource::<Graphics>().preset, "high");
+    }
+
+    /// The perf sweep's switches are never written to the file, and an old file's are not read.
+    #[test]
+    fn graphics_switches_are_not_saved() {
+        let mut registry = bevy::reflect::TypeRegistry::new();
+        registry.register::<Graphics>();
+        let g = Graphics {
+            shadows: false,
+            upscale: "performance".into(),
+            ..default()
+        };
+        let ser = bevy::reflect::serde::TypedReflectSerializer::new(g.as_partial_reflect(), &registry);
+        let text = toml::to_string(&ser).unwrap();
+        assert!(text.contains("preset") && text.contains("vsync"), "{text}");
+        for gone in ["shadows", "upscale", "aa", "grade", "motes", "ao"] {
+            assert!(!text.lines().any(|l| l.starts_with(gone)), "{gone} in {text}");
+        }
     }
 
     /// Taking an action's only key gives it the key the other action had (it used to get its defaults back,

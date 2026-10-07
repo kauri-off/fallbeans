@@ -1,11 +1,19 @@
 //! How the game is drawn: the camera's pipeline
 //! (HDR, PBR Neutral tone mapping, the grade), the sun, fog, sky and ambient light of the round's look,
-//! and the graphics settings: the hardware tier, presets and switches (`quality.rs`).
+//! and the graphics settings: the hardware tier, presets and switches (`quality.rs`), the upscaler (`upscale.rs`).
+pub mod ao;
 mod cloth;
 mod decor;
+#[cfg(feature = "dlss")]
+pub mod dlss;
 pub mod emoji;
 mod env;
+#[cfg(any(windows, target_os = "linux"))]
+mod ffx;
+mod fog;
 mod fsr;
+#[cfg(any(windows, target_os = "linux"))]
+mod fsr3;
 mod lod;
 pub mod meshes;
 mod motes;
@@ -13,6 +21,8 @@ pub mod portal;
 pub mod props;
 pub mod quality;
 pub mod surface;
+pub mod upscale;
+mod vfx;
 pub mod warmup;
 
 use std::collections::HashMap;
@@ -111,11 +121,16 @@ impl Plugin for GfxPlugin {
         app.add_plugins((
             MaterialPlugin::<SkyMaterial>::default(),
             surface::SurfacePlugin,
+            ao::AoPlugin,
             quality::QualityPlugin,
             props::PropsPlugin,
             decor::DecorPlugin,
             motes::MotesPlugin,
+            fog::FogPlugin,
+            vfx::VfxPlugin,
+            portal::PortalPlugin,
             fsr::FsrPlugin,
+            upscale::UpscalePlugin,
             warmup::WarmupPlugin { on: self.warmup },
         ));
         app.init_resource::<LookShown>();
@@ -248,11 +263,8 @@ fn apply_look(
     let Ok((cam, mut fog, mut grade)) = camera.single_mut() else {
         return;
     };
+    // (How near it begins depends on the haze: `fog.rs`.)
     fog.color = crate::view::hex(l.fog.color);
-    fog.falloff = FogFalloff::Linear {
-        start: l.fog.near as f32,
-        end: l.fog.far as f32,
-    };
     grade.global = ColorGradingGlobal {
         exposure: (l.exposure as f32).log2(),
         post_saturation: l.saturation as f32,

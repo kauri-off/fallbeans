@@ -156,7 +156,8 @@ fn run(r: &RunArgs) -> bool {
         seed: r.seed,
         release: false,
     };
-    let built = crate::run(crate::cargo().args([
+    let mut build = crate::cargo();
+    build.args([
         "build",
         "--profile",
         &r.cargo_profile,
@@ -164,8 +165,12 @@ fn run(r: &RunArgs) -> bool {
         "fb_server",
         "-p",
         "fb_client",
-    ]));
-    if !built {
+    ]);
+    // (DLSS when its SDK is there, as in the packages: the recording says which upscaler ran.)
+    if crate::dlss() {
+        build.args(["--features", "fb_client/dlss"]);
+    }
+    if !crate::run(&mut build) {
         return false;
     }
     let target = target_dir().join(match r.cargo_profile.as_str() {
@@ -174,6 +179,7 @@ fn run(r: &RunArgs) -> bool {
     });
     let bin = |name: &str| target.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     dxc_beside(&target);
+    crate::dist::upscalers_into(&target, None);
     let dir = target_dir().join("perf-runs");
     let _ = std::fs::create_dir_all(&dir);
     let secs = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
@@ -220,9 +226,8 @@ fn run(r: &RunArgs) -> bool {
     } else {
         c.args(["--perf-capture", &r.secs.to_string()]);
     }
-    if r.fullscreen {
-        c.arg("--fullscreen");
-    }
+    // (A window by default: the measurements compare at its size, whatever the profile's setting.)
+    c.arg(if r.fullscreen { "--fullscreen" } else { "--windowed" });
     c.args(&r.client_arg);
     eprintln!("$ {c:?}");
     let ok = match c.spawn() {

@@ -2,9 +2,10 @@
 //! surface's detail texture, every model's levels of detail and every look's ambient light are made; then every
 //! map is built as a round of it would be (the same `Map`, drawn by the same systems: props, decor, specials,
 //! bonuses, sky, motes), one after another with its clock run through the round, beside beans in every hat and
-//! glasses and a sample of every kind of material, until the pipeline cache has nothing left to compile. Nothing
-//! compiles or is made later, in play. Bevy specializes pipelines only for what a view sees: everything is in
-//! every view meanwhile (`NoFrustumCulling`), drawn under the opaque loading screen.
+//! glasses and a sample of every kind of material, until the pipeline cache has nothing left to compile; at the
+//! end, until the maps' baked occlusion (`ao.rs`) is made. Nothing compiles or is made later, in play. Bevy
+//! specializes pipelines only for what a view sees: everything is in every view meanwhile (`NoFrustumCulling`),
+//! drawn under the opaque loading screen.
 //!
 //! A change of the graphics settings changes the pipelines: at the room list the maps are warmed again (fewer
 //! frames each), in a room what is on screen is (and the maps later, at the room list).
@@ -30,9 +31,11 @@ use fb_sim::map::MapDef;
 use lightyear::prelude::LocalTimeline;
 
 use super::EnvLights;
+use super::ao::BakedAo;
 use super::lod::ModelLods;
 use super::quality::{Preset, Quality, preset_for};
 use super::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
+use super::upscale::{Upscaler, Upscaling};
 use crate::face::{FaceKit, FaceSource};
 use crate::game::{Generations, Map};
 use crate::outfit::{Wardrobe, make_glasses, make_hat};
@@ -54,6 +57,8 @@ const MAP_MAX_S: f32 = 20.0;
 const ASSETS_MAX_S: f32 = 60.0;
 /// What is on screen in a room, at most (s).
 const SETTLE_MAX_S: f32 = 10.0;
+/// The maps' baked occlusion still being made after the last map, waited for at most (s).
+const AO_MAX_S: f32 = 15.0;
 /// The share of the bar the models and textures take in the first pass.
 const ASSETS_SHARE: f32 = 0.15;
 
@@ -92,12 +97,13 @@ enum Stage {
     Settle,
 }
 
-/// What the pipelines depend on: the preset and the switches that add passes or change them.
+/// What the pipelines depend on: the preset, the upscaler (a temporal one adds the motion vector prepass and its
+/// own pipelines, made with its context) and the switches that add passes or change them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Key {
     preset: Preset,
+    upscaler: Upscaler,
     shadows: bool,
-    ao: bool,
     aa: bool,
     grade: bool,
     motes: bool,
@@ -105,11 +111,11 @@ struct Key {
 }
 
 impl Key {
-    fn of(g: &Graphics) -> Key {
+    fn of(g: &Graphics, up: &Upscaling) -> Key {
         Key {
             preset: preset_for(g),
+            upscaler: up.active,
             shadows: g.shadows,
-            ao: g.ao,
             aa: g.aa,
             grade: g.grade,
             motes: g.motes,
@@ -154,6 +160,8 @@ pub struct Warmup {
     /// Maps built, and those of them that did not settle in time.
     built: u32,
     late: u32,
+    /// When the last map was done with (s of real time): the baked occlusion is waited for from then.
+    tail: Option<f32>,
 }
 
 impl Warmup {
@@ -178,6 +186,7 @@ impl Warmup {
             progress: 0.0,
             built: 0,
             late: 0,
+            tail: None,
         }
     }
 
@@ -214,6 +223,7 @@ impl Warmup {
         self.progress = if self.first { ASSETS_SHARE } else { 0.0 };
         self.built = 0;
         self.late = 0;
+        self.tail = None;
     }
 }
 
@@ -297,11 +307,12 @@ fn watch(
     session: Res<Session>,
     perf: Option<Res<crate::perf::Perf>>,
     time: Res<Time<Real>>,
+    up: Res<Upscaling>,
 ) {
     if !w.on || w.busy() || quality.is_none() || perf.is_some_and(|p| p.busy) {
         return;
     }
-    let key = Key::of(&g);
+    let key = Key::of(&g, &up);
     let now = time.elapsed_secs();
     if session.room.is_none() && w.maps_for != Some(key) {
         info!("warm-up: the maps again, for {key:?}");
@@ -337,6 +348,7 @@ struct Kit<'w> {
     surface_mats: ResMut<'w, Assets<SurfaceMaterial>>,
     lods: ResMut<'w, ModelLods>,
     env: ResMut<'w, EnvLights>,
+    ao: Res<'w, BakedAo>,
 }
 
 impl Kit<'_> {
@@ -372,6 +384,7 @@ fn drive(
     faces: Query<Entity, (With<WarmBean>, With<FaceSource>)>,
     face_kit: Option<Res<FaceKit>>,
     g: Res<Graphics>,
+    up: Res<Upscaling>,
 ) {
     let w = &mut *warm;
     let now = time.elapsed_secs();
@@ -419,7 +432,7 @@ fn drive(
                 "warm-up: models, textures or levels of detail not ready after {ASSETS_MAX_S} s ({models_in} of {all} models)"
             );
         }
-        let key = Key::of(&g);
+        let key = Key::of(&g, &up);
         w.start(Stage::Maps, key, now);
         w.began = Some(began);
         return;
@@ -477,6 +490,11 @@ fn drive(
         // (A room entered meanwhile: its map comes, there is no more room for the warm-up's.)
         let Some(&(def, kind, look)) = w.plan.get(w.next).filter(|_| session.room.is_none()) else {
             let done = session.room.is_none();
+            // (The maps' occlusion is baked in the background: a round should find its map's ready.)
+            let since = *w.tail.get_or_insert(now);
+            if done && kit.ao.baking() > 0 && now - since < AO_MAX_S {
+                return;
+            }
             finish(
                 &mut commands,
                 w,
@@ -709,14 +727,10 @@ fn dress_bean(
             template = Some(mat.0.clone());
         }
     }
-    let template = template.and_then(|h| standard.get(&h).cloned()).unwrap_or_default();
     let coat = quality.is_none_or(|q| q.preset != Preset::Low);
-    let suit = standard.add(StandardMaterial {
-        perceptual_roughness: 0.5,
-        clearcoat: if coat { 0.3 } else { 0.0 },
-        clearcoat_perceptual_roughness: 0.35,
-        ..template
-    });
+    let original = template.and_then(|h| standard.get(&h));
+    let suit = crate::beans::plain_part(original, original.map_or(Color::WHITE, |m| m.base_color), 0.5, coat);
+    let suit = standard.add(suit);
     for e in body {
         commands.entity(e).insert(MeshMaterial3d(suit.clone()));
     }

@@ -1,6 +1,7 @@
-//! Graphics presets and the hardware tier: the preset is the player's (High on every machine until they pick
-//! another), switches only take work away. The tier is read from the adapter at start (T0: a software device;
-//! T1: an integrated GPU, or one that says neither; T2: a discrete GPU) and only told: it changes nothing.
+//! Graphics presets and the hardware tier: two presets, High (every machine's until the player picks Low) and Low,
+//! both upscaled in the ultra quality mode (DLSS 4.5, FSR 3.1 or FSR 1: `upscale.rs`). The tier is read from the
+//! adapter at start (T0: a software device; T1: an integrated GPU, or one that says neither; T2: a discrete GPU)
+//! and only told: it changes nothing.
 use core::time::Duration;
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -11,7 +12,7 @@ use bevy::core_pipeline::prepass::background_motion_vectors::{
 };
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
-use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
+use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
@@ -23,6 +24,7 @@ use bevy::window::{PresentMode, PrimaryWindow};
 use wgpu_types::DeviceType;
 
 use super::Sun;
+use super::upscale::{Upscaler, Upscaling};
 use crate::settings::Graphics;
 use crate::view::MainCamera;
 
@@ -39,7 +41,6 @@ pub enum Tier {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Preset {
     Low,
-    Medium,
     High,
 }
 
@@ -47,12 +48,14 @@ impl Preset {
     pub fn of(name: &str) -> Option<Preset> {
         Some(match name {
             "low" => Preset::Low,
-            "medium" => Preset::Medium,
             "high" => Preset::High,
             _ => return None,
         })
     }
 }
+
+/// The upscaling mode on every preset and upscaler, ultra quality: the main pass at 77% of the resolution.
+pub const UPSCALE: &str = "ultra";
 
 /// What the graphics run with now: the tier and the preset in effect.
 #[derive(Resource, Clone, Debug)]
@@ -63,7 +66,7 @@ pub struct Quality {
 }
 
 impl Quality {
-    /// The render scale of an FSR mode (1: full resolution).
+    /// The render scale of an upscaling mode (1: full resolution).
     pub fn scale(upscale: &str) -> f32 {
         match upscale {
             "ultra" => 0.77,
@@ -160,7 +163,7 @@ fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
     });
 }
 
-/// The preset the settings ask for: High for a name it does not know (an old "auto").
+/// The preset the settings ask for: High for a name it does not know (an old "auto" or "medium").
 pub fn preset_for(g: &Graphics) -> Preset {
     Preset::of(&g.preset).unwrap_or(Preset::High)
 }
@@ -168,6 +171,7 @@ pub fn preset_for(g: &Graphics) -> Preset {
 /// The camera, the sun and the window as the preset and switches say.
 fn apply(
     g: Res<Graphics>,
+    up: Res<Upscaling>,
     q: Option<ResMut<Quality>>,
     mut commands: Commands,
     camera: Query<Entity, With<MainCamera>>,
@@ -177,7 +181,7 @@ fn apply(
     map: Option<Res<crate::game::Map>>,
     mut surfaces: ResMut<super::surface::Surfaces>,
     mut surface_mats: ResMut<Assets<super::surface::SurfaceMaterial>>,
-    mut done: Local<Option<(Preset, Graphics)>>,
+    mut done: Local<Option<(Preset, Upscaler, Graphics)>>,
 ) {
     let Some(mut q) = q else { return };
     let preset = preset_for(&g);
@@ -196,22 +200,29 @@ fn apply(
         }
     }
     // (The settings are compared, and cloned, only when something may have changed them.)
-    if !g.is_changed() && done.as_ref().is_some_and(|(p, _)| *p == preset) {
+    let upscaler = up.active;
+    if !g.is_changed() && done.as_ref().is_some_and(|(p, u, _)| *p == preset && *u == upscaler) {
         return;
     }
-    if done.as_ref().is_some_and(|(p, d)| *p == preset && *d == *g) {
+    if done
+        .as_ref()
+        .is_some_and(|(p, u, d)| *p == preset && *u == upscaler && *d == *g)
+    {
         return;
     }
-    *done = Some((preset, g.clone()));
+    *done = Some((preset, upscaler, g.clone()));
+    // (A temporal upscaler is the anti-aliasing, and its prepasses, jitter and mip bias are `upscale.rs`'s.)
+    let temporal = up.temporal(&g);
     surfaces.set_plain(preset == Preset::Low, &mut surface_mats);
-    // (Low draws no detail texture; an integrated GPU's bandwidth is spared on Medium.)
+    // (Low draws no detail texture.)
     surfaces.anisotropy = match preset {
         Preset::Low => 1,
-        Preset::Medium => 4,
         Preset::High => 16,
     };
     let Ok(cam) = camera.single() else { return };
     let mut e = commands.entity(cam);
+    // (What an older preset may have left on the camera: TAA and SSAO with what they bring along. Left behind,
+    // the prepasses would keep running and TAA's texture LOD bias of −1 would make every texture shimmer.)
     e.remove::<(
         TemporalAntiAliasing,
         Smaa,
@@ -220,32 +231,19 @@ fn apply(
         Vignette,
         Bloom,
     )>();
-    // (And what TAA and SSAO brought along: left behind, the prepasses would keep running and TAA's
-    // texture LOD bias of −1 would make every texture shimmer. Inserting them again brings them back.)
-    e.remove::<(
-        MipBias,
-        TemporalJitter,
-        DepthPrepass,
-        NormalPrepass,
-        MotionVectorPrepass,
-    )>();
+    e.remove::<NormalPrepass>();
+    if !temporal {
+        e.remove::<(MipBias, TemporalJitter, DepthPrepass, MotionVectorPrepass)>();
+    }
     e.insert(Msaa::Off);
-    // (Upscaling replaces the temporal anti-aliasing and the AO, which want the full resolution.)
-    let upscaling = Quality::scale(&g.upscale) < 1.0;
-    if g.aa {
+    // (The main pass is always upscaled (`fsr.rs`), and Bevy 0.19's TAA and SSAO work on the whole target, not
+    // on the smaller main pass (`MainPassResolutionOverride` is only for DLSS): with FSR 1, SMAA before the
+    // upscale instead, and no SSAO; DLSS and FSR 3.1 do their own anti-aliasing.)
+    if g.aa && !temporal {
         match preset {
-            Preset::High if !upscaling => {
-                e.insert(TemporalAntiAliasing::default());
-            }
             Preset::High => {
                 e.insert(Smaa {
                     preset: SmaaPreset::High,
-                });
-            }
-            // (An integrated GPU's: the cheaper search.)
-            Preset::Medium => {
-                e.insert(Smaa {
-                    preset: SmaaPreset::Medium,
                 });
             }
             Preset::Low => {
@@ -253,48 +251,36 @@ fn apply(
             }
         }
     }
-    if g.ao && preset == Preset::High && !upscaling {
-        e.insert(ScreenSpaceAmbientOcclusion {
-            quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Medium,
-            ..default()
-        });
-    }
-    // (Half a millisecond of an integrated GPU for darker corners.)
-    if g.grade && preset != Preset::Low {
+    if g.grade && preset == Preset::High {
         e.insert(Vignette {
             intensity: 0.22,
             radius: 0.9,
             smoothness: 0.8,
             ..default()
         });
-    }
-    // The slightest glow around what is bright (the sun on white, the bell, portals): energy-conserving, so the
-    // picture keeps its brightness; a few tenths of a millisecond on an integrated GPU, none on Low.
-    if g.grade && preset != Preset::Low {
+        // The slightest glow around what is bright (the sun on white, the bell, portals): energy-conserving, so
+        // the picture keeps its brightness.
         e.insert(Bloom {
-            intensity: if preset == Preset::High { 0.06 } else { 0.04 },
+            intensity: 0.06,
             low_frequency_boost: 0.5,
             ..Bloom::NATURAL
         });
     }
-    // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M.)
-    if preset == Preset::Low {
+    // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M. A
+    // temporal upscaler has it anyway.)
+    if preset == Preset::Low && !temporal {
         e.insert(DepthPrepass);
     }
-    // (High with TAA: the temporal filter, sharp edges that TAA smooths over frames; High otherwise the
-    // Gaussian; below High one hardware-filtered tap per shadow lookup instead of the Gaussian's nine.)
-    let taa = g.aa && preset == Preset::High && !upscaling;
+    // (High: the Gaussian, soft edges; Low one hardware-filtered tap per shadow lookup instead of nine.)
     e.insert(match preset {
-        Preset::High if taa => ShadowFilteringMethod::Temporal,
         Preset::High => ShadowFilteringMethod::Gaussian,
-        _ => ShadowFilteringMethod::Hardware2x2,
+        Preset::Low => ShadowFilteringMethod::Hardware2x2,
     });
-    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over two cascades,
-    // Medium 2048 over one; the cascades overlap by a third, so their seams blend instead of showing. A third
-    // cascade on High looked the same and cost a view: 2.5–4 ms of the render thread on DX12, without bindless.)
+    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over two cascades, Low 1024
+    // over one; the cascades overlap by a third, so their seams blend instead of showing. A third cascade on High
+    // looked the same and cost a view: 2.5–4 ms of the render thread on DX12, without bindless.)
     let (size, cascades, reach) = match preset {
         Preset::High => (4096, 2, 80.0),
-        Preset::Medium => (2048, 1, 40.0),
         Preset::Low => (1024, 1, 30.0),
     };
     commands.insert_resource(DirectionalLightShadowMap { size });
@@ -321,7 +307,7 @@ fn apply(
             w.present_mode = mode;
         }
     }
-    info!("graphics: preset {preset:?}, {:?}", *g);
+    info!("graphics: preset {preset:?}, {}, {:?}", upscaler.name(), *g);
 }
 
 /// How long the frame limit slept at the end of the last frame (s).

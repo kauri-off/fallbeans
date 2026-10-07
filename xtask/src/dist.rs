@@ -84,8 +84,16 @@ fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     fs::copy(&from, to).unwrap_or_else(|e| panic!("{} → {}: {e}", from.display(), to.display()));
 }
 
-/// The client's features in the packages: no BRP probe, the profiler of F4.
-const CLIENT_FEATURES: [&str; 3] = ["--no-default-features", "--features", "profiler"];
+/// The client's features in the packages: no BRP probe, the profiler of F4, and on Windows DLSS when its SDK is
+/// there (the package carries NVIDIA's DLL then: `upscalers_into`).
+fn client_features() -> [&'static str; 3] {
+    let features = if cfg!(windows) && crate::dlss() {
+        "profiler,dlss"
+    } else {
+        "profiler"
+    };
+    ["--no-default-features", "--features", features]
+}
 
 /// The licenses of every crate built into `package` (cargo-about, `packaging/about.toml`) as `out`; fails on a
 /// license that `about.toml` does not accept.
@@ -132,9 +140,10 @@ fn dxc_into(dir: &Path) {
 
 /// The release client, staged with its assets and licenses into `dir`.
 fn client_into(dir: &Path) -> bool {
+    let features = client_features();
     let mut c = stamped(cargo());
     c.args(["build", "--locked", "--profile", "dist", "-p", "fb_client"])
-        .args(CLIENT_FEATURES);
+        .args(features);
     // The C runtime inside the exe: a clean Windows has no VCRUNTIME140.dll and the installer does not ship it.
     // (Here, not in .cargo/config.toml: there every local build would rebuild everything for it.)
     if cfg!(windows) {
@@ -143,7 +152,7 @@ fn client_into(dir: &Path) -> bool {
             "-C target-feature=+crt-static",
         );
     }
-    if !run(&mut c) || !third_party("fb_client", &CLIENT_FEATURES, &dir.join(THIRD_PARTY)) {
+    if !run(&mut c) || !third_party("fb_client", &features, &dir.join(THIRD_PARTY)) {
         return false;
     }
     let exe = format!("fb_client{}", std::env::consts::EXE_SUFFIX);
@@ -151,7 +160,105 @@ fn client_into(dir: &Path) -> bool {
     copy_dir(&root().join("assets"), &dir.join("assets"));
     copy("LICENSE", dir.join("LICENSE"));
     dxc_into(dir);
-    true
+    upscalers_into(dir, Some(&dir.join(UPSCALER_LICENSES)))
+}
+
+/// Where a package keeps the upscalers' notices and licenses.
+const UPSCALER_LICENSES: &str = "upscaler-licenses";
+
+/// The upscalers' DLLs beside the client (Windows; the game falls back to FSR 1 without them): NVIDIA's DLSS
+/// (`DLSS_DLL`, else the SDK's own in `DLSS_SDK`) when the client is built with it, AMD's FidelityFX for FSR 3.1
+/// (`FFX_SDK`: the unpacked FidelityFX SDK with its `PrebuiltSignedDLL`). With `licenses` (a package), the
+/// notices they ship with go there, and a DLL without them fails the package.
+pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
+    let mut ok = true;
+    let dlss = env("DLSS_DLL")
+        .or_else(|| env("DLSS_SDK").map(|s| s.join("lib/Windows_x86_64/rel/nvngx_dlss.dll")))
+        .filter(|p| p.is_file());
+    if crate::dlss() {
+        match dlss {
+            Some(dll) => {
+                ok &= put(&dll, &dir.join("nvngx_dlss.dll"));
+                if let Some(l) = licenses {
+                    ok &= notices_into(l);
+                }
+            }
+            None => eprintln!("no nvngx_dlss.dll (DLSS_DLL or DLSS_SDK): the client cannot use DLSS"),
+        }
+    }
+    const FFX_DLL: &str = "PrebuiltSignedDLL/amd_fidelityfx_vk.dll";
+    let Some(ffx) = env("FFX_SDK").filter(|s| s.join(FFX_DLL).is_file()) else {
+        eprintln!("FFX_SDK is not set or has no {FFX_DLL}: no AMD FSR 3.1");
+        return ok;
+    };
+    ok &= put(&ffx.join(FFX_DLL), &dir.join("amd_fidelityfx_vk.dll"));
+    if let Some(l) = licenses {
+        let license = ffx.join("docs/license.md");
+        if license.is_file() {
+            fs::create_dir_all(l).unwrap_or_else(|e| panic!("{}: {e}", l.display()));
+            copy(&license, l.join("AMD-FidelityFX-SDK-license.md"));
+        } else {
+            eprintln!("FFX_SDK has no docs/license.md: AMD's DLL is not packaged without its license");
+            ok = false;
+        }
+    }
+    ok
+}
+
+/// A DLL copied beside the client, unless the same one is there (a running client holds its DLLs).
+fn put(src: &Path, to: &Path) -> bool {
+    let len = |p: &Path| fs::metadata(p).ok().map(|m| m.len());
+    if to.is_file() && len(to) == len(src) {
+        return true;
+    }
+    match fs::copy(src, to) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("{} → {}: {e}", src.display(), to.display());
+            false
+        }
+    }
+}
+
+/// NVIDIA's notices the DLSS DLL ships with (section 9.5 of its programming guide, and the third-party code of
+/// 9.6), from the guide as text: `DLSS_GUIDE_TEXT` (a text file of it), else the guide's PDF in `DLSS_SDK` read
+/// with `pdftotext` (poppler).
+fn notices_into(dir: &Path) -> bool {
+    let text = match std::env::var_os("DLSS_GUIDE_TEXT") {
+        Some(f) => fs::read_to_string(f).ok(),
+        None => std::env::var_os("DLSS_SDK").and_then(|sdk| {
+            let pdf = Path::new(&sdk).join("doc/DLSS_Programming_Guide_Release.pdf");
+            let out = Command::new("pdftotext")
+                .args(["-layout", "-enc", "UTF-8"])
+                .arg(&pdf)
+                .arg("-")
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        }),
+    };
+    let Some(notices) = text.as_deref().and_then(notices_of) else {
+        eprintln!("no DLSS notices (DLSS_GUIDE_TEXT, or pdftotext and the guide in DLSS_SDK/doc): not packaged");
+        return false;
+    };
+    fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    fs::write(dir.join("NVIDIA-DLSS-notices.txt"), notices).is_ok()
+}
+
+/// Sections 9.5 and 9.6 of the DLSS programming guide's text: from the last "9.5 Notices" (the contents name it
+/// first) to "9.7 Linux driver compatibility".
+fn notices_of(text: &str) -> Option<String> {
+    let start = text.rfind("9.5 Notices")?;
+    let rest = text.get(start..)?;
+    let end = rest.find("9.7 Linux driver").unwrap_or(rest.len());
+    let notices = rest.get(..end)?.trim_end();
+    (notices.len() > 1000).then(|| format!("{notices}\n"))
 }
 
 fn tool(var: &str, name: &str) -> Command {
@@ -350,5 +457,20 @@ pub fn dist(a: &DistArgs) -> bool {
         Kind::Flatpak => flatpak(),
         Kind::Deb => deb(),
         Kind::Rpm => rpm(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::notices_of;
+
+    #[test]
+    fn the_notices_are_the_section_not_its_line_in_the_contents() {
+        let body = "x".repeat(1200);
+        let guide =
+            format!("   9.5 Notices ........ 68\n   9.7 Linux driver ... 73\n\n9.5 Notices\n{body}\n9.7 Linux driver");
+        let n = notices_of(&guide).unwrap();
+        assert!(n.starts_with("9.5 Notices\nxxx") && n.ends_with("x\n"), "{n}");
+        assert_eq!(notices_of("9.5 Notices, too short\n9.7 Linux driver"), None);
     }
 }

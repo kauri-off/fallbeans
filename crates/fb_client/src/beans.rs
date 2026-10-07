@@ -127,6 +127,24 @@ fn tint_of(color: u8) -> &'static str {
     COLORS[color as usize % COLORS.len()]
 }
 
+/// A painted part of the bean (suit with arms, hands and legs; belly; shoes) as plain colour on the model's own
+/// sides, with none of the model's textures: its ambient-occlusion bake (512², no mipmaps, small islands on
+/// black) held the arms' shadow at rest, which stayed on the body as they moved, and showed as stripes, moiré and
+/// dark seam lines. Real-time shadows and SSAO shade the bean instead; `coat` adds the faint clearcoat.
+pub fn plain_part(model: Option<&StandardMaterial>, color: Color, roughness: f32, coat: bool) -> StandardMaterial {
+    let sides = StandardMaterial::default();
+    let model = model.unwrap_or(&sides);
+    StandardMaterial {
+        base_color: color,
+        perceptual_roughness: roughness,
+        clearcoat: if coat { 0.3 } else { 0.0 },
+        clearcoat_perceptual_roughness: 0.35,
+        double_sided: model.double_sided,
+        cull_mode: model.cull_mode,
+        ..default()
+    }
+}
+
 pub fn spawn_beans(
     mut commands: Commands,
     beans: Query<
@@ -376,26 +394,16 @@ pub fn dress_beans(
         dress.tail.clear();
 
         let suit = tint_of(color.0);
-        let template = materials.get(&parts.body_mat).cloned().unwrap_or_default();
         // Soft plastic with a faint clearcoat.
-        let body = paints.get(format!("body {suit}"), &mut materials, || StandardMaterial {
-            base_color: suit_base(suit),
-            perceptual_roughness: 0.5,
-            clearcoat: if coat { 0.3 } else { 0.0 },
-            clearcoat_perceptual_roughness: 0.35,
-            ..template
-        });
-        let belly_template = materials.get(&parts.belly_mat).cloned().unwrap_or_default();
+        let made = plain_part(materials.get(&parts.body_mat), suit_base(suit), 0.5, coat);
+        let body = paints.get(format!("body {suit}"), &mut materials, || made);
         // The belly patch: the suit colour washed towards white, or a colour of its own.
         let (belly_key, belly_color) = match outfit.belly {
             Some(t) => (format!("belly {}", t.hex()), hex(t.hex())),
             None => (format!("belly washed {suit}"), suit_base(suit).mix(&Color::WHITE, 0.62)),
         };
-        let belly = paints.get(belly_key, &mut materials, || StandardMaterial {
-            base_color: belly_color,
-            perceptual_roughness: 0.55,
-            ..belly_template
-        });
+        let made = plain_part(materials.get(&parts.belly_mat), belly_color, 0.55, false);
+        let belly = paints.get(belly_key, &mut materials, || made);
         if suit == RAINBOW {
             for (h, is_belly) in [(&body, false), (&belly, true)] {
                 if (outfit.belly.is_none() || !is_belly) && !paints.rainbow.iter().any(|(r, _)| r == h) {
@@ -409,21 +417,16 @@ pub fn dress_beans(
         for e in &parts.belly {
             commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
         }
-        if let Some(t) = outfit.shoes {
-            // (From the model's own shoe: its baked AO stays.)
-            let shoe_template = materials.get(&parts.shoe_mat).cloned().unwrap_or_default();
-            let shoe = paints.get(format!("shoe {}", t.hex()), &mut materials, || StandardMaterial {
-                base_color: hex(t.hex()),
-                perceptual_roughness: 0.5,
-                ..shoe_template
-            });
-            for e in &parts.shoes {
-                commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
-            }
-        } else {
-            for e in &parts.shoes {
-                commands.entity(*e).insert(MeshMaterial3d(parts.shoe_mat.clone()));
-            }
+        // Shoes of the outfit's colour, or the model's own (plain too: no baked AO).
+        let model_shoe = materials.get(&parts.shoe_mat);
+        let (shoe_key, shoe_color) = match outfit.shoes {
+            Some(t) => (format!("shoe {}", t.hex()), hex(t.hex())),
+            None => ("shoe".to_string(), model_shoe.map_or(Color::WHITE, |m| m.base_color)),
+        };
+        let made = plain_part(model_shoe, shoe_color, 0.5, false);
+        let shoe = paints.get(shoe_key, &mut materials, || made);
+        for e in &parts.shoes {
+            commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
         }
 
         let hat = make_hat(outfit.hat, outfit.hat_color.map(|t| t.hex()));
@@ -823,5 +826,27 @@ pub fn animate_beans(
             }
         }
         anim.rotor = rotor;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn painted_parts_are_plain() {
+        let model = StandardMaterial {
+            occlusion_texture: Some(Handle::default()),
+            base_color_texture: Some(Handle::default()),
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        };
+        let m = plain_part(Some(&model), Color::WHITE, 0.5, true);
+        assert!(m.occlusion_texture.is_none() && m.base_color_texture.is_none() && m.normal_map_texture.is_none());
+        assert!(m.double_sided && m.cull_mode.is_none());
+        assert!(m.clearcoat > 0.0);
+        let m = plain_part(None, Color::WHITE, 0.55, false);
+        assert!(!m.double_sided && m.cull_mode.is_some() && m.clearcoat == 0.0);
     }
 }

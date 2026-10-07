@@ -31,3 +31,13 @@ English. License: AGPL-3.0-or-later.
 - Graphics: Vulkan 1.2+ first (Windows and Linux: its render thread is ~3× cheaper than wgpu's DX12), DX12 as the
   Windows fallback (`crates/fb_client/src/backend.rs`); no OpenGL.
 - The repository is public: no private hosts, addresses or keys in committed files.
+
+## Tooling habits
+
+- Change files with the editor tools (Edit/Write), not through the shell: no `python - <<'EOF'`, heredocs,
+  `sed -i` or `echo >>` insertions. Quotes in the text (Rust's `'static`, Russian text, Markdown backticks) break
+  them (`unexpected EOF while looking for matching ...`). The shell is for running commands; a script that is truly
+  needed is written to a file first and run from it.
+- One build at a time: a cold Bevy build takes every core and many GB. Sub-agents working in parallel (worktrees
+  with their own `target/`) only read and edit code; the lead merges and builds once. Ask the author before builds
+  and runs on their machine, and before performance measurements (they may have heavy work running).

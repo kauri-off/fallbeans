@@ -110,6 +110,13 @@ sysinfo.workspace = true
 bevy_app = { version = "=0.19.1", default-features = false, optional = true }
 bevy_ecs = { version = "=0.19.1", default-features = false, optional = true }
 bevy_render = { version = "=0.19.1", default-features = false, optional = true }
+# Only for the `dlss` feature: NVIDIA DLSS on Vulkan, the crate Bevy's own binding uses (patched in `vendor/`).
+dlss_wgpu = { version = "4.0.0", optional = true }
+
+# AMD FSR 3.1 (`render/fsr3.rs`): its signed DLL loaded at run time, handed wgpu-hal's raw Vulkan handles.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+ash = { version = "0.38", default-features = false }
+libloading = "0.8"
 
 [dev-dependencies]
 # The client's tests: a real server in their process, drawing on wgpu's noop device.
@@ -134,6 +141,10 @@ profiler = ["bevy_ecs/trace", "bevy_app/trace", "bevy_render/trace"]
 tracy = ["profiler", "bevy/trace", "bevy/trace_tracy"]
 # All of them to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
 chrome = ["profiler", "bevy/trace", "bevy/trace_chrome"]
+# NVIDIA DLSS 4.5 Super Resolution on RTX GPUs (Vulkan), before AMD FSR 3.1 (`render/upscale.rs`). Builds with
+# the DLSS SDK (`DLSS_SDK`), the Vulkan headers (`VULKAN_SDK`) and clang; `cargo xtask` turns it on when
+# `DLSS_SDK` is set. The game needs `nvngx_dlss.dll` (Linux: `libnvidia-ngx-dlss.so.*`) beside it to use it.
+dlss = ["bevy/dlss", "dep:dlss_wgpu"]
 
 [lints]
 workspace = true

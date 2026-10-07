@@ -104,13 +104,24 @@ impl Shared {
     pub fn build(&self) -> bool {
         let mut c = cargo();
         c.args(["build", "-p", "fb_server", "-p", "fb_client"]);
+        let mut features = Vec::new();
         if self.release {
             c.arg("--release");
         } else {
             // (Bevy as a DLL: relinks in seconds. `command` puts the DLLs on the PATH.)
-            c.args(["--features", "fb_client/dynamic,fb_server/dynamic"]);
+            features.extend(["fb_client/dynamic", "fb_server/dynamic"]);
         }
-        run(&mut c)
+        if dlss() {
+            features.push("fb_client/dlss");
+        }
+        if !features.is_empty() {
+            c.args(["--features", &features.join(",")]);
+        }
+        let built = run(&mut c);
+        if built && let Some(dir) = self.bin("fb_client").parent() {
+            dist::upscalers_into(dir, None);
+        }
+        built
     }
 
     /// The built `name` to run: a debug build finds Bevy's DLL (target/debug/deps) and Rust's own (the
@@ -158,6 +169,22 @@ pub fn dll_path() -> std::ffi::OsString {
         dirs.extend(std::env::split_paths(&p));
     }
     std::env::join_paths(dirs).unwrap_or_default()
+}
+
+/// The client's `dlss` feature (NVIDIA DLSS 4.5 before AMD FSR 3.1): on when the DLSS SDK is there to build it
+/// with (`DLSS_SDK`; the build needs the Vulkan headers, `VULKAN_SDK`, and clang too: `README.md`).
+pub fn dlss() -> bool {
+    let Some(sdk) = std::env::var_os("DLSS_SDK") else {
+        return false;
+    };
+    if !Path::new(&sdk).join("include").join("nvsdk_ngx.h").is_file() {
+        eprintln!("DLSS_SDK has no include/nvsdk_ngx.h: the client is built without DLSS");
+        return false;
+    }
+    if std::env::var_os("VULKAN_SDK").is_none() {
+        eprintln!("DLSS_SDK is set but VULKAN_SDK is not: the DLSS build needs the Vulkan headers");
+    }
+    true
 }
 
 pub fn root() -> PathBuf {
@@ -242,6 +269,10 @@ fn dev(a: &DevArgs) -> bool {
             ])
             .args(a.shared.net_args())
             .args(a.shared.play_args("dev", a.clients));
+            // (Several clients share the screen: windows. One plays fullscreen, as a player would.)
+            if a.clients > 1 {
+                c.arg("--windowed");
+            }
             if a.autopilot {
                 c.arg("--autopilot");
             }

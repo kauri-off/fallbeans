@@ -265,6 +265,11 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
         app.insert_resource(Trial(t.clone()));
         app.add_systems(Last, trial_passed.run_if(resource_exists::<Trial>));
     }
+    // (With the `dlss` feature Bevy makes a Vulkan instance whatever the backend: on DX12 it is made to fail.)
+    #[cfg(feature = "dlss")]
+    if p.backend == Backend::Dx12 {
+        crate::render::dlss::no_vulkan_instance(app);
+    }
     app.insert_resource(Chosen {
         notes,
         reset: wish.reset,

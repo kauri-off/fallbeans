@@ -182,9 +182,12 @@ pub struct Opts {
     /// No GPU timestamp and pipeline statistics queries (the GPU times of the F4 overlay).
     #[arg(long)]
     pub no_gpu_timers: bool,
-    /// Borderless fullscreen on the current monitor.
-    #[arg(long)]
+    /// Borderless fullscreen on the current monitor for this run (the default unless the settings say windowed).
+    #[arg(long, conflicts_with = "windowed")]
     pub fullscreen: bool,
+    /// A 1280×720 window for this run, whatever the settings say (several clients on one screen).
+    #[arg(long)]
+    pub windowed: bool,
     /// Does not look for a newer release.
     #[arg(long)]
     pub no_update: bool,
@@ -198,6 +201,9 @@ pub struct Opts {
     /// Tests: the warm-up on the bench too (it is off there).
     #[arg(long, hide = true)]
     pub warmup: bool,
+    /// Tests: this upscaler, if the machine offers it, instead of the best one ("dlss", "fsr3", "fsr1").
+    #[arg(long, hide = true, value_parser = ["dlss", "fsr3", "fsr1"])]
+    pub upscaler: Option<String>,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
     /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).

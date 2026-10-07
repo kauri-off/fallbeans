@@ -198,9 +198,6 @@ fn steps(g: &Graphics, q: &Quality) -> Vec<(&'static str, Graphics)> {
     if base.shadows {
         v.push(("shadows off", with(&|g| g.shadows = false)));
     }
-    if base.ao && q.preset == Preset::High && Quality::scale(&base.upscale) >= 1.0 {
-        v.push(("AO off", with(&|g| g.ao = false)));
-    }
     if base.aa {
         v.push(("AA off", with(&|g| g.aa = false)));
     }
@@ -210,12 +207,8 @@ fn steps(g: &Graphics, q: &Quality) -> Vec<(&'static str, Graphics)> {
     if base.motes {
         v.push(("motes off", with(&|g| g.motes = false)));
     }
-    if Quality::scale(&base.upscale) >= 1.0 {
-        v.push(("FSR quality", with(&|g| g.upscale = "quality".into())));
+    if Quality::scale(&base.upscale) > Quality::scale("performance") {
         v.push(("FSR performance", with(&|g| g.upscale = "performance".into())));
-    }
-    if q.preset > Preset::Medium {
-        v.push(("preset medium", with(&|g| g.preset = "medium".into())));
     }
     if q.preset > Preset::Low {
         v.push(("preset low", with(&|g| g.preset = "low".into())));
@@ -527,7 +520,7 @@ fn columns(frames: &[Frame]) -> Value {
 
 fn graphics_json(g: &Graphics) -> Value {
     json!({
-        "preset": g.preset, "shadows": g.shadows, "ao": g.ao, "aa": g.aa, "grade": g.grade, "motes": g.motes,
+        "preset": g.preset, "shadows": g.shadows, "aa": g.aa, "grade": g.grade, "motes": g.motes,
         "upscale": g.upscale, "vsync": g.vsync, "fps_limit": g.fps_limit, "backend": g.backend,
     })
 }
@@ -549,10 +542,13 @@ fn meta(world: &mut World, c: &Capture) -> Meta {
         .clone()
         .unwrap_or_else(|| world.resource::<Graphics>().clone());
     let quality = c.quality.clone().or_else(|| world.get_resource::<Quality>().cloned());
+    let upscaler = world
+        .get_resource::<crate::render::upscale::Upscaling>()
+        .map(|u| u.active.name());
     let adapter = world.get_resource::<RenderAdapterInfo>().map(|i| {
         json!({
             "name": i.0.name, "backend": format!("{:?}", i.0.backend), "type": format!("{:?}", i.0.device_type),
-            "driver": i.0.driver, "driver_info": i.0.driver_info,
+            "driver": i.0.driver, "driver_info": i.0.driver_info, "upscaler": upscaler,
         })
     });
     let window = world

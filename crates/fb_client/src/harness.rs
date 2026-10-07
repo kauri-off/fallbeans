@@ -73,6 +73,8 @@ fn noop_gpu(kind: wgpu::DeviceType) -> RenderCreation {
         })),
         RenderAdapter(Arc::new(WgpuWrapper::new(adapter))),
         RenderInstance(Arc::new(WgpuWrapper::new(instance))),
+        #[cfg(feature = "dlss")]
+        bevy::render::renderer::raw_vulkan_init::AdditionalVulkanFeatures::default(),
     )
 }
 
@@ -169,10 +171,9 @@ impl Game {
         let opts = Opts::parse_from(base.iter().chain(args));
         let mut app = App::new();
         crate::build(&mut app, opts, Some(noop_gpu(gpu)));
-        // (The preset of the kind of GPU tested: every machine starts on High, a player lowers it.)
+        // (The preset of the kind of GPU tested: every machine starts on High, a player may pick Low.)
         app.world_mut().resource_mut::<crate::settings::Graphics>().preset = match gpu {
-            wgpu::DeviceType::DiscreteGpu => "high",
-            wgpu::DeviceType::IntegratedGpu => "medium",
+            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu => "high",
             _ => "low",
         }
         .into();

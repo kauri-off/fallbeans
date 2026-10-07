@@ -233,6 +233,13 @@ fn rides(c: Option<&Collider>) -> bool {
     c.is_some_and(|c| !c.is_static && c.enabled && c.hit == 0.0 && c.tag.is_none())
 }
 
+/// Ground the feet stay on as it falls away under them (a slope, a crest): any solid, harmless ground but
+/// a pad or a bumper, which throw the body off it.
+fn keeps_feet(c: Option<&Collider>) -> bool {
+    let Some(c) = c else { return false };
+    c.enabled && !c.trigger && c.hit == 0.0 && c.tag.is_none() && c.bounce == 0.0 && c.pad == 0.0
+}
+
 impl Body {
     pub fn new(actor: i32) -> Self {
         Self {
@@ -769,12 +776,16 @@ impl Body {
             self.ground_col = -1;
             return;
         }
+        // Feet kept on the ground over a crest or down a slope, static or moving: without it a body going
+        // down a slope left it every tick (grounded only on the hops' landings), so ice gave no slide and
+        // air control steered it.
         if g && !self.grounded
             && !ev.jumped
             && self.state != BodyState::Dive
+            && !still
             && self.vel.y < 1.0
-            && rides(self.ground(world))
-            && let Some((col, n)) = self.snap_down(world, r, dt)
+            && keeps_feet(self.ground(world))
+            && let Some((col, n)) = self.snap_down(world, r, dt, cols)
         {
             self.grounded = true;
             new_ground = Some(col);
@@ -927,17 +938,17 @@ impl Body {
     }
 
     /// Ground within a short drop below the feet: the body is set down on it; returns it and its normal.
-    fn snap_down(&mut self, world: &World, r: f64, dt: f64) -> Option<(ColId, V3)> {
+    /// (`probe`: a buffer for the colliders around, reused.)
+    fn snap_down(&mut self, world: &World, r: f64, dt: f64, probe: &mut Vec<ColId>) -> Option<(ColId, V3)> {
         let reach = (0.05 + m::hypot(self.vel.x, self.vel.z) * dt * 1.5).at_most(0.3) * self.size;
         let y0 = self.pos.y;
         self.pos.y -= reach;
         let c = self.sphere(0);
         let mut best = None;
         let mut lift = 0.0;
-        let mut probe = Vec::new();
         let mut hit = Contact::default();
-        world.query(self.pos.x, self.pos.z, r + 0.5, &mut probe);
-        for &ci in &probe {
+        world.query(self.pos.x, self.pos.z, r + 0.5, probe);
+        for &ci in probe.iter() {
             let col = world.col(ci);
             if !col.enabled || col.trigger || col.bounce != 0.0 || col.pad != 0.0 {
                 continue;
