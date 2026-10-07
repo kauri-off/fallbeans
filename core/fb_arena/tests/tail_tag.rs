@@ -81,3 +81,41 @@ fn a_tail_held_through_its_immunity_changes_hands_as_it_ends() {
     let back = run(&mut arena, &mut k, i64::from(TICK_RATE) * 12 / 5, Some(holder));
     assert_eq!(back, [holder]);
 }
+
+/// A tail slows its holder (`MapSpec::on_bean`): a client's prediction of its own bean (the client's map, the
+/// same step, the same hook) must match the server's every tick, or it rolls back on every snapshot.
+#[test]
+fn a_client_predicts_the_tail_slowing_its_holder() {
+    use fb_arena::{Stepper, build_map, tick_bodies, touch_hook};
+    use fb_shared::DT;
+    use fb_sim::physics::StepEvents;
+
+    let map = fb_maps::by_id("tail-tag").unwrap();
+    let (mut arena, _) = Arena::new(map, ArenaKind::Round, 5, 0, &[1], false);
+    arena.add_pawn_at(1, false, Some(0));
+    let (mut b, mut spec) = build_map(map, 5, true, &[1]);
+    b.world.finalize(-1e3);
+    let walk = InputFrame::from_stick(0.3, 1.0, 0);
+    let mut body = arena.pawn(1).unwrap().body.clone();
+    let mut slowed = 0;
+    // (Off the rim after some 230 ticks: a respawn is not this test.)
+    for k in 0..200 {
+        arena.step(k, |_| walk);
+        let t = k as f64 * DT;
+        let (mut ev, mut scores, mut out) = (StepEvents::default(), Default::default(), Vec::new());
+        let mut touch = touch_hook(&mut spec.touches, false, t, Some(1), &mut scores, &mut out);
+        let mut steppers = [Stepper {
+            id: 1,
+            body: &mut body,
+            ev: &mut ev,
+            input: walk.into(),
+        }];
+        tick_bodies(&mut b.world, t, &mut steppers, &[], &mut touch);
+        drop(touch);
+        spec.on_bean.as_ref().expect("tail-tag slows tails")(&b.world, 1, &mut body, t);
+        let server = &arena.pawn(1).unwrap().body;
+        assert_eq!(&body, server, "tick {k}");
+        slowed += usize::from(server.slow_k < 1.0);
+    }
+    assert!(slowed > 180, "the only bean has a tail and is slowed: {slowed} ticks");
+}

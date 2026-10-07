@@ -2,7 +2,14 @@ use crate::channel::registry::ChannelRegistry;
 use crate::packet::message::{MessageData, SendCandidate};
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
-use governor::{DefaultDirectRateLimiter, Quota};
+use governor::clock::MonotonicClock;
+use governor::middleware::NoOpMiddleware;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
+
+/// Fall Beans: std's monotonic clock instead of governor's default (quanta), whose first clock calibrates
+/// the TSC for 200 ms on the thread that makes it: the first link's frame stalled that long.
+type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, MonotonicClock, NoOpMiddleware<std::time::Instant>>;
 use lightyear_serde::ToBytes;
 use nonzero_ext::*;
 #[cfg(feature = "trace")]
@@ -66,7 +73,7 @@ pub struct PriorityManager {
 #[derive(Debug)]
 pub(crate) struct BandwidthLimiter {
     enabled: bool,
-    limiter: DefaultDirectRateLimiter,
+    limiter: DirectRateLimiter,
 }
 
 impl Default for PriorityManager {
@@ -162,7 +169,7 @@ impl BandwidthLimiter {
     pub(crate) fn new(config: PriorityConfig) -> Self {
         Self {
             enabled: config.enabled,
-            limiter: DefaultDirectRateLimiter::direct(config.bandwidth_quota),
+            limiter: RateLimiter::direct_with_clock(config.bandwidth_quota, MonotonicClock),
         }
     }
 
