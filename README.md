@@ -135,9 +135,8 @@ cargo xtask play          # сервер на localhost и клиент с гл�
 libclang: LLVM на Windows, clang на Linux) и кладут рядом с клиентом библиотеки DLSS и FidelityFX. На Linux AMD
 библиотеки не выпускает: `xtask` собирает `libamd_fidelityfx_vk.so` из исходников SDK с патчем из
 `packaging/fidelityfx-linux` (cmake, компилятор C++17, `glslangValidator`, `patch`). Пакеты (`cargo xtask dist`)
-без DLSS, FSR 3.1 или (на Windows) DXC не собираются; они несут уведомления NVIDIA (разделы 9.5–9.6 руководства
-DLSS, через `pdftotext` или `DLSS_GUIDE_TEXT`) и лицензию AMD в папке `upscaler-licenses`. Условия DLSS SDK — его
-`LICENSE.txt`. Ни SDK, ни библиотек в репозитории нет.
+без DLSS, FSR 3.1 или (на Windows) DXC не собираются; они несут лицензию AMD в папке `upscaler-licenses`.
+Условия DLSS SDK — его `LICENSE.txt`. Ни SDK, ни библиотек в репозитории нет.
 
 ## Известные проблемы
 

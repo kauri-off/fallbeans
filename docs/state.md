@@ -58,9 +58,9 @@ DLSS; `dist` без апскейлеров не собирается.
   свой GUID.
 - `release.yml` собирает nsis, AppImage и deb; SDK и инструменты упаковки — через `cargo xtask setup --dist` (кэш
   `target/sdk` по хешу `toolchain/deps.toml`, свой у каждого job). AppImage и deb так уже собирались; не проверены
-  `setup` на Windows-раннере (распаковка zip через bsdtar, `cargo install` cargo-about) и `pdftotext`/pypdf для
-  заметок DLSS в nsis. Flatpak, rpm и `cargo xtask check` в CI не идут (собираются только локально). Профиль `dist` —
-  thin LTO (fat с одной единицей кодогенерации не укладывался в часы раннеров): разница в fps не мерена.
+  `setup` на Windows-раннере (распаковка zip через bsdtar, `cargo install` cargo-about). Flatpak, rpm и
+  `cargo xtask check` в CI не идут (собираются только локально). Профиль `dist` — thin LTO (fat с одной единицей
+  кодогенерации не укладывался в часы раннеров): разница в fps не мерена.
 - Режим масштабирования в настройках графики («Ультра-качество» 0,77, «Качество» 0,67, «Баланс» 0,59;
   `Graphics::upscale`, на лету, сохраняется): вживую не смотрен. DLSS на «Балансе» делает контекст в режиме
   Balanced (`dlss::mode`), на остальных — Quality; смена режима пересоздаёт контекст DLSS или FSR 3.1. Не мерено,

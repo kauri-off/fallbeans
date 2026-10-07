@@ -71,19 +71,6 @@ jobs:
           path: target/sdk
           key: sdk-${{ github.job }}-${{ hashFiles('toolchain/deps.toml') }}
       - run: cargo xtask setup --dist
-      - name: DLSS guide as text
-        shell: bash
-        run: |
-          # The package carries its notices: poppler's pdftotext, else pypdf (the runner may lack poppler).
-          pdf=$(ls target/sdk/dlss-sdk-windows-*/doc/DLSS_Programming_Guide_Release.pdf)
-          if command -v pdftotext >/dev/null; then
-            pdftotext -layout -enc UTF-8 "$pdf" dlss-guide.txt
-          else
-            python -m pip install --quiet "pypdf==5.4.0"
-            python -c 'import sys, pypdf; print("\n".join(p.extract_text() for p in pypdf.PdfReader(sys.argv[1]).pages))' \
-              "$pdf" > dlss-guide.txt
-          fi
-          echo "DLSS_GUIDE_TEXT=$(pwd -W)/dlss-guide.txt" >> "$GITHUB_ENV"
       - run: cargo xtask dist nsis
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

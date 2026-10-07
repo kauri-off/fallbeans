@@ -194,7 +194,7 @@ fn client_into(dir: &Path) -> bool {
     upscalers_into(dir, Some(&dir.join(UPSCALER_LICENSES)))
 }
 
-/// Where a package keeps the upscalers' notices and licenses.
+/// Where a package keeps the upscalers' licenses.
 const UPSCALER_LICENSES: &str = "upscaler-licenses";
 
 fn env_path(var: &str) -> Option<PathBuf> {
@@ -302,7 +302,7 @@ fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
 
 /// The upscalers' libraries beside the client (the game falls back to FSR 1 without them): NVIDIA's DLSS
 /// (`dlss_runtime`) when the client is built with it, AMD's FidelityFX for FSR 3.1 (`fidelityfx`). With
-/// `licenses` (a package), the notices they ship with go there, and a library without them fails the package.
+/// `licenses` (a package), AMD's license goes there, and a missing library fails the package.
 pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
     let mut ok = true;
     if crate::dlss() {
@@ -314,9 +314,6 @@ pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
                     lib.file_name().expect("a file").to_owned()
                 };
                 ok &= put(&lib, &dir.join(name));
-                if let Some(l) = licenses {
-                    ok &= notices_into(l);
-                }
             }
             None => {
                 eprintln!("no DLSS library (DLSS_DLL or DLSS_SDK): the client cannot use DLSS");
@@ -359,43 +356,6 @@ fn put(src: &Path, to: &Path) -> bool {
             false
         }
     }
-}
-
-/// NVIDIA's notices the DLSS DLL ships with (section 9.5 of its programming guide, and the third-party code of
-/// 9.6), from the guide as text: `DLSS_GUIDE_TEXT` (a text file of it), else the guide's PDF in `DLSS_SDK` read
-/// with `pdftotext` (poppler).
-fn notices_into(dir: &Path) -> bool {
-    let text = match std::env::var_os("DLSS_GUIDE_TEXT") {
-        Some(f) => fs::read_to_string(f).ok(),
-        None => env_path("DLSS_SDK").and_then(|sdk| {
-            let pdf = Path::new(&sdk).join("doc/DLSS_Programming_Guide_Release.pdf");
-            let out = Command::new("pdftotext")
-                .args(["-layout", "-enc", "UTF-8"])
-                .arg(&pdf)
-                .arg("-")
-                .output()
-                .ok()?;
-            out.status
-                .success()
-                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-        }),
-    };
-    let Some(notices) = text.as_deref().and_then(notices_of) else {
-        eprintln!("no DLSS notices (DLSS_GUIDE_TEXT, or pdftotext and the guide in DLSS_SDK/doc): not packaged");
-        return false;
-    };
-    fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
-    fs::write(dir.join("NVIDIA-DLSS-notices.txt"), notices).is_ok()
-}
-
-/// Sections 9.5 and 9.6 of the DLSS programming guide's text: from the last "9.5 Notices" (the contents name it
-/// first) to "9.7 Linux driver compatibility".
-fn notices_of(text: &str) -> Option<String> {
-    let start = text.rfind("9.5 Notices")?;
-    let rest = text.get(start..)?;
-    let end = rest.find("9.7 Linux driver").unwrap_or(rest.len());
-    let notices = rest.get(..end)?.trim_end();
-    (notices.len() > 1000).then(|| format!("{notices}\n"))
 }
 
 fn tool(var: &str, name: &str) -> Command {
@@ -594,20 +554,5 @@ pub fn dist(a: &DistArgs) -> bool {
         Kind::Flatpak => flatpak(),
         Kind::Deb => deb(),
         Kind::Rpm => rpm(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::notices_of;
-
-    #[test]
-    fn the_notices_are_the_section_not_its_line_in_the_contents() {
-        let body = "x".repeat(1200);
-        let guide =
-            format!("   9.5 Notices ........ 68\n   9.7 Linux driver ... 73\n\n9.5 Notices\n{body}\n9.7 Linux driver");
-        let n = notices_of(&guide).unwrap();
-        assert!(n.starts_with("9.5 Notices\nxxx") && n.ends_with("x\n"), "{n}");
-        assert_eq!(notices_of("9.5 Notices, too short\n9.7 Linux driver"), None);
     }
 }

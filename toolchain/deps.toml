@@ -9,8 +9,7 @@
 # `points_to`: the file inside the entry that `env` names; `file_sha256` checks it. `group`: "upscalers" (plain
 # `setup`) or "dist" (`setup --dist`). `os`: only on "windows" or "linux".
 
-# NVIDIA DLSS SDK at the version dlss_wgpu 4.0.0 is built against: headers, the static NGX library, the guide whose
-# notices the packages carry, its license.
+# NVIDIA DLSS SDK at the version dlss_wgpu 4.0.0 is built against: headers, the static NGX library, its license.
 [dlss-sdk-windows]
 os = "windows"
 group = "upscalers"
@@ -20,7 +19,7 @@ kind = "git"
 repo = "https://github.com/NVIDIA/DLSS.git"
 tag = "v310.5.3"
 commit = "982b0d19f9e35fef8e1b3109efa6b95470563866"
-paths = ["/include/", "/lib/Windows_x86_64/x64/", "/doc/DLSS_Programming_Guide_Release.pdf", "/LICENSE.txt"]
+paths = ["/include/", "/lib/Windows_x86_64/x64/", "/LICENSE.txt"]
 
 [dlss-sdk-linux]
 os = "linux"
@@ -31,7 +30,7 @@ kind = "git"
 repo = "https://github.com/NVIDIA/DLSS.git"
 tag = "v310.5.3"
 commit = "982b0d19f9e35fef8e1b3109efa6b95470563866"
-paths = ["/include/", "/lib/Linux_x86_64/libnvsdk_ngx.a", "/doc/DLSS_Programming_Guide_Release.pdf", "/LICENSE.txt"]
+paths = ["/include/", "/lib/Linux_x86_64/libnvsdk_ngx.a", "/LICENSE.txt"]
 
 # The DLSS library shipped beside the client: a newer one of NVIDIA's (backward compatible with the SDK above).
 [dlss-runtime-windows]

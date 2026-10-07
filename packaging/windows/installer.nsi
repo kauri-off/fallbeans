@@ -105,7 +105,7 @@ Section
   File /nonfatal "${SRC}\dxcompiler.dll"
   File /nonfatal "${SRC}\dxil.dll"
   File /nonfatal /r "${SRC}\dxc-licenses"
-  ; The upscalers (NVIDIA DLSS on RTX GPUs, AMD FSR 3.1 elsewhere on Vulkan) and their notices: without them the
+  ; The upscalers (NVIDIA DLSS on RTX GPUs, AMD FSR 3.1 elsewhere on Vulkan) and AMD's license: without them the
   ; game upscales with FSR 1.
   File /nonfatal "${SRC}\nvngx_dlss.dll"
   File /nonfatal "${SRC}\amd_fidelityfx_vk.dll"

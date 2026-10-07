@@ -222,7 +222,6 @@ pub fn doctor() -> bool {
     r.group("packages (cargo xtask dist): the upscalers above, and cargo xtask setup --dist");
     let setup_dist = "cargo xtask setup --dist";
     r.item("cargo-about", false, cargo_tool("about", setup_dist));
-    r.item("DLSS notices (pdftotext)", false, notices_text());
     if windows {
         r.item("nsis: makensis", false, makensis());
     } else {
@@ -361,19 +360,6 @@ fn cargo_tool(sub: &str, hint: &str) -> Check {
     o.filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .ok_or_else(|| hint.into())
-}
-
-fn notices_text() -> Check {
-    if let Some(p) = std::env::var_os("DLSS_GUIDE_TEXT") {
-        return Ok(format!("{} (from DLSS_GUIDE_TEXT)", PathBuf::from(p).display()));
-    }
-    tool("pdftotext", &["-v"]).ok_or_else(|| {
-        if cfg!(windows) {
-            "scoop install poppler, or DLSS_GUIDE_TEXT=<the guide as text>".into()
-        } else {
-            pkg("poppler", "poppler-utils", "poppler-utils")
-        }
-    })
 }
 
 fn makensis() -> Check {
