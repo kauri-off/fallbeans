@@ -402,40 +402,39 @@ fn build_round(
     commands.insert_resource(next);
 }
 
-/// Lightyear checks the prediction at each completed server tick, but only where the prediction history reaches
-/// back that far: just after the clock is first set (or for a bean given since) it has nothing so old and the
-/// check passes silently, until the server's tick passes the first one predicted (in an intro where nothing
-/// moves, until the start). Meanwhile the own bean kept what it had: the lobby's place while the server had it at
-/// the round's spawn. Such a tick is rolled back to instead; so is the newest one once a new arena's map is built
-/// (a rollback in the frame its `Round` came replayed its first ticks on the old map).
+/// Lightyear checks the prediction at completed server ticks only, and only where the prediction history reaches
+/// back that far. Just after the clock is first set (or for a bean given since) it has nothing so old and the
+/// check passes silently, and in an intro where nothing moves no tick completes at all: the own bean kept what it
+/// had (the lobby's place) while the server had it at the round's spawn, until the start. So the newest server
+/// state of the own bean is rolled back to as it comes when the prediction has nothing at its tick, or another
+/// respawn count (a respawn, a new arena); and once more when a new arena's map is built (a rollback in the frame
+/// its `Round` came replayed its first ticks on the old map). Anything else is left to Lightyear.
 fn reconcile(
     timeline: SyncedLocalTimeline,
     map: Option<Res<Map>>,
-    checkpoints: Res<ReplicationCheckpointMap>,
-    mutate: Option<Res<ServerMutateTicks>>,
     manager: Res<PredictionManager>,
     own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
     mut meta: ResMut<StateRollbackMetadata>,
-    mut built: Local<Option<u32>>,
+    mut seen: Local<(Option<Tick>, Option<u32>)>,
 ) {
     let tick = timeline.tick();
-    let Some(c) = mutate
-        .and_then(|m| checkpoints.latest_completed_at_or_before(&m, tick))
-        .map(|c| c.tick)
-    else {
+    let Ok((predicted, confirmed)) = own.single() else {
         return;
     };
-    let generation = map.map(|m| m.generation);
-    if tick - c > i32::from(manager.rollback_policy.max_rollback_ticks) {
+    let Some((at, server)) = confirmed.newest_present() else {
+        return;
+    };
+    if at > tick || tick - at > i32::from(manager.rollback_policy.max_rollback_ticks) {
         return;
     }
-    for (predicted, confirmed) in &own {
-        let gap = predicted.oldest().is_none_or(|(t, _)| *t > c);
-        if (gap || *built != generation) && confirmed.get_state_at_or_before(c).is_some() {
-            meta.request_forced_rollback(c);
-            *built = generation;
-        }
+    let (last, built) = &mut *seen;
+    let generation = map.map(|m| m.generation);
+    let off = predicted.get(at).is_none_or(|p| p.teleports != server.teleports);
+    if (*last != Some(at) && off) || *built != generation {
+        meta.request_forced_rollback(at);
+        *built = generation;
     }
+    *last = Some(at);
 }
 
 /// Ticks between rollbacks for a push (below).
