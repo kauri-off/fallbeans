@@ -1997,7 +1997,8 @@ fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
 /// The land far below the course, in the look's colours.
 fn ground(k: &mut Kit, root: Entity, all: Aabb) {
     let Some(gr) = k.look.look.ground else { return };
-    let kind = if gr.glow { Kind::Glossy } else { Kind::Padded };
+    // (Not padded: its metre-wide cushions read as a fine grid on land seen from 70 m up.)
+    let kind = if gr.glow { Kind::Glossy } else { Kind::Plastic };
     let mut spec = Spec {
         paint: Some(Paint {
             c1: hex(gr.c1).to_linear(),
