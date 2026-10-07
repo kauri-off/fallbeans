@@ -768,12 +768,18 @@ mod tests {
             ui_scale: f32::NAN,
             show_fps: true,
         });
+        // (A file from before the presets lost "auto".)
+        w.insert_resource(Graphics {
+            preset: "auto".into(),
+            ..default()
+        });
         sanitize(&mut w);
         let c = w.resource::<Controls>();
         assert_eq!((c.mouse_sensitivity, c.stick_sensitivity), (1.0, SENS_RANGE.1));
         assert_eq!(w.resource::<Sound>().volume, Sound::default().volume);
         let d = w.resource::<Display>();
         assert_eq!((d.fov, d.ui_scale, d.show_fps), (FOV_RANGE.0, 1.0, true));
+        assert_eq!(w.resource::<Graphics>().preset, "high");
     }
 
     /// Taking an action's only key gives it the key the other action had (it used to get its defaults back,

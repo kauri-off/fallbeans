@@ -404,7 +404,7 @@ fn drive(
             for gltf in models.0.iter().filter_map(|h| gltfs.get(h)) {
                 for m in gltf.meshes.iter().filter_map(|h| gltf_meshes.get(h)) {
                     for p in &m.primitives {
-                        lods.prepare(&p.mesh, &**meshes);
+                        lods.prepare(&p.mesh, meshes);
                     }
                 }
             }
