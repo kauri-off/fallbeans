@@ -36,6 +36,7 @@ mod settings;
 mod shapes;
 mod specials;
 mod stats;
+mod transforms;
 mod ui;
 mod update;
 mod view;
@@ -211,6 +212,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_plugins(assets::CheckAssetsPlugin);
             return;
         }
+        app.add_plugins(transforms::TransformsPlugin);
         app.add_plugins((
             view::ViewPlugin,
             beans::BeansPlugin,
