@@ -104,7 +104,7 @@ jobs:
         run: |
           curl -fsSL -o dxc.zip "$DXC_URL"
           echo "$DXC_SHA256  dxc.zip" | sha256sum -c -
-          unzip -q dxc.zip -d dxc
+          unzip -q dxc.zip -d dxc || [ $? -eq 1 ] # 1 = warning: the zip uses backslashes
           echo "FB_DXC_DIR=$PWD/dxc" >> "$GITHUB_ENV"
       - name: upscalers
         shell: bash
