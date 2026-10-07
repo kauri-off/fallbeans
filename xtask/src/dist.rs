@@ -5,7 +5,7 @@ use std::process::Command;
 
 use clap::{Args, ValueEnum};
 
-use crate::{cargo, root, run};
+use crate::{cargo, root, run, target_dir};
 
 pub const APP_ID: &str = "io.github.kauri_off.fallbeans";
 const MUSL: &str = "x86_64-unknown-linux-musl";
@@ -59,7 +59,7 @@ fn out_dir() -> PathBuf {
 }
 
 fn stage(name: &str) -> PathBuf {
-    let d = root().join("target").join("pkg").join(name);
+    let d = target_dir().join("pkg").join(name);
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).expect("stage");
     d

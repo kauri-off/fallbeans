@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use clap::{Args, Subcommand};
 use serde_json::Value;
 
-use crate::{Shared, root};
+use crate::{Shared, target_dir};
 
 #[derive(Args)]
 pub struct PerfArgs {
@@ -135,12 +135,12 @@ fn run(r: &RunArgs) -> bool {
     if !built {
         return false;
     }
-    let target = root().join("target").join(match r.cargo_profile.as_str() {
+    let target = target_dir().join(match r.cargo_profile.as_str() {
         "dev" => "debug",
         p => p,
     });
     let bin = |name: &str| target.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    let dir = root().join("target").join("perf-runs");
+    let dir = target_dir().join("perf-runs");
     let _ = std::fs::create_dir_all(&dir);
     let secs = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs();
     let kind = if r.sweep { "sweep" } else { "run" };

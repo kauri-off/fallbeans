@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use clap::Args;
 
-use crate::{Shared, root};
+use crate::{Shared, target_dir};
 
 #[derive(Args)]
 pub struct StressArgs {
@@ -61,7 +61,7 @@ pub fn stress(a: &StressArgs) -> bool {
     // processes' log writes for seconds, and every connection times out.
     #[cfg(unix)]
     let _ = Command::new("sync").status();
-    let dir = root().join("target").join("stress");
+    let dir = target_dir().join("stress");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("target/stress");
     let log = |name: &str| File::create(dir.join(name)).expect("log file");

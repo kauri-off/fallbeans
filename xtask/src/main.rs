@@ -96,8 +96,7 @@ impl Shared {
     }
 
     pub fn bin(&self, name: &str) -> PathBuf {
-        root()
-            .join("target")
+        target_dir()
             .join(if self.release { "release" } else { "debug" })
             .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
     }
@@ -150,7 +149,7 @@ pub fn dll_path() -> std::ffi::OsString {
         .output()
         .ok()
         .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
-    let mut dirs = vec![root().join("target").join("debug").join("deps")];
+    let mut dirs = vec![target_dir().join("debug").join("deps")];
     if let Some(s) = sysroot {
         dirs.push(s.join("bin"));
         dirs.push(s.join("lib"));
@@ -163,6 +162,11 @@ pub fn dll_path() -> std::ffi::OsString {
 
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+}
+
+/// Cargo's target directory: `CARGO_TARGET_DIR` (relative to the root), else `target`.
+pub fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
 
 pub fn run(cmd: &mut Command) -> bool {

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use clap::Args;
 
 use crate::stress::wait_or_kill;
-use crate::{cargo, root};
+use crate::{cargo, root, target_dir};
 
 #[derive(Args)]
 pub struct FuzzArgs {
@@ -51,7 +51,7 @@ pub fn fuzz(a: &FuzzArgs) -> bool {
         eprintln!("the client's test binary did not build");
         return false;
     };
-    let dir = root().join("target").join("fuzz-ui");
+    let dir = target_dir().join("fuzz-ui");
     if std::fs::create_dir_all(&dir).is_err() {
         eprintln!("cannot create {}", dir.display());
         return false;
