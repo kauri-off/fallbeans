@@ -14,6 +14,8 @@ concurrency: release
 env:
   CARGO_TERM_COLOR: always
   LINUX_PACKAGES: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+  # The Linux client packages' upscalers: bindgen for DLSS, FidelityFX's build, the DLSS guide as text.
+  UPSCALER_PACKAGES: clang libclang-dev cmake glslang-tools libvulkan-dev patch poppler-utils unzip
   # The packaging tools, by version (cargo xtask dist names cargo-about's too).
   CARGO_ABOUT: 0.9.2
   CARGO_DEB: 3.8.0
@@ -21,14 +23,16 @@ env:
   # DirectX's shader compiler shipped in the Windows package (DX12 compiles with it instead of FXC).
   DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
   DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
-  # The Windows package's upscalers (`render/upscale.rs`). NVIDIA's DLSS SDK at the version dlss_wgpu 4.0.0 is
+  # The client packages' upscalers (`render/upscale.rs`). NVIDIA's DLSS SDK at the version dlss_wgpu 4.0.0 is
   # built against (headers, the static NGX library, the guide whose notices the package carries), checked by
-  # commit; the DLL shipped is a newer one of NVIDIA's (backward compatible), checked by SHA-256; the Vulkan
-  # headers bindgen reads for it; AMD's FidelityFX SDK for its signed Vulkan DLL (FSR 3.1) and its license.
+  # commit; the library shipped is a newer one of NVIDIA's (backward compatible), checked by SHA-256; the Vulkan
+  # headers bindgen reads for it; AMD's FidelityFX SDK for its signed Vulkan DLL (FSR 3.1) and its license, and on
+  # Linux for the sources `cargo xtask dist` builds the library from (`packaging/fidelityfx-linux`).
   DLSS_SDK_TAG: v310.5.3
   DLSS_SDK_COMMIT: 982b0d19f9e35fef8e1b3109efa6b95470563866
   DLSS_DLL_TAG: v310.9.1
   DLSS_DLL_SHA256: 3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983
+  DLSS_SO_SHA256: 7561f16cab74e2b7ccf791bf44bb9cc43abb44bcf78f33c5663520ad4e857e02
   VULKAN_HEADERS_TAG: vulkan-sdk-1.4.363.0
   FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
   FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952
@@ -169,7 +173,7 @@ jobs:
         run: |
           # shellcheck disable=SC2086 # (a list of packages)
           apt-get update && apt-get install -y --no-install-recommends \
-            ca-certificates curl git build-essential pkg-config file $LINUX_PACKAGES
+            ca-certificates curl git build-essential pkg-config file $LINUX_PACKAGES $UPSCALER_PACKAGES
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master, 2026-10-01
         with:
@@ -190,6 +194,8 @@ jobs:
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
           echo "APPIMAGE_RUNTIME=$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
       - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
+      - name: upscalers
+        run: sh .github/upscalers-linux.sh
       - run: cargo xtask dist appimage
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -210,10 +216,12 @@ jobs:
       - name: packages
         run: |
           # shellcheck disable=SC2086 # (a list of packages)
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES flatpak flatpak-builder
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES $UPSCALER_PACKAGES flatpak flatpak-builder
       # flatpak-builder sandboxes the build with bubblewrap, which Ubuntu 24.04's AppArmor keeps from user namespaces.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo install --locked cargo-about --version ${{ env.CARGO_ABOUT }} --features cli
+      - name: upscalers
+        run: sh .github/upscalers-linux.sh
       - run: cargo xtask dist flatpak
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

@@ -67,6 +67,11 @@ fn get_shared_library_paths() -> Vec<Vec<wchar_t>> {
     #[cfg(not(feature = "debug_overlay"))]
     let profile = "rel";
 
+    // Beside the executable (the packaged game)
+    if let Some(dir) = env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+        shared_library_paths.push(os_str_to_wchar(dir.as_os_str()));
+    }
+
     // Look in $DLSS_SDK if set
     let sdk_path = var("DLSS_SDK").map(|sdk| format!("{sdk}/lib/{platform}/{profile}"));
     if let Ok(sdk_path) = sdk_path.as_ref() {

@@ -84,14 +84,10 @@ fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) {
     fs::copy(&from, to).unwrap_or_else(|e| panic!("{} → {}: {e}", from.display(), to.display()));
 }
 
-/// The client's features in the packages: no BRP probe, the profiler of F4, and on Windows DLSS when its SDK is
-/// there (the package carries NVIDIA's DLL then: `upscalers_into`).
+/// The client's features in the packages: no BRP probe, the profiler of F4, and DLSS when its SDK is there (the
+/// package carries NVIDIA's library then: `upscalers_into`).
 fn client_features() -> [&'static str; 3] {
-    let features = if cfg!(windows) && crate::dlss() {
-        "profiler,dlss"
-    } else {
-        "profiler"
-    };
+    let features = if crate::dlss() { "profiler,dlss" } else { "profiler" };
     ["--no-default-features", "--features", features]
 }
 
@@ -166,50 +162,153 @@ fn client_into(dir: &Path) -> bool {
 /// Where a package keeps the upscalers' notices and licenses.
 const UPSCALER_LICENSES: &str = "upscaler-licenses";
 
-/// The upscalers' DLLs beside the client (Windows; the game falls back to FSR 1 without them): NVIDIA's DLSS
-/// (`DLSS_DLL`, else the SDK's own in `DLSS_SDK`) when the client is built with it, AMD's FidelityFX for FSR 3.1
-/// (`FFX_SDK`: the unpacked FidelityFX SDK with its `PrebuiltSignedDLL`). With `licenses` (a package), the
-/// notices they ship with go there, and a DLL without them fails the package.
-pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
-    if !cfg!(windows) {
-        return true;
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+/// NVIDIA's DLSS library the game loads at run time: `DLSS_DLL`, else the SDK's own in `DLSS_SDK`
+/// (`nvngx_dlss.dll` on Windows, `libnvidia-ngx-dlss.so.<version>` on Linux, a name NGX looks for as it is).
+fn dlss_runtime() -> Option<PathBuf> {
+    let from_sdk = || {
+        let sdk = env_path("DLSS_SDK")?;
+        if cfg!(windows) {
+            return Some(sdk.join("lib/Windows_x86_64/rel/nvngx_dlss.dll"));
+        }
+        fs::read_dir(sdk.join("lib/Linux_x86_64/rel"))
+            .ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("libnvidia-ngx-dlss.so."))
+            })
+    };
+    env_path("DLSS_DLL").or_else(from_sdk).filter(|p| p.is_file())
+}
+
+/// AMD's FidelityFX library for FSR 3.1: the signed DLL of the SDK in `FFX_SDK` on Windows, on Linux (AMD ships
+/// none) built from the same SDK's sources with `packaging/fidelityfx-linux`.
+fn fidelityfx() -> Option<PathBuf> {
+    let Some(sdk) = env_path("FFX_SDK") else {
+        eprintln!("FFX_SDK is not set: no AMD FSR 3.1");
+        return None;
+    };
+    if cfg!(windows) {
+        let dll = sdk.join("PrebuiltSignedDLL/amd_fidelityfx_vk.dll");
+        if !dll.is_file() {
+            eprintln!("FFX_SDK has no {}: no AMD FSR 3.1", dll.display());
+            return None;
+        }
+        return Some(dll);
     }
-    let env = |var: &str| std::env::var_os(var).map(PathBuf::from);
+    fidelityfx_linux(&sdk)
+}
+
+/// `libamd_fidelityfx_vk.so` under target/fidelityfx-linux: the SDK's sources copied and patched once per
+/// SDK and patch, then CMake (cmake, a C++17 compiler, the Vulkan headers and loader, glslangValidator).
+fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
+    const SOURCES: [&str; 7] = [
+        "ffx-api/include",
+        "ffx-api/src",
+        "sdk/include",
+        "sdk/src",
+        "sdk/tools/ffx_shader_compiler/src",
+        "sdk/tools/ffx_shader_compiler/libs/MD5",
+        "sdk/tools/ffx_shader_compiler/libs/SPIRV-Reflect",
+    ];
+    const PROCESS: &str = "sdk/tools/ffx_shader_compiler/libs/tiny-process-library";
+    if let Some(missing) = SOURCES.iter().chain([&PROCESS]).find(|d| !sdk.join(d).is_dir()) {
+        eprintln!("FFX_SDK has no {missing}/ (the whole SDK unpacked, not only PrebuiltSignedDLL): no AMD FSR 3.1");
+        return None;
+    }
+    let recipe = root().join("packaging/fidelityfx-linux");
+    let patch = recipe.join("fidelityfx-sdk-v1.1.4.patch");
+    let work = target_dir().join("fidelityfx-linux");
+    let src = work.join("src");
+    let stamp = work.join("patched");
+    let want = format!(
+        "{}\n{}",
+        sdk.display(),
+        fs::read_to_string(&patch).expect("the FidelityFX patch")
+    );
+    if fs::read_to_string(&stamp).ok().as_deref() != Some(want.as_str()) {
+        let _ = fs::remove_dir_all(&src);
+        for d in SOURCES.iter().chain([&PROCESS]) {
+            copy_dir(&sdk.join(d), &src.join(d));
+        }
+        let patched = run(Command::new("patch")
+            .args(["-p1", "--forward", "--batch", "-d"])
+            .arg(&src)
+            .arg("-i")
+            .arg(&patch));
+        if !patched {
+            eprintln!("the FidelityFX patch does not apply to FFX_SDK (v1.1.4 expected): no AMD FSR 3.1");
+            return None;
+        }
+        fs::write(&stamp, &want).expect("stamp");
+    }
+    let build = work.join("build");
+    let mut configure = Command::new("cmake");
+    configure
+        .arg("-S")
+        .arg(&recipe)
+        .arg("-B")
+        .arg(&build)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg(format!("-DFFX_SRC={}", src.display()));
+    let built = run(&mut configure) && run(Command::new("cmake").arg("--build").arg(&build).arg("--parallel"));
+    let lib = build.join("libamd_fidelityfx_vk.so");
+    if !built || !lib.is_file() {
+        eprintln!("FidelityFX did not build for Linux: no AMD FSR 3.1");
+        return None;
+    }
+    Some(lib)
+}
+
+/// The upscalers' libraries beside the client (the game falls back to FSR 1 without them): NVIDIA's DLSS
+/// (`dlss_runtime`) when the client is built with it, AMD's FidelityFX for FSR 3.1 (`fidelityfx`). With
+/// `licenses` (a package), the notices they ship with go there, and a library without them fails the package.
+pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
     let mut ok = true;
-    let dlss = env("DLSS_DLL")
-        .or_else(|| env("DLSS_SDK").map(|s| s.join("lib/Windows_x86_64/rel/nvngx_dlss.dll")))
-        .filter(|p| p.is_file());
     if crate::dlss() {
-        match dlss {
-            Some(dll) => {
-                ok &= put(&dll, &dir.join("nvngx_dlss.dll"));
+        match dlss_runtime() {
+            Some(lib) => {
+                let name = if cfg!(windows) {
+                    "nvngx_dlss.dll".into()
+                } else {
+                    lib.file_name().expect("a file").to_owned()
+                };
+                ok &= put(&lib, &dir.join(name));
                 if let Some(l) = licenses {
                     ok &= notices_into(l);
                 }
             }
-            None => eprintln!("no nvngx_dlss.dll (DLSS_DLL or DLSS_SDK): the client cannot use DLSS"),
+            None => eprintln!("no DLSS library (DLSS_DLL or DLSS_SDK): the client cannot use DLSS"),
         }
     }
-    const FFX_DLL: &str = "PrebuiltSignedDLL/amd_fidelityfx_vk.dll";
-    let Some(ffx) = env("FFX_SDK").filter(|s| s.join(FFX_DLL).is_file()) else {
-        eprintln!("FFX_SDK is not set or has no {FFX_DLL}: no AMD FSR 3.1");
+    let Some(lib) = fidelityfx() else {
         return ok;
     };
-    ok &= put(&ffx.join(FFX_DLL), &dir.join("amd_fidelityfx_vk.dll"));
+    let name = if cfg!(windows) {
+        "amd_fidelityfx_vk.dll"
+    } else {
+        "libamd_fidelityfx_vk.so"
+    };
+    ok &= put(&lib, &dir.join(name));
     if let Some(l) = licenses {
-        let license = ffx.join("docs/license.md");
+        let license = env_path("FFX_SDK").unwrap_or_default().join("docs/license.md");
         if license.is_file() {
             fs::create_dir_all(l).unwrap_or_else(|e| panic!("{}: {e}", l.display()));
             copy(&license, l.join("AMD-FidelityFX-SDK-license.md"));
         } else {
-            eprintln!("FFX_SDK has no docs/license.md: AMD's DLL is not packaged without its license");
+            eprintln!("FFX_SDK has no docs/license.md: AMD's library is not packaged without its license");
             ok = false;
         }
     }
     ok
 }
 
-/// A DLL copied beside the client, unless the same one is there (a running client holds its DLLs).
+/// A library copied beside the client, unless the same one is there (a running client holds its libraries).
 fn put(src: &Path, to: &Path) -> bool {
     let len = |p: &Path| fs::metadata(p).ok().map(|m| m.len());
     if to.is_file() && len(to) == len(src) {

@@ -1,7 +1,8 @@
 //! The few pieces of the AMD FidelityFX API (FidelityFX SDK 1.1.4, MIT) that FSR 3.1 upscaling needs, written
 //! after its C headers (`ffx_api.h`, `ffx_api_types.h`, `ffx_upscale.h`, `vk/ffx_api_vk.h`): the structures
-//! field for field, the constants by value. AMD's signed `amd_fidelityfx_vk.dll` is loaded at run time
-//! (`libloading`), so nothing of the SDK is needed to build the game, and a game without the DLL runs on.
+//! field for field, the constants by value. AMD's signed `amd_fidelityfx_vk.dll` (on Linux the
+//! `libamd_fidelityfx_vk.so` xtask builds from the SDK: `packaging/fidelityfx-linux`) is loaded at run time
+//! (`libloading`), so nothing of the SDK is needed to build the game, and a game without the library runs on.
 #![allow(
     unsafe_code,
     reason = "a C API: its DLL, raw Vulkan handles, pointers into descriptors"

@@ -16,9 +16,11 @@ hex-a-gone, frost-sky, door-dash с DLSS, jump-club с FSR 3.1, FSR 1 и на DX
 треугольников (hex-a-gone: тайлы ~13k → ~141k).
 
 Сборка с DLSS: переменные `DLSS_SDK` (SDK 310.5.3 — им собран `dlss_wgpu` 4.0), `VULKAN_SDK`, clang (LLVM,
-`LIBCLANG_PATH`); `DLSS_DLL` (DLL 310.9.1 кладётся рядом с exe) и `FFX_SDK` (FidelityFX SDK 1.1.4,
-`amd_fidelityfx_vk.dll`). Без `DLSS_SDK` xtask собирает без DLSS. `--upscaler dlss|fsr3|fsr1` (скрытый) — для проверки
-других путей на машине с RTX.
+`LIBCLANG_PATH`); `DLSS_DLL` (библиотека 310.9.1 кладётся рядом с exe: `nvngx_dlss.dll` или
+`libnvidia-ngx-dlss.so.310.9.1`) и `FFX_SDK` (FidelityFX SDK 1.1.4 распакованный целиком: на Windows
+`amd_fidelityfx_vk.dll`, на Linux `xtask` собирает `libamd_fidelityfx_vk.so` из его исходников с патчем
+`packaging/fidelityfx-linux` в `target/fidelityfx-linux`). Без `DLSS_SDK` xtask собирает без DLSS.
+`--upscaler dlss|fsr3|fsr1` (скрытый) — для проверки других путей на машине с RTX.
 
 Не проверено вживую (автор смотрит сам):
 - Клики по кнопкам поверх текста (`Pickable::IGNORE` на отрезках, `rich_with`). Если клики снова теряются —
@@ -54,8 +56,18 @@ hex-a-gone, frost-sky, door-dash с DLSS, jump-club с FSR 3.1, FSR 1 и на DX
   FSR 3.1 был залп `vkDestroyImageView` образов, ещё занятых его командным буфером (не повторился за два раунда с
   неограниченным выводом). Детальные текстуры `surface.wgsl` берут градиенты сами и `MipBias` не видят. В
   `release.yml` не проверены: тег `v310.9.1` у NVIDIA/DLSS, тег `vulkan-sdk-1.4.363.0` у Vulkan-Headers, адрес
-  архива FidelityFX, `pdftotext` на раннере. DLSS в пакетах Linux не кладётся. Лицензия: DLL NVIDIA и AMD рядом с
-  AGPL-игрой — нужно ли исключение для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
+  архива FidelityFX, `pdftotext` на раннере. Лицензия: DLL NVIDIA и AMD рядом с AGPL-игрой — нужно ли исключение
+  для связывания (§7), решает автор; `PROJECT_ID` DLSS — свой GUID.
+- Апскейлеры на Linux: DLSS 4.5 и FSR 3.1 (своя сборка `libamd_fidelityfx_vk.so`) проверены offscreen-снимками
+  jump-club на RTX 5070 (Arch, драйвер 615); на AMD и Intel под Linux FSR 3.1 не запускался. Патч FidelityFX: GLSL-путь
+  `FidelityFX_SC` под Linux, ffx-api только с FSR 3.1 Upscale (без генерации кадров, FSR 2 и провайдеров драйвера
+  AMD), подмассивы scratch-буфера VK-бэкенда выровнены на 64 (у AMD — на 4, а `EffectContext` — `alignas(32)`: GCC
+  пишет туда `movaps`, без правки падение в `CreateBackendContextVK`), контекст FSR 3.1 вдвое больше (`wchar_t` —
+  4 байта). Не проверены в CI: шаги `.github/upscalers-linux.sh` в контейнере Ubuntu 22.04 (glslang 11, cmake 3.22)
+  и на ubuntu-24.04 для Flatpak; DLSS во Flatpak (видит ли песочница `libnvidia-ngx.so` драйвера через расширение
+  GL NVIDIA). С фичей `dlss` клиент на Linux зависит от `libstdc++.so.6` (`dlss_wgpu` линкует её динамически).
+- `scenarios::round_drum_roll` раз упал в `cargo xtask check` по таймауту «not within 15 s: in the dev room's lobby»
+  (RTT 232 мс, 140 пропущенных тиков под нагрузкой); отдельно проходит за ~15,7 с — запас лимита почти нулевой.
 - Пресетов два: «Высокое» (по умолчанию) и «Низкое»; сохранённые «auto»/«medium» → «high». Переключатели теней,
   сглаживания, цветокоррекции, частиц и FSR из настроек убраны (остались только для perf sweep, не сохраняются).
   SSAO и TAA нет ни на одном (Bevy 0.19 не знает уменьшенного основного прохода): вместо них мировой AO и

@@ -123,9 +123,9 @@ target/release/fb_client
 `lightyear_transport` и `dlss_wgpu` с нашими исправлениями (подключены через `[patch.crates-io]` в `Cargo.toml`).
 
 Масштабирование кадра выбирается при запуске: NVIDIA DLSS 4.5 на видеокартах RTX (Vulkan), иначе AMD FSR 3.1
-(Vulkan, библиотека AMD рядом с игрой), иначе AMD FSR 1 (DirectX 12, Linux без библиотеки, любой сбой). Что выбрано,
+(Vulkan, библиотека AMD рядом с игрой), иначе AMD FSR 1 (DirectX 12, нет библиотеки, любой сбой). Что выбрано,
 пишется в лог и видно в F4 и в настройках графики. Обычная сборка обходится без SDK — в ней FSR 3.1 (если рядом
-`amd_fidelityfx_vk.dll`) и FSR 1. Сборка с DLSS (фича клиента `dlss`):
+`amd_fidelityfx_vk.dll` или на Linux `libamd_fidelityfx_vk.so`) и FSR 1. Сборка с DLSS (фича клиента `dlss`):
 
 - [DLSS SDK](https://github.com/NVIDIA/DLSS) версии `v310.5.3` (её ждёт `dlss_wgpu` 4.0.0) — путь в `DLSS_SDK`;
   условия — `LICENSE.txt` SDK;
@@ -134,10 +134,14 @@ target/release/fb_client
 - clang (bindgen ищет libclang; если не найдёт — `LIBCLANG_PATH`).
 
 `cargo xtask dev`, `perf` и `dist` сами включают `dlss`, когда задан `DLSS_SDK`, и кладут рядом с клиентом
-`nvngx_dlss.dll` (из `DLSS_DLL`, иначе из SDK) и `amd_fidelityfx_vk.dll` (из `FFX_SDK` — распакованный
-[FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4, папка `PrebuiltSignedDLL`).
-Пакет для Windows несёт их вместе с уведомлениями NVIDIA (разделы 9.5–9.6 руководства DLSS: `dist` берёт их из PDF
-через `pdftotext` или из `DLSS_GUIDE_TEXT`) и лицензией AMD — в папке `upscaler-licenses`. Ни SDK, ни DLL в
+библиотеку DLSS (из `DLSS_DLL`, иначе из SDK: `nvngx_dlss.dll` на Windows, `libnvidia-ngx-dlss.so.<версия>` на
+Linux) и библиотеку FidelityFX из `FFX_SDK` — распакованного
+[FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4. На Windows это подписанная
+`PrebuiltSignedDLL/amd_fidelityfx_vk.dll`; для Linux AMD библиотеки не выпускает, и `xtask` собирает
+`libamd_fidelityfx_vk.so` из исходников того же SDK с патчем из `packaging/fidelityfx-linux` (только FSR 3.1;
+нужны cmake, компилятор C++17, `glslangValidator`, заголовки и загрузчик Vulkan, `patch`).
+Пакеты несут их вместе с уведомлениями NVIDIA (разделы 9.5–9.6 руководства DLSS: `dist` берёт их из PDF
+через `pdftotext` или из `DLSS_GUIDE_TEXT`) и лицензией AMD — в папке `upscaler-licenses`. Ни SDK, ни библиотек в
 репозитории нет.
 
 ## Известные проблемы

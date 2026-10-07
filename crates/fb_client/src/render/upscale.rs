@@ -1,6 +1,6 @@
 //! Which upscaler draws the frame, chosen once at the start and told in the log: NVIDIA DLSS 4.5 Super Resolution
-//! on an RTX GPU (Vulkan, the `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, its signed DLL beside the game:
-//! `fsr3.rs`), else FSR 1 (DX12, Linux without the DLL, anything that failed: `fsr.rs`). All draw the main pass at
+//! on an RTX GPU (Vulkan, the `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, AMD's library beside the game:
+//! `fsr3.rs`), else FSR 1 (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at
 //! `quality::UPSCALE`'s scale (0.77, the "ultra quality" of both vendors) and bring it to the full resolution. A
 //! temporal one (DLSS, FSR 3.1) failing at run time hands over to FSR 1 for the rest of the session.
 //!
