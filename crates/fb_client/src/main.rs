@@ -45,7 +45,7 @@ mod watch;
 use core::time::Duration;
 use std::path::PathBuf;
 
-use bevy::app::ScheduleRunnerPlugin;
+use bevy::app::{ScheduleRunnerPlugin, TaskPoolOptions, TaskPoolPlugin};
 use bevy::asset::AssetMetaCheck;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
@@ -182,6 +182,18 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 fmt_layer,
                 ..default()
             });
+        // At most 4 compute threads (Bevy takes all the cores the IO and async pools leave): every parallel query
+        // and scope of the frame wakes them all and waits, spinning, for the last; the scene's work is small. With
+        // 12 on a 20-thread CPU the client burned ~15 ms of CPU a frame, 10 with 4, at the same frame rate.
+        let mut pools = TaskPoolOptions::default();
+        pools.compute.max_threads = std::env::var("FB_COMPUTE_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4);
+        let plugins = plugins.set(TaskPoolPlugin {
+            task_pool_options: pools,
+        });
         if test {
             // (Silent: tests must not play through the speakers. The render world on the main thread: tests
             // read its pipelines.)
