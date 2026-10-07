@@ -1,6 +1,7 @@
 //! FSR 1 upscaling: the main pass draws at a lower resolution
 //! (`MainPassResolutionOverride`), EASU brings it to the full one before the post-processing, and Bevy's
-//! robust contrast-adaptive sharpening (RCAS, the second half of FSR 1) restores the detail.
+//! robust contrast-adaptive sharpening (RCAS, the second half of FSR 1) restores the detail. The fallback when
+//! neither temporal upscaler runs (`upscale.rs`); the main pass's size is set here for all of them.
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::camera::MainPassResolutionOverride;
@@ -18,6 +19,7 @@ use bevy::render::sync_component::SyncComponent;
 use bevy::render::view::{ExtractedView, ViewTarget};
 use bevy::render::{Render, RenderApp, RenderStartup, RenderSystems};
 
+use super::upscale::{Upscaler, Upscaling};
 use crate::settings::Graphics;
 use crate::view::MainCamera;
 
@@ -81,16 +83,19 @@ impl Plugin for FsrPlugin {
     }
 }
 
-/// The main pass's resolution and the sharpening, as the setting asks.
+/// The main pass's resolution as the setting asks (for every upscaler), and FSR 1 with its sharpening when it is
+/// the one in use (a temporal upscaler is the anti-aliasing and sharpens itself: no EASU, no CAS on top).
 fn resolution(
     mut commands: Commands,
     g: Res<Graphics>,
-    cams: Query<(Entity, &Camera, Option<&MainPassResolutionOverride>), With<MainCamera>>,
+    up: Res<Upscaling>,
+    cams: Query<(Entity, &Camera, Option<&MainPassResolutionOverride>, Has<Fsr>), With<MainCamera>>,
 ) {
     let scale = super::quality::Quality::scale(&g.upscale);
-    for (e, cam, now) in &cams {
+    let fsr1 = up.active == Upscaler::Fsr1;
+    for (e, cam, now, has) in &cams {
         if scale >= 1.0 {
-            if now.is_some() {
+            if now.is_some() || has {
                 commands
                     .entity(e)
                     .remove::<(MainPassResolutionOverride, Fsr, ContrastAdaptiveSharpening)>();
@@ -100,10 +105,12 @@ fn resolution(
         let Some(size) = cam.physical_viewport_size() else {
             continue;
         };
-        let low = (size.as_vec2() * scale).round().as_uvec2().max(UVec2::ONE);
+        let low = super::upscale::render_size(size, scale);
         if now.map(|n| n.0) != Some(low) {
+            commands.entity(e).insert(MainPassResolutionOverride(low));
+        }
+        if fsr1 && !has {
             commands.entity(e).insert((
-                MainPassResolutionOverride(low),
                 Fsr,
                 ContrastAdaptiveSharpening {
                     enabled: true,
@@ -111,6 +118,8 @@ fn resolution(
                     denoise: false,
                 },
             ));
+        } else if !fsr1 && has {
+            commands.entity(e).remove::<(Fsr, ContrastAdaptiveSharpening)>();
         }
     }
 }

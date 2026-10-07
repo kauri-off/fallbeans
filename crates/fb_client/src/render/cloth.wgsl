@@ -1,6 +1,8 @@
 // Cloth: the vertex stage of a pennant waving in the wind (`cloth.rs`). A wave runs from the pole to the
-// tip along the length (local x), bending the cloth across it (local z), still at the pole and widest at
-// the tip, stronger in gusts; the normals bend with it. The prepass runs the same, so shadows wave too.
+// tip along the length (local x), bending the cloth across it (local z), stronger in gusts; the normals bend
+// with it. It grows from nothing (and leaves flat) at the sleeve's seam: the sleeve round the pole, short of
+// the seam, never moves, and the cloth never reaches the pole. The prepass (depth, normals, motion vectors and
+// the shadows) runs the same, so what is drawn and its shadow wave alike.
 #import bevy_pbr::{
     mesh_functions,
     view_transformations::position_world_to_clip,
@@ -19,13 +21,14 @@
 #endif
 
 struct Cloth {
-    // Pole edge along the length (local x), 1 / length, swing at the tip, waves along the length.
+    // The seam along the length (local x), 1 / length, swing at the far end, waves along the length.
     shape: vec4<f32>,
     // Wave speed (rad/s), flutter share, phase per unit of height (rad), unused.
     motion: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(53) var<uniform> cloth: Cloth;
+// (50…53: the surface's, read by surface.wgsl.)
+@group(#{MATERIAL_BIND_GROUP}) @binding(54) var<uniform> cloth: Cloth;
 
 // Where the wind blows (world x, z): `WIND` in `cloth.rs`.
 const WIND: vec2<f32> = vec2(0.9439, 0.3303);
@@ -51,9 +54,10 @@ fn wave(p: vec3<f32>, t: f32, origin: vec3<f32>) -> vec3<f32> {
     let inv_len = cloth.shape.y;
     let s = clamp((p.x - cloth.shape.x) * inv_len, 0.0, 1.0);
     let g = cloth.shape.z * (0.45 + 0.55 * gust(t, origin.xz));
-    // Swing growing from the pole to the tip, and its rate along x.
-    let a = g * s * (0.4 + 0.6 * s);
-    let da = g * (0.4 + 1.2 * s) * inv_len;
+    // Swing growing from the seam to the far end, and its rate along x: both nothing at the seam (and on the
+    // sleeve, s = 0 there), so the cloth leaves it flat.
+    let a = g * s * s * (1.6 - 0.6 * s);
+    let da = g * s * (3.2 - 1.8 * s) * inv_len;
     let k = cloth.shape.w * TAU * inv_len;
     let ky = cloth.motion.z;
     let th = k * p.x + ky * p.y - cloth.motion.x * t + dot(origin.xz, vec2(1.7, 2.3));

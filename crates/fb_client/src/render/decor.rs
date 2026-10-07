@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::camera::primitives::MeshAabb;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::world_serialization::WorldAssetRoot;
 use fb_sim::looks::{Pattern, ResolvedLook};
@@ -220,9 +220,8 @@ fn torus(radius: f32, tube: f32, radial: u32, tubular: u32, arc: f32) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-/// The upper half of a unit sphere (a dome), flat side down.
-fn dome() -> Mesh {
-    let (w, h) = (20u32, 10u32);
+/// The upper half of a unit sphere (a dome), flat side down: `w` segments round, `h` up.
+fn dome(w: u32, h: u32) -> Mesh {
     let mut pos = Vec::new();
     let mut nrm = Vec::new();
     for j in 0..=h {
@@ -250,27 +249,100 @@ fn dome() -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-fn shape_mesh(s: Shape) -> Mesh {
+/// A unit disc facing up whose vertex colours fade from opaque at the centre to clear at the rim (a blob
+/// shadow's, `Kit::blob_shadow`).
+fn blob_disc() -> Mesh {
+    const SEG: u32 = 28;
+    // (Radius, opacity) of each ring after the centre: a soft falloff.
+    const RINGS: [(f32, f32); 3] = [(0.45, 0.78), (0.75, 0.38), (1.0, 0.0)];
+    let mut pos = vec![[0.0f32; 3]];
+    let mut col = vec![[1.0f32, 1.0, 1.0, 0.95]];
+    for (r, a) in RINGS {
+        for i in 0..SEG {
+            let t = i as f32 / SEG as f32 * core::f32::consts::TAU;
+            pos.push([t.cos() * r, 0.0, t.sin() * r]);
+            col.push([1.0, 1.0, 1.0, a]);
+        }
+    }
+    // Vertex `i` of ring `k` (1-based; 0 is the centre).
+    let at = |k: u32, i: u32| 1 + (k - 1) * SEG + i % SEG;
+    let mut idx = Vec::new();
+    for i in 0..SEG {
+        // (Wound to face up.)
+        idx.extend_from_slice(&[0, at(1, i + 1), at(1, i)]);
+        for k in 1..RINGS.len() as u32 {
+            let (a0, a1, b0, b1) = (at(k, i), at(k, i + 1), at(k + 1, i), at(k + 1, i + 1));
+            idx.extend_from_slice(&[a0, b1, b0, a0, a1, b1]);
+        }
+    }
+    let n = pos.len();
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; n])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32, 0.0]; n])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+        .with_inserted_indices(Indices::U32(idx))
+}
+
+/// The two levels of detail of the shapes: smooth silhouettes and rounded box edges near, the old segment
+/// counts and plain boxes far.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Level {
+    Near,
+    Far,
+}
+
+/// Rounding of the boxes' edges near, in the unit box (a part's scale stretches it with the box).
+const BOX_ROUND: f32 = 0.12;
+
+fn shape_mesh(s: Shape, level: Level) -> Mesh {
+    let near = level == Level::Near;
+    let seg = if near { 40 } else { 20 };
     match s {
+        Shape::Box if near => super::meshes::rounded_box(Vec3::ONE, 2, BOX_ROUND),
         Shape::Box => Cuboid::new(1.0, 1.0, 1.0).into(),
+        Shape::Sphere if near => Sphere::new(1.0).mesh().uv(36, 22),
         Shape::Sphere => Sphere::new(1.0).mesh().uv(20, 14),
-        Shape::Cyl => Cylinder::new(1.0, 1.0).mesh().resolution(20).build(),
+        Shape::Cyl => Cylinder::new(1.0, 1.0).mesh().resolution(seg).build(),
         Shape::Taper => ConicalFrustum {
             radius_top: 0.62,
             radius_bottom: 1.0,
             height: 1.0,
         }
         .mesh()
-        .resolution(20)
+        .resolution(seg)
         .build(),
-        Shape::Cone => Cone::new(1.0, 1.0).mesh().resolution(20).build(),
+        Shape::Cone => Cone::new(1.0, 1.0).mesh().resolution(seg).build(),
         Shape::Cone4 => Cone::new(1.0, 1.0).mesh().resolution(4).build(),
+        Shape::Torus if near => torus(1.0, 0.3, 16, 56, core::f32::consts::TAU),
         Shape::Torus => torus(1.0, 0.3, 12, 36, core::f32::consts::TAU),
+        Shape::Ring if near => torus(1.0, 0.07, 10, 88, core::f32::consts::TAU),
         Shape::Ring => torus(1.0, 0.07, 8, 56, core::f32::consts::TAU),
         Shape::Octa => octahedron(),
         Shape::Rock => dodecahedron(),
-        Shape::Dome => dome(),
+        Shape::Dome if near => dome(36, 14),
+        Shape::Dome => dome(20, 10),
+        Shape::HalfTorus if near => torus(0.7, 0.28, 16, 36, core::f32::consts::PI),
         Shape::HalfTorus => torus(0.7, 0.28, 12, 24, core::f32::consts::PI),
+    }
+}
+
+/// Whether a shape's two levels differ (the ones that do not are merged into one level).
+fn has_levels(s: Shape) -> bool {
+    !matches!(s, Shape::Cone4 | Shape::Octa | Shape::Rock)
+}
+
+/// Half extents of a unit shape and the centre of its bulk (in the unit shape's space).
+fn bulk(s: Shape) -> (Vec3, Vec3) {
+    match s {
+        Shape::Box => (Vec3::splat(0.5), Vec3::ZERO),
+        Shape::Sphere | Shape::Rock => (Vec3::ONE, Vec3::ZERO),
+        Shape::Cyl | Shape::Taper => (Vec3::new(0.9, 0.5, 0.9), Vec3::ZERO),
+        Shape::Cone | Shape::Cone4 => (Vec3::new(0.6, 0.4, 0.6), Vec3::new(0.0, -0.2, 0.0)),
+        Shape::Octa => (Vec3::splat(0.6), Vec3::ZERO),
+        Shape::Dome => (Vec3::new(0.85, 0.45, 0.85), Vec3::new(0.0, 0.38, 0.0)),
+        // (Hollow: they hide too little of anything to count.)
+        Shape::Torus | Shape::Ring | Shape::HalfTorus => (Vec3::ZERO, Vec3::ZERO),
     }
 }
 
@@ -310,6 +382,14 @@ enum Mat {
     G(Handle<StandardMaterial>),
 }
 
+/// A part made of a unit shape, and the set piece it belongs to (0: none).
+struct Part {
+    e: Entity,
+    shape: Shape,
+    mat: Mat,
+    piece: u32,
+}
+
 /// Shared bits for building pieces: unit shapes, materials, the look's colours, randomness.
 struct Kit<'a> {
     world: &'a mut World,
@@ -320,7 +400,13 @@ struct Kit<'a> {
     assets: AssetServer,
     ticks: Vec<Tick>,
     /// Every part made (`merge_still` merges the ones nothing moves).
-    parts: Vec<(Entity, Shape, Mat)>,
+    parts: Vec<Part>,
+    /// The set piece being built (its parts shade each other, `occlusion`).
+    piece: u32,
+    /// Set pieces standing on an island: the entity whose origin is on the grass.
+    grounds: Vec<(u32, Entity)>,
+    /// The soft shadow under what stands on an island (`blob_shadow`), made on first use.
+    blob: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
 }
 
 fn tf(at: [f32; 3], size: [f32; 3], rot: [f32; 3]) -> Transform {
@@ -424,7 +510,11 @@ impl Kit<'_> {
         if let Some(h) = self.shapes.get(&s) {
             return h.clone();
         }
-        let h = self.world.resource_mut::<Assets<Mesh>>().add(shape_mesh(s));
+        // (The parts that stay apart move, mostly near the course: the near level.)
+        let h = self
+            .world
+            .resource_mut::<Assets<Mesh>>()
+            .add(shape_mesh(s, Level::Near));
         self.shapes.insert(s, h.clone());
         h
     }
@@ -453,17 +543,34 @@ impl Kit<'_> {
             Mat::G(h) => e.insert((MeshMaterial3d(h.clone()), NotShadowReceiver)),
         };
         let e = e.id();
-        self.parts.push((e, shape, mat.clone()));
+        self.parts.push(Part {
+            e,
+            shape,
+            mat: mat.clone(),
+            piece: self.piece,
+        });
         e
     }
 
     /// A model (turned at random); a flag's cloth takes `tint`.
     fn model(&mut self, name: &'static str, parent: Entity, at: [f32; 3], scale: f32, tint: Option<String>) -> Entity {
+        let paint = tint.map(|t| vec![("Flag", t, 0.0)]).unwrap_or_default();
+        self.model_painted(name, parent, at, scale, paint)
+    }
+
+    /// A model (turned at random) with materials repainted by name (`Prop::paint`).
+    fn model_painted(
+        &mut self,
+        name: &'static str,
+        parent: Entity,
+        at: [f32; 3],
+        scale: f32,
+        paint: Vec<(&'static str, String, f32)>,
+    ) -> Entity {
         let yaw = self.rnd() * 6.3;
         let scene = self
             .assets
             .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
-        let paint = tint.map(|t| vec![("Flag", t, 0.0)]).unwrap_or_default();
         self.world
             .spawn((
                 Decor,
@@ -507,6 +614,39 @@ impl Kit<'_> {
                 ChildOf(parent),
             ))
             .id()
+    }
+
+    /// A soft round shadow on an island's grass under what stands there (the shadow maps do not reach this far
+    /// out): a disc darkening what is under it, most at its centre. At `at` in `parent`, `r` across.
+    fn blob_shadow(&mut self, parent: Entity, at: [f32; 3], r: f32) {
+        if self.blob.is_none() {
+            let mesh = self.world.resource_mut::<Assets<Mesh>>().add(blob_disc());
+            let mat = self
+                .world
+                .resource_mut::<Assets<StandardMaterial>>()
+                .add(StandardMaterial {
+                    // (Multiplied into what is under it, by the disc's alpha: a cool shade, not grey.)
+                    base_color: Color::srgb(0.46, 0.4, 0.56),
+                    unlit: true,
+                    fog_enabled: false,
+                    alpha_mode: AlphaMode::Multiply,
+                    ..default()
+                });
+            self.blob = Some((mesh, mat));
+        }
+        let Some((mesh, mat)) = self.blob.clone() else {
+            return;
+        };
+        self.world.spawn((
+            Decor,
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::from_translation(Vec3::from(at)).with_scale(Vec3::new(r, 1.0, r)),
+            Visibility::default(),
+            NotShadowCaster,
+            NotShadowReceiver,
+            ChildOf(parent),
+        ));
     }
 
     fn tick(&mut self, f: impl Fn(f32, &mut Tx) + Send + Sync + 'static) {
@@ -790,36 +930,18 @@ fn tank(k: &mut Kit, g: Entity) {
 }
 
 fn snow_pine(k: &mut Kit, g: Entity) {
-    let snow = k.plain("#ffffff", Kind::Cloth);
+    // Pines under snow: the needles frosted pale (the tiers' drooping tips read as snow-laden).
     for i in 0..2 {
         let a = k.rnd() * 6.3;
         let r = if i > 0 { 1.4 } else { 0.0 };
         let s = 0.7 + k.rnd() * 0.4;
-        let (x, z) = (a.cos() * r, a.sin() * r);
-        k.model("pine", g, [x, 0.0, z], s, None);
-        k.part(
+        let frost = if i > 0 { "#d4ece6" } else { "#e6f5f2" };
+        k.model_painted(
+            "pine",
             g,
-            Shape::Cone,
-            &snow,
-            [x, 4.25 * s, z],
-            [0.5 * s, 0.7 * s, 0.5 * s],
-            NO_ROT,
-        );
-        k.part(
-            g,
-            Shape::Cone,
-            &snow,
-            [x, 3.35 * s, z],
-            [0.85 * s, 0.35 * s, 0.85 * s],
-            NO_ROT,
-        );
-        k.part(
-            g,
-            Shape::Cone,
-            &snow,
-            [x, 2.45 * s, z],
-            [1.2 * s, 0.35 * s, 1.2 * s],
-            NO_ROT,
+            [a.cos() * r, 0.0, a.sin() * r],
+            s,
+            vec![("Pine", frost.to_string(), 0.0)],
         );
     }
 }
@@ -1739,12 +1861,20 @@ fn islands(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
             let name = flora[((k.rnd() * flora.len() as f32) as usize).min(flora.len() - 1)];
             let a = k.rnd() * 6.3;
             let r = if i == 0 && trees == 1 { 0.0 } else { 1.0 + k.rnd() * 1.6 };
-            let f = k.model(name, g, [a.cos() * r, 0.45, a.sin() * r], 1.0, None);
+            let (x, z) = (a.cos() * r, a.sin() * r);
+            // (The foot a little into the grass, 0.42 up in the model: the roots flare into it.)
+            let f = k.model(name, g, [x, 0.4, z], 1.0, None);
             let (fy, fs) = (k.rnd() * 6.3, 0.55 + k.rnd() * 0.35);
             k.set_tf(f, |t| {
                 t.rotation = Quat::from_rotation_y(fy);
                 t.scale = Vec3::splat(fs);
             });
+            let spread = match name {
+                "tree" => 1.6,
+                "pine" => 1.5,
+                _ => 1.1,
+            };
+            k.blob_shadow(g, [x, 0.47, z], spread * fs);
         }
         let ph = k.rnd() * 50.0;
         k.tick(move |t, tx| {
@@ -2088,12 +2218,17 @@ fn decorate(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
             placed.push((p, r));
             let at = k.group(Some(root), Transform::from_translation(p));
             let obj = k.group(Some(at), Transform::default());
+            k.piece += 1;
             (piece.make)(k, obj);
             if piece.island {
                 k.island(at, Transform::from_scale(Vec3::splat(s * 0.85)));
+                k.grounds.push((k.piece, obj));
+                // (In the piece's own units: `obj` is scaled by `s` below.)
+                k.blob_shadow(obj, [0.0, 0.07, 0.0], piece.r * 0.9);
             }
             let spin = if piece.island { 0.0 } else { k.rnd() * 6.3 };
-            let lift = if piece.island { 0.4 * s * 0.85 } else { 0.0 };
+            // (On the island's grass, 0.42 up in the model.)
+            let lift = if piece.island { 0.42 * s * 0.85 } else { 0.0 };
             k.set_tf(obj, |t| {
                 t.translation.y += lift;
                 t.scale *= s;
@@ -2139,9 +2274,11 @@ fn ticked(world: &mut World, ticks: &[Tick]) -> HashSet<Entity> {
 }
 
 /// The parts nothing moves are drawn merged, one mesh per cell and material (`meshes::merge`): the set pieces
-/// are hundreds of small parts.
-fn merge_still(world: &mut World, ticks: &[Tick], parts: &[(Entity, Shape, Mat)], base: Entity) {
-    use super::meshes;
+/// are hundreds of small parts. Each merged mesh comes at two levels of detail (`Level`), and its vertices carry
+/// how much the rest of their set piece hides them from the sky (`occlusion`), which the surface shader darkens
+/// them by: no shadow map reaches this far, and without it the pieces look cut out of paper.
+fn merge_still(world: &mut World, ticks: &[Tick], parts: &[Part], grounds: &[(u32, Entity)], base: Entity) {
+    use super::meshes::{self, BANDS, BandPad, LodBand};
     let moving = ticked(world, ticks);
     // World matrices by entity (None: it, or something above it, moves or is hidden).
     let mut placed: HashMap<Entity, Option<Mat4>> = HashMap::new();
@@ -2169,12 +2306,13 @@ fn merge_still(world: &mut World, ticks: &[Tick], parts: &[(Entity, Shape, Mat)]
     let mut materials: HashMap<UntypedAssetId, usize> = HashMap::new();
     let mut candidates = Vec::with_capacity(parts.len());
     let mut worlds = Vec::with_capacity(parts.len());
-    for (e, _, mat) in parts {
-        let m = place(world, *e, &moving, &mut placed);
+    let mut shades: HashMap<u32, Shade> = HashMap::new();
+    for (i, part) in parts.iter().enumerate() {
+        let m = place(world, part.e, &moving, &mut placed);
         // (A part something hangs from goes with what hangs from it: left alone.)
-        let leaf = world.get::<Children>(*e).is_none_or(|c| c.is_empty());
+        let leaf = world.get::<Children>(part.e).is_none_or(|c| c.is_empty());
         // (See-through ones are sorted one by one.)
-        let (id, opaque) = match mat {
+        let (id, opaque) = match &part.mat {
             Mat::S(h) => (
                 h.id().untyped(),
                 world
@@ -2194,40 +2332,108 @@ fn merge_still(world: &mut World, ticks: &[Tick], parts: &[(Entity, Shape, Mat)]
         candidates.push(meshes::Candidate {
             at: m.map_or(Vec3::ZERO, |m| m.w_axis.truncate()),
             material: *materials.entry(id).or_insert(n),
-            class: u64::from(matches!(mat, Mat::G(_))),
+            class: u64::from(matches!(part.mat, Mat::G(_))),
             still: leaf && opaque && m.is_some_and(|m| meshes::frame(&m).is_some()),
         });
+        // (What stands still shades the rest of its piece, merged or not.)
+        if let Some(m) = m
+            && part.piece != 0
+            && opaque
+        {
+            balls(part.shape, &m, i, &mut shades.entry(part.piece).or_default().balls);
+        }
         worlds.push(m.unwrap_or(Mat4::IDENTITY));
     }
-    let mut cpu: HashMap<Shape, Mesh> = HashMap::new();
+    for &(piece, e) in grounds {
+        if let Some(m) = place(world, e, &moving, &mut placed) {
+            shades.entry(piece).or_default().ground = Some(m.w_axis.y);
+        }
+    }
+    let k = meshes::lod_k(
+        world.get_resource::<crate::settings::Display>().map_or(70.0, |d| d.fov),
+        world.get_resource::<super::quality::Quality>().map(|q| q.preset),
+    );
+    let mut cpu: HashMap<(Shape, Level), Mesh> = HashMap::new();
     let mut gone = 0;
+    let mut drawn = 0;
     let groups = meshes::groups(&candidates);
     for group in &groups {
-        let members: Vec<(Entity, Shape, &Mat, Mat4)> = group
+        let members: Vec<(usize, &Part, Mat4)> = group
             .iter()
-            .filter_map(|&i| Some((parts.get(i)?, *worlds.get(i)?)))
-            .map(|((e, s, mat), m)| (*e, *s, mat, m))
+            .filter_map(|&i| Some((i, parts.get(i)?, *worlds.get(i)?)))
             .collect();
-        let Some(&(_, _, mat, _)) = members.first() else {
+        let Some(&(_, first, _)) = members.first() else {
             continue;
         };
+        let mat = &first.mat;
         let (lo, hi) = members
             .iter()
             .fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
-                let at = p.3.w_axis.truncate();
+                let at = p.2.w_axis.truncate();
                 (lo.min(at), hi.max(at))
             });
         let origin = (lo + hi) / 2.0;
-        for p in &members {
-            cpu.entry(p.1).or_insert_with(|| shape_mesh(p.1));
-        }
-        let pieces: Vec<(&Mesh, Mat4)> = members.iter().filter_map(|p| cpu.get(&p.1).map(|m| (m, p.3))).collect();
-        let Some(mesh) = meshes::merge(&pieces, origin, matches!(mat, Mat::S(_))) else {
-            continue;
+        // (The levels switch at the distances of the group's biggest part, padded by how far its parts lie from
+        // the centre, where the distance is measured: no part is drawn coarser than it would be by itself.)
+        let pad = members
+            .iter()
+            .map(|p| p.2.w_axis.truncate().distance(origin))
+            .fold(0.0, f32::max);
+        let r = members.iter().map(|p| part_radius(&p.2)).fold(0.0, f32::max);
+        let levels: Vec<(Level, Option<LodBand>)> = if members.iter().any(|p| has_levels(p.1.shape)) {
+            vec![
+                (
+                    Level::Near,
+                    Some(LodBand {
+                        r,
+                        first: 0,
+                        last: NEAR_LAST,
+                    }),
+                ),
+                (
+                    Level::Far,
+                    Some(LodBand {
+                        r,
+                        first: NEAR_LAST + 1,
+                        last: BANDS - 1,
+                    }),
+                ),
+            ]
+        } else {
+            vec![(Level::Far, None)]
         };
-        let aabb = mesh.compute_aabb();
-        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        {
+        for &(level, _) in &levels {
+            for p in &members {
+                cpu.entry((p.1.shape, level))
+                    .or_insert_with(|| shape_mesh(p.1.shape, level));
+            }
+        }
+        let frames = matches!(mat, Mat::S(_));
+        let made: Option<Vec<(Mesh, Option<LodBand>)>> = levels
+            .iter()
+            .map(|&(level, band)| {
+                let pieces: Vec<(&Mesh, Mat4)> = members
+                    .iter()
+                    .filter_map(|p| cpu.get(&(p.1.shape, level)).map(|m| (m, p.2)))
+                    .collect();
+                let mut mesh = meshes::merge(&pieces, origin, frames)?;
+                if frames {
+                    let spans: Vec<(usize, u32, usize)> = members
+                        .iter()
+                        .map(|p| {
+                            let count = cpu.get(&(p.1.shape, level)).map_or(0, Mesh::count_vertices);
+                            (p.0, p.1.piece, count)
+                        })
+                        .collect();
+                    shade_merged(&mut mesh, origin, &spans, &shades);
+                }
+                Some((mesh, band))
+            })
+            .collect();
+        let Some(made) = made else { continue };
+        for (mesh, band) in made {
+            let aabb = mesh.compute_aabb();
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
             let mut e = world.spawn((
                 Mesh3d(mesh),
                 Transform::from_translation(origin),
@@ -2242,17 +2448,146 @@ fn merge_still(world: &mut World, ticks: &[Tick], parts: &[(Entity, Shape, Mat)]
             if let Some(aabb) = aabb {
                 e.insert(aabb);
             }
+            if let Some(band) = band {
+                e.insert((band, BandPad(pad), band.range_padded(k, pad)));
+            }
+            drawn += 1;
         }
         for p in &members {
-            world.despawn(p.0);
+            world.despawn(p.1.e);
         }
         gone += members.len();
     }
     debug!(
-        "scenery: {gone} of {} parts merged into {} meshes",
+        "scenery: {gone} of {} parts merged into {drawn} meshes ({} groups)",
         parts.len(),
         groups.len()
     );
+}
+
+/// The last distance band (`meshes::BANDS`) the near level of the merged scenery is drawn in.
+const NEAR_LAST: usize = 3;
+
+/// How far a placed part (world matrix `m`) reaches from its origin, about (the unit shapes reach about 1).
+fn part_radius(m: &Mat4) -> f32 {
+    [m.x_axis, m.y_axis, m.z_axis]
+        .iter()
+        .map(|a| a.truncate().length())
+        .fold(0.0, f32::max)
+        * 1.12
+}
+
+// ---------------------------------------------------------------- shading
+
+/// What shades the parts of a set piece (`occlusion`): its still parts as balls (the part's index, centre,
+/// radius), and the height of the grass it stands on, if it does.
+#[derive(Default)]
+struct Shade {
+    balls: Vec<(usize, Vec3, f32)>,
+    ground: Option<f32>,
+}
+
+/// Balls standing in for a placed part (world matrix `m`, index `part`): one for a squat part, a row of them
+/// along a long one.
+fn balls(s: Shape, m: &Mat4, part: usize, out: &mut Vec<(usize, Vec3, f32)>) {
+    let (half, centre) = bulk(s);
+    if half == Vec3::ZERO {
+        return;
+    }
+    let axes = [m.x_axis.truncate(), m.y_axis.truncate(), m.z_axis.truncate()];
+    let ext = [
+        axes[0].length() * half.x,
+        axes[1].length() * half.y,
+        axes[2].length() * half.z,
+    ];
+    let c = m.transform_point3(centre);
+    let long = if ext[0] >= ext[1] && ext[0] >= ext[2] {
+        0
+    } else if ext[1] >= ext[2] {
+        1
+    } else {
+        2
+    };
+    let thin = (ext[(long + 1) % 3] * ext[(long + 2) % 3]).sqrt();
+    if thin <= 1e-4 {
+        return;
+    }
+    let n = ((ext[long] / thin).round() as usize).clamp(1, 4);
+    if n == 1 {
+        out.push((part, c, (ext[0] * ext[1] * ext[2]).cbrt()));
+        return;
+    }
+    let dir = axes[long].normalize_or_zero();
+    for i in 0..n {
+        let f = (2 * i + 1) as f32 / n as f32 - 1.0;
+        out.push((part, c + dir * ext[long] * f, thin));
+    }
+}
+
+/// The most a vertex of the merged scenery is darkened by (surface.wgsl reads it from UV_0.y of an
+/// `OBJECT_FRAME` mesh).
+const SHADE_MAX: f32 = 0.55;
+/// How far above the grass of an island its darkening reaches (m).
+const GROUND_REACH: f32 = 1.2;
+
+/// How much a point (world `p`, normal `n`) of part `part` is hidden from the sky by the rest of its set piece:
+/// by each ball of its other parts as a sphere hides the sky from a point (its solid angle, by how much the
+/// point faces it), by the grass it stands close to, and a little more where it faces down. 0 to `SHADE_MAX`.
+fn occlusion(shade: &Shade, part: usize, p: Vec3, n: Vec3) -> f32 {
+    let mut occ = 0.0;
+    for &(i, c, r) in &shade.balls {
+        if i == part {
+            continue;
+        }
+        let d = c - p;
+        let l2 = d.length_squared();
+        // (Beyond 8 radii a ball hides under 1/64 of what it would close up.)
+        if l2 < 1e-6 || l2 > r * r * 64.0 {
+            continue;
+        }
+        let facing = n.dot(d) / l2.sqrt();
+        if facing > 0.0 {
+            occ += facing * (r * r / l2).min(1.0);
+        }
+    }
+    if let Some(g) = shade.ground {
+        let near = (1.0 - (p.y - g).max(0.0) / GROUND_REACH).clamp(0.0, 1.0);
+        occ += 0.6 * near * near * (1.0 - 0.6 * n.y.max(0.0));
+    }
+    occ += 0.2 * (-n.y).max(0.0);
+    (occ * 0.7).min(1.0) * SHADE_MAX
+}
+
+/// Writes the darkening of each vertex of a merged mesh into its UV_0.y (free in a mesh with frames: the
+/// frame's position takes UV_0.x and UV_1). `spans`: each piece merged, in order, as the part's index, its set
+/// piece and its vertex count.
+fn shade_merged(mesh: &mut Mesh, origin: Vec3, spans: &[(usize, u32, usize)], shades: &HashMap<u32, Shade>) {
+    let values: Vec<f32> = {
+        let (Some(VertexAttributeValues::Float32x3(pos)), Some(VertexAttributeValues::Float32x3(nrm))) = (
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
+        ) else {
+            return;
+        };
+        let mut out = Vec::with_capacity(pos.len());
+        for &(part, piece, count) in spans {
+            let shade = shades.get(&piece);
+            let (start, end) = (out.len(), (out.len() + count).min(pos.len()));
+            let (Some(ps), Some(ns)) = (pos.get(start..end), nrm.get(start..end)) else {
+                break;
+            };
+            for (p, n) in ps.iter().zip(ns) {
+                let (p, n) = (Vec3::from(*p) + origin, Vec3::from(*n));
+                out.push(shade.map_or(0.0, |s| occlusion(s, part, p, n)));
+            }
+        }
+        out
+    };
+    if let Some(VertexAttributeValues::Float32x2(uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        for (uv, s) in uv.iter_mut().zip(values) {
+            uv[1] = s;
+        }
+    }
 }
 
 // ---------------------------------------------------------------- systems
@@ -2314,6 +2649,9 @@ fn build(world: &mut World) {
         assets,
         ticks: Vec::new(),
         parts: Vec::new(),
+        piece: 0,
+        grounds: Vec::new(),
+        blob: None,
     };
     let base = kit.group(Some(root), Transform::default());
     for req in &requests {
@@ -2330,7 +2668,8 @@ fn build(world: &mut World) {
     decorate(&mut kit, base, &boxes, all);
     let list = core::mem::take(&mut kit.ticks);
     let parts = core::mem::take(&mut kit.parts);
-    merge_still(world, &list, &parts, base);
+    let grounds = core::mem::take(&mut kit.grounds);
+    merge_still(world, &list, &parts, &grounds, base);
     let mut ticks = world.resource_mut::<Ticks>();
     ticks.generation = Some(generation);
     ticks.list = list;
@@ -2373,5 +2712,72 @@ mod tests {
             assert!(n >= 24 && n % 3 == 0, "{n}");
         }
         assert_eq!(dodecahedron().count_vertices(), 12 * 3 * 3);
+    }
+
+    #[test]
+    fn shapes_merge_at_both_levels() {
+        let all = [
+            Shape::Box,
+            Shape::Sphere,
+            Shape::Cyl,
+            Shape::Taper,
+            Shape::Cone,
+            Shape::Cone4,
+            Shape::Torus,
+            Shape::Ring,
+            Shape::Octa,
+            Shape::Rock,
+            Shape::Dome,
+            Shape::HalfTorus,
+        ];
+        for s in all {
+            for level in [Level::Near, Level::Far] {
+                assert!(
+                    super::super::meshes::mergeable(&shape_mesh(s, level)),
+                    "{s:?} {level:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blob_disc_faces_up_and_fades_out() {
+        let m = blob_disc();
+        let Some(VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!()
+        };
+        let idx: Vec<usize> = m.indices().unwrap().iter().collect();
+        for t in idx.chunks(3) {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| Vec3::from(p[i]));
+            assert!((b - a).cross(c - a).y > 0.0, "{t:?}");
+        }
+        let Some(VertexAttributeValues::Float32x4(c)) = m.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!()
+        };
+        assert!(c[0][3] > 0.9);
+        assert_eq!(c[c.len() - 1][3], 0.0);
+    }
+
+    #[test]
+    fn parts_shade_their_neighbours_not_themselves() {
+        let mut shade = Shade::default();
+        balls(
+            Shape::Sphere,
+            &Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)),
+            1,
+            &mut shade.balls,
+        );
+        // Under the ball, facing it: shaded; facing across it, or the ball's own part: not.
+        let under = occlusion(&shade, 0, Vec3::ZERO, Vec3::Y);
+        assert!(under > 0.05 && under <= SHADE_MAX, "{under}");
+        assert_eq!(occlusion(&shade, 0, Vec3::ZERO, Vec3::X), 0.0);
+        assert_eq!(occlusion(&shade, 1, Vec3::ZERO, Vec3::Y), 0.0);
+        // Close above the grass: shaded by it.
+        shade.ground = Some(-0.1);
+        assert!(occlusion(&shade, 0, Vec3::ZERO, Vec3::X) > 0.05);
+        // A long part stands as a row of balls.
+        let mut row = Vec::new();
+        balls(Shape::Cyl, &Mat4::from_scale(Vec3::new(0.1, 4.0, 0.1)), 0, &mut row);
+        assert_eq!(row.len(), 4);
     }
 }

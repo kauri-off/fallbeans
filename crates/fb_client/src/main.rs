@@ -13,6 +13,7 @@ mod clock;
 mod crash;
 mod diag;
 mod face;
+mod fullscreen;
 mod game;
 #[cfg(test)]
 mod harness;
@@ -52,7 +53,7 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::settings::RenderCreation;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use bevy::window::{ExitCondition, MonitorSelection, PresentMode, WindowMode};
+use bevy::window::{ExitCondition, PresentMode};
 use bevy::winit::WinitSettings;
 use clap::Parser;
 use fb_net::{NetStatsPlugin, ProtocolPlugin, TICK};
@@ -149,14 +150,14 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 name: Some("io.github.kauri_off.fallbeans".into()),
                 resolution: (1280, 720).into(),
                 present_mode: PresentMode::AutoVsync,
-                mode: if opts.fullscreen {
-                    WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                } else {
-                    WindowMode::Windowed
-                },
+                mode: fullscreen::mode(&opts, app.world().get_resource::<settings::Display>()),
                 ..default()
             })
         };
+        // (DLSS: the id NGX knows the game by, read as `DefaultPlugins` build; Bevy's own DLSS plugin makes way for
+        // `render/dlss.rs`.)
+        #[cfg(feature = "dlss")]
+        app.insert_resource(render::dlss::project_id());
         let plugins = DefaultPlugins
             .set(AssetPlugin {
                 file_path: asset_dir(),
@@ -194,6 +195,8 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         let plugins = plugins.set(TaskPoolPlugin {
             task_pool_options: pools,
         });
+        #[cfg(feature = "dlss")]
+        let plugins = plugins.disable::<bevy::anti_alias::AntiAliasPlugin>();
         if test {
             // (Silent: tests must not play through the speakers. The render world on the main thread: tests
             // read its pipelines.)
@@ -219,6 +222,8 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_secs_f64(1.0 / 60.0)),
             });
         }
+        #[cfg(feature = "dlss")]
+        render::dlss::add_anti_alias(app);
         app.insert_resource(bevy::render::error_handler::RenderErrorHandler(crash::render_failed));
         if opts.check_assets {
             app.add_plugins(assets::CheckAssetsPlugin);
@@ -247,7 +252,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_plugins(clicks::ClickTracePlugin);
         }
         if !opts.offscreen && !test {
-            app.add_plugins((audio::AudioPlugin, update::UpdatePlugin));
+            app.add_plugins((audio::AudioPlugin, update::UpdatePlugin, fullscreen::FullscreenPlugin));
         }
         app.add_systems(Update, screenshot);
     }

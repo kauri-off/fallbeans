@@ -116,11 +116,7 @@ pub enum Toggle {
     InvertStick,
     Shake,
     ShowFps,
-    Shadows,
-    Ao,
-    Aa,
-    Grade,
-    Motes,
+    Fullscreen,
     Vsync,
 }
 
@@ -128,7 +124,6 @@ pub enum Toggle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GfxPick {
     Preset(&'static str),
-    Upscale(&'static str),
     Fps(u32),
     Backend(&'static str),
 }
@@ -1098,11 +1093,7 @@ fn ui_actions(
                     Toggle::InvertStick => controls.invert_stick_y ^= true,
                     Toggle::Shake => controls.camera_shake ^= true,
                     Toggle::ShowFps => display.show_fps ^= true,
-                    Toggle::Shadows => gfx.shadows ^= true,
-                    Toggle::Ao => gfx.ao ^= true,
-                    Toggle::Aa => gfx.aa ^= true,
-                    Toggle::Grade => gfx.grade ^= true,
-                    Toggle::Motes => gfx.motes ^= true,
+                    Toggle::Fullscreen => display.fullscreen ^= true,
                     Toggle::Vsync => gfx.vsync ^= true,
                 }
                 crate::settings::save_soon(&mut commands);
@@ -1113,7 +1104,6 @@ fn ui_actions(
             Action::Gfx(pick) => {
                 match *pick {
                     GfxPick::Preset(p) => gfx.preset = p.into(),
-                    GfxPick::Upscale(u) => gfx.upscale = u.into(),
                     GfxPick::Fps(n) => gfx.fps_limit = n,
                     GfxPick::Backend(b) => gfx.backend = b.into(),
                 }
@@ -1139,6 +1129,7 @@ pub struct Options<'w> {
     pub binds: Res<'w, crate::settings::Bindings>,
     pub gfx: Res<'w, crate::settings::Graphics>,
     pub quality: Option<Res<'w, crate::render::quality::Quality>>,
+    pub upscaling: Option<Res<'w, crate::render::upscale::Upscaling>>,
 }
 
 impl Options<'_> {
@@ -1149,7 +1140,7 @@ impl Options<'_> {
             c.invert_mouse_y,
             c.invert_stick_y,
             c.camera_shake,
-            self.display.show_fps,
+            (self.display.show_fps, self.display.fullscreen),
             *self.binds == crate::settings::Bindings::default(),
             (
                 &self.binds.forward,
@@ -1162,7 +1153,11 @@ impl Options<'_> {
             ui.open.contains("keys"),
             &*self.gfx,
             ui.open.contains("gfx"),
-            self.quality.as_ref().map(|q| q.tier),
+            // (Paired: `Debug` stops at tuples of 12.)
+            (
+                self.quality.as_ref().map(|q| q.tier),
+                self.upscaling.as_ref().map(|u| u.active),
+            ),
         ))
     }
 }
@@ -1228,6 +1223,13 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Look::Check(display.show_fps),
             Action::Set(Toggle::ShowFps),
         );
+        button(
+            c,
+            f,
+            text::FULLSCREEN,
+            Look::Check(display.fullscreen),
+            Action::Set(Toggle::Fullscreen),
+        );
         fold(c, f, ui, "gfx", text::GRAPHICS, |k| graphics(k, f, o));
         fold(c, f, ui, "keys", text::KEYS, |k| {
             for b in crate::keys::BINDS {
@@ -1278,41 +1280,16 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
             });
         });
     };
-    let presets: Vec<(&str, GfxPick, bool, bool)> = [
-        ("low", text::PRESET_LOW),
-        ("medium", text::PRESET_MEDIUM),
-        ("high", text::PRESET_HIGH),
-    ]
-    .into_iter()
-    .map(|(id, s)| (s, GfxPick::Preset(id), g.preset == id, true))
-    .collect();
+    let presets: Vec<(&str, GfxPick, bool, bool)> = [("low", text::PRESET_LOW), ("high", text::PRESET_HIGH)]
+        .into_iter()
+        .map(|(id, s)| (s, GfxPick::Preset(id), g.preset == id, true))
+        .collect();
     chips(p, text::PRESET, &presets);
     if let Some(q) = &o.quality {
         muted(p, f, &text::adapter(&q.adapter, &format!("{:?}", q.tier)));
     }
-    let ups: Vec<(&str, GfxPick, bool, bool)> = text::UPSCALES
-        .iter()
-        .map(|(id, s)| {
-            (
-                *s,
-                GfxPick::Upscale(id),
-                g.upscale == *id || (g.upscale.is_empty() && *id == "off"),
-                true,
-            )
-        })
-        .collect();
-    chips(p, text::UPSCALE, &ups);
-    button(
-        p,
-        f,
-        text::SHADOWS,
-        Look::Check(g.shadows),
-        Action::Set(Toggle::Shadows),
-    );
-    button(p, f, text::AO, Look::Check(g.ao), Action::Set(Toggle::Ao));
-    button(p, f, text::AA, Look::Check(g.aa), Action::Set(Toggle::Aa));
-    button(p, f, text::GRADE, Look::Check(g.grade), Action::Set(Toggle::Grade));
-    button(p, f, text::MOTES, Look::Check(g.motes), Action::Set(Toggle::Motes));
+    let upscaler = o.upscaling.as_ref().map_or("AMD FSR 1", |u| u.active.name());
+    muted(p, f, &text::upscale_note(upscaler));
     button(p, f, text::VSYNC, Look::Check(g.vsync), Action::Set(Toggle::Vsync));
     let fps: Vec<(&str, GfxPick, bool, bool)> =
         [(0, text::NO_LIMIT), (30, "30"), (60, "60"), (120, "120"), (144, "144")]

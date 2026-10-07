@@ -12,6 +12,7 @@ use super::scene::big;
 use super::stats::{Frame, Stat, Summary};
 use super::{Mode, Perf};
 use crate::render::quality::Quality;
+use crate::render::upscale::Upscaling;
 use crate::settings::Graphics;
 use crate::view::MainCamera;
 
@@ -170,25 +171,33 @@ fn line(s: &Summary) -> String {
     )
 }
 
-/// The resolution, render scale, preset and switches, and the adapter.
+/// The resolution, render scale and upscaler, preset and switches, and the adapter.
 fn setup_line(
     g: &Graphics,
     q: Option<&Quality>,
+    up: Option<&Upscaling>,
     target: Option<UVec2>,
     low: Option<UVec2>,
     info: Option<&RenderAdapterInfo>,
 ) -> String {
+    // (The upscaler, and the one it fell back from.)
+    let upscaler = up.map_or("—".into(), |u| {
+        if u.active == u.chosen {
+            u.active.name().to_string()
+        } else {
+            format!("{}, {} failed", u.active.name(), u.chosen.name())
+        }
+    });
     let size = target.map_or("—".into(), |t| {
         let (pw, ph) = (t.x, t.y);
         match low {
-            Some(l) => format!("{pw}×{ph} → main pass {}×{} (FSR {})", l.x, l.y, g.upscale),
-            None => format!("{pw}×{ph}"),
+            Some(l) => format!("{pw}×{ph} → main pass {}×{} ({upscaler} {})", l.x, l.y, g.upscale),
+            None => format!("{pw}×{ph} ({upscaler} off)"),
         }
     });
     let mut on = Vec::new();
     for (flag, name) in [
         (g.shadows, "shadows"),
-        (g.ao, "AO"),
         (g.aa, "AA"),
         (g.grade, "grade"),
         (g.motes, "motes"),
@@ -218,6 +227,7 @@ fn text(
     perf: Res<Perf>,
     g: Res<Graphics>,
     q: Option<Res<Quality>>,
+    up: Option<Res<Upscaling>>,
     info: Option<Res<RenderAdapterInfo>>,
     camera: Query<(&Camera, Option<&MainPassResolutionOverride>), With<MainCamera>>,
     recording: Res<super::capture::Recording>,
@@ -255,7 +265,7 @@ fn text(
                 row("wait", s.wait),
                 row("sleep", Some(s.sleep)),
                 s.stutters,
-                setup_line(&g, q.as_deref(), target, low, info.as_deref()),
+                setup_line(&g, q.as_deref(), up.as_deref(), target, low, info.as_deref()),
             );
             full_body(&perf, target)
         }

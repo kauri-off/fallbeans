@@ -1,130 +1,79 @@
-//! Portal pictures: the discs
-//! carry a spiral (the way in) or rings flowing out (a one-way exit) in the portal's colour.
+//! Portal discs, drawn by `portal.wgsl`: a way in is a vortex in the portal's colour (spiral arms winding in,
+//! a tunnel of bands sinking towards a white-hot core, sparks drawn in, a glowing rim, a slow pulse); a one-way
+//! exit is rings flowing out of a deep middle, sparks thrown out. A trip's flash (the special's tone)
+//! brightens the disc and spins it up. Animated on the GPU's clock: one draw a disc, nothing done on the CPU.
+//! Also the exit's arrow.
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::shader::ShaderRef;
 
-const SIZE: usize = 256;
-
-/// A canvas radial gradient from radius 4 to the rim, with its stops.
-fn gradient(r: f32, stops: [(f32, [f32; 3]); 3]) -> [f32; 3] {
-    let f = ((r - 4.0) / (SIZE as f32 / 2.0 - 4.0)).clamp(0.0, 1.0);
-    let i = if f < stops[1].0 { 0 } else { 1 };
-    let (a, b) = (stops[i], stops[i + 1]);
-    let k = ((f - a.0) / (b.0 - a.0)).clamp(0.0, 1.0);
-    std::array::from_fn(|c| a.1[c] + (b.1[c] - a.1[c]) * k)
+#[derive(Clone, Copy, Default, ShaderType)]
+pub struct PortalUniform {
+    /// rgb: the portal's colour (linear); a: the disc's opacity.
+    pub color: Vec4,
+    /// x: 0 a way in (vortex), 1 an exit (rings); y: flash (0…1); z: phase (portals of other colours pulse out
+    /// of step); w: unused.
+    pub params: Vec4,
 }
 
-fn rgb(c: Color) -> [f32; 3] {
-    let s = c.to_srgba();
-    [s.red, s.green, s.blue]
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct PortalMaterial {
+    #[uniform(0)]
+    pub u: PortalUniform,
 }
 
-const DEEP: [f32; 3] = [0x1a as f32 / 255.0, 0x0f as f32 / 255.0, 0x3d as f32 / 255.0];
-
-/// The disc filled by `fill`, with white strokes over it (`stroke`: coverage per pixel, 0…1).
-fn picture(fill: impl Fn(f32) -> [f32; 3], stroke: &[f32], alpha: f32) -> Image {
-    let half = SIZE as f32 / 2.0;
-    let mut data = Vec::with_capacity(SIZE * SIZE * 4);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let r = at(x, y).length();
-            let edge = (half - r + 0.5).clamp(0.0, 1.0);
-            let s = stroke[y * SIZE + x] * alpha;
-            let c = fill(r).map(|v| v * (1.0 - s) + s);
-            data.extend(c.map(|v| (v * 255.0).round() as u8));
-            data.push((edge * 255.0).round() as u8);
+impl PortalMaterial {
+    /// A disc in `color`: a way in or an exit, its flash (0…1) and opacity.
+    pub fn new(color: Color, exit: bool, flash: f32, alpha: f32, phase: f32) -> Self {
+        let c = color.to_linear();
+        Self {
+            u: PortalUniform {
+                color: Vec4::new(c.red, c.green, c.blue, alpha),
+                params: Vec4::new(if exit { 1.0 } else { 0.0 }, flash, phase, 0.0),
+            },
         }
     }
-    let mut image = Image::new(
-        Extent3d {
-            width: SIZE as u32,
-            height: SIZE as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    // (Mips: thin white strokes shimmer at a distance without them.)
-    super::surface::add_mips(&mut image);
-    super::surface::filtered(&mut image, 8);
-    image
 }
 
-/// A pixel's centre relative to the disc's centre.
-fn at(x: usize, y: usize) -> Vec2 {
-    let half = SIZE as f32 / 2.0;
-    Vec2::new(x as f32 + 0.5 - half, y as f32 + 0.5 - half)
-}
-
-fn segment_dist(p: Vec2, a: Vec2, b: Vec2) -> f32 {
-    let ab = b - a;
-    let t = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
-    p.distance(a + ab * t)
-}
-
-fn spiral_arms() -> Vec<[Vec2; 61]> {
-    (0..4)
-        .map(|arm| {
-            std::array::from_fn(|k| {
-                let f = k as f32 / 60.0;
-                let a = arm as f32 * core::f32::consts::FRAC_PI_2 + f * core::f32::consts::PI * 2.2;
-                let r = f * SIZE as f32 * 0.48;
-                Vec2::new(a.cos() * r, a.sin() * r)
-            })
-        })
-        .collect()
-}
-
-/// The arms' coverage: a segment only reaches the pixels within 4 px of its bounding box.
-fn swirl_strokes() -> Vec<f32> {
-    let half = SIZE as f32 / 2.0;
-    let range = |lo: f32, hi: f32| {
-        (lo + half - 4.0).floor().max(0.0) as usize..=((hi + half + 4.0).ceil() as usize).min(SIZE - 1)
-    };
-    let mut d = vec![f32::MAX; SIZE * SIZE];
-    for arm in spiral_arms() {
-        for w in arm.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            let (lo, hi) = (a.min(b), a.max(b));
-            for y in range(lo.y, hi.y) {
-                for x in range(lo.x, hi.x) {
-                    let i = y * SIZE + x;
-                    d[i] = d[i].min(segment_dist(at(x, y), a, b));
-                }
-            }
-        }
+impl Material for PortalMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://fb_client/render/portal.wgsl".into()
     }
-    d.into_iter().map(|d| (3.0 - d + 0.5).clamp(0.0, 1.0)).collect()
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _: &MeshVertexBufferLayoutRef,
+        _: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // Seen from both sides.
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
 }
 
-/// White at the centre through the colour to deep violet, four white spiral arms.
-pub fn swirl(color: Color) -> Image {
-    let c = rgb(color);
-    picture(
-        |r| gradient(r, [(0.0, [1.0; 3]), (0.35, c), (1.0, DEEP)]),
-        &swirl_strokes(),
-        0.55,
-    )
-}
+pub struct PortalPlugin;
 
-/// Deep violet at the centre through the colour to white at the rim, three white rings.
-pub fn rings(color: Color) -> Image {
-    let c = rgb(color);
-    let strokes: Vec<f32> = (0..SIZE * SIZE)
-        .map(|i| {
-            let r = at(i % SIZE, i / SIZE).length();
-            let d = [0.14, 0.28, 0.42]
-                .map(|k| (r - k * SIZE as f32).abs())
-                .into_iter()
-                .fold(f32::MAX, f32::min);
-            (3.5 - d + 0.5).clamp(0.0, 1.0)
-        })
-        .collect();
-    picture(|r| gradient(r, [(0.0, DEEP), (0.6, c), (1.0, [1.0; 3])]), &strokes, 0.6)
+impl Plugin for PortalPlugin {
+    fn build(&self, app: &mut App) {
+        bevy::asset::embedded_asset!(app, "portal.wgsl");
+        app.add_plugins(MaterialPlugin::<PortalMaterial>::default());
+    }
 }
 
 /// The exit's arrow in the x/y plane, its tip at +y.
@@ -150,28 +99,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pictures_fill_the_disc() {
-        for img in [swirl(Color::srgb(0.6, 0.3, 1.0)), rings(Color::srgb(0.2, 0.8, 1.0))] {
-            let d = img.data.unwrap();
-            let at = |x: usize, y: usize| &d[(y * SIZE + x) * 4..][..4];
-            assert_eq!(at(0, 0)[3], 0);
-            assert_eq!(at(SIZE / 2, SIZE / 2)[3], 255);
-        }
-    }
-
-    #[test]
-    fn swirl_strokes_match_every_segment() {
-        let arms = spiral_arms();
-        let all: Vec<f32> = (0..SIZE * SIZE)
-            .map(|i| {
-                let p = super::at(i % SIZE, i / SIZE);
-                let d = arms
-                    .iter()
-                    .flat_map(|arm| arm.windows(2).map(|w| segment_dist(p, w[0], w[1])))
-                    .fold(f32::MAX, f32::min);
-                (3.0 - d + 0.5).clamp(0.0, 1.0)
-            })
-            .collect();
-        assert_eq!(swirl_strokes(), all);
+    fn discs_carry_their_kind_and_colour() {
+        let m = PortalMaterial::new(Color::srgb(1.0, 0.0, 0.0), true, 0.5, 0.85, 1.0);
+        assert_eq!(m.u.params.x, 1.0);
+        assert_eq!(m.u.params.y, 0.5);
+        assert!((m.u.color.x - 1.0).abs() < 1e-6 && m.u.color.y == 0.0);
+        assert_eq!(m.u.color.w, 0.85);
+        assert_eq!(PortalMaterial::new(Color::WHITE, false, 0.0, 1.0, 0.0).u.params.x, 0.0);
     }
 }

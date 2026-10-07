@@ -21,6 +21,17 @@ env:
   # DirectX's shader compiler shipped in the Windows package (DX12 compiles with it instead of FXC).
   DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
   DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
+  # The Windows package's upscalers (`render/upscale.rs`). NVIDIA's DLSS SDK at the version dlss_wgpu 4.0.0 is
+  # built against (headers, the static NGX library, the guide whose notices the package carries), checked by
+  # commit; the DLL shipped is a newer one of NVIDIA's (backward compatible), checked by SHA-256; the Vulkan
+  # headers bindgen reads for it; AMD's FidelityFX SDK for its signed Vulkan DLL (FSR 3.1) and its license.
+  DLSS_SDK_TAG: v310.5.3
+  DLSS_SDK_COMMIT: 982b0d19f9e35fef8e1b3109efa6b95470563866
+  DLSS_DLL_TAG: v310.9.1
+  DLSS_DLL_SHA256: 3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983
+  VULKAN_HEADERS_TAG: vulkan-sdk-1.4.363.0
+  FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
+  FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952
 
 jobs:
   version:
@@ -95,6 +106,44 @@ jobs:
           echo "$DXC_SHA256  dxc.zip" | sha256sum -c -
           unzip -q dxc.zip -d dxc
           echo "FB_DXC_DIR=$PWD/dxc" >> "$GITHUB_ENV"
+      - name: upscalers
+        shell: bash
+        run: |
+          # (Windows paths for the build: cargo and the game read them, not this shell.)
+          here=$(pwd -W)
+          sparse() { # repository, tag, directory, paths…
+            git clone --quiet --filter=blob:none --no-checkout --depth 1 --branch "$2" "$1" "$3"
+            git -C "$3" sparse-checkout set --no-cone "${@:4}"
+            git -C "$3" checkout --quiet
+          }
+          sparse https://github.com/NVIDIA/DLSS.git "$DLSS_SDK_TAG" dlss-sdk \
+            /include/ /lib/Windows_x86_64/x64/ /doc/DLSS_Programming_Guide_Release.pdf /LICENSE.txt
+          test "$(git -C dlss-sdk rev-parse HEAD)" = "$DLSS_SDK_COMMIT"
+          sparse https://github.com/NVIDIA/DLSS.git "$DLSS_DLL_TAG" dlss-dll /lib/Windows_x86_64/rel/nvngx_dlss.dll
+          echo "$DLSS_DLL_SHA256  dlss-dll/lib/Windows_x86_64/rel/nvngx_dlss.dll" | sha256sum -c -
+          git clone --quiet --depth 1 --branch "$VULKAN_HEADERS_TAG" \
+            https://github.com/KhronosGroup/Vulkan-Headers.git vulkan-headers
+          curl -fsSL -o ffx.zip "$FFX_URL"
+          echo "$FFX_SHA256  ffx.zip" | sha256sum -c -
+          unzip -q ffx.zip 'PrebuiltSignedDLL/*' 'docs/license.md' -d ffx
+          # The guide as text: the package carries its notices (`cargo xtask dist`). Poppler's pdftotext, else pypdf.
+          pdf=dlss-sdk/doc/DLSS_Programming_Guide_Release.pdf
+          if command -v pdftotext >/dev/null; then
+            pdftotext -layout -enc UTF-8 "$pdf" dlss-guide.txt
+          else
+            python -m pip install --quiet "pypdf==5.4.0"
+            python -c 'import sys, pypdf; print("\n".join(p.extract_text() for p in pypdf.PdfReader(sys.argv[1]).pages))' \
+              "$pdf" > dlss-guide.txt
+          fi
+          # (clang for bindgen: the runner's LLVM.)
+          {
+            echo "DLSS_SDK=$here/dlss-sdk"
+            echo "DLSS_DLL=$here/dlss-dll/lib/Windows_x86_64/rel/nvngx_dlss.dll"
+            echo "DLSS_GUIDE_TEXT=$here/dlss-guide.txt"
+            echo "VULKAN_SDK=$here/vulkan-headers"
+            echo "FFX_SDK=$here/ffx"
+            echo "LIBCLANG_PATH=C:/Program Files/LLVM/bin"
+          } >> "$GITHUB_ENV"
       - run: cargo xtask dist nsis
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

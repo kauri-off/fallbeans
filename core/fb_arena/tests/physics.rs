@@ -326,6 +326,63 @@ fn a_dive_lays_the_body_along_its_flight_and_stays_out_of_a_wall() {
     assert!(deepest < 0.02, "{deepest}");
 }
 
+/// A 30° slope of the given grip from y = 6 down to the floor at z = 10.4.
+fn slope_course(slip: f64) -> Sim {
+    let mut b = Builder::new(1, false);
+    block(&mut b, 0.0, -1.0, 20.0, 12.0, 2.0, 60.0);
+    let opts = PrimOpts {
+        col: ColliderOpts {
+            slip,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    b.ramp(0.0, 0.0, 6.0, 10.4, 0.0, 4.0, pal::WHITE, 0.5, opts);
+    Sim::new(b)
+}
+
+/// Down the slope from near its top: the share of ticks on the ground on the way and the speed at its foot.
+fn down_the_slope(s: &mut Sim, input: BodyInput) -> (f64, f64) {
+    s.reset(0.0, 5.7, 0.8);
+    let (mut on, mut all, mut speed) = (0, 0, 0.0);
+    for i in 1..=360 {
+        s.tick(i as f64 * DT, input);
+        let z = s.body.pos.z;
+        if (2.0..9.5).contains(&z) {
+            all += 1;
+            on += u32::from(s.body.grounded);
+            speed = m::hypot(s.body.vel.x, s.body.vel.z);
+        }
+    }
+    assert!(all > 0, "never went down");
+    (on as f64 / all as f64, speed)
+}
+
+#[test]
+fn keeps_its_feet_on_a_slope_and_slides_down_ice() {
+    // Running down: on the ground all the way, not hopping (air control steered it and ice did nothing).
+    let (grip_on, grip_speed) = down_the_slope(&mut slope_course(0.0), FORWARD);
+    assert!(grip_on > 0.95, "{grip_on}");
+    assert!(grip_speed < 9.5, "{grip_speed}");
+    let (ice_on, ice_speed) = down_the_slope(&mut slope_course(1.0), FORWARD);
+    assert!(ice_on > 0.95, "{ice_on}");
+    assert!(ice_speed > 12.0, "{ice_speed}");
+    // Standing still on ice: no footing, it slides to the bottom on the ground.
+    let mut s = slope_course(1.0);
+    let (idle_on, _) = down_the_slope(&mut s, IDLE);
+    assert!(idle_on > 0.95, "{idle_on}");
+    assert!(s.body.pos.z > 10.4 && s.body.grounded, "{:?}", s.body.pos);
+    // Up the icy slope from its foot: a run-up carries it a little way, but there is no grip to climb on.
+    let mut s = slope_course(1.0);
+    s.reset(0.0, 0.0, 13.0);
+    let mut top = 0.0f64;
+    for i in 1..=360 {
+        s.tick(i as f64 * DT, BodyInput { mz: -1.0, ..IDLE });
+        top = top.at_least(s.body.pos.y);
+    }
+    assert!(top < 3.0, "{top}");
+}
+
 fn ledge_course(height: f64) -> Sim {
     let mut b = Builder::new(1, false);
     block(&mut b, 0.0, -1.0, 0.0, 20.0, 2.0, 40.0);

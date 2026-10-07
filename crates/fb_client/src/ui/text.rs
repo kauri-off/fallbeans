@@ -117,25 +117,16 @@ pub const FOV: &str = "Угол обзора";
 pub const VOLUME: &str = "Громкость звуков";
 pub const UI_SCALE: &str = "Размер интерфейса";
 pub const SHOW_FPS: &str = "Показывать частоту кадров";
+pub const FULLSCREEN: &str = "Полный экран (F11)";
 pub const KEYS: &str = "Клавиши";
 pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
 pub const PRESET_LOW: &str = "Низкое";
-pub const PRESET_MEDIUM: &str = "Среднее";
 pub const PRESET_HIGH: &str = "Высокое";
-pub const UPSCALE: &str = "Масштабирование AMD FSR";
-pub const UPSCALES: [(&str, &str); 5] = [
-    ("off", "Выкл"),
-    ("ultra", "Ультра"),
-    ("quality", "Качество"),
-    ("balanced", "Баланс"),
-    ("performance", "Скорость"),
-];
-pub const SHADOWS: &str = "Тени";
-pub const AO: &str = "Фоновое затенение (AO, только «Высокое»)";
-pub const AA: &str = "Сглаживание";
-pub const GRADE: &str = "Цветокоррекция и виньетка";
-pub const MOTES: &str = "Частицы в воздухе";
+/// The upscaler in use (`render/upscale.rs`), by its vendor's name: always on, in the ultra quality mode.
+pub fn upscale_note(name: &str) -> String {
+    format!("Масштабирование: {name} (ультра-качество), включено всегда")
+}
 pub const VSYNC: &str = "Вертикальная синхронизация";
 pub const FPS_LIMIT: &str = "Ограничение кадров в секунду";
 pub const NO_LIMIT: &str = "Нет";

@@ -8,11 +8,15 @@ collection's objects, their names and hierarchy (the game animates bean parts by
 modifiers applied, +Y up, no cameras, lights or animations. Run through `cargo xtask assets --export`,
 which then loads every file in the client.
 
+The scenery models are rebuilt with more shape first (`detail.py`, the same every run).
+
 Ambient occlusion is baked for every model (Cycles, the model alone: what its own parts hide from
 the sky) over a UV layout made for it (smart projection of the whole model into one atlas, the only
 UV map exported: TEXCOORD_0) and embedded as a grey PNG, the occlusion texture of all the model's
-materials. The .blend is never saved: the modifiers are applied and the UVs replaced on this
-session's copy only.
+materials. Parts the game moves on their own (`APART`: a bean's arms, hands and legs, a fan's blades)
+are baked each by itself, the rest of the model without them: no shadow of an arm stays painted on the
+body when the arm swings away. The .blend is never saved: the modifiers are applied and the UVs replaced
+on this session's copy only.
 """
 
 import json
@@ -23,6 +27,12 @@ import sys
 import zlib
 
 import bpy
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(bpy.data.filepath)))
+sys.dont_write_bytecode = True  # (no __pycache__ in blender/)
+import detail  # noqa: E402
+
+detail.apply()
 
 argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 out_dir = os.path.abspath(argv[0] if argv else os.path.join(os.path.dirname(bpy.data.filepath), "..", "assets", "models"))
@@ -36,6 +46,14 @@ AO_SAMPLES = 512
 AO_DENSITY = 180
 AO_MIN, AO_MAX = 128, 512
 AO_MARGIN = 8
+
+# Parts of a model that move apart from the rest (by object name), each list baked by itself: what they
+# hide of the rest, and the rest of them, changes as they move.
+APART = {
+    "bean": [["ArmL"], ["HandL"], ["ArmR"], ["HandR"], ["LegL", "ShoeL"], ["LegR", "ShoeR"]],
+    "fan": [["FanHub", "FanBlade0", "FanBlade1", "FanBlade2", "FanBlade3"]],
+    "flag": [["Pennant"]],
+}
 
 if bpy.context.object and bpy.context.object.mode != "OBJECT":
     bpy.ops.object.mode_set(mode="OBJECT")
@@ -124,15 +142,24 @@ def model_size(meshes):
     return max(hi - lo)
 
 
+def bake_groups(name, meshes):
+    """The model's meshes in the sets baked apart (`APART`): the rest first, then each moving part."""
+    by_name = {o.name: o for o in meshes}
+    apart = [[by_name[n] for n in group if n in by_name] for group in APART.get(name, [])]
+    apart = [g for g in apart if g]
+    moved = {o for g in apart for o in g}
+    rest = [o for o in meshes if o not in moved]
+    return ([rest] if rest else []) + apart
+
+
 def bake_ao(name, meshes, res):
+    import numpy as np
+
     scene.world.light_settings.distance = min(AO_DISTANCE, AO_REACH * model_size(meshes))
-    img = bpy.data.images.new(f"AO_{name}", res, res, alpha=False)
-    img.colorspace_settings.name = "Non-Color"
-    # Only this model casts occlusion.
-    hidden = {}
-    for o in scene.objects:
-        hidden[o] = o.hide_render
-        o.hide_render = o not in meshes
+    # Each set bakes into an image of its own, and only the texels inside its UV islands are kept (less a
+    # texel round their edges, where the bake may or may not have reached). The texels no set covers (-1)
+    # get the margin afterwards.
+    ao = np.full((res, res), -1.0, dtype=np.float32)
     # Every material of the model bakes into the image (Cycles bakes into the active image node).
     temp = []
     for o in meshes:
@@ -145,28 +172,92 @@ def bake_ao(name, meshes, res):
                 m = slot.material = bpy.data.materials.new(f"AOBake_{o.name}")
             m.use_nodes = True
             node = m.node_tree.nodes.new("ShaderNodeTexImage")
-            node.image = img
             m.node_tree.nodes.active = node
             temp.append((m, node))
-    select_only(meshes)
-    bpy.ops.object.bake(type="AO", margin=AO_MARGIN, margin_type="EXTEND", use_clear=True, target="IMAGE_TEXTURES")
+    hidden = {o: o.hide_render for o in scene.objects}
+    px = np.empty(res * res * 4, dtype=np.float32)
+    for i, group in enumerate(bake_groups(name, meshes)):
+        img = bpy.data.images.new(f"AO_{name}_{i}", res, res, alpha=False, float_buffer=True)
+        img.colorspace_settings.name = "Non-Color"
+        for _, node in temp:
+            node.image = img
+        # Only this set casts occlusion.
+        for o in scene.objects:
+            o.hide_render = o not in group
+        select_only(group)
+        bpy.ops.object.bake(type="AO", margin=0, use_clear=True, target="IMAGE_TEXTURES")
+        img.pixels.foreach_get(px)
+        bpy.data.images.remove(img)
+        covered = uv_cover(group, res)
+        ao[covered] = px[0::4].reshape(res, res)[covered]
     for m, node in temp:
         m.node_tree.nodes.remove(node)
     for o, h in hidden.items():
         o.hide_render = h
-    png = gray_png(img)
-    bpy.data.images.remove(img)
-    return png
+    return gray_png(pad_islands(ao, AO_MARGIN))
 
 
-def gray_png(img):
-    """The bake's first channel as an 8-bit grey PNG (rows top to bottom)."""
+def uv_cover(meshes, res):
+    """The texels (rows bottom to top) whose centres lie in the meshes' UV triangles, less those on the
+    edge of what they cover."""
     import numpy as np
 
-    w, h = img.size
-    px = np.empty(w * h * 4, dtype=np.float32)
-    img.pixels.foreach_get(px)
-    g = (np.clip(px[0::4], 0.0, 1.0) * 255 + 0.5).astype(np.uint8).reshape(h, w)[::-1]
+    mask = np.zeros((res, res), dtype=bool)
+    for o in meshes:
+        me = o.data
+        me.calc_loop_triangles()
+        n = len(me.loop_triangles)
+        if n == 0:
+            continue
+        loops = np.empty(n * 3, dtype=np.int32)
+        me.loop_triangles.foreach_get("loops", loops)
+        uv = np.empty(len(me.uv_layers.active.data) * 2, dtype=np.float32)
+        me.uv_layers.active.data.foreach_get("uv", uv)
+        tris = uv.reshape(-1, 2)[loops].reshape(n, 3, 2) * res
+        for t in tris:
+            x0, y0 = np.clip(np.floor(t.min(0)).astype(int), 0, res)
+            x1, y1 = np.clip(np.ceil(t.max(0)).astype(int), 0, res)
+            area = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0])
+            if x1 <= x0 or y1 <= y0 or abs(area) < 1e-6:
+                continue
+            xs, ys = np.meshgrid(np.arange(x0, x1) + 0.5, np.arange(y0, y1) + 0.5)
+            e = [(b[0] - a[0]) * (ys - a[1]) - (b[1] - a[1]) * (xs - a[0]) for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))]
+            inside = ((e[0] >= 0) & (e[1] >= 0) & (e[2] >= 0)) | ((e[0] <= 0) & (e[1] <= 0) & (e[2] <= 0))
+            mask[y0:y1, x0:x1] |= inside
+    p = np.pad(mask, 1)
+    return mask & p[:-2, 1:-1] & p[2:, 1:-1] & p[1:-1, :-2] & p[1:-1, 2:]
+
+
+def pad_islands(ao, margin):
+    """Texels of no island (< 0) take the mean of their baked neighbours, `margin` rings out (as Blender's
+    EXTEND margin); the rest white."""
+    import numpy as np
+
+    ao = ao.copy()
+    for _ in range(margin):
+        done = ao >= 0.0
+        padded = np.pad(np.where(done, ao, 0.0), 1)
+        count = np.pad(done.astype(np.float32), 1)
+        h, w = ao.shape
+        total = np.zeros_like(ao)
+        n = np.zeros_like(ao)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy or dx:
+                    total += padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
+                    n += count[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
+        grow = ~done & (n > 0)
+        ao[grow] = total[grow] / n[grow]
+    ao[ao < 0.0] = 1.0
+    return ao
+
+
+def gray_png(ao):
+    """An AO map (rows bottom to top, as Blender keeps them) as an 8-bit grey PNG (rows top to bottom)."""
+    import numpy as np
+
+    h, w = ao.shape
+    g = (np.clip(ao, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)[::-1]
     raw = b"".join(b"\x00" + row.tobytes() for row in g)
 
     def chunk(kind, data):

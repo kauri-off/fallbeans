@@ -121,6 +121,10 @@ struct Def {
     metalness: Option<f32>,
     /// Whitening where the roughness mask is high (frost on ice).
     frost: f32,
+    /// Size of the kind's features, log2 of texels: how much further than the finest detail it shows (the
+    /// shader fades the detail by its texels a pixel). Only for what is seen as a whole (clouds, foliage,
+    /// rocks); the tiles of floors and walls go early, before their repeats can read as a grid.
+    far: f32,
 }
 
 fn def(k: Kind) -> Def {
@@ -132,30 +136,35 @@ fn def(k: Kind) -> Def {
         roughness: None,
         metalness: None,
         frost: 0.0,
+        far: 0.0,
     };
     match k {
-        Kind::Plastic => d(0.5, 0.2, 0.25, 0.03),
+        Kind::Plastic => d(0.5, 0.12, 0.12, 0.0),
+        // Big floors: soft foam, no cushions (a grid of them read as fine framing from afar).
         Kind::Padded => Def {
-            roughness: Some(0.62),
-            ..d(0.25, 0.9, 0.25, 0.14)
+            roughness: Some(0.5),
+            ..d(0.35, 0.25, 0.15, 0.03)
         },
         Kind::Rubber => Def {
             roughness: Some(0.72),
-            ..d(1.2, 0.6, 0.2, 0.1)
+            ..d(1.2, 0.4, 0.2, 0.08)
         },
         Kind::Metal => Def {
             roughness: Some(0.4),
             metalness: Some(0.6),
-            ..d(0.8, 0.3, 0.45, 0.04)
+            ..d(0.8, 0.15, 0.35, 0.03)
         },
-        Kind::Fabric => d(2.2, 0.55, 0.18, 0.12),
+        Kind::Fabric => d(2.2, 0.35, 0.18, 0.08),
+        // Clear and glassy: crisp reflections, plates parted by thin white cracks, a faint frost.
         Kind::Ice => Def {
-            roughness: Some(0.35),
-            frost: 0.35,
-            ..d(0.3, 0.7, 0.8, 0.14)
+            roughness: Some(0.12),
+            frost: 0.5,
+            far: 0.5,
+            ..d(0.15, 0.35, 0.6, 0.06)
         },
         Kind::Cloud => Def {
             roughness: Some(1.0),
+            far: 3.0,
             ..d(0.35, 1.0, 0.0, 0.18)
         },
         Kind::Gold => Def {
@@ -165,28 +174,32 @@ fn def(k: Kind) -> Def {
         },
         Kind::Wood => Def {
             roughness: Some(0.55),
-            ..d(0.35, 0.18, 0.35, 0.1)
+            far: 1.0,
+            ..d(0.35, 0.18, 0.3, 0.08)
         },
         Kind::Glossy => d(1.0, 0.08, 0.5, 0.0),
         Kind::Tile => Def {
             roughness: Some(0.38),
-            ..d(0.7, 0.3, 0.3, 0.08)
+            ..d(0.7, 0.2, 0.25, 0.06)
         },
         Kind::Leaf => Def {
             roughness: Some(0.62),
+            far: 2.0,
             ..d(1.3, 0.7, 0.3, 0.2)
         },
         Kind::Grass => Def {
             roughness: Some(0.85),
-            ..d(1.6, 0.55, 0.25, 0.16)
+            far: 1.0,
+            ..d(1.6, 0.45, 0.25, 0.12)
         },
         Kind::Rock => Def {
             roughness: Some(0.9),
+            far: 2.0,
             ..d(0.45, 0.9, 0.2, 0.22)
         },
         Kind::Cloth => Def {
             roughness: Some(0.8),
-            ..d(3.0, 0.3, 0.15, 0.08)
+            ..d(3.0, 0.2, 0.15, 0.06)
         },
         Kind::Glass => Def {
             roughness: Some(0.06),
@@ -194,7 +207,7 @@ fn def(k: Kind) -> Def {
         },
         Kind::Carpet => Def {
             roughness: Some(0.95),
-            ..d(2.4, 0.45, 0.2, 0.14)
+            ..d(2.4, 0.35, 0.2, 0.1)
         },
     }
 }
@@ -213,18 +226,23 @@ fn wrap(i: i64, period: i64) -> i64 {
 
 /// Periodic value noise: `period` cells across the unit square.
 fn vnoise(u: f32, v: f32, period: i64, seed: i64) -> f32 {
-    let x = u * period as f32;
-    let y = v * period as f32;
+    vnoise2(u, v, period, period, seed)
+}
+
+/// Periodic value noise with cells of their own count each way (streaks): `pu` across, `pv` down. Both wrap
+/// within the tile, so its edges meet without a seam.
+fn vnoise2(u: f32, v: f32, pu: i64, pv: i64, seed: i64) -> f32 {
+    let x = u * pu as f32;
+    let y = v * pv as f32;
     let (xi, yi) = (x.floor(), y.floor());
     let (fx, fy) = (x - xi, y - yi);
     let sx = fx * fx * (3.0 - 2.0 * fx);
     let sy = fy * fy * (3.0 - 2.0 * fy);
     let (xi, yi) = (xi as i64, yi as i64);
-    let w = |i| wrap(i, period);
-    let a = hash(w(xi), w(yi), seed);
-    let b = hash(w(xi + 1), w(yi), seed);
-    let c = hash(w(xi), w(yi + 1), seed);
-    let d = hash(w(xi + 1), w(yi + 1), seed);
+    let a = hash(wrap(xi, pu), wrap(yi, pv), seed);
+    let b = hash(wrap(xi + 1, pu), wrap(yi, pv), seed);
+    let c = hash(wrap(xi, pu), wrap(yi + 1, pv), seed);
+    let d = hash(wrap(xi + 1, pu), wrap(yi + 1, pv), seed);
     a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
 }
 
@@ -276,36 +294,32 @@ fn smooth(x: f32, a: f32, b: f32) -> f32 {
 use core::f32::consts::PI;
 
 /// Height and roughness mask of a kind at (u, v) in the unit square.
+/// Every cell of every noise spans 4 texels or more, and every period divides the tile: anything finer only
+/// shows as the sampling's beats (lines, moiré), and a noise that does not wrap draws a seam on each tile edge.
 fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
     match k {
         Kind::Plastic => {
-            let peel = fbm(u, v, 24, 2, 1);
-            (0.55 + (peel - 0.5) * 0.3, 0.4 + fbm(u, v, 4, 3, 2) * 0.35)
+            let peel = fbm(u, v, 16, 2, 1);
+            (0.55 + (peel - 0.5) * 0.25, 0.45 + fbm(u, v, 4, 3, 2) * 0.2)
         }
         Kind::Padded => {
-            let n = 4.0;
-            let (cu, cv) = ((u * n) % 1.0, (v * n) % 1.0);
-            let pillow = ((PI * cu).sin() * (PI * cv).sin()).max(0.0).powf(0.35);
-            let grain = fbm(u, v, 64, 2, 3);
-            (
-                pillow * 0.85 + grain * 0.15,
-                0.4 + grain * 0.4 + fbm(u, v, 8, 2, 4) * 0.2,
-            )
+            let foam = fbm(u, v, 8, 3, 3);
+            (0.5 + (foam - 0.5) * 0.5, 0.45 + fbm(u, v, 8, 2, 4) * 0.3)
         }
         Kind::Rubber => {
-            let (f1, _) = cells(u, v, 22, 5);
+            let (f1, _) = cells(u, v, 16, 5);
             let dot = 1.0 - smooth(f1, 0.18, 0.42);
             (
-                0.35 + dot * 0.5 + fbm(u, v, 32, 2, 6) * 0.15,
+                0.35 + dot * 0.5 + fbm(u, v, 16, 2, 6) * 0.15,
                 0.5 + fbm(u, v, 16, 2, 7) * 0.5,
             )
         }
         Kind::Metal => {
-            let streak = vnoise(u * 0.25, v, 180, 8) * 0.6 + vnoise(u, v, 90, 9) * 0.4;
-            (0.5 + (streak - 0.5) * 0.4, 0.3 + streak * 0.45)
+            let streak = vnoise2(u, v, 8, 64, 8) * 0.6 + vnoise(u, v, 32, 9) * 0.4;
+            (0.5 + (streak - 0.5) * 0.3, 0.3 + streak * 0.45)
         }
         Kind::Fabric => {
-            let n = 28.0;
+            let n = 16.0;
             let (x, y) = (u * n, v * n);
             let over = (x.floor() as i64 + y.floor() as i64) % 2 == 0;
             let t = if over {
@@ -313,16 +327,22 @@ fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
             } else {
                 (PI * (x % 1.0)).sin()
             };
-            let fuzz = fbm(u, v, 64, 2, 11);
+            let fuzz = fbm(u, v, 32, 2, 11);
             (t.max(0.0).powf(0.6) * 0.8 + fuzz * 0.2, 0.55 + fuzz * 0.45)
         }
         Kind::Ice => {
-            let (f1, f2) = cells(u, v, 6, 12);
-            let crack = smooth(f2 - f1, 0.0, 0.05);
-            let frost = smooth(fbm(u, v, 4, 4, 13), 0.5, 0.75);
+            // Plates parted by thin cracks; a finer net, broken off here and there; a faint frost haze. The
+            // cracks are rough (white with frost in the shader), the plates mirror-smooth.
+            let (f1, f2) = cells(u, v, 3, 12);
+            let crack = 1.0 - smooth(f2 - f1, 0.0, 0.03);
+            let (g1, g2) = cells(u, v, 7, 46);
+            let broken = smooth(fbm(u, v, 4, 2, 47), 0.45, 0.65);
+            let fine = (1.0 - smooth(g2 - g1, 0.0, 0.06)) * broken * 0.6;
+            let lines = crack.max(fine);
+            let haze = smooth(fbm(u, v, 8, 3, 13), 0.55, 0.85) * 0.3;
             (
-                0.5 + (fbm(u, v, 4, 3, 14) - 0.5) * 0.4 - (1.0 - crack) * 0.35,
-                frost * 0.9 + (1.0 - crack) * 0.6,
+                0.75 + (fbm(u, v, 4, 2, 14) - 0.5) * 0.15 - lines * 0.3,
+                0.15 + haze + lines * 0.85,
             )
         }
         Kind::Cloud => (1.0 - (fbm(u, v, 4, 5, 15) * 2.0 - 1.0).abs(), 1.0),
@@ -330,19 +350,15 @@ fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
         Kind::Wood => {
             let warp = fbm(u, v, 4, 3, 18);
             let ring = 0.5 + 0.5 * ((u * 26.0 + warp * 6.0) * PI).sin();
-            let fine = vnoise(u * 0.1, v, 120, 19);
+            let fine = vnoise2(u, v, 16, 64, 19);
             (ring * 0.7 + fine * 0.3, 0.4 + ring * 0.3 + fine * 0.3)
         }
         Kind::Glossy => (0.5 + (fbm(u, v, 16, 3, 20) - 0.5) * 0.2, fbm(u, v, 8, 3, 21)),
         Kind::Tile => {
-            let speck = if hash((u * 180.0).floor() as i64, (v * 180.0).floor() as i64, 22) > 0.93 {
-                1.0
-            } else {
-                0.0
-            };
+            let speck = smooth(vnoise(u, v, 64, 22), 0.82, 0.92);
             (
-                0.5 + (fbm(u, v, 6, 3, 23) - 0.5) * 0.4 - speck * 0.15,
-                0.35 + fbm(u, v, 12, 2, 24) * 0.4 + speck * 0.25,
+                0.5 + (fbm(u, v, 8, 3, 23) - 0.5) * 0.3 - speck * 0.15,
+                0.35 + fbm(u, v, 16, 2, 24) * 0.4 + speck * 0.25,
             )
         }
         Kind::Leaf => {
@@ -355,8 +371,8 @@ fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
             )
         }
         Kind::Grass => {
-            let blades = vnoise(u, v * 0.25, 160, 34) * 0.7 + vnoise(u, v, 64, 35) * 0.3;
-            (blades * 0.75 + fbm(u, v, 6, 3, 36) * 0.25, 0.6 + blades * 0.4)
+            let blades = vnoise2(u, v, 64, 32, 34) * 0.7 + vnoise(u, v, 32, 35) * 0.3;
+            (blades * 0.75 + fbm(u, v, 8, 3, 36) * 0.25, 0.6 + blades * 0.4)
         }
         Kind::Rock => {
             let (f1, f2) = cells(u, v, 7, 37);
@@ -367,18 +383,19 @@ fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
             )
         }
         Kind::Cloth => {
-            let n = 64.0;
+            let n = 32.0;
             let w = (PI * u * n).sin().abs() * 0.5 + (PI * v * n).sin().abs() * 0.5;
-            (w * 0.85 + fbm(u, v, 32, 2, 40) * 0.15, 0.6 + fbm(u, v, 16, 2, 41) * 0.4)
+            (w * 0.85 + fbm(u, v, 16, 2, 40) * 0.15, 0.6 + fbm(u, v, 16, 2, 41) * 0.4)
         }
         Kind::Glass => (0.5, smooth(fbm(u, v, 4, 4, 43), 0.45, 0.8) * 0.6),
         Kind::Carpet => {
-            let fuzz = fbm(u, v, 96, 2, 44);
+            let fuzz = fbm(u, v, 32, 2, 44);
             (fuzz * 0.8 + fbm(u, v, 8, 2, 45) * 0.2, 0.7 + fuzz * 0.3)
         }
     }
 }
 
+/// Texels across a detail texture (`DETAIL_SIZE` in surface.wgsl).
 const SIZE: usize = 256;
 
 /// The detail texture of a kind with its mip levels (RG normal, B height, A roughness mask).
@@ -581,23 +598,28 @@ pub struct SurfaceUniform {
     pub detail: Vec4,
     /// Pattern frequency, direction (x, z), speed.
     pub pattern: Vec4,
-    /// Pattern kind (−1: none), frost, 1: no detail texture (`Surfaces::set_plain`).
+    /// Pattern kind (−1: none), frost, 1: no detail texture (`Surfaces::set_plain`), size of the kind's
+    /// features (`Def::far`).
     pub extra: Vec4,
 }
 
 /// Bindless where the standard material is (Vulkan; not DX12, whose 2048 samplers do not hold its six per slot
 /// of a 2048-slot slab): an extended material is bindless only when both halves are, and only then do the map's
 /// many materials share one bind group.
-/// Bindless indices 50…52 (the standard material has 0…30) in their own index table at binding 100, the
-/// data in an array at 101; without bindless, a uniform at 50 and the texture and sampler at 51 and 52.
+/// Bindless indices 50…53 (the standard material has 0…30) in their own index table at binding 100, the
+/// data in an array at 101; without bindless, a uniform at 50, the texture and sampler at 51 and 52 and the
+/// occluders at 53.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 #[data(50, SurfaceUniform, binding_array(101))]
-#[bindless(index_table(range(50..53), binding(100)))]
+#[bindless(index_table(range(50..54), binding(100)))]
 pub struct Surface {
     pub u: SurfaceUniform,
     #[texture(51)]
     #[sampler(52)]
     pub detail: Handle<Image>,
+    /// The moving occluders near the camera (`ao.rs`): one texture for every material, written over each frame.
+    #[texture(53)]
+    pub occluders: Handle<Image>,
 }
 
 impl From<&Surface> for SurfaceUniform {
@@ -761,6 +783,8 @@ pub struct Surfaces {
     materials: HashMap<SpecKey, Handle<SurfaceMaterial>>,
     /// A plain texture for materials without a surface (the shader then changes nothing).
     flat: Option<Handle<Image>>,
+    /// The moving occluders' texture (`ao::gather`), made with the first material.
+    occluders: Option<Handle<Image>>,
     /// No detail texture or its maths (the Low preset).
     plain: bool,
     /// Anisotropic filtering of the detail textures finished from now on (the preset's; 0: not set yet).
@@ -821,6 +845,17 @@ impl Surfaces {
 
     fn flat(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
         self.flat.get_or_insert_with(|| images.add(flat_image())).clone()
+    }
+
+    fn occluders(&mut self, images: &mut Assets<Image>) -> Handle<Image> {
+        self.occluders
+            .get_or_insert_with(|| images.add(super::ao::occluder_image()))
+            .clone()
+    }
+
+    /// The moving occluders' texture, once a material has been made.
+    pub fn occluder_texture(&self) -> Option<&Handle<Image>> {
+        self.occluders.as_ref()
     }
 
     /// A finished detail texture: in, and given to the materials that wait for it.
@@ -886,6 +921,7 @@ impl Surfaces {
         if let Some(d) = &d {
             u.detail = Vec4::new(d.scale, d.normal, d.rough_var, d.cavity);
             u.extra.y = d.frost;
+            u.extra.w = d.far;
             if let Some(r) = d.roughness
                 && !keep_roughness
             {
@@ -902,9 +938,10 @@ impl Surfaces {
             u.pattern = Vec4::new(p.freq, dir.x, dir.y, p.speed);
             u.extra.x = pattern_id(p.kind);
         }
+        let occluders = self.occluders(images);
         let h = materials.add(ExtendedMaterial {
             base,
-            extension: Surface { u, detail },
+            extension: Surface { u, detail, occluders },
         });
         if let Some(k) = waits {
             self.waiting.push((k, h.id()));
@@ -1003,6 +1040,23 @@ mod tests {
             (5, 7, 0, 0.9253859769087285),
         ] {
             assert!((hash(x, y, seed) as f64 - want).abs() < 1e-6, "{x} {y} {seed}");
+        }
+    }
+
+    #[test]
+    fn detail_tiles_meet_without_a_seam() {
+        // The texture repeats: its far edges must carry on from the near ones (a seam is a line on every tile).
+        for k in Kind::ALL {
+            for i in 0..16 {
+                let t = i as f32 / 16.0;
+                for (a, b) in [
+                    (build(k, 0.0, t), build(k, 1.0, t)),
+                    (build(k, t, 0.0), build(k, t, 1.0)),
+                ] {
+                    let gap = (a.0 - b.0).abs().max((a.1 - b.1).abs());
+                    assert!(gap < 1e-3, "{k:?} at {t}: {a:?} {b:?}");
+                }
+            }
         }
     }
 

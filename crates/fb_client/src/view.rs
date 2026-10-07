@@ -2,6 +2,7 @@
 //! and specials), beans, bonuses, camera.
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
+use std::sync::Arc;
 
 use bevy::camera::primitives::MeshAabb;
 use bevy::input::mouse::MouseMotion;
@@ -20,6 +21,7 @@ use lightyear::prelude::*;
 use crate::beans;
 use crate::camera::{PITCH_MAX, PITCH_MIN};
 use crate::game::{CameraAngles, Gate, Map};
+use crate::render::ao::{self, AoKit, BakedAo, Solids};
 use crate::render::meshes::{self, BandPad, Candidate, LodBand};
 use crate::render::props::Prop;
 use crate::render::quality::Quality;
@@ -156,7 +158,8 @@ fn level_key(kind: PrimKind, dims: [f64; 3], band: usize) -> LevelKey {
     (kind, dims.map(f64::to_bits), meshes::level_id(kind, dims, band))
 }
 
-/// A primitive `spawn_map` may merge: its levels' world matrix (the lift in it) and its world bounds.
+/// A primitive `spawn_map` may merge: its levels' world matrix (the lift in it) and its world bounds; and whether
+/// it moves and shades what is near it (`ao::Movers`).
 struct Placed {
     item: usize,
     kind: PrimKind,
@@ -164,19 +167,24 @@ struct Placed {
     world: Mat4,
     lo: Vec3,
     hi: Vec3,
+    mover: bool,
 }
 
-/// Nodes that never move, turn or vanish, and are never tinted: no moving collider is on them, and neither
-/// the movers nor the looks change them or a node above them at any time of the round tried (`PROBES`). The
-/// world is not touched: the movers pose a copy. (What the trial misses, `pose_map` still catches.)
-fn still_nodes(map: &Map) -> Vec<bool> {
+/// Nodes that never move, turn or vanish (`fixed`), and of them those never tinted either (`still`): no moving
+/// collider is on them, and neither the movers nor the looks change them or a node above them at any time of the
+/// round tried (`PROBES`). The world is not touched: the movers pose a copy. (What the trial misses, `pose_map`
+/// still catches.)
+fn still_nodes(map: &Map) -> (Vec<bool>, Vec<bool>) {
     let base = &map.render;
     let n = base.0.len();
     let mut moves = vec![false; n];
-    // Only what primitives hang from is compared.
+    let mut tinted = vec![false; n];
+    // Only what primitives and models hang from is compared.
     let mut watched = vec![false; n];
     for item in &map.scene.items {
-        let SceneItem::Prim { node, .. } = item else { continue };
+        let (SceneItem::Prim { node, .. } | SceneItem::Model { node, .. }) = item else {
+            continue;
+        };
         let mut at = Some(*node);
         while let Some(i) = at {
             match watched.get_mut(i as usize) {
@@ -221,34 +229,49 @@ fn still_nodes(map: &Map) -> Vec<bool> {
             out.tints.clear();
             (l.0)(&map.world, t, &mut out);
             for tint in &out.tints {
-                if let Some(m) = moves.get_mut(tint.node as usize) {
+                if let Some(m) = tinted.get_mut(tint.node as usize) {
                     *m = true;
                 }
             }
         }
     }
-    // Hidden ones stay out too, and what hangs from a moving node moves (parents come before children).
+    // Hidden ones stay out too, and what hangs from a moving (tinted) node moves (is tinted); parents come before
+    // children.
     for (i, node) in base.0.iter().enumerate() {
-        let up = node.parent.is_some_and(|p| moves.get(p as usize) == Some(&true));
-        moves[i] |= !node.visible || up;
+        let up = |of: &[bool]| node.parent.is_some_and(|p| of.get(p as usize) == Some(&true));
+        let (moved, tint) = (up(&moves[..]), up(&tinted[..]));
+        moves[i] |= !node.visible || moved;
+        tinted[i] |= tint;
     }
-    moves.into_iter().map(|m| !m).collect()
+    let still = moves.iter().zip(&tinted).map(|(m, t)| !m && !t).collect();
+    (still, moves.into_iter().map(|m| !m).collect())
 }
 
 /// The times of the round `still_nodes` tries (from, to, step; s): finely through the start, coarser after.
 const PROBES: [(f64, f64, f64); 2] = [(-10.0, 60.0, 0.25), (60.0, 300.0, 1.0)];
 
+/// What the merged groups' meshes are baked again with, their ambient occlusion (`ao.rs`): the map's solids, the
+/// solid of each scene item, the bakes.
+struct Shading<'a> {
+    solids: &'a Arc<Solids>,
+    solid_of: &'a [Option<u32>],
+    baked: &'a mut BakedAo,
+}
+
 /// A merged group of static primitives: one mesh per level of detail around the group's centre, its
 /// distances padded by how far its pieces lie from the centre (`BandPad`) and taken at its biggest piece's
-/// size (`meshes::level_class` keeps the sizes close). None: a piece that does not merge.
+/// size (`meshes::level_class` keeps the sizes close), each baked again with its occlusion in the background.
+/// None: a piece that does not merge.
+#[allow(clippy::too_many_arguments)]
 fn spawn_group(
     commands: &mut Commands,
     assets: &mut Assets<Mesh>,
-    cpu: &mut HashMap<LevelKey, Mesh>,
+    cpu: &mut HashMap<LevelKey, Arc<Mesh>>,
     group: &[&Placed],
     mat: &Handle<SurfaceMaterial>,
     root: Entity,
     lod_k: f32,
+    shading: &mut Shading,
 ) -> Option<Vec<Entity>> {
     let first = group.first()?;
     let (lo, hi) = group.iter().fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
@@ -265,20 +288,40 @@ fn spawn_group(
     for band in &levels {
         for p in group {
             cpu.entry(level_key(p.kind, p.dims, band.first))
-                .or_insert_with(|| meshes::prim(p.kind, p.dims, band.first));
+                .or_insert_with(|| Arc::new(meshes::prim(p.kind, p.dims, band.first)));
         }
         let pieces: Vec<(&Mesh, Mat4)> = group
             .iter()
-            .filter_map(|p| cpu.get(&level_key(p.kind, p.dims, band.first)).map(|m| (m, p.world)))
+            .filter_map(|p| cpu.get(&level_key(p.kind, p.dims, band.first)).map(|m| (&**m, p.world)))
             .collect();
-        made.push(meshes::merge(&pieces, origin, true)?);
+        let mesh = meshes::merge(&pieces, origin, true)?;
+        let pieces = group
+            .iter()
+            .filter_map(|p| {
+                let key = level_key(p.kind, p.dims, band.first);
+                Some(ao::Piece {
+                    mesh: cpu.get(&key)?.clone(),
+                    world: p.world,
+                    own: shading.solid_of.get(p.item).copied().flatten(),
+                    key: ao::piece_key(shading.solids, key, &p.world, band.first),
+                })
+            })
+            .collect();
+        let bake = ao::Bake {
+            pieces,
+            origin,
+            band: band.first,
+        };
+        made.push((mesh, bake));
     }
     let single = levels.len() == 1;
     let mut out = Vec::with_capacity(made.len());
-    for (band, mesh) in levels.into_iter().zip(made) {
+    for (band, (mesh, bake)) in levels.into_iter().zip(made) {
         let aabb = mesh.compute_aabb();
+        let mesh = assets.add(mesh);
+        shading.baked.start(mesh.id(), bake, shading.solids.clone());
         let mut e = commands.spawn((
-            Mesh3d(assets.add(mesh)),
+            Mesh3d(mesh),
             MeshMaterial3d(mat.clone()),
             Transform::from_translation(origin),
             Visibility::default(),
@@ -297,7 +340,7 @@ fn spawn_group(
 }
 
 /// A primitive drawn by itself: its levels of detail are children (shown by the camera's distance) of an entity
-/// that follows its node.
+/// that follows its node (returned).
 fn spawn_prim(
     commands: &mut Commands,
     drawn: &mut Drawn,
@@ -306,11 +349,11 @@ fn spawn_prim(
     item: usize,
     lod_k: f32,
     shown: bool,
-) {
+) -> Option<Entity> {
     let (Some(root), Some(SceneItem::Prim { node, kind, dims, .. }), Some(Some((spec, mat, lift)))) =
         (drawn.root, map.scene.items.get(item), drawn.prims.get(item))
     else {
-        return;
+        return None;
     };
     let piece = commands
         .spawn((
@@ -345,6 +388,7 @@ fn spawn_prim(
             child.insert((band, band.range(lod_k)));
         }
     }
+    Some(piece)
 }
 
 /// A merged group with a node that moved, appeared or vanished after all (the trial of `still_nodes` missed
@@ -412,6 +456,7 @@ fn spawn_map(
     quality: Option<Res<Quality>>,
     display: Res<crate::settings::Display>,
     mut drawn: ResMut<Drawn>,
+    mut ao_kit: AoKit,
 ) {
     let Some(map) = map else { return };
     if roots.iter().any(|(_, r)| r.0 == map.generation) {
@@ -434,7 +479,13 @@ fn spawn_map(
         merged: vec![false; map.render.0.len()],
         ..default()
     };
-    let still = still_nodes(&map);
+    let (still, fixed) = still_nodes(&map);
+    // What hides the sky from the rest of the map (`ao.rs`): what stands still and is not see-through, the
+    // primitives as themselves (by scene item), the models as their parts; and what moves, as capsules.
+    let mut solids: Vec<ao::Solid> = Vec::new();
+    let mut solid_of: Vec<Option<u32>> = vec![None; items];
+    let mut movers: Vec<(Entity, ao::Capsule)> = Vec::new();
+    let mut capsules: Vec<ao::Capsule> = Vec::new();
     // Primitives that may merge, with the candidates `meshes::groups` weighs.
     let mut placed: Vec<Placed> = Vec::new();
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -471,6 +522,15 @@ fn spawn_map(
                 let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
                 let world = mat4(&map.render.get(*node).world)
                     * Mat4::from_translation(Vec3::new(0.0, lift as f32 * meshes::LIFT, 0.0));
+                let opaque = spec.alpha == AlphaMode::Opaque;
+                let fixed = fixed.get(*node as usize) == Some(&true);
+                if fixed
+                    && opaque
+                    && let Some(s) = ao::Solid::new(ao::prim_shape(*kind, *dims), &world, 1.0)
+                {
+                    solid_of[i] = Some(solids.len() as u32);
+                    solids.push(s);
+                }
                 let n = material_ids.len();
                 candidates.push(Candidate {
                     at: (lo + hi) / 2.0,
@@ -488,6 +548,7 @@ fn spawn_map(
                     world,
                     lo,
                     hi,
+                    mover: !fixed && opaque,
                 });
                 drawn.prims[i] = Some((spec, mat, lift));
                 // (Drawn below: merged, or by itself.)
@@ -497,13 +558,27 @@ fn spawn_map(
                 let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
                 let n = map.render.get(*node);
                 let piece = commands.spawn_empty().id();
-                commands.spawn((
-                    WorldAssetRoot(scene),
-                    Prop::new(name, *tint, n.pos.x, n.pos.z),
-                    Transform::default(),
-                    Visibility::default(),
-                    ChildOf(piece),
-                ));
+                let prop = commands
+                    .spawn((
+                        WorldAssetRoot(scene),
+                        Prop::new(name, *tint, n.pos.x, n.pos.z),
+                        Transform::default(),
+                        Visibility::default(),
+                        ChildOf(piece),
+                    ))
+                    .id();
+                // Standing still, it shades the map, and the ground shades its foot; moving, what it passes.
+                let world = mat4(&n.world);
+                let parts = ao_kit.model(name, &assets, &meshes);
+                if fixed.get(*node as usize) == Some(&true) {
+                    ao::model_solids(&parts, &world, &mut solids);
+                    if ao::GROUNDED.contains(name) {
+                        commands.entity(prop).insert(ao::Grounded(world.w_axis.y));
+                    }
+                } else {
+                    ao::model_capsules(&parts, &mut capsules);
+                    movers.extend(capsules.drain(..).map(|c| (piece, c)));
+                }
                 (*node, piece)
             }
             SceneItem::Special { node, .. } => {
@@ -521,15 +596,31 @@ fn spawn_map(
             ChildOf(root),
         ));
     }
-    // Static primitives merge by cell, material and levels of detail; the rest are drawn by themselves.
-    let mut cpu: HashMap<LevelKey, Mesh> = HashMap::new();
+    // Static primitives merge by cell, material and levels of detail (one by itself too: its mesh is its own, to
+    // bake its occlusion into); the rest are drawn by themselves.
+    let solids = Arc::new(ao::Solids::new(solids));
+    let mut shading = Shading {
+        solids: &solids,
+        solid_of: &solid_of,
+        baked: &mut ao_kit.baked,
+    };
+    let mut cpu: HashMap<LevelKey, Arc<Mesh>> = HashMap::new();
     let mut alone = vec![true; placed.len()];
-    for group in meshes::groups(&candidates) {
+    for group in meshes::groups_of(&candidates, 1) {
         let members: Vec<&Placed> = group.iter().filter_map(|&c| placed.get(c)).collect();
         let Some(Some((_, mat, _))) = members.first().and_then(|p| drawn.prims.get(p.item)) else {
             continue;
         };
-        let Some(entities) = spawn_group(&mut commands, &mut meshes, &mut cpu, &members, mat, root, lod_k) else {
+        let Some(entities) = spawn_group(
+            &mut commands,
+            &mut meshes,
+            &mut cpu,
+            &members,
+            mat,
+            root,
+            lod_k,
+            &mut shading,
+        ) else {
             continue;
         };
         let g = drawn.groups.len();
@@ -547,14 +638,20 @@ fn spawn_map(
         }
     }
     for (p, _) in placed.iter().zip(&alone).filter(|(_, a)| **a) {
-        spawn_prim(&mut commands, drawn, &mut meshes, &map, p.item, lod_k, true);
+        let piece = spawn_prim(&mut commands, drawn, &mut meshes, &map, p.item, lod_k, true);
+        if let Some(piece) = piece.filter(|_| p.mover) {
+            ao::prim_capsules(p.kind, p.dims, &mut capsules);
+            movers.extend(capsules.drain(..).map(|c| (piece, c)));
+        }
     }
     let merged: usize = drawn.groups.iter().map(|g| g.1.len()).sum();
     info!(
-        "map drawn: {} primitives, {merged} of them merged into {} groups",
+        "map drawn: {} primitives, {merged} of them merged into {} groups; {} moving occluders",
         placed.len(),
-        drawn.groups.len()
+        drawn.groups.len(),
+        movers.len()
     );
+    ao_kit.movers.set(movers);
     if map.bonuses.list.is_empty() {
         return;
     }
@@ -669,8 +766,17 @@ pub fn prim_spec(
         _ => Kind::Plastic,
     };
     let kind = surface.and_then(Kind::of).unwrap_or(fallback);
+    // Ice keeps its piece's colour, lighter and bluer: clear ice over it.
+    let tone = |c: &str| {
+        let c = hex(c).to_linear();
+        if kind == Kind::Ice {
+            LinearRgba::new(c.red * 0.6 + 0.2, c.green * 0.6 + 0.3, c.blue * 0.6 + 0.4, c.alpha)
+        } else {
+            c
+        }
+    };
     if pal[0] == pal[1] {
-        return Spec::plain(hex(pal[0]).to_linear(), Some(kind));
+        return Spec::plain(tone(pal[0]), Some(kind));
     }
     let tones: [String; 2] = match PALETTES.iter().position(|p| *p == pal) {
         Some(i) if look.look.id != "classic" => look.palette[i].clone(),
@@ -678,8 +784,8 @@ pub fn prim_spec(
     };
     Spec {
         paint: Some(Paint {
-            c1: hex(&tones[0]).to_linear(),
-            c2: hex(&tones[1]).to_linear(),
+            c1: tone(tones[0].as_str()),
+            c2: tone(tones[1].as_str()),
             freq: freq.unwrap_or(0.25) as f32,
             dir: Vec2::ONE,
             speed: 0.0,

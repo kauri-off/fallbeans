@@ -10,6 +10,8 @@ use fb_sim::scene::{Finish, Form, LookOut, Part, SceneItem, Tint};
 use lightyear::prelude::*;
 
 use crate::game::Map;
+use crate::render::meshes::{soft_box, soft_cylinder};
+use crate::render::portal::PortalMaterial;
 use crate::render::surface::{Kind, Spec, SurfaceMaterial, Surfaces};
 use crate::view::{PALETTES, frame_tick, hex};
 use fb_sim::looks::ResolvedLook;
@@ -40,8 +42,6 @@ pub struct SpecialCache {
     look_ids: HashMap<String, u32>,
     /// By look, tone step, opacity step.
     mats: HashMap<(u32, i8, i8), PieceMat>,
-    /// Portal pictures by form and colour (kept across maps: nothing else changes them).
-    pictures: HashMap<(bool, &'static str), Handle<Image>>,
     /// Tinted materials by the primitive's own material (identical primitives share it), colour, step.
     tints: HashMap<(AssetId<SurfaceMaterial>, &'static str, i8), Handle<SurfaceMaterial>>,
     /// Nodes tinted the frame before: one the looks no longer tint gets its own material back.
@@ -53,22 +53,19 @@ pub struct SpecialCache {
 enum PieceMat {
     Plain(Handle<StandardMaterial>),
     Surface(Handle<SurfaceMaterial>),
+    Portal(Handle<PortalMaterial>),
 }
 
-/// A cylinder whose first segment faces +z: hexagonal tiles line up.
-pub fn cyl_mesh(r: f32, h: f32, seg: u32) -> Mesh {
-    Cylinder::new(r, h)
-        .mesh()
-        .resolution(seg)
-        .build()
-        .rotated_by(Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2))
-}
+/// Segments per rounded quarter of the specials' soft boxes and cylinders: they have no levels of detail, and
+/// some come by the hundred (hexagonal tiles).
+const SOFT_ARCS: u32 = 2;
 
 fn form_mesh(form: Form) -> Option<Mesh> {
     let f = |v: f64| v as f32;
     Some(match form {
-        Form::Box([x, y, z]) => Cuboid::new(f(x), f(y), f(z)).into(),
-        Form::Cyl([r, h, seg]) => cyl_mesh(f(r), f(h), seg as u32),
+        Form::Box([x, y, z]) => soft_box(Vec3::new(f(x), f(y), f(z)), SOFT_ARCS),
+        // (The first segment faces +z: hexagonal tiles line up.)
+        Form::Cyl([r, h, seg]) => soft_cylinder(f(r), f(h), seg as u32, SOFT_ARCS),
         Form::Sphere(r) => Sphere::new(f(r)).mesh().uv(32, 18),
         Form::Torus(major, minor) => Torus {
             minor_radius: f(minor),
@@ -104,7 +101,7 @@ fn flat(form: Form) -> bool {
     )
 }
 
-/// Everything `part_material` and the pictures read of a part (the round's look is the same for all).
+/// Everything `part_material`, the boards and the portal discs read of a part (the round's look is the same for all).
 fn look_of(part: &Part) -> String {
     let form = match part.form {
         Form::Label(_, _, text) => format!("label {text}"),
@@ -119,7 +116,7 @@ fn look_of(part: &Part) -> String {
     )
 }
 
-/// Whether a part is lit and drawn on a surface (portal pictures, flat colours and light are not).
+/// Whether a part is lit and drawn on a surface (portal discs, flat colours and light are not).
 fn lit(part: &Part) -> bool {
     !matches!(part.finish, Finish::Flat | Finish::Light) && !matches!(part.form, Form::Swirl(_) | Form::Rings(_))
 }
@@ -178,6 +175,26 @@ fn part_material(part: &Part, look: &ResolvedLook, tone: i8, alpha: i8) -> Stand
     m
 }
 
+/// A portal's disc (`render::portal`), for a part that is one: its colour and kind, the flash of a trip (the
+/// tone) and its opacity.
+fn portal_disc(part: &Part, tone: i8, alpha: i8) -> Option<PortalMaterial> {
+    let exit = match part.form {
+        Form::Swirl(_) => false,
+        Form::Rings(_) => true,
+        _ => return None,
+    };
+    let c = hex(part.colors[0]);
+    let a = c.alpha() * alpha as f32 / STEPS;
+    let phase = part.colors[0].bytes().map(u32::from).sum::<u32>() % 7;
+    Some(PortalMaterial::new(
+        c,
+        exit,
+        tone.max(0) as f32 / STEPS,
+        a,
+        phase as f32,
+    ))
+}
+
 type Pieces<'w, 's> = Query<
     'w,
     's,
@@ -186,6 +203,7 @@ type Pieces<'w, 's> = Query<
         &'static mut Visibility,
         Option<&'static mut MeshMaterial3d<StandardMaterial>>,
         Option<&'static mut MeshMaterial3d<SurfaceMaterial>>,
+        Option<&'static mut MeshMaterial3d<PortalMaterial>>,
     ),
     (With<SpecialPiece>, Without<SpecialRoot>),
 >;
@@ -199,7 +217,7 @@ pub fn pose_specials(
     assets: Res<AssetServer>,
     mut cache: ResMut<SpecialCache>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    (mut materials, mut portals): (ResMut<Assets<StandardMaterial>>, ResMut<Assets<PortalMaterial>>),
     mut roots: Query<(Entity, &mut SpecialRoot)>,
     mut pieces: Pieces,
     prims: Query<(&crate::view::MapPiece, &MapPrim, &Children), Without<SpecialPiece>>,
@@ -271,33 +289,19 @@ pub fn pose_specials(
                             .mats
                             .entry(key)
                             .or_insert_with(|| {
+                                // A portal's disc: its tone is the flash of a trip.
+                                if let Some(disc) = portal_disc(part, key.1, key.2) {
+                                    return PieceMat::Portal(portals.add(disc));
+                                }
                                 let mut m = part_material(part, &map.look, key.1, key.2);
-                                let a = m.base_color.alpha();
-                                match part.form {
-                                    // A board with its emoji drawn on (the board's colour in the picture).
-                                    Form::Label(_, _, text) if !text.is_empty() => {
-                                        m.base_color_texture =
-                                            Some(images.add(crate::render::emoji::board(text, m.base_color)));
-                                        m.base_color = Color::WHITE.with_alpha(a);
-                                    }
-                                    // A portal's picture; its tone brightens it (the flash of a trip).
-                                    Form::Swirl(_) | Form::Rings(_) => {
-                                        let tex = cache
-                                            .pictures
-                                            .entry((matches!(part.form, Form::Swirl(_)), part.colors[0]))
-                                            .or_insert_with(|| {
-                                                let c = hex(part.colors[0]);
-                                                images.add(match part.form {
-                                                    Form::Swirl(_) => crate::render::portal::swirl(c),
-                                                    _ => crate::render::portal::rings(c),
-                                                })
-                                            })
-                                            .clone();
-                                        m.base_color_texture = Some(tex);
-                                        let k = 1.0 + 1.5 * key.1.max(0) as f32 / STEPS;
-                                        m.base_color = LinearRgba::new(k, k, k, a).into();
-                                    }
-                                    _ => {}
+                                // A board with its emoji drawn on (the board's colour in the picture).
+                                if let Form::Label(_, _, text) = part.form
+                                    && !text.is_empty()
+                                {
+                                    let a = m.base_color.alpha();
+                                    m.base_color_texture =
+                                        Some(images.add(crate::render::emoji::board(text, m.base_color)));
+                                    m.base_color = Color::WHITE.with_alpha(a);
                                 }
                                 if lit(part) {
                                     let kind = Some(part.surface.and_then(Kind::of).unwrap_or(Kind::Plastic));
@@ -321,14 +325,15 @@ pub fn pose_specials(
             let n = used[pi];
             used[pi] += 1;
             if let Some(&e) = root.slots[pi].get(n) {
-                if let Ok((mut cur, mut v, plain, surface)) = pieces.get_mut(e) {
+                if let Ok((mut cur, mut v, plain, surface, portal)) = pieces.get_mut(e) {
                     if *cur != tf {
                         *cur = tf;
                     }
                     v.set_if_neq(vis);
-                    match (mat, plain, surface) {
-                        (Some(PieceMat::Plain(h)), Some(mut m), _) if m.0 != h => m.0 = h,
-                        (Some(PieceMat::Surface(h)), _, Some(mut m)) if m.0 != h => m.0 = h,
+                    match (mat, plain, surface, portal) {
+                        (Some(PieceMat::Plain(h)), Some(mut m), _, _) if m.0 != h => m.0 = h,
+                        (Some(PieceMat::Surface(h)), _, Some(mut m), _) if m.0 != h => m.0 = h,
+                        (Some(PieceMat::Portal(h)), _, _, Some(mut m)) if m.0 != h => m.0 = h,
                         _ => {}
                     }
                 }
@@ -349,6 +354,7 @@ pub fn pose_specials(
                     match mat {
                         PieceMat::Plain(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
                         PieceMat::Surface(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
+                        PieceMat::Portal(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
                     };
                     if matches!(part.finish, Finish::Flat | Finish::Light) {
                         e.insert(NotShadowCaster);
@@ -361,7 +367,7 @@ pub fn pose_specials(
         // Pieces not placed this frame are hidden.
         for (pi, slots) in root.slots.iter().enumerate() {
             for &e in &slots[used[pi]..] {
-                if let Ok((_, mut v, _, _)) = pieces.get_mut(e) {
+                if let Ok((_, mut v, ..)) = pieces.get_mut(e) {
                     v.set_if_neq(Visibility::Hidden);
                 }
             }

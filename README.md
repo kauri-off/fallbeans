@@ -119,8 +119,26 @@ target/release/fb_server --name "Дома"
 target/release/fb_client
 ```
 
-Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`). В `vendor/` — копии `aeronet_websocket`
-и `lightyear_transport` с нашими исправлениями (подключены через `[patch.crates-io]` в `Cargo.toml`).
+Клиенту нужна папка `assets/` рядом с бинарником (или `BEVY_ASSET_ROOT`). В `vendor/` — копии `aeronet_websocket`,
+`lightyear_transport` и `dlss_wgpu` с нашими исправлениями (подключены через `[patch.crates-io]` в `Cargo.toml`).
+
+Масштабирование кадра выбирается при запуске: NVIDIA DLSS 4.5 на видеокартах RTX (Vulkan), иначе AMD FSR 3.1
+(Vulkan, библиотека AMD рядом с игрой), иначе AMD FSR 1 (DirectX 12, Linux без библиотеки, любой сбой). Что выбрано,
+пишется в лог и видно в F4 и в настройках графики. Обычная сборка обходится без SDK — в ней FSR 3.1 (если рядом
+`amd_fidelityfx_vk.dll`) и FSR 1. Сборка с DLSS (фича клиента `dlss`):
+
+- [DLSS SDK](https://github.com/NVIDIA/DLSS) версии `v310.5.3` (её ждёт `dlss_wgpu` 4.0.0) — путь в `DLSS_SDK`;
+  условия — `LICENSE.txt` SDK;
+- заголовки Vulkan — путь в `VULKAN_SDK` (Vulkan SDK от LunarG или клон
+  [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers); на Linux подойдёт `/usr` с `libvulkan-dev`);
+- clang (bindgen ищет libclang; если не найдёт — `LIBCLANG_PATH`).
+
+`cargo xtask dev`, `perf` и `dist` сами включают `dlss`, когда задан `DLSS_SDK`, и кладут рядом с клиентом
+`nvngx_dlss.dll` (из `DLSS_DLL`, иначе из SDK) и `amd_fidelityfx_vk.dll` (из `FFX_SDK` — распакованный
+[FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4, папка `PrebuiltSignedDLL`).
+Пакет для Windows несёт их вместе с уведомлениями NVIDIA (разделы 9.5–9.6 руководства DLSS: `dist` берёт их из PDF
+через `pdftotext` или из `DLSS_GUIDE_TEXT`) и лицензией AMD — в папке `upscaler-licenses`. Ни SDK, ни DLL в
+репозитории нет.
 
 ## Известные проблемы
 

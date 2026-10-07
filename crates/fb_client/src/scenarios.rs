@@ -930,9 +930,9 @@ fn every_setting_mid_round() {
     });
     g.press(2.0, "Графика", |a| matches!(a, Action::Fold("gfx")));
     let n = press_every(&mut g, |a| matches!(a, Action::Set(_) | Action::Gfx(_)));
-    assert!(n >= 20, "only {n} options on screen");
+    assert!(n >= 14, "only {n} options on screen");
     // Back through the presets, each with a few frames of the round behind the menu.
-    for p in ["low", "medium", "high"] {
+    for p in ["low", "high"] {
         g.press(
             2.0,
             p,

@@ -105,6 +105,11 @@ Section
   File /nonfatal "${SRC}\dxcompiler.dll"
   File /nonfatal "${SRC}\dxil.dll"
   File /nonfatal /r "${SRC}\dxc-licenses"
+  ; The upscalers (NVIDIA DLSS on RTX GPUs, AMD FSR 3.1 elsewhere on Vulkan) and their notices: without them the
+  ; game upscales with FSR 1.
+  File /nonfatal "${SRC}\nvngx_dlss.dll"
+  File /nonfatal "${SRC}\amd_fidelityfx_vk.dll"
+  File /nonfatal /r "${SRC}\upscaler-licenses"
   File /r "${SRC}\assets"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -137,6 +142,9 @@ Section "Uninstall"
   Delete "$INSTDIR\dxcompiler.dll"
   Delete "$INSTDIR\dxil.dll"
   RMDir /r "$INSTDIR\dxc-licenses"
+  Delete "$INSTDIR\nvngx_dlss.dll"
+  Delete "$INSTDIR\amd_fidelityfx_vk.dll"
+  RMDir /r "$INSTDIR\upscaler-licenses"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\assets"
   RMDir "$INSTDIR"
