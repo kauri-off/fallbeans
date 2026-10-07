@@ -35,7 +35,7 @@ AO_REACH = 0.2
 AO_SAMPLES = 512
 AO_DENSITY = 180
 AO_MIN, AO_MAX = 128, 512
-AO_MARGIN = 4
+AO_MARGIN = 8
 
 if bpy.context.object and bpy.context.object.mode != "OBJECT":
     bpy.ops.object.mode_set(mode="OBJECT")
