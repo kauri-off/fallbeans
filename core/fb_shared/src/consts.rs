@@ -1,19 +1,13 @@
-/// Bumped on every change to a replicated component or message (`fb_net`): old clients cannot connect.
-pub const WIRE_VERSION: u32 = 22;
-
 /// The simulation's fingerprint: FNV-1a of `fb_arena/tests/determinism.txt`, the recorded end states of full
 /// rounds on every map. A change to the physics, a map or the bots changes a hash there (`cargo xtask check`
 /// fails until it is re-blessed), and with it this. Line endings do not count (a CRLF checkout).
-pub const SIM_FINGERPRINT: u32 = fnv1a_lines(include_bytes!("../../fb_arena/tests/determinism.txt"));
+pub const SIM_FINGERPRINT: u32 = fnv1a_lines(FNV_SEED, include_bytes!("../../fb_arena/tests/determinism.txt"));
 
-/// What client and server compare (session request and reply, `/health`): the wire version, then six digits
-/// of the simulation's fingerprint (21_123456). A client and a server built from different simulation code
-/// refuse to play together as surely as across a wire change: the client builds the map and predicts with
-/// its own code. Never edited by hand: bump `WIRE_VERSION`, re-bless the determinism hashes.
-pub const PROTOCOL_VERSION: u32 = WIRE_VERSION * 1_000_000 + SIM_FINGERPRINT % 1_000_000;
+pub const FNV_SEED: u32 = 0x811c_9dc5;
 
-const fn fnv1a_lines(bytes: &[u8]) -> u32 {
-    let mut h: u32 = 0x811c_9dc5;
+/// FNV-1a of a text file, `\r` skipped, continuing from `seed` (`FNV_SEED` to start).
+pub const fn fnv1a_lines(seed: u32, bytes: &[u8]) -> u32 {
+    let mut h = seed;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'\r' {
@@ -67,10 +61,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_carries_the_wire_version_and_the_simulation() {
-        assert_eq!(PROTOCOL_VERSION / 1_000_000, WIRE_VERSION);
-        assert_eq!(PROTOCOL_VERSION % 1_000_000, SIM_FINGERPRINT % 1_000_000);
-        assert_eq!(fnv1a_lines(b"a 1\r\nb 2\r\n"), fnv1a_lines(b"a 1\nb 2\n"));
-        assert_ne!(fnv1a_lines(b"a 1\n"), fnv1a_lines(b"a 2\n"));
+    fn fingerprints_skip_carriage_returns() {
+        let f = |b: &[u8]| fnv1a_lines(FNV_SEED, b);
+        assert_eq!(f(b"a 1\r\nb 2\r\n"), f(b"a 1\nb 2\n"));
+        assert_ne!(f(b"a 1\n"), f(b"a 2\n"));
     }
 }

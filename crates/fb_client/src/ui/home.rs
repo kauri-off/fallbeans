@@ -409,7 +409,7 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
         Status::Down => (addr.to_string(), text::SERVER_DOWN.to_string(), true),
         Status::Up(i) => {
             let title = i.name.clone().unwrap_or_else(|| addr.to_string());
-            let same = i.protocol == fb_shared::PROTOCOL_VERSION;
+            let same = i.protocol == fb_net::PROTOCOL_VERSION;
             let line = if !same {
                 format!("{} ({})", text::SERVER_OTHER_VERSION, i.build)
             } else {

@@ -1,0 +1,407 @@
+# The wire protocol, generated from the types by fb_net's `schema` test: do not edit.
+# PROTOCOL_VERSION hashes it with the simulation's fingerprint.
+
+crates
+    aeronet_io 0.21.0
+    aeronet_steam 0.21.0
+    aeronet_websocket 0.21.0
+    aeronet_webtransport 0.21.0
+    bevy_replicon 0.44.2
+    lightyear 0.30.1
+    lightyear_aeronet 0.30.1
+    lightyear_avian2d 0.30.1
+    lightyear_avian3d 0.30.1
+    lightyear_connection 0.30.1
+    lightyear_core 0.30.1
+    lightyear_deterministic_replication 0.30.1
+    lightyear_frame_interpolation 0.30.1
+    lightyear_inputs 0.30.1
+    lightyear_inputs_bei 0.30.1
+    lightyear_inputs_leafwing 0.30.1
+    lightyear_inputs_native 0.30.1
+    lightyear_interpolation 0.30.1
+    lightyear_link 0.30.1
+    lightyear_messages 0.30.1
+    lightyear_metrics 0.30.1
+    lightyear_netcode 0.30.1
+    lightyear_p2p 0.30.1
+    lightyear_prediction 0.30.1
+    lightyear_raw_connection 0.30.1
+    lightyear_replication 0.30.1
+    lightyear_serde 0.30.1
+    lightyear_steam 0.30.1
+    lightyear_sync 0.30.1
+    lightyear_tools 0.30.1
+    lightyear_transport 0.30.1
+    lightyear_udp 0.30.1
+    lightyear_utils 0.30.1
+    lightyear_web 0.30.1
+    lightyear_websocket 0.30.1
+    lightyear_webtransport 0.30.1
+    postcard 1.1.3
+tick rate 120
+pose steps: pos 100/m, vel 100/(m/s), yaw 65536/turn, tilt 255/π, tilt_dir 256/turn, size 100/1
+
+channels
+    0 PingChannel UnorderedUnreliable
+    1 MetadataChannel UnorderedReliable
+    2 RepliconUpdatesChannel OrderedReliable
+    3 RepliconMutationsChannel UnorderedUnreliable
+    4 RepliconMutationAcksChannel OrderedReliable
+    5 InputChannel UnorderedUnreliable
+    6 MapEventsChannel OrderedReliable
+    7 ControlChannel OrderedReliable
+messages
+    0 Ping
+    1 Pong
+    2 ProtocolCheck
+    3 SenderMetadata
+    4 InputMessage<NativeStateSequence<FbInput>>
+    5 MapEventMsg
+    6 ServerMsg
+    7 ClientMsg
+components
+    0 PlayerId
+    1 BeanColor
+    2 Round
+    3 BodyFull
+    4 RemotePose
+    5 Hold
+
+enum Anim {
+    0 Idle
+    1 Air
+    2 Dive
+    3 Stun
+    4 Grab
+    5 Slide
+    6 Tumble
+    7 Getup
+    8 Reach
+    9 Climb
+    10 ClimbOver
+    11 Portal
+    12 Ladder
+}
+struct ArenaInfo {
+    id: u32
+    kind: ArenaKind
+    game: str
+    participants: Vec<u32>
+    index: u32
+    total: u32
+    practice: bool
+    late: bool
+    finished: Vec<u32>
+    out: Vec<u32>
+    scores: Vec<(u32, f64)>
+}
+enum ArenaKind {
+    0 Lobby
+    1 Round
+    2 Podium
+}
+struct Award {
+    key: str
+    title: str
+    icon: str
+    id: u32
+    text: str
+}
+struct BeanColor(u8)
+enum BodyState {
+    0 Normal
+    1 Stun
+    2 Dive
+    3 Slide
+    4 Tumble
+    5 Getup
+    6 Climb
+    7 Portal
+    8 Ladder
+}
+enum ClientMsg {
+    0 Hello(Hello)
+    1 Name(str)
+    2 Create { title: str, private: bool }
+    3 Join { room: str, pin: Option<str> }
+    4 Leave
+    5 Color(u8)
+    6 Outfit(Outfit)
+    7 Start
+    8 Abort
+    9 Playlist(Playlist)
+    10 AddBot
+    11 RemoveBot(u32)
+    12 Host(u32)
+    13 Access { private: bool }
+    14 Fill(bool)
+    15 Emote(u8)
+    16 Chat(str)
+    17 Dev { q: Option<u32>, cmd: DevCmd }
+}
+enum DenyReason {
+    0 Pin
+    1 Full
+    2 Gone
+    3 Limit
+}
+enum DevCmd {
+    0 SkipIntro
+    1 Warp { s: f64 }
+    2 EndRound
+    3 Start { games: Vec<str>, rounds: Option<u32>, bots: Option<u32> }
+    4 Lobby
+    5 Rate { k: f64 }
+    6 Step { ticks: u32 }
+    7 Teleport { id: Option<u32>, p: [f64; 3], yaw: Option<f64> }
+    8 Goto { id: Option<u32>, to: Goto }
+    9 Bot { n: Option<u32>, near: bool }
+    10 Bots { on: bool }
+    11 Kill { id: Option<u32> }
+    12 Knock { id: Option<u32>, v: [f64; 3] }
+    13 Grab { actor: Option<u32>, target: u32, s: Option<f64> }
+    14 Seed { seed: u32 }
+}
+enum FallBehaviour {
+    0 Checkpoint
+    1 Spawn
+    2 Out
+}
+struct FbInput {
+    mx: i8
+    mz: i8
+    buttons: u8
+}
+struct Full {
+    actor: i32
+    pos: [f64; 3]
+    vel: [f64; 3]
+    yaw: f64
+    grounded: bool
+    ground_col: i32
+    state: BodyState
+    state_t: f64
+    coyote: f64
+    jump_buf: f64
+    slow_until: f64
+    slow_k: f64
+    land_impact: f32
+    tilt: f64
+    tilt_dir: f64
+    power: u8
+    power_until: f64
+    climb_to: [f64; 3]
+    teleports: u32
+    checkpoint: Option<u16>
+    spawn: u16
+}
+enum Glasses {
+    0 None
+    1 Round
+    2 Shades
+    3 Hearts
+    4 Monocle
+    5 Visor
+}
+enum Goto {
+    0 Spawn
+    1 Finish
+    2 Checkpoint(u32)
+}
+enum Hat {
+    0 None
+    1 Cap
+    2 Beanie
+    3 Party
+    4 Tophat
+    5 Cowboy
+    6 Viking
+    7 Propeller
+    8 Bunny
+    9 Cat
+    10 Horns
+    11 Halo
+    12 Flower
+    13 Antenna
+}
+struct Hello {
+    name: str
+    room: Option<str>
+    pin: Option<str>
+    practice: Option<str>
+    color: Option<u8>
+    outfit: Option<Outfit>
+}
+struct Hold {
+    target: Option<u32>
+    reaching: bool
+}
+struct Lobby {
+    room: RoomRef
+    phase: Phase
+    host: Option<u32>
+    min: u32
+    max: u32
+    players: Vec<LobbyPlayer>
+    playlist: Playlist
+    fill: bool
+    pin: Option<str>
+    next: Option<u32>
+}
+struct LobbyPlayer {
+    id: u32
+    name: str
+    color: u8
+    outfit: Outfit
+    score: i64
+    crowns: u32
+    spectator: bool
+    bot: bool
+    connected: bool
+    ping: u32
+}
+enum MapEvent {
+    0 Portal { pair: u32, from: u32, t: f64 }
+    1 Seg { seg: u32, ev: SegEvent }
+    2 Tile { i: u32, at: f64 }
+    3 Star { k: u32, id: u32 }
+    4 Drop { from: u32, to: Option<u32>, n: f64 }
+    5 Snatch { from: u32, to: u32 }
+    6 Tails { ids: Vec<u32>, by: u32 }
+}
+enum MapEventKind {
+    0 Bonus { i: u32, id: u32, at: f64 }
+    1 Finish { id: u32, place: u32, time: f64 }
+    2 Ko { id: u32, out: bool, by: Option<u32>, cause: str, shortcut: bool }
+    3 Map(MapEvent)
+}
+struct MapEventMsg {
+    arena: u32
+    tick: u32
+    ev: MapEventKind
+    history: bool
+}
+enum Mode {
+    0 Mix
+    1 Races
+    2 Survival
+    3 Custom
+}
+struct Outfit {
+    hat: Hat
+    hat_color: Option<Tint>
+    glasses: Glasses
+    belly: Option<Tint>
+    shoes: Option<Tint>
+}
+enum Phase {
+    0 Lobby
+    1 Round
+    2 Results
+    3 Podium
+}
+struct PlayerId(u32)
+struct Playlist {
+    mode: Mode
+    games: Vec<str>
+    rounds: u32
+}
+struct Pose {
+    pos: [i32; 3]
+    yaw: u16
+    tilt: u8
+    tilt_dir: u8
+    anim: Anim
+    power: u8
+    size: u8
+    vel: [i16; 2]
+    teleports: u8
+}
+enum RejectReason {
+    0 Auth
+    1 Bad
+    2 Busy
+    3 Moved
+}
+struct RoomInfo {
+    id: str
+    title: str
+    private: bool
+    host: str
+    players: u32
+    bots: u32
+    max: u32
+    phase: Phase
+}
+struct RoomRef {
+    id: str
+    title: str
+    private: bool
+}
+struct Round {
+    arena: u32
+    kind: ArenaKind
+    map: str
+    seed: u32
+    zero_tick: i64
+    fall: FallBehaviour
+    static_hash: str
+}
+struct RoundRow {
+    id: u32
+    place: u64
+    points: i64
+    penalty: i64
+    delta: i64
+    total: i64
+    ok: bool
+    note: str
+    falls: u32
+}
+enum SegEvent {
+    0 Door(u32)
+    1 Safe(u32)
+    2 Fall { i: u32, at: f64 }
+}
+enum ServerMsg {
+    0 Ready { dev: bool }
+    1 Reject { reason: RejectReason, msg: str }
+    2 Rooms { rooms: Vec<RoomInfo>, mine: Option<str> }
+    3 Denied { room: Option<str>, reason: DenyReason, msg: str }
+    4 Home { msg: str }
+    5 Welcome { id: u32, room: str, solo: bool, practice: bool, resumed: bool }
+    6 Lobby(Lobby)
+    7 Arena(ArenaInfo)
+    8 RoundEnd { game: str, index: u32, total: u32, rows: Vec<RoundRow>, practice: bool }
+    9 GameEnd { standings: Vec<Standing>, awards: Vec<Award> }
+    10 Scores(Vec<(u32, f64)>)
+    11 Emote { id: u32, e: u8 }
+    12 Chat { id: u32, name: str, text: str }
+    13 Left(u32)
+    14 DevAck { q: Option<u32>, ok: bool, msg: str }
+    15 Clock { rate: f64 }
+}
+struct Standing {
+    id: u32
+    name: str
+    color: u8
+    place: u32
+    total: i64
+    wins: u32
+    falls: u32
+}
+enum Tint {
+    0 White
+    1 Yellow
+    2 Orange
+    3 Red
+    4 Pink
+    5 Purple
+    6 Blue
+    7 Teal
+    8 Green
+    9 Brown
+    10 Grey
+    11 Black
+}

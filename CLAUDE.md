@@ -35,9 +35,9 @@ English. License: AGPL-3.0-or-later.
 ## Rules
 
 - Do not commit, push, open PRs or run the `release` workflow unless asked.
-- Changing a replicated component or message: bump `WIRE_VERSION` (`core/fb_shared/src/consts.rs`) and bless the
-  wire fixture (`FB_BLESS=1 cargo test -p fb_net --test wire`). `PROTOCOL_VERSION` is derived from it and from a
-  fingerprint of `core/fb_arena/tests/determinism.txt`: re-blessing the determinism hashes changes it too.
+- Changing a replicated component or message: bless the wire schema (`FB_BLESS=1 cargo test -p fb_net schema`,
+  `crates/fb_net/protocol.txt`, traced from the types). `fb_net::PROTOCOL_VERSION` is a hash of it and of
+  `core/fb_arena/tests/determinism.txt`: never set by hand, unchanged by patches that touch neither.
 - Graphics: Vulkan 1.2+ first (Windows and Linux: its render thread is ~3× cheaper than wgpu's DX12), DX12 as the
   Windows fallback (`crates/fb_client/src/backend.rs`); no OpenGL.
 - The repository is public: no private hosts, addresses or keys in committed files.

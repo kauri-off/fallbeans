@@ -3,7 +3,7 @@
 use core::time::Duration;
 
 use bevy::prelude::*;
-use fb_shared::{PROTOCOL_VERSION, TICK_RATE};
+use fb_shared::{SIM_FINGERPRINT, TICK_RATE, fnv1a_lines};
 use lightyear::prelude::*;
 
 mod components;
@@ -12,6 +12,8 @@ pub mod errors;
 mod events;
 mod input;
 pub mod logbook;
+#[cfg(test)]
+mod schema;
 mod stats;
 mod visibility;
 mod wire;
@@ -33,8 +35,10 @@ pub fn build() -> String {
     }
 }
 
-/// Netcode's id in every connect token: the wire version and the simulation's fingerprint
-/// (`PROTOCOL_VERSION`), so a token of another build is refused too.
+/// What client and server compare: the fingerprints of the simulation and of the wire schema (`protocol.txt`).
+pub const PROTOCOL_VERSION: u32 = fnv1a_lines(SIM_FINGERPRINT, include_bytes!("../protocol.txt"));
+
+/// Netcode's id in every connect token (`PROTOCOL_VERSION`), so a token of another protocol is refused too.
 pub const PROTOCOL_ID: u64 = 0xFB00_0000 + PROTOCOL_VERSION as u64;
 pub const UDP_PORT: u16 = 5888;
 /// The HTTP API (session, health, debug); behind a reverse proxy at https://…/fallbeans/.

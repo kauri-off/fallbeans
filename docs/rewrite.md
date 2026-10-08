@@ -13,7 +13,7 @@ TS-версия была прототипом; Rust-ядро переносил�
   платформы, лестницы, порталы): траектория каждого боба раз в 0,25 с не дальше 5 см от записанной
   (`tests/paths/`). Записаны с Rust-ядра, когда оно ещё совпадало с TS (расхождение ≤ 5·10⁻⁵ м).
 - `core/fb_arena/tests/determinism.txt` — одинаковые биты на всех ОС; перезаписывается после любой правки
-  симуляции (`FB_BLESS=1 cargo test -p fb_arena --test determinism`), вместе с подъёмом `PROTOCOL_VERSION`.
+  симуляции (`FB_BLESS=1 cargo test -p fb_arena --test determinism`), `PROTOCOL_VERSION` меняется от этого сам.
 
 ## Сделано
 

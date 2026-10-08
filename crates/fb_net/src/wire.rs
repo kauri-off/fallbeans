@@ -9,21 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Anim, BodyFull, RemotePose};
 
-const STATES: [BodyState; 9] = [
-    BodyState::Normal,
-    BodyState::Stun,
-    BodyState::Dive,
-    BodyState::Slide,
-    BodyState::Tumble,
-    BodyState::Getup,
-    BodyState::Climb,
-    BodyState::Portal,
-    BodyState::Ladder,
-];
-
-fn state(i: u8) -> BodyState {
-    STATES.get(i as usize).copied().unwrap_or_default()
-}
+/// The fixed-point steps of `Pose` (the protocol schema lists them): per metre, per turn, per π, per 1.
+pub(crate) const POS_STEPS: f32 = 100.0;
+pub(crate) const VEL_STEPS: f32 = 100.0;
+pub(crate) const YAW_STEPS: u32 = 65536;
+pub(crate) const TILT_STEPS: f32 = 255.0;
+pub(crate) const TILT_DIR_STEPS: u32 = 256;
+pub(crate) const SIZE_STEPS: f32 = 100.0;
 
 /// The own bean: what prediction resumes from. Everything the physics step reads is exact: after a
 /// rollback the client must go on from the server's very state. (Timers in f32 would cross zero a tick
@@ -38,7 +30,7 @@ pub struct Full {
     yaw: f64,
     grounded: bool,
     ground_col: i32,
-    state: u8,
+    state: BodyState,
     state_t: f64,
     coyote: f64,
     jump_buf: f64,
@@ -65,7 +57,7 @@ impl From<BodyFull> for Full {
             yaw: b.yaw,
             grounded: b.grounded,
             ground_col: b.ground_col,
-            state: b.state as u8,
+            state: b.state,
             state_t: b.state_t,
             coyote: b.coyote,
             jump_buf: b.jump_buf,
@@ -94,7 +86,7 @@ impl From<Full> for BodyFull {
                 yaw: w.yaw,
                 grounded: w.grounded,
                 ground_col: w.ground_col,
-                state: state(w.state),
+                state: w.state,
                 state_t: w.state_t,
                 coyote: w.coyote,
                 jump_buf: w.jump_buf,
@@ -120,15 +112,11 @@ impl From<Full> for BodyFull {
 pub struct Pose {
     /// Centimetres (varints: 2 bytes within 80 m of the origin, 3 within 10 km).
     pos: [i32; 3],
-    /// Full turn = 65536.
     yaw: u16,
-    /// 0..π in 255 steps.
     tilt: u8,
-    /// Full turn = 256.
     tilt_dir: u8,
-    anim: u8,
+    anim: Anim,
     power: u8,
-    /// Hundredths.
     size: u8,
     /// cm/s.
     vel: [i16; 2],
@@ -136,24 +124,24 @@ pub struct Pose {
     teleports: u8,
 }
 
-fn turn<const N: u32>(a: f32) -> u32 {
-    ((a.rem_euclid(TAU) / TAU * N as f32).round() as u32) % N
+fn turn(a: f32, n: u32) -> u32 {
+    ((a.rem_euclid(TAU) / TAU * n as f32).round() as u32) % n
 }
 
 impl From<RemotePose> for Pose {
     fn from(p: RemotePose) -> Self {
         Self {
-            pos: p.pos.to_array().map(|v| (v * 100.0).round() as i32),
-            yaw: turn::<65536>(p.yaw) as u16,
-            tilt: (p.tilt.clamp(0.0, PI) / PI * 255.0).round() as u8,
-            tilt_dir: turn::<256>(p.tilt_dir) as u8,
-            anim: p.anim as u8,
+            pos: p.pos.to_array().map(|v| (v * POS_STEPS).round() as i32),
+            yaw: turn(p.yaw, YAW_STEPS) as u16,
+            tilt: (p.tilt.clamp(0.0, PI) / PI * TILT_STEPS).round() as u8,
+            tilt_dir: turn(p.tilt_dir, TILT_DIR_STEPS) as u8,
+            anim: p.anim,
             power: p.power,
-            size: (p.size * 100.0).round().clamp(0.0, 255.0) as u8,
+            size: (p.size * SIZE_STEPS).round().clamp(0.0, 255.0) as u8,
             vel: p
                 .vel
                 .to_array()
-                .map(|v| (v * 100.0).round().clamp(-32767.0, 32767.0) as i16),
+                .map(|v| (v * VEL_STEPS).round().clamp(-32767.0, 32767.0) as i16),
             teleports: p.teleports as u8,
         }
     }
@@ -162,14 +150,14 @@ impl From<RemotePose> for Pose {
 impl From<Pose> for RemotePose {
     fn from(w: Pose) -> Self {
         Self {
-            pos: Vec3::from_array(w.pos.map(|v| v as f32)) / 100.0,
-            yaw: w.yaw as f32 / 65536.0 * TAU,
-            tilt: w.tilt as f32 / 255.0 * PI,
-            tilt_dir: w.tilt_dir as f32 / 256.0 * TAU,
-            anim: Anim::ALL.get(w.anim as usize).copied().unwrap_or_default(),
+            pos: Vec3::from_array(w.pos.map(|v| v as f32)) / POS_STEPS,
+            yaw: w.yaw as f32 / YAW_STEPS as f32 * TAU,
+            tilt: w.tilt as f32 / TILT_STEPS * PI,
+            tilt_dir: w.tilt_dir as f32 / TILT_DIR_STEPS as f32 * TAU,
+            anim: w.anim,
             power: w.power,
-            size: w.size as f32 / 100.0,
-            vel: Vec2::new(w.vel[0] as f32, w.vel[1] as f32) / 100.0,
+            size: w.size as f32 / SIZE_STEPS,
+            vel: Vec2::new(w.vel[0] as f32, w.vel[1] as f32) / VEL_STEPS,
             teleports: w.teleports.into(),
         }
     }
