@@ -1,5 +1,5 @@
-//! The graphics API, chosen before Bevy starts its renderer. Windows: DirectX 12, Vulkan 1.2+ when it has no
-//! DX12 GPU. Elsewhere: Vulkan 1.2+. A real GPU wins over a software one (WARP, lavapipe) on either API. The
+//! The graphics API, chosen before Bevy starts its renderer. Windows: Vulkan 1.2+, DirectX 12 when it has no
+//! Vulkan GPU. Elsewhere: Vulkan 1.2+. A real GPU wins over a software one (WARP, lavapipe) on either API. The
 //! player may force one (`--backend`, the settings). A saved one whose start drew no frame is not tried again:
 //! a marker written before the renderer starts and cleared a few frames in outlives a start that crashes or
 //! hangs, and the next start takes the automatic choice.
