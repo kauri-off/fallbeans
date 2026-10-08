@@ -4,7 +4,7 @@ use fb_sim::bots::{ArenaOpts, BOT_DT, BotInput, BotView, Note, arena_brain};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::physics::BodyState;
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -134,10 +134,10 @@ impl MapDef for JumpClub {
             kill_y: -6.0,
             face_center: true,
             view: Some(V3::new(0.0, 3.0, 0.0)),
-            bot: Some(Box::new(move |bot, out| {
+            logic: Box::new(Brain(Box::new(move |bot, out| {
                 brain(bot, out);
                 dodge(bot, out);
-            })),
+            }))),
             ..Default::default()
         }
     }

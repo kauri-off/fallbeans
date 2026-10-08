@@ -804,6 +804,7 @@ impl<'a> Nav<'a> {
 mod tests {
     use super::*;
     use crate::builder::Builder;
+    use crate::map::NoLogic;
 
     fn same(a: &NavGrid, b: &NavGrid) -> bool {
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
@@ -820,9 +821,9 @@ mod tests {
         let mut b = Builder::new(1, false);
         b.start_area(0.0);
         let mut world = b.world;
-        world.finalize(-1.0);
+        world.finalize(-1.0, &NoLogic);
         let (before, key, hash) = (NavGrid::build(&world, None), NavGrid::key(&world), world.hash(true));
-        world.set_time(0.5);
+        world.set_time(0.5, &NoLogic);
         assert_ne!(world.hash(true), hash, "the gate is open");
         assert_eq!(NavGrid::key(&world), key);
         assert!(same(&before, &NavGrid::build(&world, None)));

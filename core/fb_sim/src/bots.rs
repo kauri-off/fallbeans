@@ -11,6 +11,7 @@ use fb_shared::NEVER;
 use fb_shared::rng::Rng;
 
 use crate::m::{self, MinMax};
+use crate::map::{Hook, MapLogic, Steer};
 use crate::math::{V3, dist_xz};
 use crate::nav::{Nav, NavPoint, PathOpts};
 use crate::physics::{Body, BodyState, DIVE_SPEED, GRAVITY, RUN_SPEED};
@@ -288,7 +289,7 @@ pub struct BotView<'a> {
     pub nav: Option<Nav<'a>>,
     /// Bonuses lying on the course right now.
     pub bonuses: &'a [V3],
-    /// The map (its state: tiles that fell, doors that broke).
+    /// The map's world (moving parts, portals); the map's own state is its logic's.
     pub world: &'a World,
     /// Points of everybody in the round (points games).
     pub scores: &'a BTreeMap<u32, i64>,
@@ -327,6 +328,8 @@ pub struct Waypoint {
     pub detour: Option<Detour>,
     /// Full control for a special stretch (returns false to follow the waypoint as usual).
     pub drive: Option<Drive>,
+    /// The map's logic steers here by its state (`MapLogic::steer`), before `drive` and `detour`.
+    pub hook: Option<Hook>,
 }
 
 /// How bots share the width at a waypoint.
@@ -389,6 +392,7 @@ impl Waypoint {
             speed: None,
             detour: None,
             drive: None,
+            hook: None,
         }
     }
 
@@ -424,6 +428,11 @@ impl Waypoint {
 
     pub fn drive_boxed(mut self, f: Drive) -> Self {
         self.drive = Some(f);
+        self
+    }
+
+    pub fn hook(mut self, h: Hook) -> Self {
+        self.hook = Some(h);
         self
     }
 }
@@ -1444,7 +1453,13 @@ fn teleported(bot: &mut BotView) -> bool {
 }
 
 /// Follows waypoints along a course (by z), with waits, timed jumps, detours and special stretches.
-pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut BotView, out: &mut BotInput) {
+pub fn path_step<W: Borrow<Waypoint>>(
+    points: &[W],
+    dive_chance: f64,
+    logic: &dyn MapLogic,
+    bot: &mut BotView,
+    out: &mut BotInput,
+) {
     init_bot(bot);
     let jumped = teleported(bot);
     let b = bot.body;
@@ -1479,16 +1494,20 @@ pub fn path_step<W: Borrow<Waypoint>>(points: &[W], dive_chance: f64, bot: &mut 
     let Some(wp) = points.get(i).map(Borrow::borrow) else {
         return;
     };
-    if let Some(drive) = &wp.drive
-        && drive(bot, out)
-    {
+    let hooked = match wp.hook {
+        Some(h) => logic.steer(h, bot, out),
+        None => Steer::Follow,
+    };
+    if hooked == Steer::Drove || wp.drive.as_ref().is_some_and(|drive| drive(bot, out)) {
         // Special stretches jam too (bots backing off for another run into the ones behind them).
         unstick(bot, out);
         return;
     }
-    if let Some(detour) = &wp.detour
-        && let Some((ax, az)) = detour(bot)
-    {
+    let detour = match hooked {
+        Steer::Detour(ax, az) => Some((ax, az)),
+        _ => wp.detour.as_ref().and_then(|detour| detour(bot)),
+    };
+    if let Some((ax, az)) = detour {
         nav_to(bot, ax, az, out, 1.0, 0.4);
         humanize(
             bot,
@@ -1894,7 +1913,7 @@ mod tests {
                 world: &world,
                 scores: &scores,
             };
-            path_step(points, 0.0, &mut view, &mut BotInput::default());
+            path_step(points, 0.0, &crate::map::NoLogic, &mut view, &mut BotInput::default());
         }
     }
 

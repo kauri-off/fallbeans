@@ -4,16 +4,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use fb_arena::{Stepper, tick_bodies, touch_hook};
+use fb_arena::{MapRun, Stepper, tick_bodies};
 use fb_shared::m::MinMax;
 use fb_shared::rgb;
 use fb_shared::rng::Rng;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::{ColliderOpts, Contact};
-use fb_sim::map::Touches;
+use fb_sim::map::{Cx, MapLogic, NoLogic};
 use fb_sim::math::{V3, dist_xz};
-use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, Power, StepEvents};
+use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, Power, StepEvents, Touch};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
 
@@ -32,19 +32,22 @@ fn block(b: &mut Builder, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64) {
 
 struct Sim {
     world: World,
-    touches: Touches,
+    logic: Box<dyn MapLogic>,
     body: Body,
     ev: StepEvents,
 }
 
 impl Sim {
-    fn new(mut b: Builder) -> Self {
-        let touches = core::mem::take(&mut b.touches);
+    fn new(b: Builder) -> Self {
+        Self::with(b, Box::new(NoLogic))
+    }
+
+    fn with(b: Builder, logic: Box<dyn MapLogic>) -> Self {
         let mut world = b.world;
-        world.finalize(0.0);
+        world.finalize(0.0, &*logic);
         Self {
             world,
-            touches,
+            logic,
             body: Body::new(1),
             ev: StepEvents::default(),
         }
@@ -57,14 +60,21 @@ impl Sim {
     /// One tick at time t (the world moves first, as on the server).
     fn tick(&mut self, t: f64, input: BodyInput) {
         let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
-        let mut touch = touch_hook(&mut self.touches, true, t, None, &mut scores, &mut out);
+        let mut map = MapRun {
+            logic: &mut *self.logic,
+            server: true,
+            apply: false,
+            me: None,
+            scores: &mut scores,
+            out: &mut out,
+        };
         let mut steppers = [Stepper {
             id: 1,
             body: &mut self.body,
             ev: &mut self.ev,
             input,
         }];
-        tick_bodies(&mut self.world, t, &mut steppers, &[], &mut touch);
+        tick_bodies(&mut self.world, t, &mut steppers, &[], &mut map);
     }
 
     /// n ticks after t0.
@@ -118,7 +128,7 @@ fn grid_finds_every_collider_a_brute_force_search_finds() {
         }
     }
     let mut world = b.world;
-    world.finalize(0.0);
+    world.finalize(0.0, &NoLogic);
     let mut got = Vec::new();
     for _ in 0..200 {
         let x = (rng.unit() - 0.5) * 130.0;
@@ -193,6 +203,15 @@ fn carries_on_from_the_full_body_state() {
     assert_eq!(c.body, a.body);
 }
 
+/// Counts touches.
+struct Count(Arc<AtomicU32>);
+
+impl MapLogic for Count {
+    fn touch(&mut self, _: &mut Cx, _: &mut Body, _: &mut StepEvents, _: Touch) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[test]
 fn falls_through_a_fake_pane_keeping_its_speed() {
     let mut b = Builder::new(1, false);
@@ -214,12 +233,9 @@ fn falls_through_a_fake_pane_keeping_its_speed() {
             },
         )
         .col();
+    b.watch_touch(pane);
     let touched = Arc::new(AtomicU32::new(0));
-    let count = touched.clone();
-    b.on_touch(pane, move |_, _, _, _| {
-        count.fetch_add(1, Ordering::Relaxed);
-    });
-    let mut s = Sim::new(b);
+    let mut s = Sim::with(b, Box::new(Count(touched.clone())));
     s.reset(0.0, 2.0, 0.0);
     s.body.vel = V3::new(0.0, -6.0, 4.0);
     let mut jumped = false;

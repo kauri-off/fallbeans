@@ -1,17 +1,17 @@
-//! What a map is: its build, the spec it returns (spawns, rules, bot brain) and
-//! the logic it runs during a round (`tick`, events, grabs, falls, touches), through `Cx`.
+//! What a map is: its build, the spec it returns (spawns, finish, checkpoints) and its `MapLogic`: the rules
+//! it runs during a round (ticks, events, grabs, falls, touches, bots) and the state they keep.
 use std::collections::BTreeMap;
 
 pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, can_move, fall_behaviour};
 use serde::{Deserialize, Serialize};
 
-use crate::bots::BotBrain;
+use crate::bots::{BotBrain, BotInput, BotView};
 use crate::builder::Builder;
-use crate::collider::ColId;
 use crate::looks::LookId;
 use crate::math::V3;
 use crate::physics::{Body, StepEvents, Touch};
-use crate::world::World;
+use crate::scene::LookOut;
+use crate::world::{MoveCtx, World};
 
 pub struct MapCtx<'a> {
     pub server: bool,
@@ -21,7 +21,7 @@ pub struct MapCtx<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Checkpoint {
-    /// Progress threshold (z unless the map defines `progress`).
+    /// Reached once a bean stands past this z.
     pub z: f64,
     pub p: V3,
 }
@@ -33,8 +33,6 @@ pub struct Finish {
     pub y: f64,
     pub half_width: Option<f64>,
 }
-
-pub type PosTest = Box<dyn Fn(V3) -> bool + Send + Sync>;
 
 /// An authoritative map event: the server decides it, applies it at once and sends it; clients apply it at
 /// its tick.
@@ -143,21 +141,97 @@ impl Bodies for NoBodies {
     }
 }
 
-pub type OnEvent = Box<dyn FnMut(&mut Cx, &MapEvent) + Send + Sync>;
-pub type OnTick = Box<dyn FnMut(&mut Cx, f64) + Send + Sync>;
-pub type OnGrab = Box<dyn FnMut(&mut Cx, u32, u32) + Send + Sync>;
-pub type OnFall = Box<dyn FnMut(&mut Cx, u32, Option<u32>) + Send + Sync>;
-pub type OnHud = Box<dyn Fn(&Cx) -> Option<String> + Send + Sync>;
-pub type OnStart = Box<dyn FnMut(&mut Cx) + Send + Sync>;
-pub type OnBean = Box<dyn Fn(&World, u32, &mut Body, f64) + Send + Sync>;
-/// A collider's touch (or stand-on) handler, run inside the step of the body that touched it.
-pub type TouchFn = Box<dyn FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync>;
+/// One of the map's own looks or bot hooks (`Builder::hook`): what the logic draws or steers by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Hook(pub u32);
 
-/// What map code can do besides building. On the server `emit` records an
-/// authoritative event, applies it right away (the spec's `on_event`) and has it sent; on clients it
-/// does nothing, the events come from the server.
+/// What a hooked waypoint tells a bot (`MapLogic::steer`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Steer {
+    /// Carry on along the path.
+    Follow,
+    /// Go there instead for now.
+    Detour(f64, f64),
+    /// The hook has set the bot's input itself.
+    Drove,
+}
+
+/// A map's rules and the state they keep, run by the server's arena and by clients (all optional).
+pub trait MapLogic: Send + Sync {
+    /// Both sides: an authoritative event (the server applies it as it emits it, clients at its tick).
+    fn event(&mut self, _cx: &mut Cx, _ev: &MapEvent) {}
+    /// Server: per-tick game logic.
+    fn tick(&mut self, _cx: &mut Cx, _t: f64) {}
+    /// Both sides, after `tick`: what the map does to a bean in play each tick from its state alone (a tail
+    /// slows its holder). A client predicts it for its own bean.
+    fn bean(&self, _id: u32, _body: &mut Body, _t: f64) {}
+    /// Server: `actor` grabbed `target` (grab button, target in reach).
+    fn grab(&mut self, _cx: &mut Cx, _actor: u32, _target: u32) {}
+    /// Server: `id` fell off during the round (and respawns); `by` is the player credited with it.
+    fn fall(&mut self, _cx: &mut Cx, _id: u32, _by: Option<u32>) {}
+    /// Client: one line of HUD text (e.g. "Ваши очки: 12").
+    fn hud(&self, _cx: &Cx) -> Option<String> {
+        None
+    }
+    /// Client: once the map is built (decorations).
+    fn start(&mut self, _cx: &mut Cx) {}
+    /// A watched collider (`Builder::watch_touch`, `watch_ground`) was touched or stood on, mid-step.
+    fn touch(&mut self, _cx: &mut Cx, _body: &mut Body, _ev: &mut StepEvents, _tc: Touch) {}
+    /// Moving parts that follow the map's state, after the world's own movers.
+    fn pose(&self, _t: f64, _ctx: &mut MoveCtx) {}
+    /// Client: places the pieces of one of the map's specials (`Builder::special_hook`) at sim time t.
+    fn look(&self, _hook: Hook, _world: &World, _t: f64, _out: &mut LookOut) {}
+    /// A hooked waypoint (`Waypoint::hook`) on a bot's path.
+    fn steer(&self, _hook: Hook, _bot: &mut BotView, _out: &mut BotInput) -> Steer {
+        Steer::Follow
+    }
+    /// Bots can play the map (`bot`).
+    fn bots(&self) -> bool {
+        false
+    }
+    fn bot(&self, _bot: &mut BotView, _out: &mut BotInput) {}
+    /// Out-of-course places (on top of frames, behind walls): standing there counts as a shortcut.
+    fn forbidden(&self, _p: V3) -> bool {
+        false
+    }
+
+    /// Server: emits an authoritative event (`Cx::record`) and applies it right away.
+    fn emit(&mut self, cx: &mut Cx, ev: MapEvent)
+    where
+        Self: Sized,
+    {
+        if cx.record(&ev) {
+            cx.in_event = true;
+            self.event(cx, &ev);
+            cx.in_event = false;
+        }
+    }
+}
+
+/// A map without rules of its own.
+pub struct NoLogic;
+
+impl MapLogic for NoLogic {}
+
+/// A map whose only rules are its bots' (a brain that keeps no state of the map's).
+pub struct Brain(pub BotBrain);
+
+impl MapLogic for Brain {
+    fn bots(&self) -> bool {
+        true
+    }
+
+    fn bot(&self, bot: &mut BotView, out: &mut BotInput) {
+        (self.0)(bot, out);
+    }
+}
+
+/// What map code can do besides building. On the server `MapLogic::emit` records an authoritative event,
+/// applies it right away and has it sent; on clients it does nothing, the events come from the server.
 pub struct Cx<'a> {
     pub server: bool,
+    /// Server: an event recorded is applied at once (the arena; not a bare step of an audit).
+    apply: bool,
     /// Current sim time in seconds (negative during the intro).
     pub t: f64,
     /// Client: id of the local player.
@@ -166,16 +240,14 @@ pub struct Cx<'a> {
     pub bodies: &'a mut dyn Bodies,
     pub scores: &'a mut BTreeMap<u32, i64>,
     pub out: &'a mut Vec<MapOut>,
-    /// The spec's handler, for `emit` (taken while it runs: an event handler does not emit).
-    pub on_event: Option<&'a mut OnEvent>,
-    /// The spec's handler is running.
-    pub in_event: bool,
+    /// An event handler is running (it does not emit).
+    pub(crate) in_event: bool,
 }
 
 impl<'a> Cx<'a> {
-    /// A context without the spec's event handler.
     pub fn new(
         server: bool,
+        apply: bool,
         t: f64,
         me: Option<u32>,
         world: &'a mut World,
@@ -185,20 +257,21 @@ impl<'a> Cx<'a> {
     ) -> Self {
         Self {
             server,
+            apply,
             t,
             me,
             world,
             bodies,
             scores,
             out,
-            on_event: None,
             in_event: false,
         }
     }
 
-    pub fn emit(&mut self, ev: MapEvent) {
+    /// Server: records an authoritative event to be sent; true when the caller is to apply it now.
+    pub fn record(&mut self, ev: &MapEvent) -> bool {
         if !self.server {
-            return;
+            return false;
         }
         // (Clients would apply a nested event with the handler, the server would not.)
         debug_assert!(!self.in_event, "an event handler emits {ev:?}");
@@ -206,12 +279,7 @@ impl<'a> Cx<'a> {
             ev: ev.clone(),
             keep: true,
         });
-        if let Some(h) = self.on_event.take() {
-            self.in_event = true;
-            h(self, &ev);
-            self.in_event = false;
-            self.on_event = Some(h);
-        }
+        self.apply
     }
 
     pub fn score(&self, id: u32) -> i64 {
@@ -236,55 +304,29 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// Touch handlers of colliders, by collider (touched and stood on).
-#[derive(Default)]
-pub struct Touches {
-    pub touch: BTreeMap<ColId, TouchFn>,
-    pub ground: BTreeMap<ColId, TouchFn>,
-}
-
-impl Touches {
-    pub fn handler(&mut self, t: Touch) -> Option<&mut TouchFn> {
-        if t.normal.is_some() {
-            self.touch.get_mut(&t.col)
-        } else {
-            self.ground.get_mut(&t.col)
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct MapSpec {
     pub spawns: Vec<V3>,
     pub kill_y: f64,
-    pub is_out: Option<PosTest>,
     pub checkpoints: Vec<Checkpoint>,
-    /// Progress along the course (default: z); checkpoint thresholds and race ranking use it.
-    pub progress: Option<Box<dyn Fn(V3) -> f64 + Send + Sync>>,
     pub finish: Option<Finish>,
-    /// Out-of-course places (on top of frames, behind walls): standing there counts as a shortcut.
-    pub forbidden: Option<PosTest>,
     /// Point the camera looks at in arenas.
     pub view: Option<V3>,
     pub face_center: bool,
-    /// Authoritative event (both sides apply it; the server first).
-    pub on_event: Option<OnEvent>,
-    /// Server: per-tick game logic.
-    pub tick: Option<OnTick>,
-    /// Both sides, after `tick`: what the map does to a bean in play each tick from the world's state alone
-    /// (a tail slows its holder). A client predicts it for its own bean.
-    pub on_bean: Option<OnBean>,
-    /// Server: `actor` grabbed `target` (grab button, target in reach).
-    pub on_grab: Option<OnGrab>,
-    /// Server: `id` fell off during the round (and respawns); `by` is the player credited with it.
-    pub on_fall: Option<OnFall>,
-    /// Client: one line of HUD text (e.g. "Ваши очки: 12").
-    pub hud: Option<OnHud>,
-    /// Client: once the map is built (decorations).
-    pub on_start: Option<OnStart>,
-    pub bot: Option<BotBrain>,
-    /// Filled from the builder by `build_map`.
-    pub touches: Touches,
+    pub logic: Box<dyn MapLogic>,
+}
+
+impl Default for MapSpec {
+    fn default() -> Self {
+        Self {
+            spawns: Vec::new(),
+            kill_y: 0.0,
+            checkpoints: Vec::new(),
+            finish: None,
+            view: None,
+            face_center: false,
+            logic: Box::new(NoLogic),
+        }
+    }
 }
 
 pub trait MapDef: Sync {

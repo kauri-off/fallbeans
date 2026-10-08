@@ -147,9 +147,6 @@ pub struct Touch {
 /// and the world (a door that breaks) before the step goes on.
 pub type OnTouch<'a> = dyn FnMut(&mut World, &mut Body, &mut StepEvents, Touch) + 'a;
 
-/// For steps in worlds without map logic.
-pub fn no_touch(_: &mut World, _: &mut Body, _: &mut StepEvents, _: Touch) {}
-
 /// Where the body stands on its ground before the world moves (see `before_world_update`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Carry {

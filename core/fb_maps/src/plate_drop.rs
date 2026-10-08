@@ -9,7 +9,7 @@ use fb_sim::builder::Builder;
 use fb_sim::collider::ColId;
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -217,7 +217,7 @@ impl MapDef for PlateDrop {
             kill_y: -12.0,
             face_center: true,
             view: Some(V3::new(0.0, 2.0, 0.0)),
-            bot: Some(arena_brain(opts)),
+            logic: Box::new(Brain(arena_brain(opts))),
             ..Default::default()
         }
     }

@@ -33,7 +33,9 @@
 (tail-tag) и бейджи звёзд (star-fall) через `DecoChange`.
 
 Волна 3: перерисовка UI — `States`/`SubStates`, `resource_changed`, каркас один раз и правка листьев вместо
-`Section`/`key_of`; разделить `Session`, `Ui`, `Hud`; `MapSpec` (колбэки и `dyn Any`) → trait `MapLogic`.
+`Section`/`key_of`; разделить `Session`, `Ui`, `Hud`. `MapSpec` → trait `MapLogic` сделан (фикстура
+детерминизма та же); вживую не смотрено то, что клиент рисует и предсказывает по состоянию логики: плитки
+hex-a-gone, стеклянный мост, звёзды star-fall, двери door-dash, хвосты tail-tag.
 
 ## Решить автору
 

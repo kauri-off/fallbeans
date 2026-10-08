@@ -7,12 +7,12 @@
 use std::collections::BTreeSet;
 
 use fb_shared::{Rgb, rgb};
-use fb_sim::bots::{ArenaOpts, arena_brain};
+use fb_sim::bots::{ArenaOpts, BotBrain, BotInput, BotView, arena_brain};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::Pattern;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapLogic, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
@@ -177,12 +177,48 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
     b.special(node, "sign", &face, sides);
 }
 
+/// The lobby's game: ring the bell.
+struct Bell {
+    /// Who has been down on the floor since they last rang it.
+    armed: BTreeSet<u32>,
+    brain: BotBrain,
+}
+
+impl MapLogic for Bell {
+    /// Standing up there after having been down on the floor since the last ring.
+    fn tick(&mut self, cx: &mut Cx, _: f64) {
+        let (bx, bz, br, by) = BELL;
+        let ids = cx.bodies.ids();
+        // Whoever left is forgotten.
+        self.armed.retain(|id| ids.contains(id));
+        for id in ids {
+            let Some(p) = cx.bodies.get(id).map(|b| b.pos) else {
+                continue;
+            };
+            if p.y < 1.0 {
+                self.armed.insert(id);
+            } else if p.y > by && m::hypot(p.x - bx, p.z - bz) < br && self.armed.remove(&id) {
+                let v = cx.score(id) + 1;
+                cx.set_score(id, v);
+            }
+        }
+    }
+
+    fn bots(&self) -> bool {
+        true
+    }
+
+    fn bot(&self, bot: &mut BotView, out: &mut BotInput) {
+        (self.brain)(bot, out);
+    }
+}
+
 impl MapDef for Lobby {
     fn meta(&self) -> &'static GameMeta {
         &META
     }
 
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
+    fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
         // ---------------------------------------------------------------- ground and plaza
         let floor = PrimOpts {
             freq: Some(0.3),
@@ -445,33 +481,16 @@ impl MapDef for Lobby {
             (6.0, 5.0),
             (-5.0, -4.0),
         ]);
-        // The bell (server): standing up there after having been down on the floor since the last ring.
-        let mut armed: BTreeSet<u32> = BTreeSet::new();
-        let tick = move |cx: &mut fb_sim::map::Cx, _t: f64| {
-            let (bx, bz, br, by) = BELL;
-            let ids = cx.bodies.ids();
-            // Whoever left is forgotten.
-            armed.retain(|id| ids.contains(id));
-            for id in ids {
-                let Some(p) = cx.bodies.get(id).map(|b| b.pos) else {
-                    continue;
-                };
-                if p.y < 1.0 {
-                    armed.insert(id);
-                } else if p.y > by && m::hypot(p.x - bx, p.z - bz) < br && armed.remove(&id) {
-                    let v = cx.score(id) + 1;
-                    cx.set_score(id, v);
-                }
-            }
-        };
         MapSpec {
             // A ring round the fountain, more places than players: a newcomer always finds a free one.
             spawns: b.ring_spawns(12, 5.0, 0.05, m::PI / 12.0),
             kill_y: -15.0,
             face_center: true,
             view: Some(V3::new(0.0, 2.0, 0.0)),
-            tick: ctx.server.then(|| Box::new(tick) as fb_sim::map::OnTick),
-            bot: Some(arena_brain(opts)),
+            logic: Box::new(Bell {
+                armed: BTreeSet::new(),
+                brain: arena_brain(opts),
+            }),
             ..Default::default()
         }
     }

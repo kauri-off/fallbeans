@@ -7,8 +7,8 @@ use std::io::{BufWriter, Write};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use fb_arena::{
-    ArenaKind, FallBehaviour, Stepper, build_map, can_move, client_event, client_start, fell, reach_checkpoint,
-    respawn, respawn_point, tick_bodies, touch_hook,
+    ArenaKind, FallBehaviour, MapRun, Stepper, build_map, can_move, client_event, client_start, fell, reach_checkpoint,
+    respawn, respawn_point, tick_bodies,
 };
 use fb_net::*;
 use fb_proto::{ArenaInfo, Pid};
@@ -141,7 +141,7 @@ impl Map {
         } else {
             Bonuses::default()
         };
-        b.world.finalize(-1e3);
+        b.world.finalize(-1e3, &*spec.logic);
         let static_hash = b.world.hash(true).to_string();
         let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
         client_start(&mut b.world, &mut spec, &mut scores, None, &mut out);
@@ -368,7 +368,7 @@ fn build_round(
     } else {
         Bonuses::default()
     };
-    b.world.finalize(-1e3);
+    b.world.finalize(-1e3, &*spec.logic);
     let static_hash = b.world.hash(true).to_string();
     if static_hash != round.static_hash {
         // The client would predict against a different map: a bug in determinism, never expected.
@@ -767,9 +767,15 @@ fn predict(
     }];
     // Map logic predicted here (a portal, a pane that breaks), and the sounds it asks for.
     let (mut scores, mut out) = (Default::default(), Vec::new());
-    let mut touch = touch_hook(&mut map.spec.touches, false, t, Some(id.0), &mut scores, &mut out);
-    tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut touch);
-    drop(touch);
+    let mut run = MapRun {
+        logic: &mut *map.spec.logic,
+        server: false,
+        apply: false,
+        me: Some(id.0),
+        scores: &mut scores,
+        out: &mut out,
+    };
+    tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut run);
     if rollback.is_none() {
         cues.write_batch(out.iter().filter_map(|o| match o {
             MapOut::Sfx(s) => Some(Cue::Sfx((*s).into())),
@@ -777,8 +783,8 @@ fn predict(
         }));
     }
     predict_respawn(map, id.0, full);
-    if let Some(f) = map.spec.on_bean.as_ref().filter(|_| !map.gone(id.0)) {
-        f(&map.world, id.0, &mut full.body, t);
+    if !map.gone(id.0) {
+        map.spec.logic.bean(id.0, &mut full.body, t);
     }
     stats.ticks += 1;
     if rollback.is_none() {

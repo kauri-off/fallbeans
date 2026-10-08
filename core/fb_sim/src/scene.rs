@@ -4,6 +4,7 @@ use std::sync::Arc;
 use fb_shared::{Rgb, rgb};
 
 use crate::looks::Pattern;
+use crate::map::{Hook, MapLogic};
 use crate::math::V3;
 use crate::nodes::NodeId;
 use crate::world::World;
@@ -335,13 +336,28 @@ pub struct LookOut {
     pub tints: Vec<Tint>,
 }
 
-/// Fills a special's pieces for sim time t from the map's state (client only, every frame).
+/// Fills a special's pieces for sim time t (client only, every frame), from the world or the map's logic.
 #[derive(Clone)]
-pub struct Look(pub Arc<dyn Fn(&World, f64, &mut LookOut) + Send + Sync>);
+pub enum Look {
+    Fn(Arc<dyn Fn(&World, f64, &mut LookOut) + Send + Sync>),
+    Map(Hook),
+}
+
+impl Look {
+    pub fn run(&self, logic: &dyn MapLogic, world: &World, t: f64, out: &mut LookOut) {
+        match self {
+            Look::Fn(f) => f(world, t, out),
+            Look::Map(h) => logic.look(*h, world, t, out),
+        }
+    }
+}
 
 impl core::fmt::Debug for Look {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        f.write_str("Look")
+        match self {
+            Look::Fn(_) => f.write_str("Look::Fn"),
+            Look::Map(h) => write!(f, "Look::Map({})", h.0),
+        }
     }
 }
 

@@ -252,7 +252,7 @@ pub fn pose_specials(
         out.pieces.clear();
         out.tints.clear();
         match look {
-            Some(l) => (l.0)(&map.world, t, out),
+            Some(l) => l.run(&*map.spec.logic, &map.world, t, out),
             None => out.pieces.extend_from_slice(still),
         }
         for tint in out.tints.drain(..) {

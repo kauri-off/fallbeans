@@ -13,8 +13,8 @@ use fb_shared::rng::Rng;
 use fb_shared::{BOT_EVERY, DT, m};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
-use fb_sim::builder::Builder;
-use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapEvent, MapOut, MapSpec, NoBodies, Touches, spec_problems};
+use fb_sim::builder::{Builder, enter_gate};
+use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapEvent, MapLogic, MapOut, MapSpec, NoBodies, NoLogic, spec_problems};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nav::{Nav, NavGrid};
 use fb_sim::physics::{Body, BodyInput, BodyState, Carry, OtherBody, StepEvents, StepScratch, Touch};
@@ -247,36 +247,41 @@ pub struct Stepper<'a> {
     pub input: BodyInput,
 }
 
-/// What a body's step does when it touches a collider with a handler: (world, id, body, events, touch).
 /// A navigation grid built ahead, and the static world it was built for (`NavGrid::key`).
 pub type PreparedNav = (NavGrid, Fingerprint);
 
-pub type TouchHook<'a> = dyn FnMut(&mut World, u32, &mut Body, &mut StepEvents, Touch) + 'a;
+/// The map code a tick of bodies runs (`tick_bodies`): its logic's moving parts and touch handlers, and portals.
+pub struct MapRun<'a> {
+    pub logic: &'a mut dyn MapLogic,
+    pub server: bool,
+    /// Events the logic emits are applied at once (the server's arena; not client prediction or a bare step).
+    pub apply: bool,
+    /// Client: the local player.
+    pub me: Option<u32>,
+    pub scores: &'a mut BTreeMap<u32, i64>,
+    pub out: &'a mut Vec<MapOut>,
+}
 
-/// For worlds without map logic.
-pub fn no_touch(_: &mut World, _: u32, _: &mut Body, _: &mut StepEvents, _: Touch) {}
-
-/// Runs a map's touch handlers for bodies stepped outside an arena (client prediction, tests): no
-/// events are applied here (on a client they come from the server).
-pub fn touch_hook<'a>(
-    touches: &'a mut Touches,
-    server: bool,
-    t: f64,
-    me: Option<u32>,
-    scores: &'a mut BTreeMap<u32, i64>,
-    out: &'a mut Vec<MapOut>,
-) -> impl FnMut(&mut World, u32, &mut Body, &mut StepEvents, Touch) + 'a {
-    move |world, _, body, ev, tc| {
-        let Some(h) = touches.handler(tc) else { return };
+impl MapRun<'_> {
+    fn touch(&mut self, world: &mut World, t: f64, body: &mut Body, ev: &mut StepEvents, tc: Touch) {
         let mut none = NoBodies;
-        let mut cx = Cx::new(server, t, me, world, &mut none, scores, out);
-        h(&mut cx, body, ev, tc);
+        let mut cx = Cx::new(
+            self.server,
+            self.apply,
+            t,
+            self.me,
+            world,
+            &mut none,
+            self.scores,
+            self.out,
+        );
+        if !enter_gate(&mut cx, tc.col, body, ev) {
+            self.logic.touch(&mut cx, body, ev, tc);
+        }
     }
 }
 
-/// A map event from the server applied to a client's copy of the map: a portal
-/// trip shuts its pair, the rest go to the map's handler. What the map says back (sounds, decorations)
-/// lands in `out`.
+/// A server's map event on a client's map: a portal trip shuts its pair, the rest go to the logic (replies in `out`).
 pub fn client_event(
     world: &mut World,
     spec: &mut MapSpec,
@@ -291,10 +296,9 @@ pub fn client_event(
         }
         return;
     }
-    let Some(h) = spec.on_event.as_mut() else { return };
     let mut none = NoBodies;
-    let mut cx = Cx::new(false, world.t, me, world, &mut none, scores, out);
-    h(&mut cx, ev);
+    let mut cx = Cx::new(false, false, world.t, me, world, &mut none, scores, out);
+    spec.logic.event(&mut cx, ev);
 }
 
 /// A client's map once built: what the map sets up on a client (decorations).
@@ -305,10 +309,9 @@ pub fn client_start(
     me: Option<u32>,
     out: &mut Vec<MapOut>,
 ) {
-    let Some(h) = spec.on_start.as_mut() else { return };
     let mut none = NoBodies;
-    let mut cx = Cx::new(false, world.t, me, world, &mut none, scores, out);
-    h(&mut cx);
+    let mut cx = Cx::new(false, false, world.t, me, world, &mut none, scores, out);
+    spec.logic.start(&mut cx);
 }
 
 /// The map's line of HUD text for the local player.
@@ -318,11 +321,10 @@ pub fn client_hud(
     scores: &mut BTreeMap<u32, i64>,
     me: Option<u32>,
 ) -> Option<String> {
-    let h = spec.hud.as_ref()?;
     let mut out = Vec::new();
     let mut none = NoBodies;
-    let cx = Cx::new(false, world.t, me, world, &mut none, scores, &mut out);
-    h(&cx)
+    let cx = Cx::new(false, false, world.t, me, world, &mut none, scores, &mut out);
+    spec.logic.hud(&cx)
 }
 
 /// Buffers `tick_bodies` reuses from tick to tick (none of it is state).
@@ -336,8 +338,22 @@ pub struct TickScratch {
 
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
-pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], touch: &mut TouchHook) {
-    tick_bodies_with(&mut TickScratch::default(), world, t, bodies, extra, touch);
+pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], map: &mut MapRun) {
+    tick_bodies_with(&mut TickScratch::default(), world, t, bodies, extra, map);
+}
+
+/// `tick_bodies` in a world without map logic (portals still work), as the server would step it.
+pub fn tick_plain(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody]) {
+    let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
+    let mut map = MapRun {
+        logic: &mut NoLogic,
+        server: true,
+        apply: false,
+        me: None,
+        scores: &mut scores,
+        out: &mut out,
+    };
+    tick_bodies(world, t, bodies, extra, &mut map);
 }
 
 /// `tick_bodies` with buffers kept by the caller.
@@ -347,7 +363,7 @@ pub fn tick_bodies_with(
     t: f64,
     bodies: &mut [Stepper],
     extra: &[OtherBody],
-    touch: &mut TouchHook,
+    map: &mut MapRun,
 ) {
     // Where a body stands on a moving platform is read in the world of the previous tick. The server's
     // world is always there; a client replaying a rollback finds it at its latest prediction instead.
@@ -356,10 +372,10 @@ pub fn tick_bodies_with(
     let k = (t / DT).round();
     let tick = (t.is_finite() && k * DT == t).then_some(k as i64);
     match tick {
-        Some(k) => world.goto_tick(k - 1),
+        Some(k) => world.goto_tick(k - 1, &*map.logic),
         None => {
             if (world.t - (t - DT)).abs() > 1e-9 {
-                world.goto(t - DT);
+                world.goto(t - DT, &*map.logic);
             }
         }
     }
@@ -375,8 +391,8 @@ pub fn tick_bodies_with(
         carries.push(s.body.before_world_update(world));
     }
     match tick {
-        Some(k) => world.goto_tick(k),
-        None => world.goto(t),
+        Some(k) => world.goto_tick(k, &*map.logic),
+        None => world.goto(t, &*map.logic),
     }
     for (s, c) in bodies.iter_mut().zip(carries.iter()) {
         s.body.after_world_update(c, world);
@@ -392,10 +408,9 @@ pub fn tick_bodies_with(
     for s in bodies.iter_mut() {
         rest.clear();
         rest.extend(others.iter().copied().filter(|o| o.id != s.id));
-        let id = s.id;
         s.body
             .step(step, s.ev, DT, s.input, world, t, rest, &mut |w, b, e, tc| {
-                touch(w, id, b, e, tc)
+                map.touch(w, t, b, e, tc)
             });
     }
 }
@@ -410,17 +425,16 @@ pub fn reach_checkpoint(spec: &MapSpec, body: &Body, checkpoint: &mut Option<usi
     if !body.grounded {
         return;
     }
-    let prog = spec.progress.as_ref().map_or(body.pos.z, |f| f(body.pos));
     for (ci, cp) in spec.checkpoints.iter().enumerate() {
-        if prog >= cp.z && checkpoint.is_none_or(|c| cp.z > spec.checkpoints[c].z) {
+        if body.pos.z >= cp.z && checkpoint.is_none_or(|c| cp.z > spec.checkpoints[c].z) {
             *checkpoint = Some(ci);
         }
     }
 }
 
-/// Below the kill line, or where the map says a bean is off the course (or nowhere: not a number).
+/// Below the kill line (or nowhere: not a number).
 pub fn fell(spec: &MapSpec, pos: V3) -> bool {
-    pos.y < spec.kill_y || !pos.is_finite() || spec.is_out.as_ref().is_some_and(|f| f(pos))
+    pos.y < spec.kill_y || !pos.is_finite()
 }
 
 /// Where a bean that fell (or took a shortcut) comes back: its checkpoint (races) or its spawn; None in the
@@ -466,10 +480,9 @@ pub fn build_map(map: &'static dyn MapDef, seed: u32, with_scene: bool, particip
         seed,
         participants,
     };
-    let mut spec = map.build(&mut b, &ctx);
+    let spec = map.build(&mut b, &ctx);
     let bad = spec_problems(&spec);
     assert!(bad.is_empty(), "map {}: {}", map.meta().id, bad.join(", "));
-    spec.touches = core::mem::take(&mut b.touches);
     (b, spec)
 }
 
@@ -501,7 +514,7 @@ impl Arena {
         } else {
             Bonuses::default()
         };
-        b.world.finalize(tick as f64 * DT);
+        b.world.finalize(tick as f64 * DT, &*spec.logic);
         let static_hash = b.world.hash(true);
         (
             Self {
@@ -786,18 +799,15 @@ impl Arena {
                     });
                 }
             }
-            let MapSpec { touches, on_event, .. } = &mut self.spec;
-            let (scores, out) = (&mut self.scores, &mut self.map_out);
-            let mut touch = |world: &mut World, _: u32, body: &mut Body, ev: &mut StepEvents, tc: Touch| {
-                let Some(h) = touches.handler(tc) else { return };
-                let mut none = NoBodies;
-                let mut cx = Cx {
-                    on_event: on_event.as_mut(),
-                    ..Cx::new(true, t, None, world, &mut none, scores, out)
-                };
-                h(&mut cx, body, ev, tc);
+            let mut map = MapRun {
+                logic: &mut *self.spec.logic,
+                server: true,
+                apply: true,
+                me: None,
+                scores: &mut self.scores,
+                out: &mut self.map_out,
             };
-            tick_bodies_with(&mut self.scratch, &mut self.world, t, &mut steppers, &[], &mut touch);
+            tick_bodies_with(&mut self.scratch, &mut self.world, t, &mut steppers, &[], &mut map);
         }
         self.flush(&mut events);
         for &i in &active {
@@ -842,41 +852,28 @@ impl Arena {
         events
     }
 
-    /// Runs `f` with the map's context (the server's: every bean in play).
-    fn with_cx<R>(&mut self, t: f64, f: impl FnOnce(&mut MapSpec, &mut Cx) -> R) -> R {
+    /// Runs `f` with the map's logic and context (the server's: every bean in play).
+    fn with_cx<R>(&mut self, t: f64, f: impl FnOnce(&mut dyn MapLogic, &mut Cx) -> R) -> R {
         let mut bodies = PawnBodies(&mut self.pawns);
-        let spec = &mut self.spec;
-        let mut on_event = spec.on_event.take();
-        let mut cx = Cx {
-            on_event: on_event.as_mut(),
-            ..Cx::new(
-                true,
-                t,
-                None,
-                &mut self.world,
-                &mut bodies,
-                &mut self.scores,
-                &mut self.map_out,
-            )
-        };
-        let r = f(spec, &mut cx);
-        spec.on_event = on_event;
-        r
+        let mut cx = Cx::new(
+            true,
+            true,
+            t,
+            None,
+            &mut self.world,
+            &mut bodies,
+            &mut self.scores,
+            &mut self.map_out,
+        );
+        f(&mut *self.spec.logic, &mut cx)
     }
 
     fn map_tick(&mut self, t: f64, events: &mut Vec<ArenaEvent>) {
-        if self.spec.tick.is_some() {
-            self.with_cx(t, |spec, cx| {
-                if let Some(f) = spec.tick.as_mut() {
-                    f(cx, t);
-                }
-            });
-            self.flush(events);
-        }
-        if let Some(f) = &self.spec.on_bean {
-            for p in self.pawns.iter_mut().filter(|p| p.status == PawnStatus::Play) {
-                f(&self.world, p.id, &mut p.body, t);
-            }
+        self.with_cx(t, |logic, cx| logic.tick(cx, t));
+        self.flush(events);
+        let logic = &*self.spec.logic;
+        for p in self.pawns.iter_mut().filter(|p| p.status == PawnStatus::Play) {
+            logic.bean(p.id, &mut p.body, t);
         }
     }
 
@@ -923,15 +920,13 @@ impl Arena {
     }
 
     fn build_nav(&self) -> NavGrid {
-        NavGrid::build(
-            &self.world,
-            self.spec.forbidden.as_ref().map(|f| f.as_ref() as &dyn Fn(V3) -> bool),
-        )
+        let logic = &*self.spec.logic;
+        NavGrid::build(&self.world, Some(&|p| logic.forbidden(p)))
     }
 
     /// Builds the bots' navigation grid now, ahead of the round or the lobby (a server room does it off its tick).
     pub fn prepare_nav(&mut self) {
-        if self.nav.is_none() && self.nav_pre.is_none() && self.kind != ArenaKind::Podium && self.spec.bot.is_some() {
+        if self.nav.is_none() && self.nav_pre.is_none() && self.kind != ArenaKind::Podium && self.spec.logic.bots() {
             self.nav_pre = Some((self.build_nav(), NavGrid::key(&self.world)));
         }
     }
@@ -953,7 +948,7 @@ impl Arena {
     /// The navigation grid takes a while to build: it is built before the start, and used at the
     /// start if the static world has not changed.
     fn prebuild_nav(&mut self) {
-        if self.nav.is_some() || self.nav_pre.is_some() || self.kind != ArenaKind::Round || self.spec.bot.is_none() {
+        if self.nav.is_some() || self.nav_pre.is_some() || self.kind != ArenaKind::Round || !self.spec.logic.bots() {
             return;
         }
         let t = self.time();
@@ -970,7 +965,7 @@ impl Arena {
         let t = self.time();
         let Some(bot) = self.pawns[i].bot.as_mut() else { return };
         bot.input = BotInput::default();
-        if self.spec.bot.is_none() || !self.bots_on {
+        if !self.spec.logic.bots() || !self.bots_on {
             return;
         }
         if self.nav.is_none() && (t >= 0.0 || self.kind != ArenaKind::Round) {
@@ -1016,7 +1011,7 @@ impl Arena {
         spots.extend(bonuses.available(t).map(|b| b.pos));
         let (others, bonuses) = (others.as_slice(), spots.as_slice());
         let p = &mut pawns[i];
-        let (Some(st), Some(brain)) = (p.bot.as_mut(), spec.bot.as_ref()) else {
+        let Some(st) = p.bot.as_mut() else {
             return;
         };
         let mut out = BotInput::default();
@@ -1033,7 +1028,7 @@ impl Arena {
             world,
             scores,
         };
-        brain(&mut view, &mut out);
+        spec.logic.bot(&mut view, &mut out);
         smooth_stick(&mut st.mem, &mut out);
         st.input = out;
         if out.emote != 0 {
@@ -1122,14 +1117,8 @@ impl Arena {
                 if round {
                     self.pawns[i].stats.grabs += 1;
                 }
-                if self.spec.on_grab.is_some() {
-                    self.with_cx(t, |spec, cx| {
-                        if let Some(f) = spec.on_grab.as_mut() {
-                            f(cx, pid, tid);
-                        }
-                    });
-                    self.flush(events);
-                }
+                self.with_cx(t, |logic, cx| logic.grab(cx, pid, tid));
+                self.flush(events);
                 self.pawns[i].reaching = false;
                 let (b, ob) = (&self.pawns[i].body, &self.pawns[oj].body);
                 let dist = dist_xz(ob.pos, b.pos);
@@ -1228,9 +1217,8 @@ impl Arena {
         let spec = &self.spec;
         let p = &mut self.pawns[i];
         let pos = p.body.pos;
-        let prog = spec.progress.as_ref().map_or(pos.z, |f| f(pos));
         if t >= 0.0 {
-            p.progress = p.progress.at_least(prog);
+            p.progress = p.progress.at_least(pos.z);
         }
         if let Some(fin) = spec.finish
             && round
@@ -1253,7 +1241,7 @@ impl Arena {
         // Standing where the course does not go (on frames, behind walls): back to the checkpoint,
         // fined. Only while standing there: being knocked off over a rail is a fall, not a shortcut.
         if p.body.grounded {
-            p.forbidden_for = if round && t >= 0.0 && spec.forbidden.as_ref().is_some_and(|f| f(pos)) {
+            p.forbidden_for = if round && t >= 0.0 && spec.logic.forbidden(pos) {
                 p.forbidden_for + DT
             } else {
                 0.0
@@ -1315,12 +1303,8 @@ impl Arena {
         if counts || self.kind == ArenaKind::Lobby {
             events.push(ArenaEvent::Ko(ko(false)));
         }
-        if counts && !shortcut && self.spec.on_fall.is_some() {
-            self.with_cx(t, |spec, cx| {
-                if let Some(f) = spec.on_fall.as_mut() {
-                    f(cx, id, by);
-                }
-            });
+        if counts && !shortcut {
+            self.with_cx(t, |logic, cx| logic.fall(cx, id, by));
             self.flush(events);
         }
         let p = &self.pawns[i];

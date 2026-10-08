@@ -9,7 +9,7 @@ use fb_sim::bots::{HumanOpts, Note, humanize, init_bot};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Surface;
@@ -165,7 +165,7 @@ impl MapDef for RollOut {
             spawns,
             kill_y: -16.0,
             view: Some(V3::new(0.0, 2.0, 0.0)),
-            bot: Some(Box::new(move |bot, out| {
+            logic: Box::new(Brain(Box::new(move |bot, out| {
                 init_bot(bot);
                 let p = bot.body.pos;
                 let mut ring = &rings[0];
@@ -251,7 +251,7 @@ impl MapDef for RollOut {
                         ..Default::default()
                     },
                 );
-            })),
+            }))),
             ..Default::default()
         }
     }

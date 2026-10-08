@@ -9,7 +9,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::{ColId, ColliderOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::scene::{Palette, pal};
@@ -200,7 +200,7 @@ impl MapDef for WallRush {
             spawns,
             kill_y: -8.0,
             view: Some(V3::new(0.0, 2.0, -6.0)),
-            bot: Some(Box::new(move |bot, out| {
+            logic: Box::new(Brain(Box::new(move |bot, out| {
                 init_bot(bot);
                 let p = bot.body.pos;
                 let t = bot.t;
@@ -257,7 +257,7 @@ impl MapDef for WallRush {
                     ..Default::default()
                 };
                 humanize(bot, out, &opts);
-            })),
+            }))),
             ..Default::default()
         }
     }

@@ -1,27 +1,14 @@
-use core::any::Any;
-use core::marker::PhantomData;
+use std::collections::BTreeMap;
 
 use fb_shared::DT;
 use fb_shared::hash::{Fingerprint, Fnv};
 
+use crate::builder::OpenFn;
 use crate::collider::{ColId, Collider, ColliderOpts, Shape};
+use crate::map::MapLogic;
+use crate::math::V3;
 use crate::nodes::{NodeId, Nodes};
 use crate::physics::PORTAL_T;
-
-/// State a map keeps besides geometry (tiles that fell, doors that broke): movers read it, map logic
-/// and bot brains get at it through its handle.
-pub type StateBox = Box<dyn Any + Send + Sync>;
-
-/// Handle to a map state of type S in its world.
-pub struct St<S>(usize, PhantomData<fn() -> S>);
-
-impl<S> Clone for St<S> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<S> Copy for St<S> {}
 
 /// How long (s) both ends of a portal stay shut after the traveller came out.
 pub const PORTAL_CLOSED: f64 = 1.0;
@@ -38,12 +25,24 @@ pub struct PortalPair {
     pub close_for: f64,
 }
 
-/// What a mover may change: transforms of nodes and whether colliders are solid. It reads the map's
-/// state and its portals.
+/// The trigger at one end of a portal pair (`Builder::portal`, `builder::enter_gate`).
+#[derive(Clone)]
+pub struct PortalGate {
+    pub pair: usize,
+    /// Which end (0 or 1).
+    pub end: u32,
+    /// Where the traveller comes out, facing `yaw`, with at least `speed` m/s (thrown up at `lift`).
+    pub to: V3,
+    pub yaw: f64,
+    pub speed: f64,
+    pub lift: Option<f64>,
+    pub open: Option<OpenFn>,
+}
+
+/// What a mover may change: transforms of nodes and whether colliders are solid. It reads the portals.
 pub struct MoveCtx<'a> {
     pub nodes: &'a mut Nodes,
     colliders: Option<&'a mut [Collider]>,
-    states: &'a [StateBox],
     portals: &'a [PortalPair],
 }
 
@@ -58,17 +57,9 @@ impl<'a> MoveCtx<'a> {
         }
     }
 
-    pub fn st<S: 'static>(&self, h: St<S>) -> &'a S {
-        state(self.states, h)
-    }
-
     pub fn portal(&self, pair: usize) -> &'a PortalPair {
         &self.portals[pair]
     }
-}
-
-fn state<S: 'static>(states: &[StateBox], h: St<S>) -> &S {
-    states[h.0].downcast_ref().expect("map state of another type")
 }
 
 /// Pure function of sim time: positions the moving parts of a map. Runs on server and client.
@@ -207,9 +198,10 @@ pub struct World {
     pub movers: Vec<Mover>,
     pub grid: ColliderGrid,
     pub t: f64,
-    pub states: Vec<StateBox>,
     /// Portal pairs in build order (their index is how the server names them to clients).
     pub portals: Vec<PortalPair>,
+    /// Portal triggers, by collider.
+    pub gates: BTreeMap<ColId, PortalGate>,
     /// Nodes whose matrices a tick must refresh (ancestors of moving colliders), in order.
     dyn_nodes: Vec<NodeId>,
     finalized: bool,
@@ -224,8 +216,8 @@ impl Default for World {
             movers: Vec::new(),
             grid: ColliderGrid::new(4.0),
             t: f64::NEG_INFINITY,
-            states: Vec::new(),
             portals: Vec::new(),
+            gates: BTreeMap::new(),
             dyn_nodes: Vec::new(),
             finalized: false,
         }
@@ -240,19 +232,6 @@ impl World {
         id
     }
 
-    pub fn add_state<S: Any + Send + Sync>(&mut self, s: S) -> St<S> {
-        self.states.push(Box::new(s));
-        St(self.states.len() - 1, PhantomData)
-    }
-
-    pub fn st<S: 'static>(&self, h: St<S>) -> &S {
-        state(&self.states, h)
-    }
-
-    pub fn st_mut<S: 'static>(&mut self, h: St<S>) -> &mut S {
-        self.states[h.0].downcast_mut().expect("map state of another type")
-    }
-
     /// A trip through portal pair `pair`, in at end `from` at time t: both ends shut till it is over.
     pub fn portal_used(&mut self, pair: usize, from: u32, t: f64) {
         let Some(p) = self.portals.get_mut(pair) else { return };
@@ -264,21 +243,21 @@ impl World {
         p.closed_until = t + PORTAL_T + p.close_for;
     }
 
-    fn run_movers(&mut self, t: f64) {
+    fn run_movers(&mut self, t: f64, logic: &dyn MapLogic) {
         let mut ctx = MoveCtx {
             nodes: &mut self.nodes,
             colliders: Some(&mut self.colliders),
-            states: &self.states,
             portals: &self.portals,
         };
         for mv in &self.movers {
             mv(t, &mut ctx);
         }
+        logic.pose(t, &mut ctx);
     }
 
     /// Call once after building: positions everything for time t and indexes static colliders.
-    pub fn finalize(&mut self, t: f64) {
-        self.run_movers(t);
+    pub fn finalize(&mut self, t: f64, logic: &dyn MapLogic) {
+        self.run_movers(t, logic);
         self.nodes.update_all();
         let mut chain = vec![false; self.nodes.0.len()];
         for i in 0..self.colliders.len() {
@@ -308,8 +287,8 @@ impl World {
     }
 
     /// Moves the world to time t; the previous matrices become the ones of the last call.
-    pub fn set_time(&mut self, t: f64) {
-        self.run_movers(t);
+    pub fn set_time(&mut self, t: f64, logic: &dyn MapLogic) {
+        self.run_movers(t, logic);
         for &i in &self.dyn_nodes {
             self.nodes.update_one(i);
         }
@@ -322,47 +301,47 @@ impl World {
     /// Moves to tick k (time k·DT) as if ticking there: the previous matrices are those of tick k − 1,
     /// whatever the world showed before (client prediction replays ticks out of order). Both times come
     /// from the tick (k·DT − DT and (k − 1)·DT may differ in the last bit), so a replay is the server's tick.
-    pub fn goto_tick(&mut self, k: i64) {
+    pub fn goto_tick(&mut self, k: i64, logic: &dyn MapLogic) {
         let t = k as f64 * DT;
         if t == self.t {
             return;
         }
         let prev = (k - 1) as f64 * DT;
         if prev != self.t {
-            self.set_time(prev);
+            self.set_time(prev, logic);
         }
-        self.set_time(t);
+        self.set_time(t, logic);
     }
 
     /// Moves to time t as if ticking there: the previous matrices are those of t − DT, whatever the
     /// world showed before. For times between ticks; at a tick, `goto_tick`.
-    pub fn goto(&mut self, t: f64) {
+    pub fn goto(&mut self, t: f64, logic: &dyn MapLogic) {
         if t == self.t {
             return;
         }
         if (t - DT - self.t).abs() > 1e-9 {
-            self.set_time(t - DT);
+            self.set_time(t - DT, logic);
         }
-        self.set_time(t);
+        self.set_time(t, logic);
     }
 
     /// Poses `nodes` (a copy of this world's) for drawing at time t; colliders are left alone.
-    pub fn pose(&self, t: f64, nodes: &mut Nodes) {
-        self.pose_locals(t, nodes);
+    pub fn pose(&self, t: f64, nodes: &mut Nodes, logic: &dyn MapLogic) {
+        self.pose_locals(t, nodes, logic);
         nodes.update_all();
     }
 
     /// `pose` without the world matrices: the caller refreshes those of the nodes that moved.
-    pub fn pose_locals(&self, t: f64, nodes: &mut Nodes) {
+    pub fn pose_locals(&self, t: f64, nodes: &mut Nodes, logic: &dyn MapLogic) {
         let mut ctx = MoveCtx {
             nodes,
             colliders: None,
-            states: &self.states,
             portals: &self.portals,
         };
         for mv in &self.movers {
             mv(t, &mut ctx);
         }
+        logic.pose(t, &mut ctx);
     }
 
     /// Fingerprint of the collision geometry at the current time.

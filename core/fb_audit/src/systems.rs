@@ -1,7 +1,7 @@
 //! Audits of the systems, not of one map: physics feel, input handling, game rules and planning.
 use std::collections::{BTreeMap, BTreeSet};
 
-use fb_arena::{Arena, ArenaKind, Stepper, no_touch, tick_bodies};
+use fb_arena::{Arena, ArenaKind, Stepper, tick_plain};
 use fb_maps::director::{Mode, Playlist, ROUND_COUNTS, game, plan_game};
 use fb_shared::game::Genre;
 use fb_shared::input::{BTN_JUMP, InputFrame};
@@ -11,6 +11,7 @@ use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS};
 use fb_shared::{DT, MAX_PLAYERS, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
+use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyInput, BodyState, RUN_SPEED, StepEvents};
 use fb_sim::scene::pal;
@@ -56,7 +57,7 @@ fn test_world() -> World {
         ..Default::default()
     };
     b.box_(100.0, 0.1, 0.0, 40.0, 0.2, 40.0, pal::BLUE, ice);
-    b.world.finalize(0.0);
+    b.world.finalize(0.0, &NoLogic);
     b.world
 }
 
@@ -77,7 +78,7 @@ fn run(
             ev: &mut ev,
             input: i,
         }];
-        tick_bodies(world, k as f64 * DT, &mut one, &[], &mut no_touch);
+        tick_plain(world, k as f64 * DT, &mut one, &[]);
         if each(k, body, world) {
             return k;
         }

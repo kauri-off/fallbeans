@@ -2,14 +2,13 @@
 //! platforms, ledges, ladders, giants. The beans of each world follow a script; where they are every quarter
 //! second must stay within `TOL` of the recorded path (`tests/paths/<world>.txt`). Record again after an
 //! intended change with `FB_BLESS=1 cargo test -p fb_arena --test scenarios`.
-use std::collections::BTreeMap;
-
-use fb_arena::{Stepper, tick_bodies, touch_hook};
+use fb_arena::{Stepper, tick_plain};
 use fb_shared::input::InputFrame;
 use fb_shared::rgb;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
+use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, Power, StepEvents};
 use fb_sim::scene::pal;
@@ -319,11 +318,8 @@ fn path(name: &str) -> String {
     let (ticks, beans) = script(name);
     let mut b = Builder::new(1, false);
     build(name, &mut b);
-    let mut touches = core::mem::take(&mut b.touches);
     let mut world = b.world;
-    world.finalize(0.0);
-    let mut scores = BTreeMap::new();
-    let mut out = Vec::new();
+    world.finalize(0.0, &NoLogic);
     let mut bodies: Vec<(u32, Body, StepEvents)> = beans
         .iter()
         .zip(1..)
@@ -349,8 +345,7 @@ fn path(name: &str) -> String {
             })
             .collect();
         let t = k as f64 * DT;
-        let mut touch = touch_hook(&mut touches, true, t, None, &mut scores, &mut out);
-        tick_bodies(&mut world, t, &mut steppers, &[], &mut touch);
+        tick_plain(&mut world, t, &mut steppers, &[]);
         if k % EVERY == 0 {
             for (id, b, _) in &bodies {
                 let p = b.pos;

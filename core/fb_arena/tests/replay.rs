@@ -1,8 +1,9 @@
 //! Client prediction replays ticks from a server state after its world has run ahead: the replay must give
 //! the same bodies, bit for bit, as ticking straight through (a bean riding a moving, turning platform).
-use fb_arena::{Stepper, no_touch, tick_bodies};
+use fb_arena::{Stepper, tick_plain};
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyInput, StepEvents};
 use fb_sim::scene::pal;
@@ -29,7 +30,7 @@ fn platform_world() -> World {
         n.pos.x = m::sin(t * 0.8) * 3.0;
         n.rot.y = t * 0.6;
     });
-    b.world.finalize(0.0);
+    b.world.finalize(0.0, &NoLogic);
     b.world
 }
 
@@ -51,7 +52,7 @@ fn step(world: &mut World, body: &mut Body, k: i64) {
         ev: &mut ev,
         input: input(k),
     }];
-    tick_bodies(world, k as f64 * DT, &mut s, &[], &mut no_touch);
+    tick_plain(world, k as f64 * DT, &mut s, &[]);
 }
 
 #[test]

@@ -12,8 +12,8 @@ fn looks_run_through_rounds() {
     for &map in fb_maps::MAPS {
         let end = map.meta().duration.at_most(150.0);
         for seed in 1..=4 {
-            let (mut b, _) = build_map(map, seed, true, &[1, 2]);
-            b.world.finalize(0.0);
+            let (mut b, spec) = build_map(map, seed, true, &[1, 2]);
+            b.world.finalize(0.0, &*spec.logic);
             let scene = b.scene.take().expect("a client build has a scene");
             let mut out = LookOut::default();
             for item in &scene.items {
@@ -35,7 +35,7 @@ fn looks_run_through_rounds() {
                 while t < end {
                     out.pieces.clear();
                     out.tints.clear();
-                    (look.0)(&b.world, t, &mut out);
+                    look.run(&*spec.logic, &b.world, t, &mut out);
                     for p in &out.pieces {
                         assert!((p.part as usize) < parts.len(), "{id} {kind}: part {}", p.part);
                         assert!(

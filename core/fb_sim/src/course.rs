@@ -9,19 +9,47 @@ use fb_shared::cause::Hazard;
 use fb_shared::rgb;
 use fb_shared::rng::{Rng, shuffle};
 
-use crate::bots::{BOT_DT, BotBrain, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
+use crate::bots::{BOT_DT, BotInput, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
 use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::m::{self, MinMax};
-use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapEvent, MapSfx, MapSpec, OnTick, PosTest, SegEvent};
+use crate::map::{Checkpoint, Cx, Finish, Hook, MapCtx, MapEvent, MapLogic, MapSfx, MapSpec, SegEvent, Steer};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
+use crate::physics::{Body, StepEvents, Touch};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
 use crate::scene::Model;
 use crate::scene::Surface;
-use crate::scene::{Palette, pal};
+use crate::scene::{LookOut, Palette, pal};
+use crate::world::{MoveCtx, World};
 
-pub type SegHandler = Box<dyn FnMut(&mut Cx, &SegEvent) + Send + Sync>;
+pub type PosTest = Box<dyn Fn(V3) -> bool + Send + Sync>;
+
+/// A section's rules and state (doors that broke, panes that fell): `MapLogic` for one section.
+pub trait Section: Send + Sync {
+    fn event(&mut self, _cx: &mut Cx, _ev: &SegEvent) {}
+    /// Any collider the course watches was touched: the section looks whether it is one of its own.
+    fn touch(&mut self, _cx: &mut Cx, _body: &mut Body, _ev: &mut StepEvents, _tc: Touch) {}
+    fn pose(&self, _t: f64, _ctx: &mut MoveCtx) {}
+    /// Any hook of the course: the section draws its own.
+    fn look(&self, _hook: Hook, _world: &World, _t: f64, _out: &mut LookOut) {}
+    /// Any hook of the course: the section steers by its own.
+    fn steer(&self, _hook: Hook, _bot: &mut BotView, _out: &mut BotInput) -> Steer {
+        Steer::Follow
+    }
+
+    /// Server: emits an event of section `seg` (`SegCtx::seg`) and applies it right away.
+    fn emit(&mut self, cx: &mut Cx, seg: u32, ev: SegEvent)
+    where
+        Self: Sized,
+    {
+        if cx.record(&MapEvent::Seg { seg, ev: ev.clone() }) {
+            cx.in_event = true;
+            self.event(cx, &ev);
+            cx.in_event = false;
+        }
+    }
+}
 
 pub struct SegCtx<'a> {
     pub b: &'a mut Builder,
@@ -31,8 +59,7 @@ pub struct SegCtx<'a> {
     pub y: f64,
     /// The section's place in the course: its events carry it.
     seg: u32,
-    handlers: &'a mut BTreeMap<u32, Vec<SegHandler>>,
-    ticks: &'a mut Vec<OnTick>,
+    sections: &'a mut BTreeMap<u32, Box<dyn Section>>,
     /// Notes the course's bots share between sections.
     pub notes: CourseNotes,
 }
@@ -49,25 +76,16 @@ impl SegCtx<'_> {
         self.b.rng.unit()
     }
 
-    /// Handles this section's events.
-    pub fn on(&mut self, f: impl FnMut(&mut Cx, &SegEvent) + Send + Sync + 'static) {
-        self.handlers.entry(self.seg).or_default().push(Box::new(f));
+    /// The section's rules (one per section).
+    pub fn rules(&mut self, s: impl Section + 'static) {
+        let old = self.sections.insert(self.seg, Box::new(s));
+        assert!(old.is_none(), "section {} has rules already", self.seg);
     }
 
-    /// The section's number, for `seg_emit`.
+    /// The section's number, for `Section::emit`.
     pub fn seg(&self) -> u32 {
         self.seg
     }
-
-    /// Server: per-tick logic of this section.
-    pub fn tick(&mut self, f: impl FnMut(&mut Cx, f64) + Send + Sync + 'static) {
-        self.ticks.push(Box::new(f));
-    }
-}
-
-/// Emits an event of section `seg` (from `SegCtx::seg`).
-pub fn seg_emit(cx: &mut Cx, seg: u32, ev: SegEvent) {
-    cx.emit(MapEvent::Seg { seg, ev });
 }
 
 #[derive(Default)]
@@ -130,12 +148,11 @@ fn dynamic() -> PrimOpts {
     }
 }
 
-/// Builds a race course and returns its spec (spawns, finish, checkpoints, events, bots).
+/// Builds a race course and returns its spec (spawns, finish, checkpoints; its sections' rules, bots).
 pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     let spawns = b.start_area(0.0);
-    let mut handlers: BTreeMap<u32, Vec<SegHandler>> = BTreeMap::new();
+    let mut sections: BTreeMap<u32, Box<dyn Section>> = BTreeMap::new();
     let notes = CourseNotes { push: b.note() };
-    let mut ticks: Vec<OnTick> = Vec::new();
     let mut routes: Vec<Vec<Vec<Waypoint>>> = Vec::new();
     let mut forbidden: Vec<PosTest> = Vec::new();
     let mut checkpoints = vec![Checkpoint {
@@ -155,8 +172,7 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
             z: zz,
             y,
             seg: i as u32,
-            handlers: &mut handlers,
-            ticks: &mut ticks,
+            sections: &mut sections,
             notes,
         };
         let out = seg(&mut s);
@@ -199,29 +215,69 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         kill_y: min_y - 14.0,
         finish: Some(finish),
         checkpoints,
-        forbidden: Some(Box::new(move |p| forbidden.iter().any(|f| f(p)))),
-        on_event: Some(Box::new(move |cx, ev| {
-            let MapEvent::Seg { seg, ev } = ev else { return };
-            for h in handlers.get_mut(seg).into_iter().flatten() {
-                h(cx, ev);
-            }
-        })),
-        tick: Some(Box::new(move |cx, t| {
-            for f in &mut ticks {
-                f(cx, t);
-            }
-        })),
-        bot: Some(course_brain(routes, picks)),
+        logic: Box::new(Course {
+            sections,
+            forbidden,
+            routes,
+            picks,
+        }),
         ..Default::default()
     }
 }
 
-/// Each bot takes one route per section (chosen when it starts, kept in `picks`) and follows the joined path.
-pub fn course_brain(sections: Vec<Vec<Vec<Waypoint>>>, picks: Vec<Note<usize>>) -> BotBrain {
-    Box::new(move |bot, out| {
+/// A race course's rules: those of its sections, and its bots.
+pub struct Course {
+    sections: BTreeMap<u32, Box<dyn Section>>,
+    forbidden: Vec<PosTest>,
+    /// Ways through each section and the finish: a bot keeps one per section in `picks`.
+    routes: Vec<Vec<Vec<Waypoint>>>,
+    picks: Vec<Note<usize>>,
+}
+
+impl MapLogic for Course {
+    fn event(&mut self, cx: &mut Cx, ev: &MapEvent) {
+        let MapEvent::Seg { seg, ev } = ev else { return };
+        if let Some(s) = self.sections.get_mut(seg) {
+            s.event(cx, ev);
+        }
+    }
+
+    fn touch(&mut self, cx: &mut Cx, body: &mut Body, ev: &mut StepEvents, tc: Touch) {
+        for s in self.sections.values_mut() {
+            s.touch(cx, body, ev, tc);
+        }
+    }
+
+    fn pose(&self, t: f64, ctx: &mut MoveCtx) {
+        for s in self.sections.values() {
+            s.pose(t, ctx);
+        }
+    }
+
+    fn look(&self, hook: Hook, world: &World, t: f64, out: &mut LookOut) {
+        for s in self.sections.values() {
+            s.look(hook, world, t, out);
+        }
+    }
+
+    fn steer(&self, hook: Hook, bot: &mut BotView, out: &mut BotInput) -> Steer {
+        for s in self.sections.values() {
+            let steer = s.steer(hook, bot, out);
+            if steer != Steer::Follow {
+                return steer;
+            }
+        }
+        Steer::Follow
+    }
+
+    fn bots(&self) -> bool {
+        true
+    }
+
+    fn bot(&self, bot: &mut BotView, out: &mut BotInput) {
         init_bot(bot);
         let mut pts: Vec<&Waypoint> = Vec::new();
-        for (r, &k) in sections.iter().zip(&picks) {
+        for (r, &k) in self.routes.iter().zip(&self.picks) {
             let pick = match bot.mem.get(k) {
                 Some(v) => v,
                 None => {
@@ -234,8 +290,12 @@ pub fn course_brain(sections: Vec<Vec<Vec<Waypoint>>>, picks: Vec<Note<usize>>) 
                 pts.extend(route);
             }
         }
-        path_step(&pts, 0.0, bot, out);
-    })
+        path_step(&pts, 0.0, self, bot, out);
+    }
+
+    fn forbidden(&self, p: V3) -> bool {
+        self.forbidden.iter().any(|f| f(p))
+    }
 }
 
 // ------------------------------------------------------------------ sections
@@ -541,6 +601,173 @@ struct Door {
     row: u32,
 }
 
+/// A row of doors as bots see it: its waypoint's hook, where it stands, their notes.
+struct DoorRow {
+    hook: Hook,
+    z: f64,
+    pick: Note<usize>,
+    tried: Note<u32>,
+}
+
+/// The doors of a `door_rows` section.
+struct DoorRows {
+    seg: u32,
+    doors: Vec<Door>,
+    /// Breakable doors, by collider.
+    breakable: BTreeMap<ColId, usize>,
+    rows: Vec<DoorRow>,
+    notes: CourseNotes,
+}
+
+impl DoorRows {
+    fn break_door(&mut self, cx: &mut Cx, id: usize) {
+        let Some(d) = self.doors.get_mut(id) else {
+            return;
+        };
+        if d.broken.is_some() || !d.breakable {
+            return;
+        }
+        // (A break the client predicted was heard and seen then: it goes on from there.)
+        let heard = d.predicted.filter(|p| (cx.t - p).abs() < DOOR_PREDICTED);
+        d.broken = Some(heard.unwrap_or(cx.t));
+        cx.world.colliders[d.col as usize].enabled = false;
+        if heard.is_none() {
+            cx.sfx(MapSfx::Break);
+        }
+    }
+
+    fn predict_door(&mut self, cx: &mut Cx, id: usize) {
+        let t = cx.t;
+        let Some(d) = self.doors.get_mut(id) else {
+            return;
+        };
+        if d.broken.is_some() || !d.breakable || d.predicted.is_some_and(|p| (p..p + DOOR_PREDICTED).contains(&t)) {
+            return;
+        }
+        d.predicted = Some(t);
+        cx.world.colliders[d.col as usize].enabled = false;
+        cx.sfx(MapSfx::Break);
+    }
+}
+
+impl Section for DoorRows {
+    fn event(&mut self, cx: &mut Cx, ev: &SegEvent) {
+        if let SegEvent::Door(id) = *ev {
+            self.break_door(cx, id as usize);
+        }
+    }
+
+    fn touch(&mut self, cx: &mut Cx, _: &mut Body, _: &mut StepEvents, tc: Touch) {
+        let Some(&id) = self.breakable.get(&tc.col) else {
+            return;
+        };
+        if cx.server {
+            self.emit(cx, self.seg, SegEvent::Door(id as u32));
+        } else {
+            self.predict_door(cx, id);
+        }
+    }
+
+    fn pose(&self, t: f64, ctx: &mut MoveCtx) {
+        for d in &self.doors {
+            let since = if let Some(at) = d.broken {
+                at
+            } else if let Some(predicted) = d.predicted {
+                // A client's own predicted break, open until the server's event (or DOOR_PREDICTED).
+                let open = (predicted..predicted + DOOR_PREDICTED).contains(&t);
+                ctx.set_enabled(d.col, !open);
+                if !open {
+                    let n = ctx.node(d.obj);
+                    n.rot.x = 0.0;
+                    n.visible = true;
+                    continue;
+                }
+                predicted
+            } else {
+                continue;
+            };
+            let dt = (t - since).at_least(0.0);
+            let n = ctx.node(d.obj);
+            n.rot.x = (dt * dt * 7.0).at_most(m::PI / 2.0);
+            n.visible = dt <= 1.4;
+        }
+    }
+
+    /// Like a player: take a door someone broke, or barge into one; if it holds, try the next.
+    fn steer(&self, hook: Hook, bot: &mut BotView, _: &mut BotInput) -> Steer {
+        let Some((r, row)) = self.rows.iter().enumerate().find(|(_, row)| row.hook == hook) else {
+            return Steer::Follow;
+        };
+        let (wz, pick_key, tried_key, notes) = (row.z, row.pick, row.tried, self.notes);
+        let p = bot.body.pos;
+        if p.z > wz + 0.6 {
+            return Steer::Follow;
+        }
+        let row: Vec<(bool, f64)> = self
+            .doors
+            .iter()
+            .filter(|d| d.row == r as u32)
+            .map(|d| (d.broken.is_some(), d.x))
+            .collect();
+        let mut pick = bot.mem.get(pick_key);
+        let open: Vec<usize> = (0..row.len()).filter(|&i| row[i].0).collect();
+        if !open.is_empty() && pick.is_none_or(|k| !row.get(k).is_some_and(|d| d.0)) {
+            let mut nearest = open[0];
+            for &i in &open[1..] {
+                if (row[i].1 - p.x).abs() < (row[nearest].1 - p.x).abs() {
+                    nearest = i;
+                }
+            }
+            if (row[nearest].1 - p.x).abs() < 7.0 {
+                pick = Some(nearest);
+            }
+        }
+        let pick = match pick {
+            Some(k) => k,
+            None => {
+                let mask = bot.mem.get(tried_key).unwrap_or(0);
+                let mut options: Vec<usize> = (0..5).filter(|i| mask & (1 << i) == 0).collect();
+                let pref = p.x + bot.mem.traits().off * 3.0;
+                options.sort_by(|&a, &c| {
+                    let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
+                    da.total_cmp(&dc)
+                });
+                let first = bot.rng.unit() < 0.7;
+                let at = if first {
+                    0
+                } else {
+                    1.min(options.len().saturating_sub(1))
+                };
+                match options.get(at) {
+                    Some(&k) => k,
+                    None => bot.rng.index(5),
+                }
+            }
+        };
+        bot.mem.set(pick_key, pick);
+        let (broken, dx) = row[pick];
+        if !broken && p.z > wz - 1.05 && (p.x - dx).abs() < 1.2 {
+            let push = bot.mem.get(notes.push).unwrap_or(0.0) + BOT_DT;
+            bot.mem.set(notes.push, push);
+            if push > 0.25 + bot.mem.traits().react {
+                let tried = bot.mem.get(tried_key).unwrap_or(0) | (1 << pick);
+                bot.mem.set(tried_key, tried);
+                bot.mem.remove(pick_key);
+                bot.mem.set(notes.push, 0.0);
+            }
+        } else {
+            bot.mem.set(notes.push, 0.0);
+        }
+        let aligned = (p.x - dx).abs() < 0.5;
+        let (x, z) = if broken || aligned || p.z > wz - 1.5 {
+            (dx, wz + 2.0)
+        } else {
+            (dx, wz - 1.4)
+        };
+        Steer::Detour(x, z)
+    }
+}
+
 /// Rows of doors: most are solid, some burst open when you run into them (the first one through finds out).
 pub fn door_rows(rows: u32, w: f64) -> Segment {
     Box::new(move |s| {
@@ -552,7 +779,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
         let n = 5;
         let dw = w / n as f64;
         let mut doors: Vec<Door> = Vec::new();
-        let mut breakable_cols: Vec<(ColId, usize)> = Vec::new();
+        let mut breakable = BTreeMap::new();
         let mut row_z = Vec::new();
         for r in 0..rows {
             let wz = s.z + 5.0 + r as f64 * gap_z;
@@ -583,12 +810,13 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                         ..Default::default()
                     },
                 );
-                let breakable = idx.contains(&i);
-                if breakable {
-                    breakable_cols.push((col, id));
+                let can_break = idx.contains(&i);
+                if can_break {
+                    s.b.watch_touch(col);
+                    breakable.insert(col, id);
                 }
                 doors.push(Door {
-                    breakable,
+                    breakable: can_break,
                     broken: None,
                     predicted: None,
                     obj,
@@ -599,151 +827,29 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
             }
             s.b.box_(0.0, y + 3.6, wz, w + 0.4, 0.8, 1.0, pal::YELLOW, d());
         }
-        let st = s.b.state(doors);
-        let break_door = move |cx: &mut Cx, id: usize| {
-            let Some(d) = cx.world.st_mut(st).get_mut(id) else {
-                return;
-            };
-            if d.broken.is_some() || !d.breakable {
-                return;
-            }
-            // (A break the client predicted was heard and seen then: it goes on from there.)
-            let heard = d.predicted.filter(|p| (cx.t - p).abs() < DOOR_PREDICTED);
-            d.broken = Some(heard.unwrap_or(cx.t));
-            let col = d.col;
-            cx.world.colliders[col as usize].enabled = false;
-            if heard.is_none() {
-                cx.sfx(MapSfx::Break);
-            }
-        };
-        let predict_door = move |cx: &mut Cx, id: usize| {
-            let t = cx.t;
-            let Some(d) = cx.world.st_mut(st).get_mut(id) else {
-                return;
-            };
-            if d.broken.is_some() || !d.breakable || d.predicted.is_some_and(|p| (p..p + DOOR_PREDICTED).contains(&t)) {
-                return;
-            }
-            d.predicted = Some(t);
-            let col = d.col;
-            cx.world.colliders[col as usize].enabled = false;
-            cx.sfx(MapSfx::Break);
-        };
-        s.b.mover(move |t, ctx| {
-            for d in ctx.st(st) {
-                let since = if let Some(at) = d.broken {
-                    at
-                } else if let Some(predicted) = d.predicted {
-                    // A client's own predicted break, open until the server's event (or DOOR_PREDICTED).
-                    let open = (predicted..predicted + DOOR_PREDICTED).contains(&t);
-                    ctx.set_enabled(d.col, !open);
-                    if !open {
-                        let n = ctx.node(d.obj);
-                        n.rot.x = 0.0;
-                        n.visible = true;
-                        continue;
-                    }
-                    predicted
-                } else {
-                    continue;
-                };
-                let dt = (t - since).at_least(0.0);
-                let n = ctx.node(d.obj);
-                n.rot.x = (dt * dt * 7.0).at_most(m::PI / 2.0);
-                n.visible = dt <= 1.4;
-            }
-        });
-        let seg = s.seg();
-        for (col, id) in breakable_cols {
-            s.b.on_touch(col, move |cx, _, _, _| {
-                if cx.server {
-                    seg_emit(cx, seg, SegEvent::Door(id as u32));
-                } else {
-                    predict_door(cx, id);
-                }
-            });
-        }
-        s.on(move |cx, ev| {
-            if let SegEvent::Door(id) = *ev {
-                break_door(cx, id as usize);
-            }
-        });
         let notes = s.notes;
         let mut route = Vec::new();
-        for (r, &wz) in row_z.iter().enumerate() {
-            let (pick_key, tried_key): (Note<usize>, Note<u32>) = (s.b.note(), s.b.note());
-            let r = r as u32;
-            // Like a player: take a door someone broke, or barge into one; if it holds, try the next.
-            route.push(Waypoint::spread(0.0, wz + 1.5, 0.5).detour(move |bot| {
-                let p = bot.body.pos;
-                if p.z > wz + 0.6 {
-                    return None;
-                }
-                let row: Vec<(bool, f64)> = bot
-                    .world
-                    .st(st)
-                    .iter()
-                    .filter(|d| d.row == r)
-                    .map(|d| (d.broken.is_some(), d.x))
-                    .collect();
-                let mut pick = bot.mem.get(pick_key);
-                let open: Vec<usize> = (0..row.len()).filter(|&i| row[i].0).collect();
-                if !open.is_empty() && pick.is_none_or(|k| !row.get(k).is_some_and(|d| d.0)) {
-                    let mut nearest = open[0];
-                    for &i in &open[1..] {
-                        if (row[i].1 - p.x).abs() < (row[nearest].1 - p.x).abs() {
-                            nearest = i;
-                        }
-                    }
-                    if (row[nearest].1 - p.x).abs() < 7.0 {
-                        pick = Some(nearest);
-                    }
-                }
-                let pick = match pick {
-                    Some(k) => k,
-                    None => {
-                        let mask = bot.mem.get(tried_key).unwrap_or(0);
-                        let mut options: Vec<usize> = (0..5).filter(|i| mask & (1 << i) == 0).collect();
-                        let pref = p.x + bot.mem.traits().off * 3.0;
-                        options.sort_by(|&a, &c| {
-                            let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
-                            da.total_cmp(&dc)
-                        });
-                        let first = bot.rng.unit() < 0.7;
-                        let at = if first {
-                            0
-                        } else {
-                            1.min(options.len().saturating_sub(1))
-                        };
-                        match options.get(at) {
-                            Some(&k) => k,
-                            None => bot.rng.index(5),
-                        }
-                    }
-                };
-                bot.mem.set(pick_key, pick);
-                let (broken, dx) = row[pick];
-                if !broken && p.z > wz - 1.05 && (p.x - dx).abs() < 1.2 {
-                    let push = bot.mem.get(notes.push).unwrap_or(0.0) + BOT_DT;
-                    bot.mem.set(notes.push, push);
-                    if push > 0.25 + bot.mem.traits().react {
-                        let tried = bot.mem.get(tried_key).unwrap_or(0) | (1 << pick);
-                        bot.mem.set(tried_key, tried);
-                        bot.mem.remove(pick_key);
-                        bot.mem.set(notes.push, 0.0);
-                    }
-                } else {
-                    bot.mem.set(notes.push, 0.0);
-                }
-                let aligned = (p.x - dx).abs() < 0.5;
-                Some(if broken || aligned || p.z > wz - 1.5 {
-                    (dx, wz + 2.0)
-                } else {
-                    (dx, wz - 1.4)
-                })
-            }));
+        let mut door_rows = Vec::new();
+        for &wz in &row_z {
+            let (pick, tried): (Note<usize>, Note<u32>) = (s.b.note(), s.b.note());
+            let hook = s.b.hook();
+            route.push(Waypoint::spread(0.0, wz + 1.5, 0.5).hook(hook));
+            door_rows.push(DoorRow {
+                hook,
+                z: wz,
+                pick,
+                tried,
+            });
         }
         route.push(Waypoint::spread(0.0, s.z + len - 0.5, 1.0));
+        let seg = s.seg();
+        s.rules(DoorRows {
+            seg,
+            doors,
+            breakable,
+            rows: door_rows,
+            notes,
+        });
         let z0 = s.z;
         SegOut {
             z: s.z + len,

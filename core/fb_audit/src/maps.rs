@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fb_arena::StateHash;
-use fb_arena::{Arena, ArenaKind, PawnStatus, Stepper, tick_bodies, touch_hook};
+use fb_arena::{Arena, ArenaKind, MapRun, PawnStatus, Stepper, tick_bodies};
 use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::Genre;
 use fb_shared::hash::Fingerprint;
@@ -72,14 +72,22 @@ fn simulate(
     for i in 1..=n {
         let t = t0 + i as f64 * DT;
         {
-            let mut touch = touch_hook(&mut spec.touches, true, t, None, &mut scores, &mut out);
+            // (Events are not applied: a lone bean's touches change nothing for the next one.)
+            let mut map = MapRun {
+                logic: &mut *spec.logic,
+                server: true,
+                apply: false,
+                me: None,
+                scores: &mut scores,
+                out: &mut out,
+            };
             let mut one = [Stepper {
                 id: 99,
                 body: &mut *body,
                 ev: &mut ev,
                 input,
             }];
-            tick_bodies(world, t, &mut one, &[], &mut touch);
+            tick_bodies(world, t, &mut one, &[], &mut map);
         }
         out.clear();
         if each(t, body, &ev) {
@@ -153,7 +161,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let a = built(map, ctx.seed);
     let (spec, meta, world) = (&a.spec, map.meta(), &a.world);
     let sp = &spec.spawns;
-    let forbidden = |p: V3| spec.forbidden.as_ref().is_some_and(|f| f(p));
+    let forbidden = |p: V3| spec.logic.forbidden(p);
     out.metric("spawns", sp.len());
     if sp.len() < MAX_PLAYERS {
         out.error(format!(
@@ -210,10 +218,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 out.error("a race without a finish");
             }
             Some(fin) => {
-                let start = sp
-                    .iter()
-                    .map(|&p| spec.progress.as_ref().map_or(p.z, |f| f(p)))
-                    .fold(f64::NEG_INFINITY, m::max);
+                let start = sp.iter().map(|p| p.z).fold(f64::NEG_INFINITY, m::max);
                 if fin.z <= start {
                     out.error("the finish is not ahead of the spawns");
                 }
@@ -231,7 +236,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             out.warn("arena without a view point: the camera looks at the origin");
         }
     }
-    if spec.bot.is_none() {
+    if !spec.logic.bots() {
         out.error("no bot brain: bots will stand still");
     }
     out.metric("colliders", world.colliders.len());
@@ -259,7 +264,7 @@ fn stand_test(arena: &mut Arena, p: V3, t0: f64, seconds: f64) -> Stand {
     let kill_y = arena.spec.kill_y;
     let mut b = Body::new(99);
     b.reset(p, 0.0);
-    arena.world.goto(t0);
+    arena.world.goto(t0, &*arena.spec.logic);
     let start = overlap(&b, arena);
     let mut hit = None;
     let mut hit_at = 0.0;
@@ -458,7 +463,7 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut checks: u64 = 0;
     for s in 0..samples {
         let t = s as f64 * step;
-        a.world.set_time(t);
+        a.world.set_time(t, &*a.spec.logic);
         let world = &a.world;
         let mut test = |ia: ColId, ib: ColId| {
             let (ca, cb) = (world.col(ia), world.col(ib));
@@ -538,10 +543,10 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 
 fn nav(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut a = built(map, ctx.seed);
-    a.world.goto(0.0);
+    a.world.goto(0.0, &*a.spec.logic);
     let clock = Clock::start();
-    let forbidden = a.spec.forbidden.as_deref().map(|f| f as &dyn Fn(V3) -> bool);
-    let grid = NavGrid::build(&a.world, forbidden);
+    let logic = &*a.spec.logic;
+    let grid = NavGrid::build(&a.world, Some(&|p| logic.forbidden(p)));
     out.metric("build_ms", r1(clock.ms()));
     let mut off_grid = Vec::new();
     for (i, p) in a.spec.spawns.clone().into_iter().enumerate() {

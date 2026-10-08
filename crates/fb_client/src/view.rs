@@ -226,7 +226,7 @@ fn still_nodes(map: &Map) -> (Vec<bool>, Vec<bool>) {
         .iter()
         .flat_map(|&(from, to, step)| (0..((to - from) / step) as usize).map(move |k| from + k as f64 * step))
     {
-        map.world.pose_locals(t, &mut probe);
+        map.world.pose_locals(t, &mut probe, &*map.spec.logic);
         for &i in &watch {
             let (a, b) = (&probe.0[i], &base.0[i]);
             if a.pos != b.pos || a.rot != b.rot || a.scale != b.scale || a.visible != b.visible {
@@ -236,7 +236,7 @@ fn still_nodes(map: &Map) -> (Vec<bool>, Vec<bool>) {
         for l in &looks {
             out.pieces.clear();
             out.tints.clear();
-            (l.0)(&map.world, t, &mut out);
+            l.run(&*map.spec.logic, &map.world, t, &mut out);
             for tint in &out.tints {
                 if let Some(m) = tinted.get_mut(tint.node as usize) {
                     *m = true;
@@ -848,7 +848,7 @@ fn pose_map(
     // (A map built again after none starts from generation 0 again.)
     let all = map.is_added() || posed.generation != Some(map.generation);
     let map = &mut *map;
-    map.world.pose_locals(t, &mut map.render);
+    map.world.pose_locals(t, &mut map.render, &*map.spec.logic);
     posed.generation = Some(map.generation);
     posed.update(&mut map.render, all);
     if !all && drawn.generation == Some(map.generation) {

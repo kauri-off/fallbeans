@@ -10,15 +10,15 @@ use crate::bots::Note;
 use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::looks::Pattern;
 use crate::m::{self, MinMax};
-use crate::map::{Cx, MapEvent, MapOut, Touches};
+use crate::map::{Cx, Hook, MapEvent, MapOut};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
-use crate::physics::{Body, PORTAL_T, StepEvents, Touch};
+use crate::physics::{Body, PORTAL_T, StepEvents};
 use crate::scene::Surface;
 use crate::scene::{
     Finish, Form, Look, LookOut, Model, Palette, Part, Piece, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal,
 };
-use crate::world::{MoveCtx, PORTAL_CLOSED, PortalPair, St, World};
+use crate::world::{MoveCtx, PORTAL_CLOSED, PortalGate, PortalPair, World};
 
 #[derive(Clone, Debug)]
 pub struct PrimOpts {
@@ -126,6 +126,33 @@ pub fn portal_shut(pair: &PortalPair, open: Option<&OpenFn>, t: f64) -> bool {
     (t > pair.at && t < pair.closed_until) || open.is_some_and(|o| !o(t))
 }
 
+/// A body ran into a portal's gate: in it goes unless the portal is shut. False: `col` is no gate.
+pub fn enter_gate(cx: &mut Cx, col: ColId, body: &mut Body, ev: &mut StepEvents) -> bool {
+    let t = cx.world.t;
+    let Some(g) = cx.world.gates.get(&col) else {
+        return false;
+    };
+    let (k, end) = (g.pair, g.end);
+    if body.in_portal() || portal_shut(&cx.world.portals[k], g.open.as_ref(), t) {
+        return true;
+    }
+    body.enter_portal(ev, g.to, g.yaw, g.speed, g.lift);
+    // Clients hear of it (it shuts, they show the light); not kept for late joiners. A client's prediction
+    // does not shut it: only the server's event does.
+    if cx.server {
+        cx.world.portal_used(k, end, t);
+        cx.out.push(MapOut::Event {
+            ev: MapEvent::Portal {
+                pair: k as u32,
+                from: end,
+                t,
+            },
+            keep: false,
+        });
+    }
+    true
+}
+
 pub struct Builder {
     pub world: World,
     pub rng: Rng,
@@ -133,10 +160,10 @@ pub struct Builder {
     pub scene: Option<SceneDesc>,
     /// Candidate spots for bonuses (bonus.rs picks a few per round).
     pub bonus_spots: Vec<V3>,
-    /// Touch handlers of colliders (moved into the map's spec after the build).
-    pub touches: Touches,
     /// Notes in bots' memory made so far.
     notes: u32,
+    /// Hooks made so far.
+    hooks: u32,
 }
 
 impl Builder {
@@ -147,8 +174,8 @@ impl Builder {
             seed,
             scene: with_scene.then(SceneDesc::default),
             bonus_spots: Vec::new(),
-            touches: Touches::default(),
             notes: 0,
+            hooks: 0,
         }
     }
 
@@ -156,6 +183,12 @@ impl Builder {
     pub fn note<T>(&mut self) -> Note<T> {
         self.notes += 1;
         Note::new(self.notes)
+    }
+
+    /// A new hook for the map's logic (a look it draws, a waypoint it steers bots by).
+    pub fn hook(&mut self) -> Hook {
+        self.hooks += 1;
+        Hook(self.hooks)
     }
 
     pub fn server(&self) -> bool {
@@ -210,38 +243,38 @@ impl Builder {
                 kind,
                 parts: parts.to_vec(),
                 pieces: Vec::new(),
-                look: Some(Look(Arc::new(look))),
+                look: Some(Look::Fn(Arc::new(look))),
             });
         }
+    }
+
+    /// Something only the client draws, following the map's state (`MapLogic::look`, by the hook).
+    pub fn special_hook(&mut self, node: NodeId, kind: &'static str, parts: &[Part]) -> Hook {
+        let hook = self.hook();
+        if let Some(s) = &mut self.scene {
+            s.items.push(SceneItem::Special {
+                node,
+                kind,
+                parts: parts.to_vec(),
+                pieces: Vec::new(),
+                look: Some(Look::Map(hook)),
+            });
+        }
+        hook
     }
 
     pub fn collider(&mut self, node: NodeId, shape: Shape, o: ColliderOpts) -> ColId {
         self.world.add(node, shape, o)
     }
 
-    /// State the map keeps (movers, logic and bot brains reach it through the handle).
-    pub fn state<S: core::any::Any + Send + Sync>(&mut self, s: S) -> St<S> {
-        self.world.add_state(s)
-    }
-
-    /// Called whenever a body touches the collider (once per contact, inside its step).
-    pub fn on_touch(
-        &mut self,
-        col: ColId,
-        f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
-    ) {
+    /// `MapLogic::touch` hears whenever a body touches the collider (once per contact, inside its step).
+    pub fn watch_touch(&mut self, col: ColId) {
         self.world.colliders[col as usize].opts.on_touch = true;
-        self.touches.touch.insert(col, Box::new(f));
     }
 
-    /// Called on every step a body stands on the collider.
-    pub fn on_ground(
-        &mut self,
-        col: ColId,
-        f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
-    ) {
+    /// `MapLogic::touch` hears on every step a body stands on the collider.
+    pub fn watch_ground(&mut self, col: ColId) {
         self.world.colliders[col as usize].opts.on_ground = true;
-        self.touches.ground.insert(col, Box::new(f));
     }
 
     fn prim(
@@ -783,27 +816,17 @@ impl Builder {
                         ..Default::default()
                     },
                 );
-                let (open, speed, lift, yaw) = (o.open.clone(), o.speed, o.lift, other.yaw);
-                self.on_touch(trigger, move |cx, body, ev, _| {
-                    let t = cx.world.t;
-                    if body.in_portal() || portal_shut(&cx.world.portals[k], open.as_ref(), t) {
-                        return;
-                    }
-                    body.enter_portal(ev, to, yaw, speed, lift);
-                    // Clients hear of it (it shuts, they show the light); not kept for late joiners. A
-                    // client's prediction does not shut it: only the server's event does.
-                    if cx.server {
-                        cx.world.portal_used(k, i as u32, t);
-                        cx.out.push(MapOut::Event {
-                            ev: MapEvent::Portal {
-                                pair: k as u32,
-                                from: i as u32,
-                                t,
-                            },
-                            keep: false,
-                        });
-                    }
-                });
+                self.world.colliders[trigger as usize].opts.on_touch = true;
+                let gate = PortalGate {
+                    pair: k,
+                    end: i as u32,
+                    to,
+                    yaw: other.yaw,
+                    speed: o.speed,
+                    lift: o.lift,
+                    open: o.open.clone(),
+                };
+                self.world.gates.insert(trigger, gate);
                 // Shut: the sashes are a wall.
                 let at = self.anchor(0.0, 1.35, 0.0, ring);
                 let sash = self.collider(
