@@ -32,7 +32,11 @@ impl Plugin for HomePlugin {
                             .or_else(resource_changed::<Ui>)
                             .or_else(resource_changed::<Session>),
                     ),
-                    tabs_follow.run_if(state_changed::<Screen>.or_else(state_changed::<HomeTab>)),
+                    tabs_follow.run_if(
+                        state_changed::<Screen>
+                            .or_else(state_changed::<HomeTab>)
+                            .or_else(state_changed::<MenuTab>),
+                    ),
                     update_box.run_if(resource_exists_and_changed::<Update>.or_else(resource_changed::<LastCrash>)),
                     servers.run_if(resource_changed::<Servers>.or_else(resource_changed::<States>)),
                     server_add.run_if(resource_changed::<Servers>.or_else(resource_changed::<Form>)),
