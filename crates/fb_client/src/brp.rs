@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::game::{Map, ProbeInput, Stats};
 use crate::net::Conn;
 use crate::session::{Session, send};
-use crate::ui::{Fold, HomeTab, MenuTab, Ui};
+use crate::ui::{Fold, Folds, HomeTab, MenuTab, Ui};
 
 pub struct BrpPlugin {
     pub port: u16,
@@ -207,28 +207,37 @@ struct UiParams {
 }
 
 /// Drives the interface the way the player's clicks would (menu, tabs, folded parts, F3).
-fn ui_state(In(params): In<Option<Value>>, ui: Option<ResMut<Ui>>) -> BrpResult {
+fn ui_state(
+    In(params): In<Option<Value>>,
+    ui: Option<ResMut<Ui>>,
+    folds: Option<ResMut<Folds>>,
+    home: Option<ResMut<NextState<HomeTab>>>,
+    menu: Option<ResMut<NextState<MenuTab>>>,
+    overlay: Option<ResMut<crate::hud::Overlay>>,
+) -> BrpResult {
     let p: UiParams = parse(params)?;
-    let Some(mut ui) = ui else {
+    let (Some(mut ui), Some(mut folds), Some(mut home), Some(mut menu), Some(mut overlay)) =
+        (ui, folds, home, menu, overlay)
+    else {
         return Err(bad("no interface (headless)"));
     };
     if let Some(m) = p.menu {
         ui.menu = m;
     }
     match p.tab.as_deref() {
-        Some("game") => ui.menu_tab = MenuTab::Game,
-        Some("settings") => ui.menu_tab = MenuTab::Settings,
-        Some("dev") => ui.menu_tab = MenuTab::Dev,
-        Some("rooms") => ui.home_tab = HomeTab::Rooms,
-        Some("home-settings") => ui.home_tab = HomeTab::Settings,
+        Some("game") => menu.set(MenuTab::Game),
+        Some("settings") => menu.set(MenuTab::Settings),
+        Some("dev") => menu.set(MenuTab::Dev),
+        Some("rooms") => home.set(HomeTab::Main),
+        Some("home-settings") => home.set(HomeTab::Settings),
         Some(t) => return Err(bad(format!("no tab {t}"))),
         None => {}
     }
     if let Some(k) = p.fold {
-        ui.toggle(k);
+        folds.toggle(k);
     }
     if let Some(d) = p.debug {
-        ui.debug = d;
+        overlay.0 = d;
     }
     Ok(json!({ "menu": ui.menu, "chat": ui.chat, "need_click": ui.need_click }))
 }

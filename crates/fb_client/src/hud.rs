@@ -7,16 +7,20 @@ use lightyear::prelude::*;
 
 use crate::game::{Map, Stats};
 use crate::net::Conn;
-use crate::ui::Ui;
 
 #[derive(Component)]
 struct HudText;
+
+/// F3: the network and performance overlay is up.
+#[derive(Resource, Default)]
+pub struct Overlay(pub bool);
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        app.init_resource::<Overlay>();
         app.add_systems(Startup, setup);
         app.add_systems(
             Update,
@@ -50,12 +54,12 @@ fn setup(mut commands: Commands) {
 }
 
 /// F3 shows the overlay or hides it.
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut ui: ResMut<Ui>, mut q: Query<&mut Visibility, With<HudText>>) {
+fn toggle(keys: Res<ButtonInput<KeyCode>>, mut on: ResMut<Overlay>, mut q: Query<&mut Visibility, With<HudText>>) {
     if keys.just_pressed(KeyCode::F3) {
-        ui.debug ^= true;
+        on.0 ^= true;
     }
     for mut v in &mut q {
-        v.set_if_neq(if ui.debug {
+        v.set_if_neq(if on.0 {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -64,7 +68,7 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut ui: ResMut<Ui>, mut q: Query<&mut
 }
 
 fn update(
-    ui: Res<Ui>,
+    on: Res<Overlay>,
     mut text: Query<&mut Text, With<HudText>>,
     conn: Option<Res<Conn>>,
     map: Option<Res<Map>>,
@@ -80,7 +84,7 @@ fn update(
     perf: Option<Res<crate::perf::Perf>>,
 ) {
     let Ok(mut text) = text.single_mut() else { return };
-    if !ui.debug {
+    if !on.0 {
         return;
     }
     // (As F4 counts it: the frames of the last 2 s over their time. Bevy's smoothed rate, which differs, only

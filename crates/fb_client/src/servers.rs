@@ -179,16 +179,22 @@ impl States {
 pub struct Target(pub Option<String>);
 
 /// Checks the list's servers while the list is on screen.
-pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, mut states: ResMut<States>) {
-    let states = &mut *states;
+pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, mut res: ResMut<States>) {
+    // (Marked changed only when what a server said did: the list on screen is redrawn then.)
+    let states = res.bypass_change_detection();
     let (done, pending) = std::mem::take(&mut states.pending)
         .into_iter()
         .partition::<Vec<_>, _>(|(_, job)| job.ready());
     states.pending = pending;
+    let was = states.of.clone();
     states
         .of
         .extend(done.into_iter().filter_map(|(addr, job)| Some((addr, job.join()?))));
     states.of.retain(|a, _| servers.list.contains(a));
+    if states.of != was {
+        res.set_changed();
+    }
+    let states = res.bypass_change_detection();
     let now = time.elapsed_secs();
     if target.0.is_some() {
         states.next = Some(0.0);

@@ -1,8 +1,9 @@
-//! The client's side of the control protocol: the hello, where the player is (room list, a room, its lobby
-//! and arena), and what the interface shows of it (results, chat, the feed). `--start` plays a game by
-//! itself as the room's host (stress runs, `xtask dev`).
+//! The client's side of the control protocol: the hello, where the player is (`Session`: a room, its lobby
+//! and arena), the room list (`RoomList`), and what the interface shows of the room (`Outcome`, `ChatLog`,
+//! `FeedLog`). `--start` plays a game by itself as the room's host (stress runs, `xtask dev`).
 use std::collections::{BTreeMap, VecDeque};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
@@ -27,13 +28,8 @@ pub struct Session {
     pub scores: BTreeMap<Pid, i64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
-    /// The last game's standings (the podium's poses).
-    pub standings: Vec<Standing>,
     /// The host already asked to start the game in this lobby.
     started: bool,
-    /// The room list while in no room (None until the server sent it), and the room this player created.
-    pub rooms: Option<Vec<RoomInfo>>,
-    pub mine: Option<String>,
     /// Why entering or creating a room failed (`DenyReason::Pin`: that room asks for its PIN).
     pub denied: Option<Denied>,
     /// Why the server sent the client away (another window, out of date).
@@ -43,12 +39,32 @@ pub struct Session {
     pub back_to: Option<String>,
     /// Counts entries into a room (not resumes): the menu opens on each.
     pub entries: u32,
+}
+
+/// The room list while in no room (None until the server sent it), and the room this player created.
+#[derive(Resource, Default, PartialEq)]
+pub struct RoomList {
+    pub rooms: Option<Vec<RoomInfo>>,
+    pub mine: Option<String>,
+}
+
+/// How the last round and game went.
+#[derive(Resource, Default, PartialEq)]
+pub struct Outcome {
     pub results: Option<Results>,
     /// Shown beside the podium.
     pub game_end: Option<GameEnd>,
-    pub chat: VecDeque<ChatLine>,
-    pub feed: VecDeque<FeedEntry>,
+    /// The last game's standings (the podium's poses).
+    pub standings: Vec<Standing>,
 }
+
+/// The room's chat, oldest first.
+#[derive(Resource, Default, PartialEq)]
+pub struct ChatLog(pub VecDeque<ChatLine>);
+
+/// The feed: who fell, finishes, notes; oldest first.
+#[derive(Resource, Default, PartialEq)]
+pub struct FeedLog(pub VecDeque<FeedEntry>);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Denied {
@@ -121,12 +137,22 @@ impl Session {
         self.me.is_some() && self.lobby.as_ref().is_some_and(|l| l.host == self.me)
     }
 
-    pub fn push_chat(&mut self, now: f32, id: Option<Pid>, name: String, text: String) {
-        let n = self.chat.back().map_or(0, |l| l.n + 1);
-        if self.chat.len() >= CHAT_MAX_LINES {
-            self.chat.pop_front();
+    fn leave_room(&mut self) {
+        self.me = None;
+        self.room = None;
+        self.lobby = None;
+        self.arena = None;
+        self.practice = false;
+    }
+}
+
+impl ChatLog {
+    pub fn push(&mut self, now: f32, id: Option<Pid>, name: String, text: String) {
+        let n = self.0.back().map_or(0, |l| l.n + 1);
+        if self.0.len() >= CHAT_MAX_LINES {
+            self.0.pop_front();
         }
-        self.chat.push_back(ChatLine {
+        self.0.push_back(ChatLine {
             n,
             id,
             name,
@@ -134,30 +160,36 @@ impl Session {
             at: now,
         });
     }
+}
 
-    pub fn push_feed(&mut self, now: f32, what: Feed) {
-        let n = self.feed.back().map_or(0, |f| f.n + 1);
-        self.feed.retain(|f| now - f.at < FEED_SECS);
-        if self.feed.len() >= FEED_MAX {
-            self.feed.pop_front();
+impl FeedLog {
+    pub fn push(&mut self, now: f32, what: Feed) {
+        let n = self.0.back().map_or(0, |f| f.n + 1);
+        self.0.retain(|f| now - f.at < FEED_SECS);
+        if self.0.len() >= FEED_MAX {
+            self.0.pop_front();
         }
-        self.feed.push_back(FeedEntry { n, at: now, what });
+        self.0.push_back(FeedEntry { n, at: now, what });
     }
 
     pub fn note(&mut self, now: f32, text: String) {
-        self.push_feed(now, Feed::Note(text));
+        self.push(now, Feed::Note(text));
     }
+}
 
-    fn leave_room(&mut self) {
-        self.me = None;
-        self.room = None;
-        self.lobby = None;
-        self.arena = None;
-        self.practice = false;
-        self.results = None;
-        self.game_end = None;
-        self.chat.clear();
-        self.feed.clear();
+/// What the interface keeps of a room, emptied on leaving it.
+#[derive(SystemParam)]
+pub struct RoomView<'w> {
+    pub outcome: ResMut<'w, Outcome>,
+    pub chat: ResMut<'w, ChatLog>,
+    pub feed: ResMut<'w, FeedLog>,
+}
+
+impl RoomView<'_> {
+    pub fn clear(&mut self) {
+        self.outcome.set_if_neq(Outcome::default());
+        self.chat.set_if_neq(ChatLog::default());
+        self.feed.set_if_neq(FeedLog::default());
     }
 }
 
@@ -166,6 +198,10 @@ pub struct SessionPlugin;
 impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Session>();
+        app.init_resource::<RoomList>();
+        app.init_resource::<Outcome>();
+        app.init_resource::<ChatLog>();
+        app.init_resource::<FeedLog>();
         app.add_observer(say_hello);
         app.add_systems(Update, (receive, start_game).chain());
     }
@@ -205,6 +241,8 @@ pub fn send(senders: &mut Query<&mut MessageSender<ClientMsg>, With<Client>>, ms
 fn receive(
     mut receivers: Query<&mut MessageReceiver<ServerMsg>, With<Client>>,
     mut session: ResMut<Session>,
+    mut list: ResMut<RoomList>,
+    mut view: RoomView,
     mut opts: ResMut<Opts>,
     conn: Option<Res<Conn>>,
     mut commands: Commands,
@@ -232,29 +270,35 @@ fn receive(
                     }
                 }
                 ServerMsg::Rooms { rooms, mine } => {
-                    session.me = None;
-                    session.room = None;
-                    // (The list is built only for a log that keeps it: the room list comes again and again.)
+                    // (The list comes again and again: what is unchanged is not marked so.)
+                    if session.me.is_some() || session.room.is_some() {
+                        session.me = None;
+                        session.room = None;
+                    }
                     if bevy::log::tracing::enabled!(bevy::log::Level::DEBUG) {
-                        let list: Vec<String> = rooms
+                        let names: Vec<String> = rooms
                             .iter()
                             .map(|r| format!("{} «{}» {}+{}/{}", r.id, r.title, r.players, r.bots, r.max))
                             .collect();
-                        debug!("rooms: [{}] mine {mine:?}", list.join(", "));
+                        debug!("rooms: [{}] mine {mine:?}", names.join(", "));
                     }
-                    session.rooms = Some(rooms);
-                    session.mine = mine;
+                    list.set_if_neq(RoomList {
+                        rooms: Some(rooms),
+                        mine,
+                    });
                 }
                 ServerMsg::Denied { room, reason, msg } => {
                     warn!("room {room:?} denied ({reason:?}): {}", msg.as_deref().unwrap_or("-"));
                     // The room from a link or the one we were in is not to be had: the room list it is.
                     if session.arena.is_some() {
                         session.leave_room();
+                        view.clear();
                     }
                     session.denied = Some(Denied { room, reason, msg });
                 }
                 ServerMsg::Home { msg } => {
                     session.leave_room();
+                    view.clear();
                     session.denied = msg.map(|msg| Denied {
                         room: None,
                         reason: DenyReason::Gone,
@@ -280,7 +324,7 @@ fn receive(
                     session.practice = practice;
                     session.denied = None;
                     if !resumed {
-                        session.chat.clear();
+                        view.chat.set_if_neq(ChatLog::default());
                     }
                     if !resumed || other_room {
                         session.entries += 1;
@@ -290,13 +334,15 @@ fn receive(
                     if l.phase == Phase::Lobby && session.lobby.as_ref().is_none_or(|o| o.phase != Phase::Lobby) {
                         session.started = false;
                     }
-                    if l.phase != Phase::Results {
-                        session.results = None;
+                    if l.phase != Phase::Results && view.outcome.results.is_some() {
+                        view.outcome.results = None;
                     }
-                    if l.phase != Phase::Podium {
-                        session.game_end = None;
+                    if l.phase != Phase::Podium && view.outcome.game_end.is_some() {
+                        view.outcome.game_end = None;
                     }
-                    session.lobby = Some(l);
+                    if session.lobby.as_ref() != Some(&l) {
+                        session.lobby = Some(l);
+                    }
                 }
                 ServerMsg::Arena(a) => {
                     info!(
@@ -312,10 +358,10 @@ fn receive(
                         a.participants.len()
                     );
                     session.scores = a.scores.iter().copied().collect();
-                    if a.kind != ArenaKind::Lobby {
-                        session.results = None;
+                    if a.kind != ArenaKind::Lobby && view.outcome.results.is_some() {
+                        view.outcome.results = None;
                     }
-                    session.feed.clear();
+                    view.feed.set_if_neq(FeedLog::default());
                     session.arena = Some(a);
                 }
                 ServerMsg::RoundEnd {
@@ -327,7 +373,7 @@ fn receive(
                 } => {
                     let line: Vec<String> = rows.iter().map(|r| format!("#{} {:+}", r.id, r.delta)).collect();
                     info!("round {index} ({game}) over: {}", line.join(" "));
-                    session.results = Some(Results {
+                    view.outcome.results = Some(Results {
                         game,
                         index,
                         total,
@@ -339,21 +385,22 @@ fn receive(
                 ServerMsg::GameEnd { standings, awards } => {
                     let s: Vec<String> = standings.iter().map(|s| format!("{} {}", s.name, s.total)).collect();
                     info!("game over: {}", s.join(", "));
-                    session.standings = standings.clone();
-                    session.game_end = Some(GameEnd { standings, awards });
-                    session.results = None;
+                    let o = &mut *view.outcome;
+                    o.standings = standings.clone();
+                    o.game_end = Some(GameEnd { standings, awards });
+                    o.results = None;
                 }
                 ServerMsg::Chat { id, name, text } => {
                     // (Other people's words: not in the logs and reports a player sends.)
                     debug!("chat {name}: {text}");
-                    session.push_chat(now, Some(id), name, text);
+                    view.chat.push(now, Some(id), name, text);
                     if Some(id) != session.me {
                         cues.write(Cue::Sfx(crate::audio::Sfx::Click));
                     }
                 }
                 ServerMsg::Notice(text) => {
                     info!("server: {text}");
-                    session.push_chat(now, None, crate::ui::text::SERVER.into(), text);
+                    view.chat.push(now, None, crate::ui::text::SERVER.into(), text);
                     cues.write(Cue::Sfx(crate::audio::Sfx::Click));
                 }
                 ServerMsg::DevAck { result, .. } => {
@@ -362,7 +409,7 @@ fn receive(
                         Err(m) => format!("✖ {m}"),
                     };
                     info!("dev: {line}");
-                    session.note(now, format!("🛠 {line}"));
+                    view.feed.note(now, format!("🛠 {line}"));
                 }
                 ServerMsg::Clock { rate } => info!("game time ×{rate}"),
                 ServerMsg::Scores(s) => {
@@ -370,16 +417,12 @@ fn receive(
                     let lobby = session.arena.as_ref().is_some_and(|a| a.kind == ArenaKind::Lobby);
                     for (id, v) in s {
                         let was = session.scores.insert(id, v).unwrap_or(0);
-                        let bot = session
-                            .lobby
-                            .as_ref()
-                            .and_then(|l| l.players.iter().find(|p| p.id == id))
-                            .is_none_or(|p| p.bot);
+                        let bot = session.player(id).is_none_or(|p| p.bot);
                         if lobby && v > was && !bot {
                             cues.write(Cue::Bell(id));
                             let mine = Some(id) == session.me;
                             let line = crate::ui::text::bell(mine, &session.name_of(id), v as u32);
-                            session.note(now, line);
+                            view.feed.note(now, line);
                         }
                     }
                 }

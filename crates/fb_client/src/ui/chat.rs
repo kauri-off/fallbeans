@@ -9,7 +9,7 @@ use lightyear::prelude::client::Client;
 use lightyear::prelude::*;
 
 use super::*;
-use crate::session::Session;
+use crate::session::{ChatLine, ChatLog, Session};
 
 /// How long the chat stays on screen after a new line.
 const SHOW_S: f32 = 8.0;
@@ -22,12 +22,20 @@ impl Plugin for ChatPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, build_chat.after(super::setup));
         // (After the menu has seen the frame's Esc: the one that closes the chat must not open the menu too.)
-        app.add_systems(Update, (open_close, log).chain().after(super::menu::menu_flow));
+        app.add_systems(
+            Update,
+            (open_close, lines.run_if(resource_changed::<ChatLog>), shown)
+                .chain()
+                .after(super::menu::menu_flow),
+        );
     }
 }
 
 #[derive(Component)]
-struct ChatLog;
+struct LogBox;
+/// A line of the chat: its number and time.
+#[derive(Component)]
+struct ChatRow(u32, f32);
 #[derive(Component)]
 struct ChatInput;
 
@@ -50,8 +58,7 @@ fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
         ))
         .with_children(|c| {
             c.spawn((
-                ChatLog,
-                Section::default(),
+                LogBox,
                 Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: px(2),
@@ -120,70 +127,93 @@ fn open_close(
     }
 }
 
-fn log(
-    mut q: Query<(Entity, &mut Section, &mut BackgroundColor), With<ChatLog>>,
-    ui: Res<Ui>,
+/// New lines are added, lines gone from the log taken away.
+fn lines(
+    q: Single<Entity, With<LogBox>>,
+    log: Res<ChatLog>,
+    rows: Query<(Entity, &ChatRow)>,
     session: Res<Session>,
-    time: Res<Time<Real>>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec, mut bg)) = q.single_mut() else {
-        return;
-    };
-    let now = time.elapsed_secs();
-    let fresh = session.chat.back().is_some_and(|l| now - l.at < SHOW_S);
-    let shown: Vec<_> = if ui.chat {
-        session.chat.iter().collect()
-    } else if fresh {
-        let n = session.chat.len().saturating_sub(FRESH_LINES);
-        session.chat.range(n..).collect()
-    } else {
-        Vec::new()
-    };
-    let alpha = if ui.chat { 0.8 } else { 0.45 };
-    bg.set_if_neq(BackgroundColor(if shown.is_empty() {
-        Color::NONE
-    } else {
-        INK.with_alpha(alpha * 0.8)
-    }));
-    let ns: Vec<u32> = shown.iter().map(|l| l.n).collect();
-    if !sec.stale(key_of(&(ns, ui.chat))) {
-        return;
+    let mut last = None;
+    for (e, r) in &rows {
+        if log.0.iter().any(|l| l.n == r.0 && l.at == r.1) {
+            last = last.max(Some(r.0));
+        } else {
+            commands.entity(e).despawn();
+        }
     }
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        for l in shown {
-            let color =
-                l.id.and_then(|id| session.player(id))
-                    .map_or(Color::WHITE, |p| super::suit(p.color));
-            let name_ink = color.mix(&Color::WHITE, 0.5);
-            let mut line = p.spawn((Text::default(), TextLayout::default(), Pickable::IGNORE));
-            line.with_children(|t| {
-                // (A name may hold emoji too: the Black font has none.)
-                for (run, emoji) in runs(&format!("{}: ", l.name)) {
-                    t.spawn((
-                        TextSpan::new(run),
-                        TextFont {
-                            font: if emoji { f.emoji.clone() } else { f.black.clone() }.into(),
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(name_ink),
-                    ));
-                }
-                for (run, emoji) in runs(&l.text) {
-                    t.spawn((
-                        TextSpan::new(run),
-                        TextFont {
-                            font: if emoji { f.emoji.clone() } else { f.bold.clone() }.into(),
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                }
-            });
+    commands.entity(*q).with_children(|p| {
+        for l in log.0.iter().filter(|l| last.is_none_or(|n| l.n > n)) {
+            line(p, f, &session, l);
         }
     });
+}
+
+fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine) {
+    let color =
+        l.id.and_then(|id| session.player(id))
+            .map_or(Color::WHITE, |p| suit(p.color));
+    let name_ink = color.mix(&Color::WHITE, 0.5);
+    p.spawn((
+        ChatRow(l.n, l.at),
+        Text::default(),
+        TextLayout::default(),
+        Pickable::IGNORE,
+    ))
+    .with_children(|t| {
+        // (A name may hold emoji too: the Black font has none.)
+        for (run, emoji) in runs(&format!("{}: ", l.name)) {
+            t.spawn((
+                TextSpan::new(run),
+                TextFont {
+                    font: if emoji { f.emoji.clone() } else { f.black.clone() }.into(),
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextColor(name_ink),
+            ));
+        }
+        for (run, emoji) in runs(&l.text) {
+            t.spawn((
+                TextSpan::new(run),
+                TextFont {
+                    font: if emoji { f.emoji.clone() } else { f.bold.clone() }.into(),
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        }
+    });
+}
+
+/// Open, every line; for a while after a new one, the last few; otherwise none.
+fn shown(
+    ui: Res<Ui>,
+    log: Res<ChatLog>,
+    time: Res<Time<Real>>,
+    mut q: Single<&mut BackgroundColor, With<LogBox>>,
+    mut rows: Query<(&ChatRow, &mut Node)>,
+) {
+    let now = time.elapsed_secs();
+    let fresh = log.0.back().is_some_and(|l| now - l.at < SHOW_S);
+    let from = if ui.chat {
+        Some(0)
+    } else if fresh {
+        log.0.get(log.0.len().saturating_sub(FRESH_LINES)).map(|l| l.n)
+    } else {
+        None
+    };
+    let alpha = if ui.chat { 0.8 } else { 0.45 };
+    q.set_if_neq(BackgroundColor(if from.is_some() && !log.0.is_empty() {
+        INK.with_alpha(alpha * 0.8)
+    } else {
+        Color::NONE
+    }));
+    for (r, mut node) in &mut rows {
+        show(&mut node, from.is_some_and(|n| r.0 >= n));
+    }
 }

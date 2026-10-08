@@ -238,7 +238,9 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
             _ => {}
         }
     }
-    let u = &mut *update;
+    // (Marked changed only when the state is: the screens showing it are redrawn then.)
+    let u = update.bypass_change_detection();
+    let was = u.state.clone();
     if let Some(r) = Job::take(&mut u.checking).flatten().flatten() {
         info!("update: {} is out", r.version);
         u.release = Some(r.clone());
@@ -256,6 +258,9 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
             u.state = State::Failed(e);
         }
         Some(None) => u.state = State::Failed("the update thread is gone".into()),
+    }
+    if u.state != was {
+        update.set_changed();
     }
 }
 

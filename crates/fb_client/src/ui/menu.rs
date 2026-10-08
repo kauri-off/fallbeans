@@ -5,6 +5,7 @@ use bevy::input_focus::InputFocus;
 use bevy::picking::events::{Pointer, Press};
 use bevy::prelude::*;
 use bevy::text::EditableText;
+use bevy::ui::InteractionDisabled;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
@@ -14,7 +15,7 @@ use fb_shared::outfit::{GLASSES, HATS, Hat, Tint};
 use lightyear::prelude::client::Client;
 use lightyear::prelude::*;
 
-use super::home::{name_row, practice_list, tabs};
+use super::home::{head, name_row, practice_list};
 use super::*;
 use crate::game::Gate;
 use crate::session::Session;
@@ -31,7 +32,13 @@ impl Plugin for MenuPlugin {
             Update,
             (
                 (adopt_name, menu_flow, super::rebind, sync_names, gate).chain(),
-                (head, top, body, settings, dev),
+                (
+                    parts.run_if(state_changed::<MenuTab>.or_else(resource_changed::<Session>)),
+                    top.run_if(resource_changed::<Session>),
+                    (swatches, players, host_setup, phase_line).run_if(resource_changed::<Session>),
+                    outfit.run_if(resource_changed::<Player>),
+                    dev,
+                ),
                 menu_actions,
             )
                 .chain(),
@@ -63,22 +70,50 @@ fn on_press(
     }
 }
 
-#[derive(Component)]
-struct MenuHead;
-#[derive(Component)]
-struct MenuTop;
-#[derive(Component)]
-struct MenuNameRow;
-#[derive(Component)]
-struct MenuBody;
-#[derive(Component)]
-struct MenuSettings;
-#[derive(Component)]
-struct MenuDev;
+/// The menu's parts, each shown on its tab.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    Top,
+    Name,
+    Body,
+    Settings,
+    Dev,
+}
 
-fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me) {
+/// The way back from practice, and the room's name, way out and access.
+#[derive(Component)]
+struct PracticeTop;
+#[derive(Component)]
+struct RoomTop;
+#[derive(Component)]
+struct RoomTitle;
+#[derive(Component)]
+struct PrivateNote;
+
+/// The lobby's part of the body (the colours, who is here, the setup, practice), and the line of a game under way.
+#[derive(Component)]
+struct LobbyPart;
+#[derive(Component)]
+struct Swatches;
+#[derive(Component)]
+struct OutfitBox;
+#[derive(Component)]
+struct PlayersBox;
+#[derive(Component)]
+struct HostBox;
+#[derive(Component)]
+struct PhaseBox;
+#[derive(Component)]
+struct DevBox;
+
+fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me, options: Options, folds: Res<Folds>) {
     let f = &*f;
     let e = layers[Layer::Menu];
+    let col = |gap: f32| Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: rem(gap),
+        ..default()
+    };
     commands.entity(e).with_children(|l| {
         // A column beside the player panel, over the game in full view.
         l.spawn((
@@ -109,7 +144,15 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                 glass(),
             ))
             .with_children(|m| {
-                m.spawn((MenuHead, Section::default(), Node::default()));
+                head(
+                    m,
+                    f,
+                    &[
+                        (text::TAB_GAME, Action::MenuTab(MenuTab::Game)),
+                        (text::TAB_SETTINGS, Action::MenuTab(MenuTab::Settings)),
+                        (text::TAB_DEV, Action::MenuTab(MenuTab::Dev)),
+                    ],
+                );
                 m.spawn((
                     Node {
                         flex_direction: FlexDirection::Column,
@@ -121,18 +164,68 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                     bevy::ui_widgets::ScrollArea,
                 ))
                 .with_children(|b| {
-                    let col = || Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: rem(0.625),
-                        ..default()
-                    };
-                    b.spawn((MenuTop, Section::default(), col()));
-                    b.spawn((MenuNameRow, col())).with_children(|n| {
+                    b.spawn((Part::Top, col(0.625))).with_children(|t| {
+                        t.spawn((PracticeTop, col(0.625))).with_children(|p| {
+                            label(p, f, "");
+                            button(p, f, text::PRACTICE_BACK, Look::Plain, Action::EndPractice);
+                        });
+                        t.spawn((RoomTop, col(0.0))).with_children(|r| {
+                            group(r, |g| {
+                                row(g, false, |r| {
+                                    r.spawn(Node {
+                                        flex_grow: 1.0,
+                                        ..default()
+                                    })
+                                    .with_children(|t| {
+                                        let title = heading(t, f, "");
+                                        t.commands().entity(title).insert(RoomTitle);
+                                    });
+                                    button(r, f, text::LEAVE_ROOM, Look::TinyDanger, Action::LeaveRoom);
+                                });
+                                button(
+                                    g,
+                                    f,
+                                    text::PRIVATE_ROOM,
+                                    Look::Check(false),
+                                    Action::Send(ClientMsg::Access { private: true }),
+                                );
+                                let note = muted(g, f, text::PRIVATE_NOTE);
+                                g.commands().entity(note).insert(PrivateNote);
+                            });
+                        });
+                    });
+                    b.spawn((Part::Name, col(0.625))).with_children(|n| {
                         name_row(n, f, Field::MenuName, &me.name());
                     });
-                    b.spawn((MenuBody, Section::default(), col()));
-                    b.spawn((MenuSettings, Section::default(), col()));
-                    b.spawn((MenuDev, Section::default(), col()));
+                    b.spawn((Part::Body, col(0.625))).with_children(|p| {
+                        p.spawn((
+                            Swatches,
+                            Node {
+                                flex_wrap: FlexWrap::Wrap,
+                                column_gap: rem(0.5),
+                                row_gap: rem(0.4),
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|r| {
+                            for i in 0..COLORS.len() as u8 {
+                                swatch(r, suit(i), false, Action::Color(i), true, 1.75);
+                            }
+                        });
+                        p.spawn((OutfitBox, col(0.625)));
+                        p.spawn((PhaseBox, col(0.625)));
+                        p.spawn((LobbyPart, col(0.625))).with_children(|l| {
+                            l.spawn((PlayersBox, col(0.625)));
+                            l.spawn((HostBox, col(0.625)));
+                            practice_list(l, f, &folds);
+                        });
+                    });
+                    b.spawn((Part::Settings, col(0.625)))
+                        .with_children(|s| settings_tab(s, f, &options, &folds));
+                    b.spawn((Part::Dev, col(0.625))).with_children(|d| {
+                        d.spawn((DevBox, col(0.625)));
+                    });
                 });
                 button(
                     m,
@@ -146,7 +239,7 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
     });
 }
 
-fn capture(cursor: &mut CursorOptions, on: bool) {
+fn capture(cursor: &mut Mut<CursorOptions>, on: bool) {
     let mode = if !on {
         CursorGrabMode::None
     } else if cfg!(target_os = "windows") {
@@ -164,7 +257,7 @@ fn capture(cursor: &mut CursorOptions, on: bool) {
 /// Who has the mouse, and when the menu opens and closes: it opens on entering a room and
 /// with Esc; a round's start, Esc again or a click on the field close it and capture the mouse.
 pub(super) fn menu_flow(
-    mut ui: ResMut<Ui>,
+    mut res: ResMut<Ui>,
     session: Res<Session>,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
@@ -177,64 +270,67 @@ pub(super) fn menu_flow(
     focus: Res<InputFocus>,
 ) {
     let Ok(mut cursor) = cursor.single_mut() else { return };
+    // (Worked out on a copy: `Ui` reads as changed only when it is.)
+    let mut ui = res.clone();
     let in_room = session.room.is_some() && session.arena.is_some();
     let clicked = clicks.read().count() > 0;
     let lost_focus = focus_events.read().any(|e| !e.focused);
-    if !in_room {
+    if in_room {
+        let captured = cursor.grab_mode != CursorGrabMode::None;
+        let was_menu = ui.menu;
+        if seen.0 != session.entries {
+            seen.0 = session.entries;
+            ui.menu = true;
+        }
+        let arena = session.arena.as_ref().map(|a| a.id);
+        if seen.1 != arena {
+            seen.1 = arena;
+            if let Some(a) = &session.arena
+                && a.kind != ArenaKind::Lobby
+            {
+                ui.menu = false;
+                if a.kind == ArenaKind::Round && !a.late {
+                    capture(&mut cursor, true);
+                }
+            }
+        }
+        let typing = focus.get().is_some_and(|e| fields.contains(e));
+        let esc = keys.just_pressed(KeyCode::Escape) && !ui.chat && ui.rebinding.is_none() && !(typing && !ui.menu);
+        // (A pad keeps reporting while another window has the focus.)
+        let start = window_focused(&windows) && pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
+        if esc || start {
+            if ui.menu {
+                ui.menu = false;
+                capture(&mut cursor, true);
+            } else {
+                ui.menu = true;
+            }
+        } else if clicked && !ui.chat {
+            ui.menu = false;
+            capture(&mut cursor, true);
+        }
+        if lost_focus && captured {
+            capture(&mut cursor, false);
+            if !ui.menu {
+                ui.need_click = true;
+            }
+        }
+        if ui.menu {
+            capture(&mut cursor, false);
+            ui.need_click = false;
+        }
+        if cursor.grab_mode != CursorGrabMode::None {
+            ui.need_click = false;
+        } else if !ui.menu && !ui.chat && was_menu {
+            ui.need_click = true;
+        }
+    } else {
         ui.menu = false;
         ui.need_click = false;
         capture(&mut cursor, false);
         *seen = (session.entries, None);
-        return;
     }
-    let captured = cursor.grab_mode != CursorGrabMode::None;
-    let was_menu = ui.menu;
-    if seen.0 != session.entries {
-        seen.0 = session.entries;
-        ui.menu = true;
-    }
-    let arena = session.arena.as_ref().map(|a| a.id);
-    if seen.1 != arena {
-        seen.1 = arena;
-        if let Some(a) = &session.arena
-            && a.kind != ArenaKind::Lobby
-        {
-            ui.menu = false;
-            if a.kind == ArenaKind::Round && !a.late {
-                capture(&mut cursor, true);
-            }
-        }
-    }
-    let typing = focus.get().is_some_and(|e| fields.contains(e));
-    let esc = keys.just_pressed(KeyCode::Escape) && !ui.chat && ui.rebinding.is_none() && !(typing && !ui.menu);
-    // (A pad keeps reporting while another window has the focus.)
-    let start = window_focused(&windows) && pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
-    if esc || start {
-        if ui.menu {
-            ui.menu = false;
-            capture(&mut cursor, true);
-        } else {
-            ui.menu = true;
-        }
-    } else if clicked && !ui.chat {
-        ui.menu = false;
-        capture(&mut cursor, true);
-    }
-    if lost_focus && captured {
-        capture(&mut cursor, false);
-        if !ui.menu {
-            ui.need_click = true;
-        }
-    }
-    if ui.menu {
-        capture(&mut cursor, false);
-        ui.need_click = false;
-    }
-    if cursor.grab_mode != CursorGrabMode::None {
-        ui.need_click = false;
-    } else if !ui.menu && !ui.chat && was_menu {
-        ui.need_click = true;
-    }
+    res.set_if_neq(ui);
 }
 
 /// A player without a name of their own keeps the one the room gave them.
@@ -299,197 +395,161 @@ fn gate(
     }
 }
 
-fn head(
-    mut q: Query<(Entity, &mut Section), With<MenuHead>>,
-    ui: Res<Ui>,
+/// Each part on its tab; the dev tab only on a dev server.
+fn parts(
+    tab: Option<Res<State<MenuTab>>>,
     session: Res<Session>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+    mut parts: Query<(&Part, &mut Node)>,
+    mut tabs: Query<(&Act, &mut Node), Without<Part>>,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    if !sec.stale(key_of(&(ui.menu_tab, session.dev))) {
-        return;
+    let tab = tab.map(|t| *t.get());
+    for (part, mut node) in &mut parts {
+        let on = match part {
+            Part::Top => tab == Some(MenuTab::Game),
+            Part::Name | Part::Body => tab == Some(MenuTab::Game) && !session.practice,
+            Part::Settings => tab == Some(MenuTab::Settings),
+            Part::Dev => tab == Some(MenuTab::Dev) && session.dev,
+        };
+        show(&mut node, on);
     }
-    let f = &*f;
-    let tab = ui.menu_tab;
-    let dev = session.dev;
-    rebuild(&mut commands, e, |p| {
-        p.spawn(Node {
-            width: percent(100),
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            flex_wrap: FlexWrap::Wrap,
-            row_gap: rem(0.5),
-            ..default()
-        })
-        .with_children(|r| {
-            logo(r, f, 26.0);
-            let mut items = vec![
-                (text::TAB_GAME, Action::MenuTab(MenuTab::Game), tab == MenuTab::Game),
-                (
-                    text::TAB_SETTINGS,
-                    Action::MenuTab(MenuTab::Settings),
-                    tab == MenuTab::Settings,
-                ),
-            ];
-            if dev {
-                items.push((text::TAB_DEV, Action::MenuTab(MenuTab::Dev), tab == MenuTab::Dev));
-            }
-            tabs(r, f, &items);
-        });
-    });
+    for (act, mut node) in &mut tabs {
+        if let Action::MenuTab(MenuTab::Dev) = act.0 {
+            show(&mut node, session.dev);
+        }
+    }
 }
 
 /// The room's name and the way out; for the host, private or public and the PIN. In practice: the way back.
 fn top(
-    mut q: Query<(Entity, &mut Section, &mut Node), With<MenuTop>>,
-    mut name_row: Query<&mut Node, (With<MenuNameRow>, Without<MenuTop>)>,
-    ui: Res<Ui>,
     session: Res<Session>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+    mut practice: Single<(Entity, &mut Node), (With<PracticeTop>, Without<RoomTop>)>,
+    mut room: Single<&mut Node, (With<RoomTop>, Without<PracticeTop>)>,
+    title: Single<Entity, With<RoomTitle>>,
+    mut note: Single<&mut Node, (With<PrivateNote>, Without<PracticeTop>, Without<RoomTop>)>,
+    mut buttons: Query<
+        (Entity, &mut Act, &mut Look, &mut Node),
+        (Without<PracticeTop>, Without<RoomTop>, Without<PrivateNote>),
+    >,
+    children: Query<&Children>,
+    mut texts: Query<&mut Rich>,
 ) {
-    let Ok((e, mut sec, mut node)) = q.single_mut() else {
-        return;
-    };
-    let on = ui.menu_tab == MenuTab::Game;
-    show(&mut node, on);
-    for mut n in &mut name_row {
-        show(&mut n, on && !session.practice);
+    let (practice_e, ref mut practice_node) = *practice;
+    show(practice_node, session.practice);
+    show(&mut room, !session.practice && session.lobby.is_some());
+    if session.practice {
+        let game = session.arena.as_ref().map(|a| a.game.clone()).unwrap_or_default();
+        let title = fb_maps::by_id(&game).map_or(game.clone(), |d| d.meta().title.to_string());
+        relabel(practice_e, &text::practice_now(&title), &children, &mut texts);
     }
-    let room = session.lobby.as_ref().map(|l| (&l.room, l.host, &l.pin));
-    let key = key_of(&(
-        room,
-        session.me,
-        session.practice,
-        &session.back_to,
-        &session.arena.as_ref().map(|a| &a.game),
-    ));
-    if !sec.stale(key) {
-        return;
-    }
-    let f = &*f;
     let host = session.host();
-    let lobby = session.lobby.clone();
-    rebuild(&mut commands, e, |p| {
-        if session.practice {
-            let game = session.arena.as_ref().map(|a| a.game.clone()).unwrap_or_default();
-            let title = fb_maps::by_id(&game).map_or(game.clone(), |d| d.meta().title.to_string());
-            label(p, f, &text::practice_now(&title));
-            let back = if session.back_to.is_some() {
-                text::BACK_TO_ROOM
-            } else {
-                text::PRACTICE_BACK
-            };
-            button(p, f, back, Look::Plain, Action::EndPractice);
-            return;
+    let private = session.lobby.as_ref().is_some_and(|l| l.room.private);
+    if let Some(l) = &session.lobby {
+        let lock = if private { "🔒 " } else { "" };
+        if let Ok(mut t) = texts.get_mut(*title) {
+            t.set(&format!("{lock}{}", l.room.title));
         }
-        let Some(l) = lobby else { return };
-        group(p, |g| {
-            row(g, false, |r| {
-                let lock = if l.room.private { "🔒 " } else { "" };
-                r.spawn(Node {
-                    flex_grow: 1.0,
-                    ..default()
-                })
-                .with_children(|t| {
-                    heading(t, f, &format!("{lock}{}", l.room.title));
-                });
-                button(r, f, text::LEAVE_ROOM, Look::TinyDanger, Action::LeaveRoom);
-            });
-            if host {
-                let s = match &l.pin {
+    }
+    show(&mut note, !host && private);
+    for (e, mut act, mut look, mut node) in &mut buttons {
+        match act.0 {
+            Action::EndPractice => {
+                let back = if session.back_to.is_some() {
+                    text::BACK_TO_ROOM
+                } else {
+                    text::PRACTICE_BACK
+                };
+                relabel(e, back, &children, &mut texts);
+            }
+            Action::Send(ClientMsg::Access { .. }) => {
+                show(&mut node, host);
+                look.set_if_neq(Look::Check(private));
+                if !matches!(act.0, Action::Send(ClientMsg::Access { private: p }) if p != private) {
+                    act.0 = Action::Send(ClientMsg::Access { private: !private });
+                }
+                let s = match session.lobby.as_ref().and_then(|l| l.pin.as_ref()) {
                     Some(pin) => text::pin_line(pin),
                     None => format!("{} {}", text::PRIVATE_ROOM, text::PIN_FOR_ENTRY),
                 };
-                button(
-                    g,
-                    f,
-                    &s,
-                    Look::Check(l.room.private),
-                    Action::Send(ClientMsg::Access {
-                        private: !l.room.private,
-                    }),
-                );
-            } else if l.room.private {
-                muted(g, f, text::PRIVATE_NOTE);
+                relabel(e, &s, &children, &mut texts);
             }
-        });
-    });
+            _ => {}
+        }
+    }
 }
 
-#[derive(Debug, PartialEq)]
-struct BodyKey<'a> {
-    lobby: Option<&'a Lobby>,
-    me: Option<Pid>,
-    open: &'a std::collections::BTreeSet<Fold>,
-    outfit: fb_proto::Outfit,
-    arena: Option<(u32, ArenaKind, u32, u32)>,
-    practice: bool,
-}
-
-/// The look, who is here, the game setup (host) and practice.
-fn body(
-    mut q: Query<(Entity, &mut Section, &mut Node), With<MenuBody>>,
-    ui: Res<Ui>,
+/// The suit colours (in the lobby only, one per bean): the player's marked, the others' not to be had.
+fn swatches(
     session: Res<Session>,
-    player: Res<Player>,
+    mut row: Single<&mut Node, With<Swatches>>,
+    mut buttons: Query<(Entity, &Act, &mut Look, Has<InteractionDisabled>)>,
+    mut commands: Commands,
+) {
+    let Some(l) = &session.lobby else { return };
+    show(&mut row, l.phase == Phase::Lobby);
+    let me = session.me;
+    let mine = l.players.iter().find(|p| Some(p.id) == me);
+    for (e, act, mut look, disabled) in &mut buttons {
+        let Action::Color(i) = act.0 else { continue };
+        let taken = l.players.iter().any(|p| p.color == i && Some(p.id) != me);
+        look.set_if_neq(Look::Swatch(suit(i), mine.is_some_and(|m| m.color == i)));
+        enable(&mut commands, e, !disabled, !taken);
+    }
+}
+
+/// Who is here, in the lobby.
+fn players(
+    session: Res<Session>,
+    q: Single<Entity, With<PlayersBox>>,
+    mut lobby_part: Single<&mut Node, (With<LobbyPart>, Without<PhaseBox>)>,
+    mut phase: Single<&mut Node, (With<PhaseBox>, Without<LobbyPart>)>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec, mut node)) = q.single_mut() else {
+    let lobby = session.lobby.as_ref().filter(|l| l.phase == Phase::Lobby);
+    show(&mut lobby_part, lobby.is_some());
+    show(&mut phase, session.lobby.is_some() && lobby.is_none());
+    let Some(l) = lobby else { return };
+    let f = &*f;
+    let (me, host) = (session.me, session.host());
+    rebuild(&mut commands, *q, |p| {
+        heading(p, f, &text::players_of(l.players.len(), l.max));
+        for pl in &l.players {
+            player_row(p, f, l, pl, me, host);
+        }
+    });
+}
+
+/// A game under way: which round, or the results or podium; the host may abort it.
+fn phase_line(
+    session: Res<Session>,
+    q: Single<Entity, With<PhaseBox>>,
+    f: Res<Fonts>,
+    mut shown: Local<Option<(String, bool)>>,
+    mut commands: Commands,
+) {
+    let Some(l) = session.lobby.as_ref().filter(|l| l.phase != Phase::Lobby) else {
         return;
     };
-    show(&mut node, ui.menu_tab == MenuTab::Game && !session.practice);
-    let key = BodyKey {
-        lobby: session.lobby.as_ref(),
-        me: session.me,
-        open: &ui.open,
-        outfit: player.outfit(),
-        arena: session.arena.as_ref().map(|a| (a.id, a.kind, a.index, a.total)),
-        practice: session.practice,
+    let line = match &session.arena {
+        Some(a) if a.kind == ArenaKind::Round => {
+            let title = fb_maps::by_id(&a.game).map_or("", |d| d.meta().title);
+            text::round_now(a.index, a.total, title)
+        }
+        _ if l.phase == Phase::Podium => text::PODIUM_NOW.into(),
+        _ => text::RESULTS_NOW.into(),
     };
-    if !sec.stale(key_of(&key)) {
+    let next = Some((line, session.host()));
+    if *shown == next {
         return;
     }
+    *shown = next;
+    let Some((line, host)) = &*shown else { return };
     let f = &*f;
-    let Some(l) = session.lobby.clone() else {
-        rebuild(&mut commands, e, |_| {});
-        return;
-    };
-    let me = session.me;
-    let host = session.host();
-    let outfit = player.outfit();
-    let arena = session.arena.clone();
-    rebuild(&mut commands, e, |p| {
-        outfit_picker(p, f, &ui, &l, me, &outfit);
-        if l.phase != Phase::Lobby {
-            let line = match &arena {
-                Some(a) if a.kind == ArenaKind::Round => {
-                    let title = fb_maps::by_id(&a.game).map_or("", |d| d.meta().title);
-                    text::round_now(a.index, a.total, title)
-                }
-                _ if l.phase == Phase::Podium => text::PODIUM_NOW.into(),
-                _ => text::RESULTS_NOW.into(),
-            };
-            label(p, f, &line);
-            if host {
-                button(p, f, text::ABORT, Look::Danger, Action::Send(ClientMsg::Abort));
-            }
-            return;
+    rebuild(&mut commands, *q, |p| {
+        label(p, f, line);
+        if *host {
+            button(p, f, text::ABORT, Look::Danger, Action::Send(ClientMsg::Abort));
         }
-        heading(p, f, &text::players_of(l.players.len(), l.max));
-        stack(p, |list| {
-            for pl in &l.players {
-                player_row(list, f, &l, pl, me, host);
-            }
-        });
-        if host {
-            host_setup(p, f, &l);
-        } else {
-            muted(p, f, text::HOST_STARTS);
-        }
-        practice_list(p, f, &ui);
     });
 }
 
@@ -548,8 +608,24 @@ fn player_row(
     });
 }
 
+/// The host's setup, or the line that the host starts the game.
+fn host_setup(session: Res<Session>, q: Single<Entity, With<HostBox>>, f: Res<Fonts>, mut commands: Commands) {
+    let Some(l) = session.lobby.as_ref().filter(|l| l.phase == Phase::Lobby) else {
+        return;
+    };
+    let f = &*f;
+    let host = session.host();
+    rebuild(&mut commands, *q, |p| {
+        if host {
+            setup_of(p, f, l);
+        } else {
+            muted(p, f, text::HOST_STARTS);
+        }
+    });
+}
+
 /// The host's part of the lobby: which maps, how many rounds, bots, and the start button.
-fn host_setup(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
+fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
     let pl = &l.playlist;
     let ready = l.players.iter().filter(|p| p.connected || p.bot).count() as u32;
     let enough = ready >= l.min;
@@ -632,27 +708,22 @@ fn host_setup(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
     });
 }
 
-/// The player's look: suit colour (lobby only, one per bean), hat, glasses and colours of the hat, belly and shoes.
-fn outfit_picker(
-    p: &mut ChildSpawnerCommands,
-    f: &Fonts,
-    ui: &Ui,
-    l: &Lobby,
-    me: Option<Pid>,
-    outfit: &fb_proto::Outfit,
+/// The player's look: hat, glasses and colours of the hat, belly and shoes (each choice carries the whole outfit:
+/// redrawn when it changes).
+fn outfit(
+    player: Res<Player>,
+    folds: Res<Folds>,
+    q: Single<Entity, With<OutfitBox>>,
+    f: Res<Fonts>,
+    mut commands: Commands,
 ) {
-    let mine = l.players.iter().find(|p| Some(p.id) == me);
-    if l.phase == Phase::Lobby {
-        row(p, true, |r| {
-            for (i, _) in COLORS.iter().enumerate() {
-                let i = i as u8;
-                let taken = l.players.iter().any(|p| p.color == i && Some(p.id) != me);
-                let on = mine.is_some_and(|m| m.color == i);
-                swatch(r, suit(i), on, Action::Color(i), !taken, 1.75);
-            }
-        });
-    }
-    fold(p, f, ui, Fold::Outfit, text::OUTFIT, |c| {
+    let f = &*f;
+    let outfit = player.outfit();
+    rebuild(&mut commands, *q, |p| outfit_picker(p, f, &folds, &outfit));
+}
+
+fn outfit_picker(p: &mut ChildSpawnerCommands, f: &Fonts, folds: &Folds, outfit: &fb_proto::Outfit) {
+    fold(p, f, folds, Fold::Outfit, text::OUTFIT, |c| {
         let wear = |patch: &dyn Fn(&mut fb_proto::Outfit)| {
             let mut o = *outfit;
             patch(&mut o);
@@ -705,47 +776,29 @@ fn tints(
     });
 }
 
-fn settings(
-    mut q: Query<(Entity, &mut Section, &mut Node), With<MenuSettings>>,
-    ui: Res<Ui>,
-    options: Options,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
-    let Ok((e, mut sec, mut node)) = q.single_mut() else {
-        return;
-    };
-    show(&mut node, ui.menu_tab == MenuTab::Settings);
-    if !sec.stale(options.key(&ui)) {
-        return;
-    }
-    let f = &*f;
-    rebuild(&mut commands, e, |p| settings_tab(p, f, &options, &ui));
-}
-
 const RATES: [f64; 7] = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0];
 
 /// Dev tools (a server started with `--dev`): time, quick games, teleports, bots, forced hits.
+/// (Redrawn when the map's checkpoints and finish, its teleports, change.)
 fn dev(
-    mut q: Query<(Entity, &mut Section, &mut Node), With<MenuDev>>,
-    ui: Res<Ui>,
+    q: Single<Entity, With<DevBox>>,
     session: Res<Session>,
     map: Option<Res<crate::game::Map>>,
+    folds: Res<Folds>,
     f: Res<Fonts>,
+    mut shown: Local<Option<(bool, usize, bool)>>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec, mut node)) = q.single_mut() else {
-        return;
-    };
-    show(&mut node, ui.menu_tab == MenuTab::Dev && session.dev);
     let checkpoints = map.as_ref().map_or(0, |m| m.spec.checkpoints.len());
     let finish = map.as_ref().is_some_and(|m| m.spec.finish.is_some());
-    if !sec.stale(key_of(&(session.dev, checkpoints, finish, &ui.open))) {
+    let next = Some((session.dev, checkpoints, finish));
+    if *shown == next {
         return;
     }
+    *shown = next;
     let f = &*f;
     let d = |cmd: DevCmd| Action::Send(ClientMsg::Dev { q: None, cmd });
-    rebuild(&mut commands, e, |p| {
+    rebuild(&mut commands, *q, |p| {
         if !session.dev {
             return;
         }
@@ -827,7 +880,7 @@ fn dev(
             );
             button(r, f, "Выбыть", Look::Chip(false), d(DevCmd::Kill { id: None }));
         });
-        fold(p, f, &ui, Fold::DevMaps, text::PLAY_MAP, |c| {
+        fold(p, f, &folds, Fold::DevMaps, text::PLAY_MAP, |c| {
             row(c, true, |r| {
                 for def in fb_maps::GAMES {
                     let m = def.meta();

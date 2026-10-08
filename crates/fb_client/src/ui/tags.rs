@@ -46,8 +46,8 @@ impl Plugin for TagsPlugin {
 #[derive(Component)]
 struct Tag {
     id: Pid,
-    /// What it shows: name, colour and badge (rebuilt when that changes).
-    key: u64,
+    /// What it shows: the name with its badge, and the suit colour (rebuilt when that changes).
+    name: String,
     color: u8,
     /// Its size, an index into `STEPS`.
     step: usize,
@@ -66,7 +66,6 @@ struct Seen {
     at: Vec2,
     d: f32,
     name: String,
-    key: u64,
     color: u8,
     /// The points looked at for walls: the head and the middle of the body.
     aims: [Vec3; 2],
@@ -136,7 +135,6 @@ fn place_tags(
             id: id.0,
             at: at / scale.0,
             d,
-            key: key_of(&(&name, p.color)),
             name,
             color: p.color,
             aims: [head, feet + Vec3::Y * 0.9 * pose.size],
@@ -161,7 +159,7 @@ fn place_tags(
                 l.spawn((
                     Tag {
                         id: s.id,
-                        key: s.key,
+                        name: s.name.clone(),
                         color: s.color,
                         step: want_step,
                         lift: 0.0,
@@ -199,10 +197,10 @@ fn place_tags(
             let fresh = frame_node(k);
             node.padding = fresh.padding;
             node.column_gap = fresh.column_gap;
-            tag.key = 0;
+            tag.name.clear();
         }
-        if tag.key != s.key {
-            tag.key = s.key;
+        if tag.name != s.name || tag.color != s.color {
+            tag.name.clone_from(&s.name);
             tag.color = s.color;
             let (k, a) = (STEPS[tag.step], tag.alpha);
             tag.painted = a;

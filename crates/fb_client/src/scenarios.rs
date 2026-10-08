@@ -8,8 +8,8 @@ use fb_proto::{DenyReason, DevCmd, Phase};
 use crate::harness::Game;
 use crate::keys::Bind;
 use crate::render::quality::Preset;
-use crate::session::Session;
-use crate::ui::{Action, Field, Fold, HomeTab, Knob, MenuTab, Ui, UiAction};
+use crate::session::{RoomList, Session};
+use crate::ui::{Action, Field, Fold, Folds, Form, HomeTab, Knob, MenuTab, Ui, UiAction};
 
 /// In the dev room's lobby, where the menu opens by itself on entry.
 fn in_lobby(g: &mut Game) {
@@ -21,8 +21,7 @@ fn in_lobby(g: &mut Game) {
 
 fn on_room_list(g: &mut Game) {
     g.until(10.0, "the room list", |w| {
-        let s = w.resource::<Session>();
-        s.rooms.is_some() && s.room.is_none()
+        w.resource::<RoomList>().rooms.is_some() && w.resource::<Session>().room.is_none()
     });
 }
 
@@ -78,7 +77,7 @@ fn into_round(g: &mut Game, map: &str) {
 #[test]
 fn the_client_runs_without_a_gpu() {
     let mut g = Game::new(&[]);
-    g.until(10.0, "the room list", |w| w.resource::<Session>().rooms.is_some());
+    g.until(10.0, "the room list", |w| w.resource::<RoomList>().rooms.is_some());
 }
 
 /// The loading screen's warm-up (off on the bench but here): every map built and drawn as a round's, beans in
@@ -272,7 +271,7 @@ fn leave_the_room_and_come_back() {
     });
     on_room_list(&mut g);
     g.until(5.0, "the room closed", |w| {
-        let s = w.resource::<Session>();
+        let s = w.resource::<RoomList>();
         s.mine.is_none() && s.rooms.as_ref().is_some_and(|l| l.iter().all(|r| r.id != room))
     });
 }
@@ -510,11 +509,11 @@ fn the_server_list() {
     g.focus(Field::Server);
     g.type_text("не адрес!");
     g.enter();
-    assert!(g.res::<Ui>().server_bad, "a wrong address is told");
+    assert!(g.res::<Form>().server_bad, "a wrong address is told");
     g.erase(Field::Server);
     g.type_text("127.0.0.1:1");
     g.enter();
-    assert!(!g.res::<Ui>().server_bad);
+    assert!(!g.res::<Form>().server_bad);
     assert!(
         g.res::<crate::servers::Servers>()
             .list
@@ -624,7 +623,7 @@ fn the_map_goes_with_the_room() {
     });
     on_room_list(&mut g);
     g.until(5.0, "the map gone and the room closed", |w| {
-        !w.contains_resource::<Map>() && w.resource::<Session>().mine.is_none()
+        !w.contains_resource::<Map>() && w.resource::<RoomList>().mine.is_none()
     });
     create_room(&mut g, "Вторая", false);
     g.until(10.0, "the new lobby's own map", |w| {
@@ -736,7 +735,7 @@ fn practice_and_back() {
     create_room(&mut g, "Тренируюсь", false);
     let room = g.res::<Session>().room.clone();
     // (The fold stays open as it was left at the room list.)
-    assert!(g.res::<Ui>().open.contains(&Fold::Practice));
+    assert!(g.res::<Folds>().open(Fold::Practice));
     g.press(2.0, "Тренировка: двери", practice("door-dash"));
     g.until(15.0, "the practice round", in_practice);
     g.frames(120);
@@ -856,7 +855,7 @@ fn settings_at_the_room_list() {
     assert_eq!(g.res::<crate::settings::Bindings>().keys(Bind::Jump), [KeyCode::KeyK]);
     g.press(2.0, "Сбросить", |a| matches!(a, Action::ResetKeys));
     assert_ne!(g.res::<crate::settings::Bindings>().keys(Bind::Jump), [KeyCode::KeyK]);
-    g.press(2.0, "Комнаты", |a| matches!(a, Action::HomeTab(HomeTab::Rooms)));
+    g.press(2.0, "Комнаты", |a| matches!(a, Action::HomeTab(HomeTab::Main)));
     on_room_list(&mut g);
 }
 

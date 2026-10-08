@@ -48,7 +48,7 @@ pub struct ProbeInput {
     pub frame: InputFrame,
     pub until: f64,
 }
-use crate::session::{Feed, Session};
+use crate::session::{Feed, FeedLog, Session};
 
 /// Map events by their tick.
 #[derive(Default)]
@@ -883,6 +883,7 @@ fn apply_map_events(
     own: Query<&PlayerId, With<Predicted>>,
     rounds: Query<&Round>,
     mut session: ResMut<Session>,
+    mut feed: ResMut<FeedLog>,
     time: Res<Time<Real>>,
     mut cues: MessageWriter<Cue>,
 ) {
@@ -915,7 +916,6 @@ fn apply_map_events(
     }
     let me = own.single().ok().map(|p| p.0);
     let now = interp.map(|t| t.tick().0);
-    let session = &mut *session;
     let mut out = Vec::new();
     let pending = core::mem::take(&mut map.pending);
     for msg in pending {
@@ -936,7 +936,7 @@ fn apply_map_events(
                     if let Some(b) = taken.filter(|_| loud) {
                         cues.write(Cue::Bonus(*id));
                         let who = (Some(*id) != session.me).then(|| session.name_of(*id));
-                        session.note(real, crate::ui::text::bonus_note(b.kind, who.as_deref()));
+                        feed.note(real, crate::ui::text::bonus_note(b.kind, who.as_deref()));
                     }
                 } else {
                     map.pending.push(msg);
@@ -950,7 +950,7 @@ fn apply_map_events(
                     if loud {
                         cues.write(Cue::Finish(*id));
                         let line = crate::ui::text::finish_note(&session.name_of(*id), *place as usize, *time);
-                        session.note(real, line);
+                        feed.note(real, line);
                     }
                 }
             }
@@ -979,20 +979,18 @@ fn apply_map_events(
                             out: *out,
                             shortcut: *shortcut,
                         };
-                        session.push_feed(real, what);
+                        feed.push(real, what);
                     }
                 }
             }
             MapEventKind::Map(ev) => {
                 let mut said = Vec::new();
-                client_event(
-                    &mut map.world,
-                    &mut map.spec,
-                    &mut session.scores,
-                    session.me,
-                    ev,
-                    &mut said,
-                );
+                // (`Session` reads as changed only when the scores do: the HUD redraws on it.)
+                let mut scores = session.scores.clone();
+                client_event(&mut map.world, &mut map.spec, &mut scores, session.me, ev, &mut said);
+                if scores != session.scores {
+                    session.scores = scores;
+                }
                 if !loud {
                     said.retain(|o| !matches!(o, MapOut::Sfx(_)));
                 }

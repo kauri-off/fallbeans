@@ -19,7 +19,7 @@ impl Plugin for LoadingPlugin {
 }
 
 #[derive(Component)]
-struct Screen;
+struct Curtain;
 
 #[derive(Component)]
 struct Bar;
@@ -32,7 +32,7 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
     let on = warm.is_some_and(|w| w.busy());
     commands
         .spawn((
-            Screen,
+            Curtain,
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100),
@@ -78,19 +78,18 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                     BackgroundColor(PINK),
                 ));
             });
-            s.spawn((StepLine, Section::default(), Node::default()));
+            let step = muted(s, f, "");
+            s.commands().entity(step).insert(StepLine);
         });
 }
 
 /// Up while the warm-up runs, its bar and what it is doing; no text field has the keyboard meanwhile.
 fn update_screen(
     warm: Option<Res<Warmup>>,
-    mut screen: Query<&mut Node, (With<Screen>, Without<Bar>)>,
-    mut bar: Query<&mut Node, (With<Bar>, Without<Screen>)>,
-    mut line: Query<(Entity, &mut Section), With<StepLine>>,
+    mut screen: Query<&mut Node, (With<Curtain>, Without<Bar>)>,
+    mut bar: Query<&mut Node, (With<Bar>, Without<Curtain>)>,
+    mut line: Query<&mut Rich, With<StepLine>>,
     mut focus: ResMut<InputFocus>,
-    f: Res<Fonts>,
-    mut commands: Commands,
 ) {
     let busy = warm.as_ref().is_some_and(|w| w.busy());
     for mut n in &mut screen {
@@ -106,13 +105,7 @@ fn update_screen(
             n.width = width;
         }
     }
-    let step = w.step();
-    let f = &*f;
-    for (e, mut sec) in &mut line {
-        if sec.stale(key_of(&step)) {
-            rebuild(&mut commands, e, |p| {
-                muted(p, f, &step);
-            });
-        }
+    for mut t in &mut line {
+        t.set(&w.step());
     }
 }

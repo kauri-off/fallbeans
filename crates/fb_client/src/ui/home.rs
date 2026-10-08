@@ -12,7 +12,7 @@ use crate::crash::LastCrash;
 use crate::net::Conn;
 use crate::opts::Opts;
 use crate::servers::{Servers, States, Status, Target};
-use crate::session::{Denied, Session};
+use crate::session::{Denied, RoomList, RoomView, Session};
 use crate::settings::{Identities, Me, Player};
 use crate::update::{State as UpdateState, Update};
 
@@ -20,13 +20,32 @@ pub struct HomePlugin;
 
 impl Plugin for HomePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<Form>();
         app.add_systems(Startup, build_home.after(super::setup));
         app.add_systems(
             Update,
             (
-                layers,
                 (
-                    head, update_box, servers, server_add, rooms, pin, create, practice, settings, banner,
+                    layers.run_if(
+                        state_changed::<Screen>
+                            .or_else(state_changed::<HomeTab>)
+                            .or_else(resource_changed::<Ui>)
+                            .or_else(resource_changed::<Session>),
+                    ),
+                    tabs_follow.run_if(state_changed::<Screen>.or_else(state_changed::<HomeTab>)),
+                    update_box.run_if(resource_exists_and_changed::<Update>.or_else(resource_changed::<LastCrash>)),
+                    servers.run_if(resource_changed::<Servers>.or_else(resource_changed::<States>)),
+                    server_add.run_if(resource_changed::<Servers>.or_else(resource_changed::<Form>)),
+                    rooms.run_if(
+                        resource_changed::<RoomList>
+                            .or_else(resource_changed::<Session>)
+                            .or_else(resource_changed::<Servers>),
+                    ),
+                    pin.run_if(resource_changed::<Session>),
+                    own_room.run_if(resource_changed::<RoomList>),
+                    private_box.run_if(resource_changed::<Form>),
+                    title_hint.run_if(resource_changed::<Player>.or_else(resource_changed::<Opts>)),
+                    banner,
                 ),
                 enter_submits,
                 (home_actions, server_actions),
@@ -36,156 +55,168 @@ impl Plugin for HomePlugin {
     }
 }
 
-#[derive(Component)]
-struct HomeHead;
+/// The room list's forms: the private box of a room to create, and an address that is not one.
+#[derive(Resource, Default)]
+pub struct Form {
+    pub private: bool,
+    pub server_bad: bool,
+}
+
 #[derive(Component)]
 struct UpdateBox;
 #[derive(Component)]
 struct ServersBox;
 #[derive(Component)]
-struct ServerAddBox;
+struct ServersList;
 #[derive(Component)]
-struct RoomsTabBox;
+struct ServerBad;
 #[derive(Component)]
-struct SettingsBox;
+struct RoomsBox;
 #[derive(Component)]
 struct RoomsList;
 #[derive(Component)]
-struct ServersList;
-#[derive(Component)]
 struct PinBox;
 #[derive(Component)]
-struct CreateBox;
+struct OwnRoom;
 #[derive(Component)]
-struct PracticeBox;
+struct NewRoom;
+#[derive(Component)]
+struct SettingsBox;
 #[derive(Component)]
 struct BannerBox;
 
-fn build_home(mut commands: Commands, layers: Query<(Entity, &Layer)>, f: Res<Fonts>, me: Me) {
+fn column(gap: f32) -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: rem(gap),
+        ..default()
+    }
+}
+
+fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me, options: Options, folds: Res<Folds>) {
     let f = &*f;
-    for (e, layer) in &layers {
-        match layer {
-            Layer::Home => {
-                commands.entity(e).with_children(|l| {
-                    l.spawn(Node {
-                        width: percent(100),
-                        height: percent(100),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::all(rem(1.0)),
-                        ..default()
-                    })
-                    .with_children(|c| {
-                        c.spawn((
-                            Node {
-                                width: rem(36.0),
-                                max_width: percent(100),
-                                max_height: percent(100),
-                                flex_direction: FlexDirection::Column,
-                                row_gap: rem(0.75),
-                                padding: UiRect::all(rem(1.25)),
-                                border: UiRect::all(px(1)),
-                                border_radius: BorderRadius::all(rem(1.125)),
-                                ..default()
-                            },
-                            glass(),
-                        ))
-                        .with_children(|panel| {
-                            panel.spawn((HomeHead, Section::default(), Node::default()));
-                            panel.spawn((
-                                UpdateBox,
-                                Section::default(),
-                                Node {
-                                    flex_direction: FlexDirection::Column,
-                                    row_gap: rem(0.5),
-                                    ..default()
-                                },
-                            ));
-                            panel
-                                .spawn((
+    commands.entity(layers[Layer::Banner]).insert(BannerBox);
+    commands.entity(layers[Layer::Home]).with_children(|l| {
+        l.spawn(Node {
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::all(rem(1.0)),
+            ..default()
+        })
+        .with_children(|c| {
+            c.spawn((
+                Node {
+                    width: rem(36.0),
+                    max_width: percent(100),
+                    max_height: percent(100),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: rem(0.75),
+                    padding: UiRect::all(rem(1.25)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(rem(1.125)),
+                    ..default()
+                },
+                glass(),
+            ))
+            .with_children(|panel| {
+                head(
+                    panel,
+                    f,
+                    &[
+                        (text::TAB_SERVERS, Action::HomeTab(HomeTab::Main)),
+                        (text::TAB_SETTINGS, Action::HomeTab(HomeTab::Settings)),
+                    ],
+                );
+                panel.spawn((UpdateBox, column(0.5)));
+                panel
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            overflow: Overflow::scroll_y(),
+                            flex_shrink: 1.0,
+                            ..default()
+                        },
+                        bevy::ui_widgets::ScrollArea,
+                    ))
+                    .with_children(|body| {
+                        body.spawn((ServersBox, column(0.75))).with_children(|t| {
+                            t.spawn((ServersList, column(0.625)));
+                            t.spawn(column(0.5)).with_children(|p| {
+                                row(p, false, |r| {
+                                    field_with_hint(r, f, Field::Server, "", text::SERVER_PLACEHOLDER, 120, None);
+                                    button(r, f, text::ADD, Look::Go, Action::AddServer);
+                                });
+                                let bad = rich(p, f, text::SERVER_BAD, 13.0, RED_INK);
+                                p.commands().entity(bad).insert((
+                                    ServerBad,
                                     Node {
-                                        flex_direction: FlexDirection::Column,
-                                        overflow: Overflow::scroll_y(),
-                                        flex_shrink: 1.0,
+                                        display: display(false),
                                         ..default()
                                     },
-                                    bevy::ui_widgets::ScrollArea,
-                                ))
-                                .with_children(|body| {
-                                    body.spawn((
-                                        ServersBox,
-                                        Node {
-                                            flex_direction: FlexDirection::Column,
-                                            row_gap: rem(0.75),
-                                            ..default()
-                                        },
-                                    ))
-                                    .with_children(|t| {
-                                        t.spawn((
-                                            ServersList,
-                                            Section::default(),
-                                            Node {
-                                                flex_direction: FlexDirection::Column,
-                                                row_gap: rem(0.625),
-                                                ..default()
-                                            },
-                                        ));
-                                        t.spawn((
-                                            ServerAddBox,
-                                            Section::default(),
-                                            Node {
-                                                flex_direction: FlexDirection::Column,
-                                                row_gap: rem(0.5),
-                                                ..default()
-                                            },
-                                        ));
-                                    });
-                                    body.spawn((
-                                        RoomsTabBox,
-                                        Node {
-                                            flex_direction: FlexDirection::Column,
-                                            row_gap: rem(0.75),
-                                            ..default()
-                                        },
-                                    ))
-                                    .with_children(|t| {
-                                        name_row(t, f, Field::Name, &me.name());
-                                        for marker in 0..4 {
-                                            let mut s = t.spawn((
-                                                Section::default(),
-                                                Node {
-                                                    flex_direction: FlexDirection::Column,
-                                                    row_gap: rem(0.625),
-                                                    ..default()
-                                                },
-                                            ));
-                                            match marker {
-                                                0 => s.insert(RoomsList),
-                                                1 => s.insert(PinBox),
-                                                2 => s.insert(CreateBox),
-                                                _ => s.insert(PracticeBox),
-                                            };
-                                        }
-                                    });
-                                    body.spawn((
-                                        SettingsBox,
-                                        Section::default(),
-                                        Node {
-                                            flex_direction: FlexDirection::Column,
-                                            ..default()
-                                        },
-                                    ));
-                                });
+                                ));
+                                muted(p, f, text::SERVER_HINT);
+                            });
                         });
+                        body.spawn((RoomsBox, column(0.75))).with_children(|t| {
+                            name_row(t, f, Field::Name, &me.name());
+                            t.spawn((RoomsList, column(0.625)));
+                            t.spawn((PinBox, column(0.625)));
+                            group(t, |g| {
+                                g.spawn((OwnRoom, column(0.625)));
+                                g.spawn((NewRoom, column(0.625))).with_children(|n| {
+                                    heading(n, f, text::OWN_ROOM);
+                                    field_with_hint(
+                                        n,
+                                        f,
+                                        Field::RoomTitle,
+                                        "",
+                                        &text::room_title_placeholder(&me.name()),
+                                        ROOM_TITLE_MAX,
+                                        None,
+                                    );
+                                    button(n, f, text::PRIVATE_CREATE, Look::Check(false), Action::CreatePrivate);
+                                    button(n, f, text::CREATE_ROOM, Look::Go, Action::CreateRoom);
+                                });
+                            });
+                            practice_list(t, f, &folds);
+                        });
+                        body.spawn((SettingsBox, column(0.0)))
+                            .with_children(|t| settings_tab(t, f, &options, &folds));
                     });
-                });
+            });
+        });
+    });
+}
+
+/// A screen's head: the logo and its tabs.
+pub fn head(p: &mut ChildSpawnerCommands, f: &Fonts, items: &[(&str, Action)]) {
+    p.spawn(Node {
+        width: percent(100),
+        justify_content: JustifyContent::SpaceBetween,
+        align_items: AlignItems::Center,
+        flex_wrap: FlexWrap::Wrap,
+        row_gap: rem(0.5),
+        ..default()
+    })
+    .with_children(|r| {
+        logo(r, f, 26.0);
+        r.spawn((
+            Node {
+                column_gap: rem(0.25),
+                padding: UiRect::all(rem(0.2)),
+                border_radius: BorderRadius::all(rem(0.875)),
+                ..default()
+            },
+            BackgroundColor(GROUP),
+        ))
+        .with_children(|t| {
+            for (i, (s, a)) in items.iter().enumerate() {
+                button(t, f, s, Look::Tab(i == 0), a.clone());
             }
-            Layer::Banner => {
-                commands.entity(e).insert((BannerBox, Section::default()));
-            }
-            _ => {}
-        }
-    }
+        });
+    });
 }
 
 /// The player's name: kept in the settings and told to the server (at the room list or in a room).
@@ -196,131 +227,104 @@ pub fn name_row(p: &mut ChildSpawnerCommands, f: &Fonts, which: Field, name: &st
     });
 }
 
-/// Where the player is decides what is on screen: the room list, a room (HUD, chat, menu), or a banner.
+/// The screen decides which layers are up, and the home tab which of its parts.
 fn layers(
     mut q: Query<(&Layer, &mut Node)>,
+    screen: Res<State<Screen>>,
+    tab: Option<Res<State<HomeTab>>>,
     session: Res<Session>,
-    conn: Option<Res<Conn>>,
-    target: Res<Target>,
     ui: Res<Ui>,
-    mut rooms_box: Query<&mut Node, (With<RoomsTabBox>, Without<Layer>)>,
-    mut settings_box: Query<&mut Node, (With<SettingsBox>, Without<Layer>, Without<RoomsTabBox>)>,
-    mut servers_box: Query<
-        &mut Node,
+    mut boxes: Query<
+        (&mut Node, Has<ServersBox>, Has<RoomsBox>),
         (
-            With<ServersBox>,
+            Or<(With<ServersBox>, With<RoomsBox>, With<SettingsBox>)>,
             Without<Layer>,
-            Without<RoomsTabBox>,
-            Without<SettingsBox>,
         ),
     >,
 ) {
-    let online = conn.as_ref().is_some_and(|c| c.connected);
-    let in_room = session.room.is_some() && session.arena.is_some();
-    let picking = target.0.is_none();
-    let home = picking || (online && session.room.is_none() && session.rooms.is_some() && !session.refused);
+    let screen = *screen.get();
+    let room = screen == Screen::Room;
     for (layer, mut node) in &mut q {
         let on = match layer {
-            Layer::Home => home,
+            Layer::Home => matches!(screen, Screen::Servers | Screen::Rooms),
             Layer::Banner => true,
-            Layer::Hud | Layer::Tags => in_room,
-            Layer::Chat => in_room && !session.practice,
-            Layer::Menu => in_room && ui.menu,
+            Layer::Hud | Layer::Tags => room,
+            Layer::Chat => room && !session.practice,
+            Layer::Menu => room && ui.menu,
         };
         show(&mut node, on);
     }
-    for mut n in &mut rooms_box {
-        show(&mut n, ui.home_tab == HomeTab::Rooms && !picking);
-    }
-    for mut n in &mut servers_box {
-        show(&mut n, ui.home_tab == HomeTab::Rooms && picking);
-    }
-    for mut n in &mut settings_box {
-        show(&mut n, ui.home_tab == HomeTab::Settings);
+    let tab = tab.map(|t| *t.get());
+    for (mut node, servers, rooms) in &mut boxes {
+        let on = if servers {
+            tab == Some(HomeTab::Main) && screen == Screen::Servers
+        } else if rooms {
+            tab == Some(HomeTab::Main) && screen == Screen::Rooms
+        } else {
+            tab == Some(HomeTab::Settings)
+        };
+        show(&mut node, on);
     }
 }
 
-pub fn tabs(p: &mut ChildSpawnerCommands, f: &Fonts, items: &[(&str, Action, bool)]) {
-    p.spawn((
-        Node {
-            column_gap: rem(0.25),
-            padding: UiRect::all(rem(0.2)),
-            border_radius: BorderRadius::all(rem(0.875)),
-            ..default()
-        },
-        BackgroundColor(GROUP),
-    ))
-    .with_children(|t| {
-        for (s, a, on) in items {
-            button(t, f, s, Look::Tab(*on), a.clone());
-        }
-    });
-}
-
-fn head(
-    mut q: Query<(Entity, &mut Section), With<HomeHead>>,
-    ui: Res<Ui>,
-    target: Res<Target>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+/// The tabs of both screens show the one open; the room list's first is the servers' until one is entered.
+fn tabs_follow(
+    screen: Res<State<Screen>>,
+    home: Option<Res<State<HomeTab>>>,
+    menu: Option<Res<State<MenuTab>>>,
+    mut tabs: Query<(Entity, &Act, &mut Look)>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Rich>,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let picking = target.0.is_none();
-    if !sec.stale(key_of(&(ui.home_tab, picking))) {
-        return;
+    for (e, act, mut look) in &mut tabs {
+        let on = match act.0 {
+            Action::HomeTab(t) => home.as_ref().is_some_and(|h| *h.get() == t),
+            Action::MenuTab(t) => menu.as_ref().is_some_and(|m| *m.get() == t),
+            _ => continue,
+        };
+        look.set_if_neq(Look::Tab(on));
+        if let Action::HomeTab(HomeTab::Main) = act.0 {
+            let s = if *screen.get() == Screen::Rooms {
+                text::TAB_ROOMS
+            } else {
+                text::TAB_SERVERS
+            };
+            relabel(e, s, &children, &mut texts);
+        }
     }
-    let f = &*f;
-    let tab = ui.home_tab;
-    let first = if picking { text::TAB_SERVERS } else { text::TAB_ROOMS };
-    rebuild(&mut commands, e, |p| {
-        p.spawn(Node {
-            width: percent(100),
-            justify_content: JustifyContent::SpaceBetween,
-            align_items: AlignItems::Center,
-            flex_wrap: FlexWrap::Wrap,
-            row_gap: rem(0.5),
-            ..default()
-        })
-        .with_children(|r| {
-            logo(r, f, 26.0);
-            tabs(
-                r,
-                f,
-                &[
-                    (first, Action::HomeTab(HomeTab::Rooms), tab == HomeTab::Rooms),
-                    (
-                        text::TAB_SETTINGS,
-                        Action::HomeTab(HomeTab::Settings),
-                        tab == HomeTab::Settings,
-                    ),
-                ],
-            );
-        });
-    });
+}
+
+/// What the update box shows: redrawn when that changes, not with every chunk of a download.
+#[derive(Clone, PartialEq)]
+enum UpdateView {
+    State(UpdateState),
+    /// Per cent.
+    Downloading(u64),
 }
 
 /// A newer release, the download, or this build's version.
 fn update_box(
-    mut q: Query<(Entity, &mut Section), With<UpdateBox>>,
+    q: Single<Entity, With<UpdateBox>>,
     update: Option<Res<Update>>,
     crash: Res<LastCrash>,
     f: Res<Fonts>,
+    mut shown: Local<Option<(UpdateView, bool)>>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
     let state = update.as_ref().map_or(UpdateState::Idle, |u| u.state.clone());
     let can = update.as_ref().is_some_and(|u| u.can_install());
-    // (A download is redrawn when its percentage changes, not with every chunk that comes in.)
-    let key = match &state {
-        UpdateState::Downloading(got, total) => key_of(&("downloading", (got * 100).checked_div(*total))),
-        s => key_of(s),
+    let view = match state {
+        UpdateState::Downloading(got, total) => UpdateView::Downloading((got * 100).checked_div(total).unwrap_or(0)),
+        s => UpdateView::State(s),
     };
-    if !sec.stale(key_of(&(key, can, &crash.0))) {
+    let next = Some((view.clone(), can));
+    if *shown == next && !crash.is_changed() {
         return;
     }
+    *shown = next;
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        update_state(p, f, &state, can);
+    rebuild(&mut commands, *q, |p| {
+        update_state(p, f, &view, can);
         if let Some(c) = &crash.0 {
             let report = c.report.display().to_string();
             let msg = if c.gpu_lost {
@@ -336,12 +340,12 @@ fn update_box(
 }
 
 /// `can`: the release can be installed here, so a failed try may be tried again.
-fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState, can: bool) {
-    match state {
-        UpdateState::Idle => {
+fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, view: &UpdateView, can: bool) {
+    match view {
+        UpdateView::State(UpdateState::Idle) => {
             muted(p, f, &text::version(&fb_net::build()));
         }
-        UpdateState::Available(r) => {
+        UpdateView::State(UpdateState::Available(r)) => {
             group(p, |g| {
                 row(g, false, |row_| {
                     heading(row_, f, &text::update_out(&r.version));
@@ -353,10 +357,10 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState, ca
                 });
             });
         }
-        UpdateState::Downloading(got, total) => {
-            label(p, f, &text::downloading(*got, *total));
+        UpdateView::Downloading(pct) | UpdateView::State(UpdateState::Downloading(pct, _)) => {
+            label(p, f, &text::downloading(*pct, 100));
         }
-        UpdateState::Failed(err) => {
+        UpdateView::State(UpdateState::Failed(err)) => {
             group(p, |g| {
                 let t = rich(g, f, &text::update_failed(err), 13.0, RED_INK);
                 wrap_anywhere(g, t);
@@ -368,7 +372,7 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState, ca
                 });
             });
         }
-        UpdateState::Restarting => {
+        UpdateView::State(UpdateState::Restarting) => {
             label(p, f, text::RESTARTING);
         }
     }
@@ -376,29 +380,20 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, state: &UpdateState, ca
 
 /// The player's servers, each with what it said last.
 fn servers(
-    mut q: Query<(Entity, &mut Section), With<ServersList>>,
+    q: Single<Entity, With<ServersList>>,
     list: Res<Servers>,
     states: Res<States>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let rows: Vec<(String, Status)> = list
-        .ordered()
-        .into_iter()
-        .map(|a| (a.clone(), states.get(&a)))
-        .collect();
-    if !sec.stale(key_of(&rows)) {
-        return;
-    }
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
+    rebuild(&mut commands, *q, |p| {
         heading(p, f, text::SERVERS);
-        if rows.is_empty() {
+        if list.list.is_empty() {
             muted(p, f, text::NO_SERVERS);
         }
-        for (addr, status) in &rows {
-            server_row(p, f, addr, status);
+        for addr in list.ordered() {
+            server_row(p, f, &addr, &states.get(&addr));
         }
     });
 }
@@ -460,56 +455,43 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
     });
 }
 
-/// The field to add a server (rebuilt, so emptied, when the list changes).
+/// The field to add a server is emptied when the list changes (unless the address was not one), and says so then.
 fn server_add(
-    mut q: Query<(Entity, &mut Section), With<ServerAddBox>>,
     list: Res<Servers>,
-    ui: Res<Ui>,
-    fields: Query<(&Field, &EditableText)>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+    form: Res<Form>,
+    mut fields: Query<(&Field, &mut EditableText)>,
+    mut bad: Single<&mut Node, With<ServerBad>>,
+    mut had: Local<Vec<String>>,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    if !sec.stale(key_of(&(&list.list, ui.server_bad))) {
+    show(&mut bad, form.server_bad);
+    if *had == list.list {
         return;
     }
-    let f = &*f;
-    let typed = if ui.server_bad {
-        field_text(&fields, Field::Server)
-    } else {
-        String::new()
-    };
-    rebuild(&mut commands, e, |p| {
-        row(p, false, |r| {
-            field_with_hint(r, f, Field::Server, &typed, text::SERVER_PLACEHOLDER, 120, None);
-            button(r, f, text::ADD, Look::Go, Action::AddServer);
-        });
-        if ui.server_bad {
-            rich(p, f, text::SERVER_BAD, 13.0, RED_INK);
-        }
-        muted(p, f, text::SERVER_HINT);
-    });
+    had.clone_from(&list.list);
+    if !form.server_bad
+        && let Some((_, mut t)) = fields.iter_mut().find(|(f, _)| **f == Field::Server)
+    {
+        set_field_text(&mut t, "");
+    }
 }
 
 fn rooms(
-    mut q: Query<(Entity, &mut Section), With<RoomsList>>,
+    q: Single<Entity, With<RoomsList>>,
     session: Res<Session>,
+    list: Res<RoomList>,
     conn: Option<Res<Conn>>,
     servers: Res<Servers>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let gone = session.denied.as_ref().filter(|d| d.reason != DenyReason::Pin);
-    let server = conn.map(|c| servers.last.clone().unwrap_or_else(|| c.http.clone()));
-    if !sec.stale(key_of(&(&session.rooms, &session.mine, gone, &server))) {
-        return;
-    }
     let f = &*f;
-    let list = session.rooms.clone();
-    let mine = session.mine.clone();
-    let alert = gone.and_then(|d| d.msg.clone());
-    rebuild(&mut commands, e, |p| {
+    let alert = session
+        .denied
+        .as_ref()
+        .filter(|d| d.reason != DenyReason::Pin)
+        .and_then(|d| d.msg.as_deref());
+    let server = conn.map(|c| servers.last.clone().unwrap_or_else(|| c.http.clone()));
+    rebuild(&mut commands, *q, |p| {
         row(p, false, |r| {
             button(r, f, text::TO_SERVERS, Look::Tiny, Action::LeaveServer);
             if let Some(s) = &server {
@@ -517,10 +499,10 @@ fn rooms(
             }
         });
         if let Some(msg) = alert {
-            rich(p, f, &msg, 14.0, RED_INK);
+            rich(p, f, msg, 14.0, RED_INK);
         }
-        heading(p, f, &text::rooms_count(list.as_ref().map_or(0, Vec::len)));
-        match &list {
+        heading(p, f, &text::rooms_count(list.rooms.as_ref().map_or(0, Vec::len)));
+        match &list.rooms {
             None => {
                 muted(p, f, text::LOADING_ROOMS);
             }
@@ -529,7 +511,7 @@ fn rooms(
             }
             Some(l) => {
                 for r in l {
-                    room_row(p, f, r, mine.as_deref() == Some(r.id.as_str()));
+                    room_row(p, f, r, list.mine.as_deref() == Some(r.id.as_str()));
                 }
             }
         }
@@ -572,24 +554,25 @@ fn room_row(p: &mut ChildSpawnerCommands, f: &Fonts, r: &RoomInfo, mine: bool) {
     });
 }
 
-/// A private room asked for its PIN: only its host knows it.
+/// A private room asked for its PIN: only its host knows it. (Redrawn, so emptied, when it asks again.)
 fn pin(
-    mut q: Query<(Entity, &mut Section), With<PinBox>>,
+    q: Single<Entity, With<PinBox>>,
     session: Res<Session>,
+    list: Res<RoomList>,
     f: Res<Fonts>,
+    mut shown: Local<Option<Denied>>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
     let asks = session.denied.as_ref().filter(|d| d.reason == DenyReason::Pin);
-    if !sec.stale(key_of(&asks)) {
+    if shown.as_ref() == asks {
         return;
     }
+    shown.clone_from(&asks.cloned());
     let f = &*f;
-    let asks: Option<Denied> = asks.cloned();
-    rebuild(&mut commands, e, |p| {
+    rebuild(&mut commands, *q, |p| {
         let Some(d) = asks else { return };
         let Some(room) = d.room.clone() else { return };
-        let title = session
+        let title = list
             .rooms
             .as_ref()
             .and_then(|l| l.iter().find(|r| r.id == room))
@@ -617,51 +600,46 @@ fn pin(
     });
 }
 
-/// Everyone may keep one room of their own: they are its host whenever they are in it.
-fn create(
-    mut q: Query<(Entity, &mut Section), With<CreateBox>>,
-    session: Res<Session>,
-    ui: Res<Ui>,
-    me: Me,
-    fields: Query<(&Field, &EditableText)>,
+/// Everyone may keep one room of their own: they are its host whenever they are in it. The form to create one
+/// is shown while they have none.
+fn own_room(
+    own: Single<Entity, With<OwnRoom>>,
+    mut new: Single<&mut Node, With<NewRoom>>,
+    list: Res<RoomList>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let name = me.name();
-    if !sec.stale(key_of(&(&session.mine, ui.create_private, &name))) {
-        return;
-    }
+    show(&mut new, list.mine.is_none());
     let f = &*f;
-    let mine = session.mine.clone();
-    let title = field_text(&fields, Field::RoomTitle);
-    let private = ui.create_private;
-    rebuild(&mut commands, e, |p| {
-        group(p, |g| {
-            if let Some(id) = mine {
-                button(g, f, text::BACK_TO_OWN, Look::Go, Action::Join(id));
-                muted(g, f, text::OWN_ROOM_NOTE);
-                return;
-            }
-            heading(g, f, text::OWN_ROOM);
-            field_with_hint(
-                g,
-                f,
-                Field::RoomTitle,
-                &title,
-                &text::room_title_placeholder(&name),
-                ROOM_TITLE_MAX,
-                None,
-            );
-            button(g, f, text::PRIVATE_CREATE, Look::Check(private), Action::CreatePrivate);
-            button(g, f, text::CREATE_ROOM, Look::Go, Action::CreateRoom);
-        });
+    rebuild(&mut commands, *own, |g| {
+        if let Some(id) = &list.mine {
+            button(g, f, text::BACK_TO_OWN, Look::Go, Action::Join(id.clone()));
+            muted(g, f, text::OWN_ROOM_NOTE);
+        }
     });
 }
 
+fn private_box(form: Res<Form>, mut checks: Query<(&Act, &mut Look)>) {
+    for (act, mut look) in &mut checks {
+        if let Action::CreatePrivate = act.0 {
+            look.set_if_neq(Look::Check(form.private));
+        }
+    }
+}
+
+/// A room created without a title is named after its host.
+fn title_hint(me: Me, fields: Query<&Field>, mut hints: Query<(&Placeholder, &mut Text)>) {
+    let hint = text::room_title_placeholder(&me.name());
+    for (p, mut t) in &mut hints {
+        if fields.get(p.0).is_ok_and(|f| *f == Field::RoomTitle) && t.0 != hint {
+            t.0.clone_from(&hint);
+        }
+    }
+}
+
 /// One map against bots, alone.
-pub fn practice_list(p: &mut ChildSpawnerCommands, f: &Fonts, ui: &Ui) {
-    fold(p, f, ui, Fold::Practice, text::PRACTICE, |c| {
+pub fn practice_list(p: &mut ChildSpawnerCommands, f: &Fonts, folds: &Folds) {
+    fold(p, f, folds, Fold::Practice, text::PRACTICE, |c| {
         row(c, true, |r| {
             for g in fb_maps::GAMES {
                 let m = g.meta();
@@ -672,58 +650,40 @@ pub fn practice_list(p: &mut ChildSpawnerCommands, f: &Fonts, ui: &Ui) {
     });
 }
 
-fn practice(
-    mut q: Query<(Entity, &mut Section), With<PracticeBox>>,
-    ui: Res<Ui>,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    if !sec.stale(key_of(&ui.open.contains(&Fold::Practice))) {
-        return;
-    }
-    let f = &*f;
-    rebuild(&mut commands, e, |p| practice_list(p, f, &ui));
+/// What the out-of-date card offers: the update as it goes, or the release page.
+#[derive(Clone, PartialEq)]
+enum Offer {
+    Page,
+    Install,
+    /// Per cent.
+    Downloading(u64),
+    /// Why, and whether it may be tried again.
+    Failed(String, bool),
+    Restarting,
 }
 
-fn settings(
-    mut q: Query<(Entity, &mut Section), With<SettingsBox>>,
-    options: Options,
-    ui: Res<Ui>,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    if !sec.stale(options.key(&ui)) {
-        return;
-    }
-    let f = &*f;
-    rebuild(&mut commands, e, |p| settings_tab(p, f, &options, &ui));
+/// What the banner layer shows: redrawn when that changes.
+#[derive(Clone, PartialEq)]
+enum Show {
+    None,
+    Card(Option<String>, bool),
+    Outdated(Offer),
+    Line(&'static str),
 }
 
 /// Connecting, reconnecting, the game being updated, or refused: a card in the middle or a banner on top.
 fn banner(
-    mut q: Query<(Entity, &mut Section), With<BannerBox>>,
+    q: Single<Entity, With<BannerBox>>,
     session: Res<Session>,
+    list: Res<RoomList>,
     conn: Option<Res<Conn>>,
     target: Res<Target>,
     update: Option<Res<Update>>,
     f: Res<Fonts>,
+    mut shown: Local<Option<Show>>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
     let online = conn.as_ref().is_some_and(|c| c.connected);
-    /// What the out-of-date card offers: the update as it goes, or the release page.
-    #[derive(Debug, PartialEq)]
-    enum Offer {
-        Page,
-        Install,
-        /// Per cent.
-        Downloading(u64),
-        /// Why, and whether it may be tried again.
-        Failed(String, bool),
-        Restarting,
-    }
     let offer = match update.as_ref().map(|u| (&u.state, u.can_install())) {
         Some((UpdateState::Available(_), true)) => Offer::Install,
         Some((UpdateState::Downloading(got, total), _)) => {
@@ -734,29 +694,24 @@ fn banner(
         _ => Offer::Page,
     };
     let ever = conn.as_ref().is_some_and(|c| c.ever);
-    #[derive(Debug, PartialEq)]
-    enum Show {
-        None,
-        Card(&'static str, Option<String>, bool),
-        Outdated(Offer),
-        Line(&'static str),
-    }
     let show = if target.0.is_none() {
         Show::None
     } else if let Some(msg) = &session.reject {
-        Show::Card(text::LOGO, Some(msg.clone()), true)
+        Show::Card(Some(msg.clone()), true)
     } else if session.refused {
         Show::Outdated(offer)
     } else if !online && ever {
         Show::Line(text::RECONNECTING)
-    } else if !online || (session.room.is_none() && session.rooms.is_none()) {
+    } else if !online || (session.room.is_none() && list.rooms.is_none()) {
         Show::Line(text::CONNECTING)
     } else {
         Show::None
     };
-    if !sec.stale(key_of(&show)) {
+    if shown.as_ref() == Some(&show) {
         return;
     }
+    *shown = Some(show.clone());
+    let e = *q;
     let f = &*f;
     rebuild(&mut commands, e, |p| match show {
         Show::None => {}
@@ -820,11 +775,8 @@ fn banner(
                 });
             });
         }
-        Show::Card(title, more, quit) => card(p, |card| {
+        Show::Card(more, quit) => card(p, |card| {
             logo(card, f, 30.0);
-            if title != text::LOGO {
-                heading(card, f, title);
-            }
             if let Some(m) = more {
                 label(card, f, &m);
             }
@@ -902,6 +854,7 @@ fn home_actions(
     mut player: ResMut<Player>,
     mut opts: ResMut<Opts>,
     mut ui: ResMut<Ui>,
+    mut form: ResMut<Form>,
     conn: Option<ResMut<Conn>>,
     fields: Query<(&Field, &EditableText)>,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
@@ -947,7 +900,7 @@ fn home_actions(
                 }
             }
             Action::CancelPin => session.denied = None,
-            Action::CreatePrivate => ui.create_private ^= true,
+            Action::CreatePrivate => form.private ^= true,
             Action::CreateRoom => {
                 let mut title = fb_shared::text::sanitize_title(&field_text(&fields, Field::RoomTitle));
                 let name = opts.name.clone().unwrap_or_else(|| player.name.clone());
@@ -958,7 +911,7 @@ fn home_actions(
                     &mut senders,
                     ClientMsg::Create {
                         title,
-                        private: ui.create_private,
+                        private: form.private,
                     },
                 );
             }
@@ -995,8 +948,11 @@ fn server_actions(
     mut states: ResMut<States>,
     mut target: ResMut<Target>,
     mut session: ResMut<Session>,
+    mut list: ResMut<RoomList>,
+    mut view: RoomView,
     mut opts: ResMut<Opts>,
     mut ui: ResMut<Ui>,
+    mut form: ResMut<Form>,
     ids: Res<Identities>,
     conn: Option<Res<Conn>>,
     fields: Query<(&Field, &EditableText)>,
@@ -1008,7 +964,7 @@ fn server_actions(
         match a {
             Action::AddServer => {
                 let addr = field_text(&fields, Field::Server);
-                ui.server_bad = !addr.trim().is_empty() && crate::servers::candidates(&addr).is_empty();
+                form.server_bad = !addr.trim().is_empty() && crate::servers::candidates(&addr).is_empty();
                 if servers.add(&addr) {
                     states.refresh();
                     crate::settings::save_soon(&mut commands);
@@ -1033,6 +989,8 @@ fn server_actions(
                 // (This server's own: one never sees the player's identity on another.)
                 let identity = opts.token.clone().or_else(|| ids.get(&base));
                 *session = Session::default();
+                *list = RoomList::default();
+                view.clear();
                 target.0 = Some(base.clone());
                 crate::net::open(&mut commands, &opts, identity, base, time.elapsed_secs());
                 opened = true;
@@ -1043,10 +1001,11 @@ fn server_actions(
                 }
                 target.0 = None;
                 *session = Session::default();
+                *list = RoomList::default();
+                view.clear();
                 opts.room = None;
                 opts.practice = None;
                 ui.menu = false;
-                ui.home_tab = HomeTab::Rooms;
                 states.refresh();
             }
             _ => {}

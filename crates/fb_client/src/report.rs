@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 use crate::game::Map;
 use crate::logs::{self, Logs};
 use crate::net::Conn;
-use crate::session::Session;
+use crate::session::{FeedLog, Session};
 use crate::stats::NetNow;
 use crate::ui::text;
 use crate::watch::{Corrections, Recent};
@@ -39,7 +39,8 @@ fn report(
     map: Option<Res<Map>>,
     timeline: Res<LocalTimeline>,
     own: Query<&BodyFull, With<Predicted>>,
-    mut session: ResMut<Session>,
+    session: Res<Session>,
+    mut feed: ResMut<FeedLog>,
 ) {
     if !keys.just_pressed(KeyCode::F8) {
         return;
@@ -124,6 +125,6 @@ fn report(
     // (Sent to whoever fixes it: without the player's home folder, the user name in it.)
     if file.write_all(crate::crash::redact(&s).as_bytes()).is_ok() {
         info!("F8 report: {}", path.display());
-        session.note(time.elapsed_secs(), text::report_saved(&path.display().to_string()));
+        feed.note(time.elapsed_secs(), text::report_saved(&path.display().to_string()));
     }
 }

@@ -1,7 +1,8 @@
 //! The player's interface on bevy_ui: the room list, the Esc menu, the HUD, the chat
-//! and the name tags. A panel is rebuilt whole when what it shows changes (`Section`); text fields live
-//! outside the rebuilt parts, so typing survives. Every button carries an `Action`; one observer turns
-//! presses into `UiAction` messages for the module that owns them.
+//! and the name tags. Where the player is picks the screen (`Screen`, its tabs `HomeTab` and `MenuTab`). Each
+//! screen is built once; what changes is set in place (`Rich` texts, a button's `Look`, folds shown or not), and
+//! only lists are rebuilt, when the resource they show changes. Every button carries an `Action`; one observer
+//! turns presses into `UiAction` messages for the module that owns them.
 pub mod text;
 
 mod chat;
@@ -11,7 +12,9 @@ mod loading;
 mod menu;
 mod tags;
 
-use core::hash::{Hash, Hasher};
+#[cfg(test)]
+pub use home::Form;
+
 use std::collections::BTreeSet;
 
 use bevy::asset::AssetId;
@@ -20,12 +23,15 @@ use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit};
-use bevy::ui::{InteractionDisabled, Pressed};
+use bevy::ui::{InteractionDisabled, Pressed, UiSystems};
 use bevy::ui_widgets::{Activate, Slider, SliderRange, SliderStep, SliderThumb, SliderValue, ValueChange};
 use bevy::window::PrimaryWindow;
 use fb_proto::{ClientMsg, Outfit};
 
-use crate::settings::Display;
+use crate::keys::Bind;
+use crate::render::upscale::Upscaler;
+use crate::session::{RoomList, Session};
+use crate::settings::{Bindings, Controls, Display, Graphics, Sound};
 use crate::view::color;
 
 const BOLD: &[u8] = include_bytes!("../../../../assets/fonts/Nunito-Bold.ttf");
@@ -67,14 +73,27 @@ pub struct Fonts {
     pub emoji: Handle<Font>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+/// Which screen is up: the player's servers, a server's rooms, a room; or none, under a banner (connecting,
+/// refused, between the room list and a room's arena).
+#[derive(States, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Screen {
+    #[default]
+    Servers,
+    Rooms,
+    Room,
+    Away,
+}
+
+#[derive(SubStates, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[source(Screen = Screen::Servers | Screen::Rooms)]
 pub enum HomeTab {
     #[default]
-    Rooms,
+    Main,
     Settings,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(SubStates, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[source(Screen = Screen::Room)]
 pub enum MenuTab {
     #[default]
     Game,
@@ -82,29 +101,19 @@ pub enum MenuTab {
     Dev,
 }
 
-/// What the interface is doing.
-#[derive(Resource, Default)]
+/// Who has the keyboard and the mouse.
+#[derive(Resource, Clone, Default, PartialEq)]
 pub struct Ui {
     /// The Esc menu is open: the mouse is free and the game takes no input.
     pub menu: bool,
-    pub menu_tab: MenuTab,
-    pub home_tab: HomeTab,
     /// The chat line takes the keyboard.
     pub chat: bool,
     /// In play with the mouse free (focus lost): the field asks for a click.
     pub need_click: bool,
-    /// F3: the network and performance overlay.
-    pub debug: bool,
-    /// Folded parts that are open.
-    pub open: BTreeSet<Fold>,
-    /// The create-room form's "private" box.
-    pub create_private: bool,
-    /// The address typed to add a server is not one.
-    pub server_bad: bool,
     /// The last device used was a gamepad (the hints follow it).
     pub pad: bool,
     /// Waiting for the key to bind to this action.
-    pub rebinding: Option<crate::keys::Bind>,
+    pub rebinding: Option<Bind>,
 }
 
 /// A folded part of a screen (by name in BRP's `fb/ui`).
@@ -119,12 +128,20 @@ pub enum Fold {
     DevMaps,
 }
 
-impl Ui {
+/// The folded parts that are open.
+#[derive(Resource, Default)]
+pub struct Folds(BTreeSet<Fold>);
+
+impl Folds {
     /// Opens a folded part, or folds it.
     pub fn toggle(&mut self, f: Fold) {
-        if !self.open.remove(&f) {
-            self.open.insert(f);
+        if !self.0.remove(&f) {
+            self.0.insert(f);
         }
+    }
+
+    pub fn open(&self, f: Fold) -> bool {
+        self.0.contains(&f)
     }
 }
 
@@ -185,7 +202,7 @@ pub enum Action {
     Wear(Outfit),
     RandomOutfit,
     Set(Toggle),
-    Rebind(crate::keys::Bind),
+    Rebind(Bind),
     ResetKeys,
     Gfx(GfxPick),
     OpenLogs,
@@ -250,42 +267,43 @@ impl Look {
             _ => UiRect::axes(rem(1.0), rem(0.5625)),
         }
     }
-}
 
-/// A part of a screen rebuilt when what it shows changes: `key` is a hash of that.
-#[derive(Component, Default)]
-pub struct Section {
-    key: Option<u64>,
-}
-
-pub fn key_of(v: &impl core::fmt::Debug) -> u64 {
-    // (Sections ask every frame: the Debug text goes straight into the hasher, without a String.)
-    struct Feed<'a>(&'a mut std::hash::DefaultHasher);
-    impl core::fmt::Write for Feed<'_> {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.0.write(s.as_bytes());
-            Ok(())
+    fn border(self) -> UiRect {
+        match self {
+            Look::Swatch(_, on) => UiRect::all(px(if on { 3 } else { 2 })),
+            _ => UiRect::all(px(1)),
         }
     }
-    let mut h = std::hash::DefaultHasher::new();
-    let _ = core::fmt::Write::write_fmt(&mut Feed(&mut h), format_args!("{v:?}"));
-    h.finish()
-}
 
-impl Section {
-    /// True (and remembers it) when the section must be rebuilt for `key`.
-    pub fn stale(&mut self, key: u64) -> bool {
-        if self.key == Some(key) {
-            return false;
+    fn rim(self) -> BorderColor {
+        BorderColor::all(match self {
+            Look::Check(_) | Look::Fold | Look::Tab(_) => Color::NONE,
+            Look::Swatch(_, true) => INK,
+            Look::Swatch(_, false) => Color::WHITE,
+            _ => RIM,
+        })
+    }
+
+    fn shadow(self) -> Option<BoxShadow> {
+        match self {
+            Look::Check(_) | Look::Fold | Look::Tab(false) => None,
+            Look::Swatch(..) => Some(BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4))),
+            _ => Some(BoxShadow::new(SHADOW.with_alpha(0.12), px(0), px(2), px(0), px(6))),
         }
-        self.key = Some(key);
-        true
     }
 }
 
-/// Replaces a section's content.
+/// Replaces an entity's content (a list rebuilt when the resource it shows changes).
 pub fn rebuild(commands: &mut Commands, e: Entity, f: impl FnOnce(&mut ChildSpawnerCommands)) {
     commands.entity(e).despawn_children().with_children(f);
+}
+
+pub fn display(on: bool) -> bevy::ui::Display {
+    if on {
+        bevy::ui::Display::Flex
+    } else {
+        bevy::ui::Display::None
+    }
 }
 
 /// Text fields, found by what they hold.
@@ -316,16 +334,28 @@ pub fn runs(s: &str) -> Vec<(String, bool)> {
     out
 }
 
+/// What a text that may hold emoji says: set it, and its spans of the two fonts follow (`respan`).
+#[derive(Component, Clone, PartialEq, Eq, Debug)]
+pub struct Rich(pub String);
+
+impl Rich {
+    pub fn set(&mut self, s: &str) {
+        if self.0 != s {
+            s.clone_into(&mut self.0);
+        }
+    }
+}
+
 /// Text that may hold emoji, as spans of the two fonts.
 pub fn rich(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, color: Color) -> Entity {
     rich_in(p, f, s, size, color, false)
 }
 
 pub fn rich_in(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, color: Color, black: bool) -> Entity {
-    rich_with(p, f, s, size, color, black, ())
+    rich_with(p, f, s, size, color, black, None)
 }
 
-/// Text whose root and every run carry `extra`.
+/// Text whose root and every run carry `pick`.
 fn rich_with(
     p: &mut ChildSpawnerCommands,
     f: &Fonts,
@@ -333,35 +363,62 @@ fn rich_with(
     size: f32,
     color: Color,
     black: bool,
-    extra: impl Bundle + Clone,
+    pick: Option<Pickable>,
 ) -> Entity {
-    let font = if black { f.black.clone() } else { f.bold.clone() };
-    let mut e = p.spawn((
-        Text::default(),
-        TextFont {
-            font: font.clone().into(),
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(color),
-        extra.clone(),
-    ));
-    let id = e.id();
-    e.with_children(|t| {
-        for (run, emoji) in runs(s) {
-            t.spawn((
-                TextSpan::new(run),
-                TextFont {
-                    font: if emoji { f.emoji.clone() } else { font.clone() }.into(),
-                    font_size: FontSize::Px(size),
-                    ..default()
-                },
-                TextColor(color),
-                extra.clone(),
-            ));
+    let font = TextFont {
+        font: if black { f.black.clone() } else { f.bold.clone() }.into(),
+        font_size: FontSize::Px(size),
+        ..default()
+    };
+    let mut e = p.spawn((Text::default(), font.clone(), TextColor(color), Rich(s.into())));
+    if let Some(pick) = pick {
+        e.insert(pick);
+    }
+    e.with_children(|t| spans(t, f, s, &font, TextColor(color), pick));
+    e.id()
+}
+
+fn spans(t: &mut ChildSpawnerCommands, f: &Fonts, s: &str, font: &TextFont, color: TextColor, pick: Option<Pickable>) {
+    for (run, emoji) in runs(s) {
+        let font = if emoji {
+            TextFont {
+                font: f.emoji.clone().into(),
+                ..font.clone()
+            }
+        } else {
+            font.clone()
+        };
+        let mut span = t.spawn((TextSpan::new(run), font, color));
+        if let Some(pick) = pick {
+            span.insert(pick);
         }
-    });
-    id
+    }
+}
+
+/// A `Rich` text set to something else gets its spans anew.
+fn respan(
+    texts: Query<(Entity, Ref<Rich>, &TextFont, &TextColor, Option<&Pickable>), Changed<Rich>>,
+    f: Res<Fonts>,
+    mut commands: Commands,
+) {
+    for (e, rich, font, color, pick) in &texts {
+        if rich.is_added() {
+            continue;
+        }
+        commands
+            .entity(e)
+            .despawn_children()
+            .with_children(|t| spans(t, &f, &rich.0, font, *color, pick.copied()));
+    }
+}
+
+/// Sets the first `Rich` text inside `e` (a button's label).
+pub fn relabel(e: Entity, s: &str, children: &Query<&Children>, texts: &mut Query<&mut Rich>) {
+    if let Some(c) = children.iter_descendants(e).find(|c| texts.contains(*c))
+        && let Ok(mut t) = texts.get_mut(c)
+    {
+        t.set(s);
+    }
 }
 
 /// The text `t` (just spawned in `p`) breaks inside a word that does not fit on a line, a path or a URL,
@@ -419,7 +476,7 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
             flex_grow: 1.0,
             flex_shrink: shrink,
             padding: look.padding(),
-            border: UiRect::all(px(1)),
+            border: look.border(),
             border_radius: BorderRadius::all(radius),
             justify_content: if matches!(look, Look::Check(_) | Look::Fold) {
                 JustifyContent::FlexStart
@@ -431,17 +488,12 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
             ..default()
         },
         BackgroundColor(bg),
-        BorderColor::all(if matches!(look, Look::Check(_) | Look::Fold | Look::Tab(_)) {
-            Color::NONE
-        } else {
-            RIM
-        }),
+        look.rim(),
     );
-    let shadow = (!matches!(look, Look::Check(_) | Look::Fold | Look::Tab(false)))
-        .then(|| BoxShadow::new(SHADOW.with_alpha(0.12), px(0), px(2), px(0), px(6)));
-    button_shell(p, look, act, enabled, shrink, face, shadow, |b| {
+    button_shell(p, look, act, enabled, shrink, face, |b| {
         if let Look::Check(on) = look {
             b.spawn((
+                CheckBox,
                 Node {
                     width: rem(1.1),
                     height: rem(1.1),
@@ -457,42 +509,48 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                 Pickable::IGNORE,
             ))
             .with_children(|c| {
-                if on {
-                    c.spawn((
-                        Node {
-                            width: rem(0.5),
-                            height: rem(0.5),
-                            border_radius: BorderRadius::all(px(2)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::WHITE),
-                        Pickable::IGNORE,
-                    ));
-                }
+                c.spawn((
+                    CheckDot,
+                    Node {
+                        width: rem(0.5),
+                        height: rem(0.5),
+                        border_radius: BorderRadius::all(px(2)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::WHITE),
+                    if on { Visibility::Inherited } else { Visibility::Hidden },
+                    Pickable::IGNORE,
+                ));
             });
         }
         // (Picking hits text by its runs: a run without IGNORE would take the release from the button.)
         if !s.is_empty() {
-            rich_with(b, f, s, look.size(), ink, false, Pickable::IGNORE);
+            rich_with(b, f, s, look.size(), ink, false, Some(Pickable::IGNORE));
         }
     })
 }
 
+/// A check box's square, and the mark in it.
+#[derive(Component)]
+struct CheckBox;
+#[derive(Component)]
+struct CheckDot;
+
 /// A colour swatch button.
 pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action, enabled: bool, size: f32) -> Entity {
+    let look = Look::Swatch(color, on);
     let face = (
         Node {
             width: rem(size),
             height: rem(size),
-            border: UiRect::all(px(if on { 3 } else { 2 })),
+            border: look.border(),
             border_radius: BorderRadius::MAX,
             ..default()
         },
         BackgroundColor(color),
-        BorderColor::all(if on { INK } else { Color::WHITE }),
+        look.rim(),
     );
-    let shadow = Some(BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4)));
-    button_shell(p, Look::Swatch(color, on), act, enabled, 0.0, face, shadow, |_| {})
+    button_shell(p, look, act, enabled, 0.0, face, |_| {})
 }
 
 /// What of a button moves when it is hovered or pressed. The button itself stays put: pressed at its edge,
@@ -500,7 +558,6 @@ pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action,
 #[derive(Component)]
 struct Face(Entity);
 
-#[expect(clippy::too_many_arguments)]
 fn button_shell(
     p: &mut ChildSpawnerCommands,
     look: Look,
@@ -508,7 +565,6 @@ fn button_shell(
     enabled: bool,
     shrink: f32,
     face: impl Bundle,
-    shadow: Option<BoxShadow>,
     inside: impl FnOnce(&mut ChildSpawnerCommands),
 ) -> Entity {
     let mut e = p.spawn((
@@ -527,7 +583,7 @@ fn button_shell(
     let mut face_e = Entity::PLACEHOLDER;
     e.with_children(|b| {
         let mut fe = b.spawn((face, UiTransform::default(), Pickable::IGNORE));
-        if let Some(shadow) = shadow {
+        if let Some(shadow) = look.shadow() {
             fe.insert(shadow);
         }
         fe.with_children(inside);
@@ -535,6 +591,60 @@ fn button_shell(
     });
     e.insert(Face(face_e));
     e.id()
+}
+
+/// Makes a button pressable or not.
+pub fn enable(commands: &mut Commands, e: Entity, was: bool, on: bool) {
+    if was != on {
+        if on {
+            commands.entity(e).remove::<InteractionDisabled>();
+        } else {
+            commands.entity(e).insert(InteractionDisabled);
+        }
+    }
+}
+
+/// A button whose `Look` was set anew is redrawn: its rim, shadow, ink and check box.
+fn restyle(
+    buttons: Query<(Ref<Look>, &Face), Changed<Look>>,
+    mut faces: Query<(&mut Node, &mut BorderColor), Without<CheckBox>>,
+    children: Query<&Children>,
+    mut boxes: Query<(&mut BorderColor, &mut BackgroundColor), With<CheckBox>>,
+    mut dots: Query<&mut Visibility, With<CheckDot>>,
+    mut inks: Query<&mut TextColor>,
+    mut commands: Commands,
+) {
+    for (look, face) in &buttons {
+        if look.is_added() {
+            continue;
+        }
+        let look = *look;
+        if let Ok((mut node, mut rim)) = faces.get_mut(face.0) {
+            if node.border != look.border() {
+                node.border = look.border();
+            }
+            *rim = look.rim();
+        }
+        match look.shadow() {
+            Some(s) => commands.entity(face.0).insert(s),
+            None => commands.entity(face.0).remove::<BoxShadow>(),
+        };
+        let ink = look.fill().1;
+        for c in children.iter_descendants(face.0) {
+            if let Ok(mut t) = inks.get_mut(c) {
+                t.set_if_neq(TextColor(ink));
+            }
+            if let Look::Check(on) = look {
+                if let Ok((mut rim, mut fill)) = boxes.get_mut(c) {
+                    *rim = BorderColor::all(if on { BLUE } else { MUTED });
+                    fill.set_if_neq(BackgroundColor(if on { BLUE } else { Color::WHITE }));
+                }
+                if let Ok(mut v) = dots.get_mut(c) {
+                    v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+                }
+            }
+        }
+    }
 }
 
 /// A text field (one line). `filter` keeps only the characters it allows.
@@ -806,23 +916,57 @@ pub fn dot_rim(c: Color) -> Color {
     rim.with_alpha(rim.alpha() * c.alpha())
 }
 
-/// A folded part: its title toggles it.
+/// A folded part: its title toggles it; the body is built folded or not and shown when open (`sync_folds`).
 pub fn fold(
     p: &mut ChildSpawnerCommands,
     f: &Fonts,
-    ui: &Ui,
+    folds: &Folds,
     key: Fold,
-    title: &str,
+    title: &'static str,
     body: impl FnOnce(&mut ChildSpawnerCommands),
 ) {
-    let open = ui.open.contains(&key);
-    let mark = if open { "− " } else { "+ " };
+    let open = folds.open(key);
     stack(p, |c| {
-        button(c, f, &format!("{mark}{title}"), Look::Fold, Action::Fold(key));
-        if open {
-            stack(c, body);
-        }
+        let b = button(c, f, &fold_title(title, open), Look::Fold, Action::Fold(key));
+        c.commands().entity(b).insert(FoldTitle(title));
+        c.spawn((
+            FoldBody(key),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: rem(0.625),
+                display: display(open),
+                ..default()
+            },
+        ))
+        .with_children(body);
     });
+}
+
+#[derive(Component)]
+struct FoldTitle(&'static str);
+
+#[derive(Component)]
+struct FoldBody(Fold);
+
+fn fold_title(title: &str, open: bool) -> String {
+    format!("{} {title}", if open { "−" } else { "+" })
+}
+
+fn sync_folds(
+    folds: Res<Folds>,
+    mut bodies: Query<(&FoldBody, &mut Node)>,
+    titles: Query<(Entity, &Act, &FoldTitle)>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Rich>,
+) {
+    for (b, mut node) in &mut bodies {
+        show(&mut node, folds.open(b.0));
+    }
+    for (e, act, title) in &titles {
+        if let Action::Fold(k) = act.0 {
+            relabel(e, &fold_title(title.0, folds.open(k)), &children, &mut texts);
+        }
+    }
 }
 
 /// A glass panel (`.glass`).
@@ -874,10 +1018,16 @@ impl Plugin for UiPlugin {
         };
         app.insert_resource(f);
         app.init_resource::<Ui>();
+        app.init_resource::<Folds>();
+        app.init_state::<Screen>();
+        app.add_sub_state::<HomeTab>();
+        app.add_sub_state::<MenuTab>();
         app.add_message::<UiAction>();
         app.add_observer(on_activate);
         app.add_observer(on_slide);
         app.add_systems(Startup, setup);
+        // (Before the frame's state transitions: the screen changes in the frame after what picks it.)
+        app.add_systems(PreUpdate, screen);
         app.add_systems(
             Update,
             (
@@ -887,11 +1037,33 @@ impl Plugin for UiPlugin {
                 knob_values,
                 show_placeholders,
                 last_device,
-                ui_actions,
+                (
+                    ui_actions,
+                    sync_folds.run_if(resource_changed::<Folds>),
+                    sync_settings.run_if(
+                        resource_changed::<Controls>
+                            .or_else(resource_changed::<Display>)
+                            .or_else(resource_changed::<Graphics>)
+                            .or_else(resource_changed::<Bindings>)
+                            .or_else(resource_changed::<Ui>)
+                            .or_else(resource_exists_and_changed::<crate::render::quality::Quality>)
+                            .or_else(resource_exists_and_changed::<crate::render::upscale::Upscaling>),
+                    ),
+                    sync_sliders.run_if(
+                        resource_changed::<Controls>
+                            .or_else(resource_changed::<Display>)
+                            .or_else(resource_changed::<Sound>),
+                    ),
+                )
+                    .chain(),
             ),
         );
-        // (After the sections redrawn this frame, before the next frame's keys.)
-        app.add_systems(PostUpdate, keep_focus);
+        // (Restyled, then spanned anew with the new ink, before the layout; focus kept after the lists redrawn this
+        // frame, before the next frame's keys.)
+        app.add_systems(
+            PostUpdate,
+            ((restyle, respan).chain().before(UiSystems::Prepare), keep_focus),
+        );
         app.add_plugins((
             home::HomePlugin,
             menu::MenuPlugin,
@@ -931,7 +1103,7 @@ fn setup(mut commands: Commands) {
                             position_type: PositionType::Absolute,
                             width: percent(100),
                             height: percent(100),
-                            display: bevy::ui::Display::None,
+                            display: display(layer == Layer::Banner),
                             ..default()
                         },
                         ZIndex(z),
@@ -943,13 +1115,33 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(Layers(layers));
 }
 
-/// Shows a layer or hides it.
-pub fn show(node: &mut Node, on: bool) {
-    let d = if on {
-        bevy::ui::Display::Flex
+/// Where the player is picks the screen.
+fn screen(
+    session: Res<Session>,
+    list: Res<RoomList>,
+    conn: Option<Res<crate::net::Conn>>,
+    target: Res<crate::servers::Target>,
+    now: Res<State<Screen>>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    let online = conn.is_some_and(|c| c.connected);
+    let s = if target.0.is_none() {
+        Screen::Servers
+    } else if session.room.is_some() && session.arena.is_some() {
+        Screen::Room
+    } else if online && session.room.is_none() && list.rooms.is_some() && !session.refused {
+        Screen::Rooms
     } else {
-        bevy::ui::Display::None
+        Screen::Away
     };
+    if *now.get() != s {
+        next.set(s);
+    }
+}
+
+/// Shows a layer or hides it.
+pub fn show(node: &mut Mut<Node>, on: bool) {
+    let d = display(on);
     if node.display != d {
         node.display = d;
     }
@@ -1107,18 +1299,21 @@ fn last_device(
 fn ui_actions(
     mut actions: MessageReader<UiAction>,
     mut ui: ResMut<Ui>,
-    mut controls: ResMut<crate::settings::Controls>,
+    mut folds: ResMut<Folds>,
+    mut home_tab: ResMut<NextState<HomeTab>>,
+    mut menu_tab: ResMut<NextState<MenuTab>>,
+    mut controls: ResMut<Controls>,
     mut display: ResMut<Display>,
-    mut binds: ResMut<crate::settings::Bindings>,
-    mut gfx: ResMut<crate::settings::Graphics>,
+    mut binds: ResMut<Bindings>,
+    mut gfx: ResMut<Graphics>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     for UiAction(a) in actions.read() {
         match a {
-            Action::HomeTab(t) => ui.home_tab = *t,
-            Action::MenuTab(t) => ui.menu_tab = *t,
-            Action::Fold(k) => ui.toggle(*k),
+            Action::HomeTab(t) => home_tab.set(*t),
+            Action::MenuTab(t) => menu_tab.set(*t),
+            Action::Fold(k) => folds.toggle(*k),
             Action::Set(t) => {
                 match t {
                     Toggle::InvertMouse => controls.invert_mouse_y ^= true,
@@ -1145,7 +1340,7 @@ fn ui_actions(
             }
             Action::Rebind(b) => ui.rebinding = Some(*b),
             Action::ResetKeys => {
-                *binds = crate::settings::Bindings::default();
+                *binds = Bindings::default();
                 ui.rebinding = None;
                 crate::settings::save_soon(&mut commands);
             }
@@ -1157,115 +1352,111 @@ fn ui_actions(
 /// The options kept on this machine.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Options<'w> {
-    pub controls: Res<'w, crate::settings::Controls>,
-    pub sound: Res<'w, crate::settings::Sound>,
+    pub controls: Res<'w, Controls>,
+    pub sound: Res<'w, Sound>,
     pub display: Res<'w, Display>,
-    pub binds: Res<'w, crate::settings::Bindings>,
-    pub gfx: Res<'w, crate::settings::Graphics>,
+    pub binds: Res<'w, Bindings>,
+    pub gfx: Res<'w, Graphics>,
     pub quality: Option<Res<'w, crate::render::quality::Quality>>,
     pub upscaling: Option<Res<'w, crate::render::upscale::Upscaling>>,
 }
 
 impl Options<'_> {
-    /// What the settings tab must be rebuilt for (not the sliders: they move themselves).
-    pub fn key(&self, ui: &Ui) -> u64 {
-        let c = &*self.controls;
-        key_of(&(
-            c.invert_mouse_y,
-            c.invert_stick_y,
-            c.camera_shake,
-            (self.display.show_fps, self.display.fullscreen),
-            *self.binds == crate::settings::Bindings::default(),
-            (
-                &self.binds.forward,
-                &self.binds.back,
-                &self.binds.left,
-                &self.binds.right,
-            ),
-            (&self.binds.jump, &self.binds.dive, &self.binds.grab),
-            ui.rebinding,
-            ui.open.contains(&Fold::Keys),
-            &*self.gfx,
-            ui.open.contains(&Fold::Gfx),
-            // (Paired: `Debug` stops at tuples of 12.)
-            (
-                self.quality.as_ref().map(|q| q.tier),
-                self.upscaling.as_ref().map(|u| u.active),
-            ),
-        ))
+    fn toggle(&self, t: Toggle) -> bool {
+        match t {
+            Toggle::InvertMouse => self.controls.invert_mouse_y,
+            Toggle::InvertStick => self.controls.invert_stick_y,
+            Toggle::Shake => self.controls.camera_shake,
+            Toggle::ShowFps => self.display.show_fps,
+            Toggle::Fullscreen => self.display.fullscreen,
+            Toggle::Vsync => self.gfx.vsync,
+        }
+    }
+
+    fn knob(&self, k: Knob) -> f32 {
+        match k {
+            Knob::MouseSens => self.controls.mouse_sensitivity,
+            Knob::StickSens => self.controls.stick_sensitivity,
+            Knob::Fov => self.display.fov,
+            Knob::Volume => self.sound.volume,
+            Knob::UiScale => self.display.ui_scale,
+        }
+    }
+
+    fn upscaling(&self) -> crate::render::upscale::Upscaling {
+        self.upscaling.as_deref().copied().unwrap_or_default()
+    }
+
+    /// A graphics choice is the one made, and whether this machine can make it. (Only what this system runs: a
+    /// saved backend or upscaler it cannot is "auto".)
+    fn picked(&self, pick: GfxPick) -> (bool, bool) {
+        let g = &*self.gfx;
+        let offer = self.upscaling().offer;
+        let upscaler = g.upscaler.0.filter(|u| offer.has(*u));
+        match pick {
+            GfxPick::Preset(p) => (g.preset == p, true),
+            GfxPick::Fps(n) => (g.fps_limit == n, true),
+            GfxPick::Backend(b) => (g.backend.runnable() == b, true),
+            GfxPick::Upscaler(None) => (upscaler.is_none(), true),
+            GfxPick::Upscaler(Some(u)) => (upscaler == Some(u), offer.has(u)),
+            GfxPick::Upscale(m) => (g.upscale == m, true),
+        }
+    }
+
+    fn line(&self, l: GfxLine) -> Option<String> {
+        let up = self.upscaling();
+        match l {
+            GfxLine::Adapter => self
+                .quality
+                .as_ref()
+                .map(|q| text::adapter(&q.adapter, &format!("{:?}", q.tier))),
+            GfxLine::Upscaler => {
+                let failed = (up.active != up.chosen).then_some(up.chosen.name());
+                Some(text::upscaler_now(up.active.name(), failed))
+            }
+            GfxLine::Note => {
+                (!Upscaler::ALL.into_iter().all(|u| up.offer.has(u))).then(|| text::UPSCALER_NOTE.to_string())
+            }
+        }
     }
 }
 
-/// The options tab, at the room list and in the menu.
-pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &Ui) {
-    let (controls, sound, display) = (&*o.controls, &*o.sound, &*o.display);
+/// Lines of the graphics part that follow what the machine has.
+#[derive(Component, Clone, Copy)]
+enum GfxLine {
+    Adapter,
+    Upscaler,
+    Note,
+}
+
+/// The keys of an action, and the line asking for one while it is rebound.
+#[derive(Component)]
+struct BindKeys(Bind);
+#[derive(Component)]
+struct BindWait(Bind);
+
+/// The options tab, at the room list and in the menu: built once, its controls follow the options
+/// (`sync_settings`, `sync_sliders`).
+pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, folds: &Folds) {
+    let check = |c: &mut ChildSpawnerCommands, s: &str, t: Toggle| {
+        button(c, f, s, Look::Check(o.toggle(t)), Action::Set(t));
+    };
+    let knob = |c: &mut ChildSpawnerCommands, k: Knob, s: &str, range: (f32, f32), step: f32| {
+        slider(c, f, k, s, o.knob(k), range, step);
+    };
     stack(p, |c| {
-        slider(
-            c,
-            f,
-            Knob::MouseSens,
-            text::MOUSE_SENS,
-            controls.mouse_sensitivity,
-            crate::settings::SENS_RANGE,
-            0.05,
-        );
-        button(
-            c,
-            f,
-            text::INVERT_MOUSE,
-            Look::Check(controls.invert_mouse_y),
-            Action::Set(Toggle::InvertMouse),
-        );
-        slider(
-            c,
-            f,
-            Knob::StickSens,
-            text::STICK_SENS,
-            controls.stick_sensitivity,
-            crate::settings::SENS_RANGE,
-            0.05,
-        );
-        button(
-            c,
-            f,
-            text::INVERT_STICK,
-            Look::Check(controls.invert_stick_y),
-            Action::Set(Toggle::InvertStick),
-        );
-        button(
-            c,
-            f,
-            text::SHAKE,
-            Look::Check(controls.camera_shake),
-            Action::Set(Toggle::Shake),
-        );
-        slider(c, f, Knob::Fov, text::FOV, display.fov, crate::settings::FOV_RANGE, 1.0);
-        slider(c, f, Knob::Volume, text::VOLUME, sound.volume, (0.0, 1.0), 0.05);
-        slider(
-            c,
-            f,
-            Knob::UiScale,
-            text::UI_SCALE,
-            display.ui_scale,
-            crate::settings::UI_SCALE_RANGE,
-            0.05,
-        );
-        button(
-            c,
-            f,
-            text::SHOW_FPS,
-            Look::Check(display.show_fps),
-            Action::Set(Toggle::ShowFps),
-        );
-        button(
-            c,
-            f,
-            text::FULLSCREEN,
-            Look::Check(display.fullscreen),
-            Action::Set(Toggle::Fullscreen),
-        );
-        fold(c, f, ui, Fold::Gfx, text::GRAPHICS, |k| graphics(k, f, o));
-        fold(c, f, ui, Fold::Keys, text::KEYS, |k| {
+        knob(c, Knob::MouseSens, text::MOUSE_SENS, crate::settings::SENS_RANGE, 0.05);
+        check(c, text::INVERT_MOUSE, Toggle::InvertMouse);
+        knob(c, Knob::StickSens, text::STICK_SENS, crate::settings::SENS_RANGE, 0.05);
+        check(c, text::INVERT_STICK, Toggle::InvertStick);
+        check(c, text::SHAKE, Toggle::Shake);
+        knob(c, Knob::Fov, text::FOV, crate::settings::FOV_RANGE, 1.0);
+        knob(c, Knob::Volume, text::VOLUME, (0.0, 1.0), 0.05);
+        knob(c, Knob::UiScale, text::UI_SCALE, crate::settings::UI_SCALE_RANGE, 0.05);
+        check(c, text::SHOW_FPS, Toggle::ShowFps);
+        check(c, text::FULLSCREEN, Toggle::Fullscreen);
+        fold(c, f, folds, Fold::Gfx, text::GRAPHICS, |k| graphics(k, f, o));
+        fold(c, f, folds, Fold::Keys, text::KEYS, |k| {
             for b in crate::keys::BINDS {
                 row(k, false, |r| {
                     r.spawn(Node {
@@ -1282,11 +1473,16 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
                         ..default()
                     })
                     .with_children(|n| {
-                        if ui.rebinding == Some(b) {
-                            rich(n, f, text::PRESS_KEY, 14.0, PINK);
-                        } else {
-                            heading(n, f, &crate::keys::labels(o.binds.keys(b)));
-                        }
+                        let keys = heading(n, f, &crate::keys::labels(o.binds.keys(b)));
+                        n.commands().entity(keys).insert(BindKeys(b));
+                        let wait = rich(n, f, text::PRESS_KEY, 14.0, PINK);
+                        n.commands().entity(wait).insert((
+                            BindWait(b),
+                            Node {
+                                display: display(false),
+                                ..default()
+                            },
+                        ));
                     });
                     button(r, f, text::CHANGE, Look::Tiny, Action::Rebind(b));
                 });
@@ -1294,7 +1490,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             muted(k, f, text::KEYS_NOTE);
             button(k, f, text::RESET_KEYS, Look::Tiny, Action::ResetKeys);
         });
-        fold(c, f, ui, Fold::Problems, text::PROBLEMS, |k| {
+        fold(c, f, folds, Fold::Problems, text::PROBLEMS, |k| {
             muted(k, f, text::PROBLEMS_NOTE);
             button(k, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         });
@@ -1303,77 +1499,103 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
 
 fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     use crate::opts::Backend;
-    use crate::render::quality::Preset;
-    let g = &*o.gfx;
-    let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &[(&str, GfxPick, bool, bool)]| {
+    use crate::render::quality::{Preset, Upscale};
+    let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &mut dyn Iterator<Item = (&str, GfxPick)>| {
         stack(p, |c| {
             muted(c, f, title);
             row(c, true, |r| {
-                for (s, pick, on, ok) in items {
-                    button_if(r, f, s, Look::Chip(*on), Action::Gfx(*pick), *ok);
+                for (s, pick) in items {
+                    let (on, ok) = o.picked(pick);
+                    button_if(r, f, s, Look::Chip(on), Action::Gfx(pick), ok);
                 }
             });
         });
     };
-    let presets: Vec<(&str, GfxPick, bool, bool)> = [Preset::Low, Preset::High]
-        .into_iter()
-        .map(|p| (text::preset(p), GfxPick::Preset(p), g.preset == p, true))
-        .collect();
-    chips(p, text::PRESET, &presets);
-    if let Some(q) = &o.quality {
-        muted(p, f, &text::adapter(&q.adapter, &format!("{:?}", q.tier)));
-    }
-    upscalers(p, f, o, &chips);
-    button(p, f, text::VSYNC, Look::Check(g.vsync), Action::Set(Toggle::Vsync));
-    let fps: Vec<(&str, GfxPick, bool, bool)> =
-        [(0, text::NO_LIMIT), (30, "30"), (60, "60"), (120, "120"), (144, "144")]
-            .into_iter()
-            .map(|(n, s)| (s, GfxPick::Fps(n), g.fps_limit == n, true))
-            .collect();
-    chips(p, text::FPS_LIMIT, &fps);
-    // (Only what this system runs; a saved one it cannot is "auto".)
-    let saved = g.backend.runnable();
-    let backends: Vec<(&str, GfxPick, bool, bool)> = [
+    let line = |p: &mut ChildSpawnerCommands, l: GfxLine| {
+        let s = o.line(l);
+        let e = muted(p, f, s.as_deref().unwrap_or_default());
+        p.commands().entity(e).insert((
+            l,
+            Node {
+                display: display(s.is_some()),
+                ..default()
+            },
+        ));
+    };
+    let presets = [Preset::Low, Preset::High].map(|p| (text::preset(p), GfxPick::Preset(p)));
+    chips(p, text::PRESET, &mut presets.into_iter());
+    line(p, GfxLine::Adapter);
+    let upscalers = core::iter::once((text::UPSCALER_AUTO, GfxPick::Upscaler(None)))
+        .chain(Upscaler::ALL.map(|u| (text::upscaler(u), GfxPick::Upscaler(Some(u)))));
+    chips(p, text::UPSCALER, &mut upscalers.into_iter());
+    let modes = Upscale::PICKS.map(|m| (text::upscale(m), GfxPick::Upscale(m)));
+    chips(p, text::UPSCALE, &mut modes.into_iter());
+    line(p, GfxLine::Upscaler);
+    line(p, GfxLine::Note);
+    button(
+        p,
+        f,
+        text::VSYNC,
+        Look::Check(o.toggle(Toggle::Vsync)),
+        Action::Set(Toggle::Vsync),
+    );
+    let fps =
+        [(0, text::NO_LIMIT), (30, "30"), (60, "60"), (120, "120"), (144, "144")].map(|(n, s)| (s, GfxPick::Fps(n)));
+    chips(p, text::FPS_LIMIT, &mut fps.into_iter());
+    let backends = [
         (text::BACKEND_AUTO, None),
         ("DirectX 12", Some(Backend::Dx12)),
         ("Vulkan", Some(Backend::Vulkan)),
     ]
     .into_iter()
     .filter(|(_, b)| b.is_none_or(Backend::available))
-    .map(|(s, b)| (s, GfxPick::Backend(b), saved == b, true))
-    .collect();
-    chips(p, text::BACKEND, &backends);
+    .map(|(s, b)| (s, GfxPick::Backend(b)));
+    chips(p, text::BACKEND, &mut backends.into_iter());
 }
 
-/// The upscaler: automatic or one of those this machine offers (the others shown, not pressable), and the one at work.
-fn upscalers(
-    p: &mut ChildSpawnerCommands,
-    f: &Fonts,
-    o: &Options,
-    chips: &dyn Fn(&mut ChildSpawnerCommands, &str, &[(&str, GfxPick, bool, bool)]),
+/// The options tabs follow the options: check boxes, choices, the machine's lines and the keys.
+fn sync_settings(
+    o: Options,
+    ui: Res<Ui>,
+    mut buttons: Query<(Entity, &Act, &mut Look, Has<InteractionDisabled>)>,
+    mut lines: Query<(&GfxLine, &mut Rich, &mut Node)>,
+    mut keys: Query<(&BindKeys, &mut Rich), Without<GfxLine>>,
+    mut waits: Query<(&BindWait, &mut Node), Without<GfxLine>>,
+    mut commands: Commands,
 ) {
-    use crate::render::upscale::Upscaler;
-    let up = o.upscaling.as_deref().copied().unwrap_or_default();
-    let saved = o.gfx.upscaler.0.filter(|u| up.offer.has(*u));
-    let mut items = vec![(text::UPSCALER_AUTO, GfxPick::Upscaler(None), saved.is_none(), true)];
-    items.extend(Upscaler::ALL.into_iter().map(|u| {
-        (
-            text::upscaler(u),
-            GfxPick::Upscaler(Some(u)),
-            saved == Some(u),
-            up.offer.has(u),
-        )
-    }));
-    chips(p, text::UPSCALER, &items);
-    let modes: Vec<(&str, GfxPick, bool, bool)> = crate::render::quality::Upscale::PICKS
-        .into_iter()
-        .map(|m| (text::upscale(m), GfxPick::Upscale(m), o.gfx.upscale == m, true))
-        .collect();
-    chips(p, text::UPSCALE, &modes);
-    let failed = (up.active != up.chosen).then_some(up.chosen.name());
-    muted(p, f, &text::upscaler_now(up.active.name(), failed));
-    if !Upscaler::ALL.into_iter().all(|u| up.offer.has(u)) {
-        muted(p, f, text::UPSCALER_NOTE);
+    for (e, act, mut look, disabled) in &mut buttons {
+        match act.0 {
+            Action::Set(t) => {
+                look.set_if_neq(Look::Check(o.toggle(t)));
+            }
+            Action::Gfx(pick) => {
+                let (on, ok) = o.picked(pick);
+                look.set_if_neq(Look::Chip(on));
+                enable(&mut commands, e, !disabled, ok);
+            }
+            _ => {}
+        }
+    }
+    for (l, mut t, mut node) in &mut lines {
+        let s = o.line(*l);
+        show(&mut node, s.is_some());
+        t.set(s.as_deref().unwrap_or_default());
+    }
+    for (k, mut t) in &mut keys {
+        t.set(&crate::keys::labels(o.binds.keys(k.0)));
+    }
+    for (w, mut node) in &mut waits {
+        show(&mut node, ui.rebinding == Some(w.0));
+    }
+}
+
+/// Sliders follow their options (set at the other tab, or anew).
+fn sync_sliders(o: Options, sliders: Query<(Entity, &Knob, &SliderValue)>, mut commands: Commands) {
+    for (e, k, v) in &sliders {
+        let want = o.knob(*k);
+        if v.0 != want {
+            commands.entity(e).insert(SliderValue(want));
+        }
     }
 }
 
@@ -1382,19 +1604,16 @@ fn upscalers(
 pub fn rebind(
     keys: Res<ButtonInput<KeyCode>>,
     mut ui: ResMut<Ui>,
-    mut binds: ResMut<crate::settings::Bindings>,
-    session: Res<crate::session::Session>,
+    folds: Res<Folds>,
+    home: Option<Res<State<HomeTab>>>,
+    menu: Option<Res<State<MenuTab>>>,
+    mut binds: ResMut<Bindings>,
     mut commands: Commands,
 ) {
     let Some(b) = ui.rebinding else { return };
-    let in_room = session.room.is_some() && session.arena.is_some();
-    let shown = ui.open.contains(&Fold::Keys)
-        && if in_room {
-            ui.menu && ui.menu_tab == MenuTab::Settings
-        } else {
-            ui.home_tab == HomeTab::Settings
-        };
-    if !shown {
+    let tab = home.is_some_and(|t| *t.get() == HomeTab::Settings)
+        || (ui.menu && menu.is_some_and(|t| *t.get() == MenuTab::Settings));
+    if !(tab && folds.open(Fold::Keys)) {
         ui.rebinding = None;
         return;
     }

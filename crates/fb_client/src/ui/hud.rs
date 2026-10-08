@@ -17,7 +17,7 @@ use super::*;
 use crate::game::Map;
 use crate::net::Conn;
 use crate::opts::Transport;
-use crate::session::{FEED_SECS, Feed, Session};
+use crate::session::{FEED_SECS, Feed, FeedEntry, FeedLog, Outcome, Session};
 use crate::view::{Spectate, frame_tick};
 
 pub struct HudPlugin;
@@ -25,23 +25,26 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Hud>();
+        app.init_resource::<RoundTime>();
         app.add_systems(Startup, build_hud.after(super::setup));
         app.add_systems(
             Update,
             (
                 hud_state,
                 (
-                    panel,
+                    root.run_if(resource_changed::<Hud>),
+                    panel.run_if(resource_changed::<Hud>.or_else(resource_changed::<Session>)),
                     net_line.run_if(on_real_timer(Duration::from_millis(250))),
-                    feed,
-                    intro,
-                    top,
-                    results,
-                    summary,
-                    status,
+                    // (Lines gone before the log is looked at: neither takes away what the other did.)
+                    (expire, feed.run_if(resource_changed::<FeedLog>)).chain(),
+                    feed_box.run_if(resource_changed::<Outcome>),
+                    intro.run_if(resource_changed::<Session>),
+                    clock,
+                    results.run_if(resource_changed::<Outcome>.or_else(resource_changed::<Session>)),
+                    summary.run_if(resource_changed::<Outcome>.or_else(resource_changed::<Session>)),
+                    status.run_if(resource_changed::<Hud>.or_else(resource_changed::<Outcome>)),
                     keys,
-                    prompt,
-                    count,
+                    prompt.run_if(resource_changed::<Hud>.or_else(resource_changed::<Ui>)),
                 ),
             )
                 .chain(),
@@ -66,35 +69,44 @@ pub enum Part {
     Spectating,
 }
 
-/// What the HUD shows, worked out once a frame.
-#[derive(Resource, Default)]
+/// What the HUD shows of the round, set when it changes.
+#[derive(Resource, Default, PartialEq)]
 pub struct Hud {
     pub on: bool,
     pub kind: Option<ArenaKind>,
-    /// Round time, seconds (negative during the intro).
-    pub t: f64,
-    pub time_left: f64,
-    /// Seconds until the next scene starts on its own.
-    pub next_in: Option<f64>,
     pub status: Part,
     pub place: usize,
     pub spectating: Option<String>,
     pub map_text: Option<String>,
     pub bonus: Option<String>,
     pub roster: Vec<Entry>,
-    pub fps: f64,
 }
 
+/// The round's clock, every frame.
+#[derive(Resource, Default)]
+pub struct RoundTime {
+    /// Round time, seconds (negative during the intro).
+    pub t: f64,
+    pub time_left: f64,
+    /// Seconds until the next scene starts on its own.
+    pub next_in: Option<f64>,
+}
+
+#[derive(Component)]
+struct HudRoot;
 #[derive(Component)]
 struct PanelBox;
 #[derive(Component)]
 struct NetLine;
 #[derive(Component)]
 struct FeedBox;
+/// A line of the feed: its entry's number and time.
+#[derive(Component)]
+struct FeedRow(u32, f32);
 #[derive(Component)]
 struct IntroBox;
 #[derive(Component)]
-struct TopBox;
+struct IntroLeft;
 #[derive(Component)]
 struct TimerText;
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +120,9 @@ struct GoText;
 struct ResultsBox;
 #[derive(Component)]
 struct SummaryBox;
+/// The time to the next scene, after its label.
+#[derive(Component)]
+struct NextLine(&'static str);
 #[derive(Component)]
 struct StatusBox;
 #[derive(Component)]
@@ -149,121 +164,163 @@ fn shadowed(size: f32, color: Color, font: &Handle<Font>) -> impl Bundle {
 }
 
 fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
+    let f = &*f;
     let e = layers[Layer::Hud];
-    commands.entity(e).with_children(|h| {
-        h.spawn((
+    commands.entity(e).with_children(|l| {
+        l.spawn((
+            HudRoot,
             Node {
-                position_type: PositionType::Absolute,
-                top: rem(0.75),
-                left: rem(0.75),
-                width: rem(16.0),
-                max_height: percent(96),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::new(rem(0.75), rem(0.75), rem(0.625), rem(0.5)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            glass(),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                PanelBox,
-                Section::default(),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    ..default()
-                },
-            ));
-            p.spawn((
-                NetLine,
-                Node {
-                    margin: UiRect::top(rem(0.375)),
-                    ..default()
-                },
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(MUTED),
-            ));
-        });
-        h.spawn((
-            FeedBox,
-            Section::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                top: rem(0.75),
-                right: rem(0.75),
-                max_width: percent(46),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                row_gap: rem(0.375),
-                ..default()
-            },
-        ));
-        h.spawn((TopBox, centred(Some(rem(0.75)), None))).with_children(|t| {
-            let full = || Node {
                 width: percent(100),
-                justify_content: JustifyContent::Center,
+                height: percent(100),
+                display: display(false),
                 ..default()
-            };
-            t.spawn((IntroBox, Section::default(), full()));
-            t.spawn((TimerText, shadowed(34.0, Color::WHITE, &f.black)));
-            for pill in [Pill::MapText, Pill::Bonus] {
-                t.spawn((
-                    pill,
-                    Section::default(),
+            },
+            Pickable::IGNORE,
+        ))
+        .with_children(|h| {
+            h.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: rem(0.75),
+                    left: rem(0.75),
+                    width: rem(16.0),
+                    max_height: percent(96),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::new(rem(0.75), rem(0.75), rem(0.625), rem(0.5)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(rem(1.125)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                glass(),
+            ))
+            .with_children(|p| {
+                p.spawn((
+                    PanelBox,
                     Node {
-                        padding: UiRect::axes(rem(1.0), rem(0.375)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::MAX,
-                        display: bevy::ui::Display::None,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(2),
                         ..default()
                     },
-                    glass(),
                 ));
-            }
-            t.spawn((GoText, shadowed(72.0, YELLOW, &f.black)));
-            t.spawn((ResultsBox, Section::default(), full()));
+                p.spawn((
+                    NetLine,
+                    Node {
+                        margin: UiRect::top(rem(0.375)),
+                        ..default()
+                    },
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(11.0),
+                        ..default()
+                    },
+                    TextColor(MUTED),
+                ));
+            });
+            h.spawn((
+                FeedBox,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: rem(0.75),
+                    right: rem(0.75),
+                    max_width: percent(46),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::FlexEnd,
+                    row_gap: rem(0.375),
+                    ..default()
+                },
+            ));
+            h.spawn(centred(Some(rem(0.75)), None)).with_children(|t| {
+                let full = || Node {
+                    width: percent(100),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                };
+                t.spawn((IntroBox, full()));
+                t.spawn((TimerText, shadowed(34.0, Color::WHITE, &f.black)));
+                for pill in [Pill::MapText, Pill::Bonus] {
+                    t.spawn((
+                        pill,
+                        Node {
+                            padding: UiRect::axes(rem(1.0), rem(0.375)),
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::MAX,
+                            display: display(false),
+                            ..default()
+                        },
+                        glass(),
+                    ))
+                    .with_children(|p| {
+                        rich_in(p, f, "", 16.0, INK, pill == Pill::Bonus);
+                    });
+                }
+                t.spawn((GoText, shadowed(72.0, YELLOW, &f.black)));
+                t.spawn((ResultsBox, full()));
+            });
+            h.spawn((
+                SummaryBox,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: rem(0.75),
+                    right: rem(0.75),
+                    width: rem(20.0),
+                    ..default()
+                },
+            ));
+            h.spawn(centred(Some(percent(30)), None)).with_children(|c| {
+                c.spawn((CountText, shadowed(120.0, Color::WHITE, &f.black)));
+            });
+            h.spawn((StatusBox, centred(None, Some(rem(3.5)))));
+            h.spawn(centred(None, Some(rem(0.75)))).with_children(|k| {
+                k.spawn((
+                    KeysBox,
+                    Node {
+                        padding: UiRect::axes(rem(0.9), rem(0.4)),
+                        border_radius: BorderRadius::MAX,
+                        max_width: percent(96),
+                        display: display(false),
+                        ..default()
+                    },
+                    BackgroundColor(INK.with_alpha(0.75)),
+                ))
+                .with_children(|k| {
+                    rich(k, f, "", 13.0, Color::WHITE);
+                });
+            });
+            h.spawn(centred(Some(percent(58)), None)).with_children(|c| {
+                c.spawn((
+                    PromptBox,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(rem(1.4), rem(0.8)),
+                        border_radius: BorderRadius::all(rem(1.0)),
+                        display: display(false),
+                        ..default()
+                    },
+                    BackgroundColor(INK.with_alpha(0.78)),
+                ))
+                .with_children(|c| {
+                    rich_in(c, f, text::CLICK_FIELD, 18.0, Color::WHITE, true);
+                    rich(c, f, text::OR_ESC_MENU, 12.0, Color::WHITE);
+                });
+            });
         });
-        h.spawn((
-            SummaryBox,
-            Section::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                top: rem(0.75),
-                right: rem(0.75),
-                width: rem(20.0),
-                ..default()
-            },
-        ));
-        h.spawn((centred(Some(percent(30)), None),)).with_children(|c| {
-            c.spawn((CountText, shadowed(120.0, Color::WHITE, &f.black)));
-        });
-        h.spawn((StatusBox, Section::default(), centred(None, Some(rem(3.5)))));
-        h.spawn((KeysBox, Section::default(), centred(None, Some(rem(0.75)))));
-        h.spawn((PromptBox, Section::default(), centred(Some(percent(58)), None)));
     });
 }
 
 fn hud_state(
     mut hud: ResMut<Hud>,
+    mut time: ResMut<RoundTime>,
     map: Option<ResMut<Map>>,
     session: Res<Session>,
     spectate: Option<Res<Spectate>>,
     timeline: Res<LocalTimeline>,
     fixed: Res<Time<Fixed>>,
     own: Query<&BodyFull, With<Predicted>>,
-    diag: Res<DiagnosticsStore>,
 ) {
     let Some(mut map) = map.filter(|_| session.room.is_some()) else {
-        if hud.on {
-            *hud = Hud::default();
-        }
+        hud.set_if_neq(Hud::default());
         return;
     };
     let map = &mut *map;
@@ -271,22 +328,26 @@ fn hud_state(
     let tick = frame_tick(&timeline, &fixed);
     let t = map.time(tick);
     let me = session.me;
-    let mut roster = Vec::new();
-    for id in &map.info.participants {
-        let place = map.info.finished.iter().position(|f| f == id);
-        let st = if place.is_some() {
-            Part::Finished
-        } else if map.info.out.contains(id) {
-            Part::Out
-        } else {
-            Part::Play
-        };
-        roster.push(Entry {
-            id: *id,
-            part: st,
-            place: place.map(|p| p + 1),
-        });
-    }
+    let roster = map
+        .info
+        .participants
+        .iter()
+        .map(|id| {
+            let place = map.info.finished.iter().position(|f| f == id);
+            let part = if place.is_some() {
+                Part::Finished
+            } else if map.info.out.contains(id) {
+                Part::Out
+            } else {
+                Part::Play
+            };
+            Entry {
+                id: *id,
+                part,
+                place: place.map(|p| p + 1),
+            }
+        })
+        .collect();
     let body = own.single().ok().map(|f| &f.body);
     let place = me
         .and_then(|me| map.info.finished.iter().position(|f| *f == me))
@@ -321,23 +382,25 @@ fn hud_state(
         .and_then(|s| s.target)
         .filter(|_| status != Part::Play)
         .map(|id| session.name_of(id));
-    *hud = Hud {
+    hud.set_if_neq(Hud {
         on: true,
         kind: Some(kind),
-        t,
-        time_left: (duration - t).max(0.0),
-        next_in,
         status,
         place,
         spectating,
         map_text,
         bonus,
         roster,
-        fps: diag
-            .get(&FrameTimeDiagnosticsPlugin::FPS)
-            .and_then(|d| d.smoothed())
-            .unwrap_or(0.0),
+    });
+    *time = RoundTime {
+        t,
+        time_left: (duration - t).max(0.0),
+        next_in,
     };
+}
+
+fn root(hud: Res<Hud>, mut q: Single<&mut Node, With<HudRoot>>) {
+    show(&mut q, hud.on);
 }
 
 fn name_tag(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, id: Pid, size: f32) {
@@ -376,28 +439,16 @@ fn genre_pill(p: &mut ChildSpawnerCommands, f: &Fonts, g: Genre, s: &str) {
 
 /// Top left: the round, the players with their status, score and ping.
 fn panel(
-    mut q: Query<(Entity, &mut Section), With<PanelBox>>,
+    q: Single<Entity, With<PanelBox>>,
     hud: Res<Hud>,
     session: Res<Session>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
     let Some(info) = session.arena.as_ref().filter(|_| hud.on) else {
         return;
     };
     let round = info.kind == ArenaKind::Round;
-    let key = key_of(&(
-        &session.lobby,
-        info.id,
-        info.kind,
-        &hud.roster,
-        &session.scores,
-        session.me,
-    ));
-    if !sec.stale(key) {
-        return;
-    }
     let f = &*f;
     let def = fb_maps::by_id(&info.game).map(|d| d.meta());
     let mut players = session.lobby.as_ref().map_or_else(Vec::new, |l| l.players.clone());
@@ -408,8 +459,7 @@ fn panel(
     }
     let host = session.lobby.as_ref().and_then(|l| l.host);
     let genre_points = def.is_some_and(|m| m.genre == Genre::Points);
-    let info = info.clone();
-    rebuild(&mut commands, e, |p| {
+    rebuild(&mut commands, *q, |p| {
         row(p, false, |r| match (round, def) {
             (true, Some(m)) => {
                 let s = if info.practice {
@@ -514,6 +564,7 @@ fn net_line(
     conn: Option<Res<Conn>>,
     links: Query<&Link>,
     display: Res<crate::settings::Display>,
+    diag: Res<DiagnosticsStore>,
     time: Res<Time<Real>>,
 ) {
     let now = time.elapsed_secs();
@@ -529,7 +580,11 @@ fn net_line(
     let transport = if conn.transport == Transport::Ws { "TCP" } else { "UDP" };
     let mut s = format!("{transport} · {}", text::ping(rtt.round() as u32));
     if display.show_fps {
-        s += &format!(" · {:.0} к/с", hud.fps);
+        let fps = diag
+            .get(&FrameTimeDiagnosticsPlugin::FPS)
+            .and_then(|d| d.smoothed())
+            .unwrap_or(0.0);
+        s += &format!(" · {fps:.0} к/с");
     }
     if let Some(hint) = crate::diag::vpn_hint(&conn, now) {
         s += "\n";
@@ -540,86 +595,108 @@ fn net_line(
     }
 }
 
-/// Top right: who fell and why; finishes, bonuses and other notes.
+/// Top right: who fell and why; finishes, bonuses and other notes. New entries are added, gone ones taken away.
 fn feed(
-    mut q: Query<(Entity, &mut Section), With<FeedBox>>,
+    q: Single<Entity, With<FeedBox>>,
+    log: Res<FeedLog>,
+    rows: Query<(Entity, &FeedRow)>,
     session: Res<Session>,
-    hud: Res<Hud>,
     time: Res<Time<Real>>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let now = time.elapsed_secs();
-    let live: Vec<_> = session
-        .feed
-        .iter()
-        .filter(|x| hud.on && now - x.at < FEED_SECS && session.game_end.is_none())
-        .collect();
-    let ns: Vec<u32> = live.iter().map(|x| x.n).collect();
-    if !sec.stale(key_of(&ns)) {
-        return;
-    }
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        for x in live {
-            p.spawn((
-                Node {
-                    column_gap: rem(0.375),
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(rem(0.75), rem(0.3125)),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(0.75)),
-                    // (A note may carry a long path: an F8 report's.)
-                    max_width: rem(30.0),
-                    ..default()
-                },
-                glass(),
-            ))
-            .with_children(|r| match &x.what {
-                Feed::Note(s) => {
-                    let t = rich(r, f, s, 13.0, INK);
-                    wrap_anywhere(r, t);
-                }
-                Feed::Ko {
-                    victim,
-                    by,
-                    cause,
-                    out,
-                    shortcut,
-                } => {
-                    let (icon, why) = text::cause(*cause);
-                    if let Some(by) = by.filter(|b| b != victim) {
-                        name_tag(r, f, &session, by, 13.0);
-                    }
-                    rich(r, f, icon, 15.0, INK);
-                    name_tag(r, f, &session, *victim, 13.0);
-                    let ink = if *out { RED_INK } else { MUTED };
-                    rich(r, f, &text::ko_line(why, *out, *shortcut), 12.0, ink);
-                }
-            });
+    let now = time.elapsed_secs();
+    let row_of = |x: &FeedEntry| (x.n, x.at.to_bits());
+    let mut have = Vec::new();
+    for (e, r) in &rows {
+        if log.0.iter().any(|x| row_of(x) == (r.0, r.1.to_bits())) {
+            have.push((r.0, r.1.to_bits()));
+        } else {
+            commands.entity(e).despawn();
+        }
+    }
+    commands.entity(*q).with_children(|p| {
+        // (Not those `expire` took away already.)
+        for x in log
+            .0
+            .iter()
+            .filter(|x| now - x.at < FEED_SECS && !have.contains(&row_of(x)))
+        {
+            feed_row(p, f, &session, x);
         }
     });
 }
 
+fn feed_row(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, x: &FeedEntry) {
+    p.spawn((
+        FeedRow(x.n, x.at),
+        Node {
+            column_gap: rem(0.375),
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(rem(0.75), rem(0.3125)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(0.75)),
+            // (A note may carry a long path: an F8 report's.)
+            max_width: rem(30.0),
+            ..default()
+        },
+        glass(),
+    ))
+    .with_children(|r| match &x.what {
+        Feed::Note(s) => {
+            let t = rich(r, f, s, 13.0, INK);
+            wrap_anywhere(r, t);
+        }
+        Feed::Ko {
+            victim,
+            by,
+            cause,
+            out,
+            shortcut,
+        } => {
+            let (icon, why) = text::cause(*cause);
+            if let Some(by) = by.filter(|b| b != victim) {
+                name_tag(r, f, session, by, 13.0);
+            }
+            rich(r, f, icon, 15.0, INK);
+            name_tag(r, f, session, *victim, 13.0);
+            let ink = if *out { RED_INK } else { MUTED };
+            rich(r, f, &text::ko_line(why, *out, *shortcut), 12.0, ink);
+        }
+    });
+}
+
+/// The feed gives way to the game's summary.
+fn feed_box(outcome: Res<Outcome>, mut q: Single<&mut Node, With<FeedBox>>) {
+    show(&mut q, outcome.game_end.is_none());
+}
+
+/// A line of the feed goes after a while.
+fn expire(rows: Query<(Entity, &FeedRow)>, time: Res<Time<Real>>, mut commands: Commands) {
+    let now = time.elapsed_secs();
+    for (e, r) in &rows {
+        if now - r.1 >= FEED_SECS {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// Before the start: the game, its goal, and the time to the start (the camera flies over the course).
 fn intro(
-    mut q: Query<(Entity, &mut Section), With<IntroBox>>,
-    hud: Res<Hud>,
+    q: Single<Entity, With<IntroBox>>,
     session: Res<Session>,
     f: Res<Fonts>,
+    mut shown: Local<Option<u32>>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let between = session.results.is_some() || session.game_end.is_some();
-    let on = hud.on && hud.kind == Some(ArenaKind::Round) && hud.t < 0.0 && !between;
-    let info = session.arena.as_ref().filter(|_| on);
-    let left = (-hud.t).ceil() as i64;
-    if !sec.stale(key_of(&(info.map(|i| i.id), on.then_some(left)))) {
+    let info = session.arena.as_ref().filter(|a| a.kind == ArenaKind::Round);
+    if *shown == info.map(|i| i.id) {
         return;
     }
+    *shown = info.map(|i| i.id);
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
+    rebuild(&mut commands, *q, |p| {
         let Some(info) = info else { return };
         let Some(m) = fb_maps::by_id(&info.game).map(|d| d.meta()) else {
             return;
@@ -647,7 +724,8 @@ fn intro(
                     flex_grow: 1.0,
                     ..default()
                 });
-                rich(r, f, &text::in_secs(text::TO_START, -hud.t), 13.0, PINK);
+                let left = rich(r, f, "", 13.0, PINK);
+                r.commands().entity(left).insert(IntroLeft);
             });
             rich_in(c, f, m.title, 24.0, PINK, true);
             label(c, f, &format!("🎯 {}.", m.goal));
@@ -656,89 +734,88 @@ fn intro(
     });
 }
 
-/// After the start: the timer, the map's line, the bonus in effect, «ВПЕРЁД!».
-fn top(
+/// Every frame: the intro and its time to the start, the timer, the map's line, the bonus in effect, «ВПЕРЁД!»,
+/// 3-2-1, and the time to the next scene.
+fn clock(
     hud: Res<Hud>,
-    session: Res<Session>,
-    mut timer: Query<(&mut Text, &mut TextColor), (With<TimerText>, Without<GoText>)>,
-    mut go: Query<&mut Text, (With<GoText>, Without<TimerText>)>,
-    mut pills: Query<(Entity, &Pill, &mut Section, &mut Node)>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+    time: Res<RoundTime>,
+    outcome: Res<Outcome>,
+    mut intro: Single<&mut Node, (With<IntroBox>, Without<Pill>)>,
+    mut timer: Single<(&mut Text, &mut TextColor), (With<TimerText>, Without<GoText>, Without<CountText>)>,
+    mut go: Single<&mut Text, (With<GoText>, Without<TimerText>, Without<CountText>)>,
+    mut count: Single<&mut Text, (With<CountText>, Without<TimerText>, Without<GoText>)>,
+    mut pills: Query<(Entity, &Pill, &mut Node), Without<IntroBox>>,
+    mut leaves: Query<(&mut Rich, Option<&IntroLeft>, Option<&NextLine>)>,
+    children: Query<&Children>,
 ) {
-    let between = session.results.is_some() || session.game_end.is_some();
-    let on = hud.on && hud.kind == Some(ArenaKind::Round) && hud.t >= 0.0 && !between;
-    if let Ok((mut t, mut c)) = timer.single_mut() {
-        let s = if on {
-            text::fmt_time(hud.time_left)
-        } else {
-            String::new()
-        };
-        if t.0 != s {
-            t.0 = s;
-        }
-        let color = if hud.time_left < 10.0 { YELLOW } else { Color::WHITE };
-        c.set_if_neq(TextColor(color));
-    }
-    if let Ok(mut t) = go.single_mut() {
-        let s = if on && hud.t < 1.2 { text::GO } else { "" };
-        if t.0 != s {
-            t.0 = s.into();
-        }
-    }
-    let f = &*f;
-    for (e, pill, mut sec, mut node) in &mut pills {
-        let s = match pill {
-            _ if !on => None,
-            Pill::MapText => hud.map_text.clone(),
-            Pill::Bonus => hud.bonus.clone(),
-        };
-        show(&mut node, s.is_some());
-        if sec.stale(key_of(&s)) {
-            rebuild(&mut commands, e, |p| {
-                if let Some(s) = s {
-                    rich_in(p, f, &s, 16.0, INK, *pill == Pill::Bonus);
-                }
-            });
-        }
-    }
-}
-
-/// 3, 2, 1 before the start.
-fn count(hud: Res<Hud>, mut q: Query<&mut Text, With<CountText>>) {
-    let Ok(mut t) = q.single_mut() else { return };
-    let left = (-hud.t).ceil() as i64;
-    let on = hud.on && hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&left);
-    let s = if on { left.to_string() } else { String::new() };
+    let between = outcome.results.is_some() || outcome.game_end.is_some();
+    let round = hud.on && hud.kind == Some(ArenaKind::Round) && !between;
+    let before = round && time.t < 0.0;
+    let on = round && time.t >= 0.0;
+    show(&mut intro, before);
+    let (ref mut t, ref mut c) = *timer;
+    let s = if on {
+        text::fmt_time(time.time_left)
+    } else {
+        String::new()
+    };
     if t.0 != s {
         t.0 = s;
     }
+    c.set_if_neq(TextColor(if time.time_left < 10.0 { YELLOW } else { Color::WHITE }));
+    let s = if on && time.t < 1.2 { text::GO } else { "" };
+    if go.0 != s {
+        go.0 = s.into();
+    }
+    let left = (-time.t).ceil() as i64;
+    let s = if hud.on && hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&left) {
+        left.to_string()
+    } else {
+        String::new()
+    };
+    if count.0 != s {
+        count.0 = s;
+    }
+    for (e, pill, mut node) in &mut pills {
+        let s = match pill {
+            _ if !on => None,
+            Pill::MapText => hud.map_text.as_deref(),
+            Pill::Bonus => hud.bonus.as_deref(),
+        };
+        show(&mut node, s.is_some());
+        if let Some(s) = s
+            && let Some(c) = children.iter_descendants(e).find(|c| leaves.contains(*c))
+            && let Ok((mut t, ..)) = leaves.get_mut(c)
+        {
+            t.set(s);
+        }
+    }
+    for (mut t, intro, next) in &mut leaves {
+        if intro.is_some() && before {
+            t.set(&text::in_secs(text::TO_START, -time.t));
+        }
+        if let Some(n) = next {
+            t.set(&time.next_in.map(|s| text::in_secs(n.0, s)).unwrap_or_default());
+        }
+    }
 }
 
-fn next_line(p: &mut ChildSpawnerCommands, f: &Fonts, label_s: &str, s: Option<f64>) {
-    if let Some(s) = s {
-        rich_in(p, f, &text::in_secs(label_s, s), 13.0, PINK, true);
-    }
+fn next_line(p: &mut ChildSpawnerCommands, f: &Fonts, label_s: &'static str) {
+    let e = rich_in(p, f, "", 13.0, PINK, true);
+    p.commands().entity(e).insert(NextLine(label_s));
 }
 
 /// After a round: points won and lost, compact, at the top.
 fn results(
-    mut q: Query<(Entity, &mut Section), With<ResultsBox>>,
-    hud: Res<Hud>,
+    q: Single<Entity, With<ResultsBox>>,
+    outcome: Res<Outcome>,
     session: Res<Session>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let r = session.results.as_ref().filter(|_| hud.on);
-    let next = hud.next_in.map(|s| s.ceil() as i64);
-    if !sec.stale(key_of(&(r, next, &session.lobby.as_ref().map(|l| &l.players)))) {
-        return;
-    }
     let f = &*f;
-    let r = r.cloned();
-    rebuild(&mut commands, e, |p| {
-        let Some(r) = r else { return };
+    rebuild(&mut commands, *q, |p| {
+        let Some(r) = &outcome.results else { return };
         let title = fb_maps::by_id(&r.game).map_or(r.game.clone(), |d| d.meta().title.to_string());
         let next = if r.practice {
             text::AGAIN
@@ -779,7 +856,7 @@ fn results(
                 justify_content: JustifyContent::Center,
                 ..default()
             })
-            .with_children(|n| next_line(n, f, next, hud.next_in));
+            .with_children(|n| next_line(n, f, next));
             for row_ in &r.rows {
                 let me = session.me == Some(row_.id);
                 table_row(c, me, |t| {
@@ -849,22 +926,15 @@ fn cell(p: &mut ChildSpawnerCommands, w: f32, f: impl FnOnce(&mut ChildSpawnerCo
 
 /// The end of the game: the final table and the titles, beside the podium.
 fn summary(
-    mut q: Query<(Entity, &mut Section), With<SummaryBox>>,
-    hud: Res<Hud>,
+    q: Single<Entity, With<SummaryBox>>,
+    outcome: Res<Outcome>,
     session: Res<Session>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let g = session.game_end.as_ref().filter(|_| hud.on);
-    let next = hud.next_in.map(|s| s.ceil() as i64);
-    if !sec.stale(key_of(&(g, next))) {
-        return;
-    }
     let f = &*f;
-    let g = g.cloned();
-    rebuild(&mut commands, e, |p| {
-        let Some(g) = g else { return };
+    rebuild(&mut commands, *q, |p| {
+        let Some(g) = &outcome.game_end else { return };
         p.spawn((
             Node {
                 width: percent(100),
@@ -945,31 +1015,28 @@ fn summary(
                     });
                 });
             }
-            next_line(c, f, text::BACK_TO_LOBBY, hud.next_in);
+            next_line(c, f, text::BACK_TO_LOBBY);
         });
     });
 }
 
 /// Out of play in a round: finished, out, or watching, and whom the camera follows.
 fn status(
-    mut q: Query<(Entity, &mut Section), With<StatusBox>>,
+    q: Single<Entity, With<StatusBox>>,
     hud: Res<Hud>,
-    session: Res<Session>,
+    outcome: Res<Outcome>,
     f: Res<Fonts>,
     mut commands: Commands,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let between = session.results.is_some() || session.game_end.is_some();
+    let between = outcome.results.is_some() || outcome.game_end.is_some();
     let on = hud.on && hud.kind == Some(ArenaKind::Round) && !between && hud.status != Part::Play;
-    let key = on.then(|| (hud.status, hud.place, hud.spectating.clone()));
-    if !sec.stale(key_of(&key)) {
-        return;
-    }
     let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        let Some((st, place, who)) = key else { return };
-        let (line, ink) = match st {
-            Part::Finished => (text::finished(place), GREEN_INK),
+    rebuild(&mut commands, *q, |p| {
+        if !on {
+            return;
+        }
+        let (line, ink) = match hud.status {
+            Part::Finished => (text::finished(hud.place), GREEN_INK),
             Part::Out => (text::YOU_ARE_OUT.to_string(), RED_INK),
             _ => (text::SPECTATOR.to_string(), INK),
         };
@@ -988,7 +1055,7 @@ fn status(
             rich_in(
                 r,
                 f,
-                &format!("{line} · {}", text::camera_on(who.as_deref())),
+                &format!("{line} · {}", text::camera_on(hud.spectating.as_deref())),
                 17.0,
                 ink,
                 true,
@@ -1000,23 +1067,24 @@ fn status(
 
 /// The controls line at the bottom: in the first seconds of a round, and in the lobby with the menu shut.
 fn keys(
-    mut q: Query<(Entity, &mut Section), With<KeysBox>>,
     hud: Res<Hud>,
+    time: Res<RoundTime>,
+    outcome: Res<Outcome>,
     ui: Res<Ui>,
     session: Res<Session>,
     binds: Res<crate::settings::Bindings>,
-    f: Res<Fonts>,
-    mut commands: Commands,
+    mut q: Single<(Entity, &mut Node), With<KeysBox>>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Rich>,
 ) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let between = session.results.is_some() || session.game_end.is_some();
+    let between = outcome.results.is_some() || outcome.game_end.is_some();
     let info = session.arena.as_ref();
-    let grab = info
-        .and_then(|i| fb_maps::by_id(&i.game))
-        .is_some_and(|d| d.meta().grab);
     let line = match hud.kind {
-        Some(ArenaKind::Round) if hud.on && !between && hud.status == Part::Play && (0.0..10.0).contains(&hud.t) => {
+        Some(ArenaKind::Round) if hud.on && !between && hud.status == Part::Play && (0.0..10.0).contains(&time.t) => {
             let practice = info.is_some_and(|i| i.practice);
+            let grab = info
+                .and_then(|i| fb_maps::by_id(&i.game))
+                .is_some_and(|d| d.meta().grab);
             let g = if grab {
                 "схватить хвост"
             } else {
@@ -1039,58 +1107,14 @@ fn keys(
         )),
         _ => None,
     };
-    if !sec.stale(key_of(&line)) {
-        return;
+    let (e, ref mut node) = *q;
+    show(node, line.is_some());
+    if let Some(line) = line {
+        relabel(e, &line, &children, &mut texts);
     }
-    let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        let Some(line) = line else { return };
-        p.spawn((
-            Node {
-                padding: UiRect::axes(rem(0.9), rem(0.4)),
-                border_radius: BorderRadius::MAX,
-                max_width: percent(96),
-                ..default()
-            },
-            BackgroundColor(INK.with_alpha(0.75)),
-        ))
-        .with_children(|k| {
-            rich(k, f, &line, 13.0, Color::WHITE);
-        });
-    });
 }
 
 /// In play but the mouse is free: ask for a click.
-fn prompt(
-    mut q: Query<(Entity, &mut Section), With<PromptBox>>,
-    ui: Res<Ui>,
-    hud: Res<Hud>,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
-    let Ok((e, mut sec)) = q.single_mut() else { return };
-    let on = hud.on && ui.need_click && !ui.menu;
-    if !sec.stale(key_of(&on)) {
-        return;
-    }
-    let f = &*f;
-    rebuild(&mut commands, e, |p| {
-        if !on {
-            return;
-        }
-        p.spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(rem(1.4), rem(0.8)),
-                border_radius: BorderRadius::all(rem(1.0)),
-                ..default()
-            },
-            BackgroundColor(INK.with_alpha(0.78)),
-        ))
-        .with_children(|c| {
-            rich_in(c, f, text::CLICK_FIELD, 18.0, Color::WHITE, true);
-            rich(c, f, text::OR_ESC_MENU, 12.0, Color::WHITE);
-        });
-    });
+fn prompt(ui: Res<Ui>, hud: Res<Hud>, mut q: Single<&mut Node, With<PromptBox>>) {
+    show(&mut q, hud.on && ui.need_click && !ui.menu);
 }

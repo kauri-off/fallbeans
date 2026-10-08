@@ -20,7 +20,7 @@ use crate::game::Map;
 use crate::logs::{self, Logs};
 use crate::opts::Opts;
 use crate::render::quality::{Preset, Quality, Upscale};
-use crate::session::Session;
+use crate::session::FeedLog;
 use crate::settings::Graphics;
 use crate::ui::text;
 use crate::view::MainCamera;
@@ -253,7 +253,7 @@ fn keys(
     mut perf: ResMut<Perf>,
     mut g: ResMut<Graphics>,
     q: Option<Res<Quality>>,
-    mut session: ResMut<Session>,
+    mut feed: ResMut<FeedLog>,
 ) {
     if !keys.just_pressed(KeyCode::F9) {
         return;
@@ -269,7 +269,7 @@ fn keys(
     let c = start(what, now, &mut g, q.as_deref());
     perf.busy = what == What::Sweep;
     info!("perf: {what:?} recording started");
-    session.note(
+    feed.note(
         time.elapsed_secs(),
         if shift { text::PERF_SWEEP } else { text::PERF_RECORDING }.into(),
     );
@@ -439,7 +439,7 @@ fn finish(world: &mut World, c: Capture) {
             let (note, exit) = outcome(None, quit);
             let now = world.resource::<Time>().elapsed_secs();
             if let Some(n) = note {
-                world.resource_mut::<Session>().note(now, n);
+                world.resource_mut::<FeedLog>().note(now, n);
             }
             if let Some(e) = exit {
                 world.write_message(e);
@@ -449,7 +449,7 @@ fn finish(world: &mut World, c: Capture) {
 }
 
 /// The saves that are done: the player is told where the file is, a benchmark quits.
-fn saved(mut saving: ResMut<Saving>, time: Res<Time>, mut session: ResMut<Session>, mut exit: MessageWriter<AppExit>) {
+fn saved(mut saving: ResMut<Saving>, time: Res<Time>, mut feed: ResMut<FeedLog>, mut exit: MessageWriter<AppExit>) {
     let (done, pending): (Vec<_>, Vec<_>) = core::mem::take(&mut saving.0)
         .into_iter()
         .partition(|(h, _)| h.is_finished());
@@ -458,7 +458,7 @@ fn saved(mut saving: ResMut<Saving>, time: Res<Time>, mut session: ResMut<Sessio
         let path = h.join().ok().flatten();
         let (note, quit) = outcome(path.as_deref(), quit);
         if let Some(n) = note {
-            session.note(time.elapsed_secs(), n);
+            feed.note(time.elapsed_secs(), n);
         }
         if let Some(e) = quit {
             exit.write(e);

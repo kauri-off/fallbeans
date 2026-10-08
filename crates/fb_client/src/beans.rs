@@ -18,7 +18,7 @@ use lightyear::prelude::*;
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
 use crate::game::{Cue, Map, PrevPos};
 use crate::outfit::{Base, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
-use crate::session::Session;
+use crate::session::{Outcome, Session};
 use crate::view::{color, power_color};
 
 #[derive(Component)]
@@ -654,7 +654,7 @@ fn model_affine(root: &Transform, out: &crate::bean::Out) -> bevy::math::Affine3
 pub fn animate_beans(
     time: Res<Time<Real>>,
     map: Option<Res<Map>>,
-    session: Res<Session>,
+    outcome: Res<Outcome>,
     mut cues: MessageReader<Cue>,
     mut beans: Query<(
         &PlayerId,
@@ -756,12 +756,12 @@ pub fn animate_beans(
             (model_affine(&root, &anim.out).inverse().transform_point3(world), hs)
         });
         let pose = podium.then(|| {
-            let place = session
+            let place = outcome
                 .standings
                 .iter()
                 .find(|s| s.id == id.0)
                 .and_then(|s| (s.place as usize).checked_sub(1));
-            podium_pose(place, session.standings.len().max(1))
+            podium_pose(place, outcome.standings.len().max(1))
         });
         let (yaw, _, _) = root.rotation.to_euler(EulerRot::YXZ);
         anim.animate(
