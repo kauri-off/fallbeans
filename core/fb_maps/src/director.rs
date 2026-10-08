@@ -40,7 +40,7 @@ pub fn game(id: &str) -> Option<&'static GameMeta> {
 /// The game can be played by this many. A plan is made for the players a game starts with: whoever runs
 /// it checks again before each round (players leave), and skips a game that no longer fits.
 pub fn fits(g: &GameMeta, players: u32) -> bool {
-    g.min_players.unwrap_or(1) <= players
+    g.min_players <= players
 }
 
 fn pool_for(mode: Mode, players: u32) -> Vec<&'static GameMeta> {
@@ -78,39 +78,37 @@ pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<&'static str
         // (Every mode has games for one player; without any, the bag below would never fill.)
         return Vec::new();
     }
-    let mut finales: Vec<&GameMeta> = pool.iter().copied().filter(|g| g.finale).collect();
+    let mut finales: Vec<&'static GameMeta> = pool.iter().copied().filter(|g| g.finale).collect();
     let last = if n > 1 && !finales.is_empty() {
         shuffle(&mut finales, rng);
-        Some(finales[0].id)
+        Some(finales[0])
     } else {
         None
     };
-    let mut bag: Vec<&'static str> = Vec::new();
-    let mut rounds: Vec<&'static str> = Vec::new();
+    let mut bag: Vec<&'static GameMeta> = Vec::new();
+    let mut rounds: Vec<&'static GameMeta> = Vec::new();
     let mut last_genre = None;
     let want = if last.is_some() { n - 1 } else { n };
     while rounds.len() < want {
         if bag.is_empty() {
-            let mut ids: Vec<&'static str> = pool
+            let mut games: Vec<&'static GameMeta> = pool
                 .iter()
-                .map(|g| g.id)
-                .filter(|&id| Some(id) != last || pool.len() == 1)
+                .copied()
+                .filter(|g| last.is_none_or(|l| l.id != g.id) || pool.len() == 1)
                 .collect();
-            shuffle(&mut ids, rng);
-            bag.extend(ids);
+            shuffle(&mut games, rng);
+            bag.extend(games);
         }
         let i = bag
             .iter()
-            .position(|&id| game(id).map(|g| g.genre) != last_genre && !rounds.contains(&id))
+            .position(|g| Some(g.genre) != last_genre && !rounds.iter().any(|r| r.id == g.id))
             .unwrap_or(0);
-        let id = bag.remove(i);
-        rounds.push(id);
-        last_genre = game(id).map(|g| g.genre);
+        let g = bag.remove(i);
+        rounds.push(g);
+        last_genre = Some(g.genre);
     }
-    if let Some(l) = last {
-        rounds.push(l);
-    }
-    rounds
+    rounds.extend(last);
+    rounds.iter().map(|g| g.id).collect()
 }
 
 /// A playlist with unknown games dropped and the length one the host can pick.

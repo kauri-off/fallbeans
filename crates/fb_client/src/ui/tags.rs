@@ -14,6 +14,7 @@ use lightyear::prelude::*;
 
 use super::*;
 use crate::beans::BeanView;
+use crate::camera::smoothstep;
 use crate::game::Map;
 use crate::session::Session;
 use crate::view::MainCamera;
@@ -73,7 +74,7 @@ struct Seen {
 
 fn place_tags(
     mut commands: Commands,
-    layers: Query<(Entity, &Layer)>,
+    layers: Res<Layers>,
     beans: Query<
         (&PlayerId, &GlobalTransform, &InheritedVisibility, &RemotePose),
         (With<BeanView>, With<Interpolated>),
@@ -100,9 +101,7 @@ fn place_tags(
     mut frame: Local<u32>,
     mut near: Local<(Vec<ColId>, Vec<ColId>)>,
 ) {
-    let Some((layer, _)) = layers.iter().find(|(_, l)| **l == Layer::Tags) else {
-        return;
-    };
+    let layer = layers[Layer::Tags];
     let Ok((cam, cam_tf)) = camera.single() else { return };
     let Some(view) = cam.logical_viewport_size() else {
         return;
@@ -293,11 +292,6 @@ fn depth(d: f32) -> i32 {
     1000 - d.round() as i32
 }
 
-fn smoothstep(x: f32, a: f32, b: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// The tag's frame at size `k`.
 fn frame_node(k: f32) -> Node {
     Node {
@@ -357,7 +351,6 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
     );
     const STEP: f32 = 2.0;
     checked.clear();
-    let mut normal = V3::ZERO;
     let n = (len / STEP).ceil() as usize;
     for i in 0..=n {
         let p = from + dir * (i as f32 * STEP).min(len);
@@ -368,10 +361,10 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
             }
             checked.push(ci);
             let c = world.col(ci);
-            if !c.enabled || c.trigger || c.hit > 0.0 || c.sweep {
+            if !c.enabled || c.opts.trigger || c.opts.hit > 0.0 || c.opts.sweep {
                 continue;
             }
-            if c.raycast(o, d, (len - 0.3) as f64, &mut normal) >= 0.0 {
+            if c.raycast(o, d, (len - 0.3) as f64).is_some() {
                 return true;
             }
         }

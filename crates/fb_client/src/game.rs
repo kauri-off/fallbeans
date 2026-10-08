@@ -1,6 +1,6 @@
 //! The client's copy of the round: the same map built from the seed, own-bean prediction, map events,
 //! and the input it sends.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -15,7 +15,7 @@ use fb_proto::{ArenaInfo, Pid};
 use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_sim::bonus::{BonusTaken, Bonuses};
-use fb_sim::map::{BeanDeco, MapOut, MapSpec};
+use fb_sim::map::{BeanDeco, MapOut, MapSfx, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::Nodes;
 use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
@@ -50,6 +50,20 @@ pub struct ProbeInput {
 }
 use crate::session::{Feed, Session};
 
+/// Map events by their tick.
+#[derive(Default)]
+pub struct Seen(BTreeMap<u32, Vec<MapEventKind>>);
+
+impl Seen {
+    fn contains(&self, msg: &MapEventMsg) -> bool {
+        self.0.get(&msg.tick).is_some_and(|evs| evs.contains(&msg.ev))
+    }
+
+    fn insert(&mut self, msg: &MapEventMsg) {
+        self.0.entry(msg.tick).or_default().push(msg.ev.clone());
+    }
+}
+
 /// The map of the current round as this client built it.
 #[derive(Resource)]
 pub struct Map {
@@ -63,16 +77,16 @@ pub struct Map {
     pub static_hash: String,
     /// Map events waiting for their tick on the interpolated timeline.
     pub pending: Vec<MapEventMsg>,
-    /// Map events applied to this arena (tick, digest): the history the room sends again after a reconnect
-    /// is not applied a second time.
-    pub seen: BTreeSet<(u32, u64)>,
+    /// Map events applied to this arena: the history the room sends again after a reconnect is not applied a
+    /// second time.
+    pub seen: Seen,
     pub generation: u32,
     /// Who plays this arena, and who of them finished (in order) or is out.
     pub info: ArenaInfo,
     /// Decorations maps put on beans (tails, badges).
     pub deco: BTreeMap<Pid, BeanDeco>,
     /// Sounds the map asked for, for the audio to take.
-    pub sfx: Vec<&'static str>,
+    pub sfx: Vec<MapSfx>,
     /// How this round looks (`fb_sim::looks`): palettes, sky, light, fog, scenery.
     pub look: fb_sim::looks::ResolvedLook,
     /// The room it was built in: every room's first lobby is arena 1 with seed 1, another room's is not this.
@@ -128,7 +142,7 @@ impl Map {
             Bonuses::default()
         };
         b.world.finalize(-1e3);
-        let static_hash = b.world.hash(true);
+        let static_hash = b.world.hash(true).to_string();
         let (mut scores, mut out) = (BTreeMap::new(), Vec::new());
         client_start(&mut b.world, &mut spec, &mut scores, None, &mut out);
         let render = b.world.nodes.clone();
@@ -149,7 +163,7 @@ impl Map {
             render,
             static_hash,
             pending: Vec::new(),
-            seen: BTreeSet::new(),
+            seen: Seen::default(),
             generation,
             info: ArenaInfo {
                 id: 0,
@@ -181,15 +195,7 @@ impl Map {
         for o in out {
             match o {
                 MapOut::Sfx(s) => self.sfx.push(s),
-                MapOut::Decorate { id, deco } => {
-                    let d = self.deco.entry(id).or_default();
-                    if deco.tail.is_some() {
-                        d.tail = deco.tail;
-                    }
-                    if deco.badge.is_some() {
-                        d.badge = deco.badge;
-                    }
-                }
+                MapOut::Decorate { id, change } => self.deco.entry(id).or_default().apply(change),
                 MapOut::Event { .. } | MapOut::Score { .. } => {}
             }
         }
@@ -223,7 +229,7 @@ pub enum Cue {
     /// Somebody rang the lobby's bell (climbed its tower).
     Bell(Pid),
     /// A sound the map asked for (`MapSfx`).
-    Sfx(&'static str),
+    Sfx(crate::audio::Sfx),
 }
 
 /// Camera yaw (radians; forward is (sin, cos) on x/z) and pitch.
@@ -363,7 +369,7 @@ fn build_round(
         Bonuses::default()
     };
     b.world.finalize(-1e3);
-    let static_hash = b.world.hash(true);
+    let static_hash = b.world.hash(true).to_string();
     if static_hash != round.static_hash {
         // The client would predict against a different map: a bug in determinism, never expected.
         error!("map hash {static_hash} differs from the server's {}", round.static_hash);
@@ -388,7 +394,7 @@ fn build_round(
         render,
         static_hash,
         pending: Vec::new(),
-        seen: BTreeSet::new(),
+        seen: Seen::default(),
         generation,
         info,
         deco: BTreeMap::new(),
@@ -505,9 +511,17 @@ fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Qu
     }
 }
 
+/// Where the autopilot steers.
+enum Steer {
+    /// Relative to the camera: (forward, right, buttons).
+    Camera(f64, f64, u8),
+    /// In world space.
+    World(InputFrame),
+}
+
 /// A slow circle with a hop now and then, and a run for any bonus lying about: exercises prediction and
-/// the map event path without a player. Returns (forward, right, buttons) or a world-space stick.
-fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> Result<(f64, f64, u8), InputFrame> {
+/// the map event path without a player.
+fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> Steer {
     // Each player on its own rhythm, so a room of autopilots does not move in lockstep.
     let id = own.map_or(0, |(id, _)| id.0);
     let p = k + id * 53;
@@ -517,7 +531,7 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> 
         if let Some(b) = map.bonuses.available(map.time(k as f64)).next() {
             let (dx, dz) = (b.pos.x - p.x, b.pos.z - p.z);
             let l = (dx * dx + dz * dz).sqrt().max(1e-6);
-            return Err(InputFrame::from_stick(dx / l, dz / l, buttons));
+            return Steer::World(InputFrame::from_stick(dx / l, dz / l, buttons));
         }
     }
     let turn = if (p / (200 + 17 * (id % 5))).is_multiple_of(2) {
@@ -525,7 +539,7 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> 
     } else {
         -0.6
     };
-    Ok((1.0, turn, buttons))
+    Steer::Camera(1.0, turn, buttons)
 }
 
 /// Jump and dive fire once per press (a held key does not repeat them, nor does the server: see
@@ -556,12 +570,14 @@ fn latch_presses(
     let (Some(keys), Some(mouse)) = (keys, mouse) else {
         return;
     };
-    if keys.any_just_pressed(binds.keys(Bind::Jump)) {
+    if keys.any_just_pressed(binds.keys(Bind::Jump).iter().copied()) {
         presses.0 |= BTN_JUMP;
     }
     // The click that captures the mouse is not a dive.
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    if keys.any_just_pressed(binds.keys(Bind::Dive)) || (captured && mouse.just_pressed(MouseButton::Left)) {
+    if keys.any_just_pressed(binds.keys(Bind::Dive).iter().copied())
+        || (captured && mouse.just_pressed(MouseButton::Left))
+    {
         presses.0 |= BTN_DIVE;
     }
 }
@@ -586,7 +602,7 @@ fn gamepad(pads: &Query<&Gamepad>) -> ((f64, f64), bool) {
 
 /// The stick (forward, right) and the held buttons (grab).
 fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, binds: &Bindings) -> (f64, f64, u8) {
-    let held = |b: Bind| binds.keys(b).iter().any(|k| keys.pressed(*k));
+    let held = |b: Bind| keys.any_pressed(binds.keys(b).iter().copied());
     let axis = |pos: Bind, neg: Bind| f64::from(i8::from(held(pos)) - i8::from(held(neg)));
     let f = axis(Bind::Forward, Bind::Back);
     let r = axis(Bind::Right, Bind::Left);
@@ -632,8 +648,8 @@ fn write_input(
     }
     let (f, r, buttons) = if opts.autopilot() {
         match autopilot(timeline.tick().0, map.as_deref(), own) {
-            Ok(v) => v,
-            Err(frame) => {
+            Steer::Camera(f, r, buttons) => (f, r, buttons),
+            Steer::World(frame) => {
                 state.0 = frame.into();
                 return;
             }
@@ -734,8 +750,12 @@ fn predict(
     };
     let full = &mut *full;
     // A body from the previous arena may stand on a collider this world does not have.
-    if full.body.ground_col >= map.world.colliders.len() as i32 {
-        full.body.ground_col = -1;
+    if full
+        .body
+        .ground_col
+        .is_some_and(|c| c as usize >= map.world.colliders.len())
+    {
+        full.body.ground_col = None;
     }
     prev.0 = full.body.pos;
     let (was_grounded, was_dive) = (full.body.grounded, full.body.state == BodyState::Dive);
@@ -752,7 +772,7 @@ fn predict(
     drop(touch);
     if rollback.is_none() {
         cues.write_batch(out.iter().filter_map(|o| match o {
-            MapOut::Sfx(s) => Some(Cue::Sfx(s)),
+            MapOut::Sfx(s) => Some(Cue::Sfx((*s).into())),
             _ => None,
         }));
     }
@@ -893,8 +913,7 @@ fn apply_map_events(
     let mut out = Vec::new();
     let pending = core::mem::take(&mut map.pending);
     for msg in pending {
-        let key = (msg.tick, crate::ui::key_of(&msg.ev));
-        if map.seen.contains(&key) {
+        if map.seen.contains(&msg) {
             continue;
         }
         // (History: an event from before the player came in. It changes the world, but makes no sound.)
@@ -910,13 +929,8 @@ fn apply_map_events(
                     });
                     if let Some(b) = taken.filter(|_| loud) {
                         cues.write(Cue::Bonus(*id));
-                        let (icon, title) = crate::ui::text::bonus(b.kind);
-                        let who = if Some(*id) == session.me {
-                            "Вы".to_string()
-                        } else {
-                            session.name_of(*id)
-                        };
-                        session.note(real, format!("{icon} {who}: {title}!"));
+                        let who = (Some(*id) != session.me).then(|| session.name_of(*id));
+                        session.note(real, crate::ui::text::bonus_note(b.kind, who.as_deref()));
                     }
                 } else {
                     map.pending.push(msg);
@@ -944,7 +958,7 @@ fn apply_map_events(
                 if *out {
                     info!("player {id} is out ({cause})");
                     if map.info.out.contains(id) {
-                        map.seen.insert(key);
+                        map.seen.insert(&msg);
                         continue;
                     }
                     map.info.out.push(*id);
@@ -955,7 +969,7 @@ fn apply_map_events(
                         let what = Feed::Ko {
                             victim: *id,
                             by: *by,
-                            cause: cause.clone(),
+                            cause: *cause,
                             out: *out,
                             shortcut: *shortcut,
                         };
@@ -979,7 +993,7 @@ fn apply_map_events(
                 out.extend(said);
             }
         }
-        map.seen.insert(key);
+        map.seen.insert(&msg);
     }
     map.take_out(out);
 }
@@ -989,7 +1003,7 @@ fn map_sounds(map: Option<ResMut<Map>>, mut cues: MessageWriter<Cue>) {
     if let Some(mut map) = map
         && !map.sfx.is_empty()
     {
-        cues.write_batch(core::mem::take(&mut map.sfx).into_iter().map(Cue::Sfx));
+        cues.write_batch(core::mem::take(&mut map.sfx).into_iter().map(|s| Cue::Sfx(s.into())));
     }
 }
 

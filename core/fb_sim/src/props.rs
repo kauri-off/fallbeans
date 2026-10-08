@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
+use fb_shared::cause::Hazard;
+
 use crate::builder::{Builder, PrimOpts};
 use crate::collider::{ColliderOpts, Shape};
 use crate::m::{self, MinMax};
 use crate::math::V3;
 use crate::nodes::ROOT;
+use crate::scene::Model;
 use crate::scene::{Palette, pal};
 
 /// A rotor angle that starts at `start`, eases up to `w` rad/s over about `ease` s and keeps speeding up by `acc`.
@@ -137,7 +140,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
     let mut balls = Vec::new();
     for (li, &x) in o.lanes.iter().enumerate() {
         for k in 0..o.per_lane {
-            let phase = b.rng.next() * o.period + (k as f64 * o.period) / o.per_lane as f64;
+            let phase = b.rng.unit() * o.period + (k as f64 * o.period) / o.per_lane as f64;
             balls.push((x, phase));
             let ball = b.sphere(
                 x,
@@ -149,7 +152,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
                     dynamic: true,
                     col: ColliderOpts {
                         hit: 1.1,
-                        tag: Some("ball"),
+                        tag: Some(Hazard::Ball),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -254,12 +257,12 @@ pub fn glove_puncher(b: &mut Builder, o: GloveOpts) -> Glove {
         },
         ColliderOpts {
             hit: 1.1,
-            tag: Some("glove"),
+            tag: Some(Hazard::Glove),
             sinks: true,
             ..Default::default()
         },
     );
-    let model = b.model("glove", glove);
+    let model = b.model(Model::Glove, glove);
     let n = b.world.nodes.get_mut(model);
     // The model punches along its +z: turned to punch across.
     n.rot.y = -o.side * (m::PI / 2.0);

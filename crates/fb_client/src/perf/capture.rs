@@ -19,7 +19,7 @@ use super::{CpuAcc, Perf, RenderShared, Spike};
 use crate::game::Map;
 use crate::logs::{self, Logs};
 use crate::opts::Opts;
-use crate::render::quality::{Preset, Quality};
+use crate::render::quality::{Preset, Quality, Upscale};
 use crate::session::Session;
 use crate::settings::Graphics;
 use crate::ui::text;
@@ -207,11 +207,11 @@ fn steps(g: &Graphics, q: &Quality) -> Vec<(&'static str, Graphics)> {
     if base.motes {
         v.push(("motes off", with(&|g| g.motes = false)));
     }
-    if Quality::scale(&base.upscale) > Quality::scale("performance") {
-        v.push(("FSR performance", with(&|g| g.upscale = "performance".into())));
+    if base.upscale.scale() > Upscale::Performance.scale() {
+        v.push(("FSR performance", with(&|g| g.upscale = Upscale::Performance)));
     }
     if q.preset > Preset::Low {
-        v.push(("preset low", with(&|g| g.preset = "low".into())));
+        v.push(("preset low", with(&|g| g.preset = Preset::Low)));
     }
     v
 }

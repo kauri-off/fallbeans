@@ -1,11 +1,12 @@
 use core::any::Any;
 use core::marker::PhantomData;
 
-use crate::collider::{ColId, Collider, Shape};
+use fb_shared::DT;
+use fb_shared::hash::{Fingerprint, Fnv};
+
+use crate::collider::{ColId, Collider, ColliderOpts, Shape};
 use crate::nodes::{NodeId, Nodes};
 use crate::physics::PORTAL_T;
-use fb_shared::DT;
-use fb_shared::hash::Fnv;
 
 /// State a map keeps besides geometry (tiles that fell, doors that broke): movers read it, map logic
 /// and bot brains get at it through its handle.
@@ -46,7 +47,7 @@ pub struct MoveCtx<'a> {
     portals: &'a [PortalPair],
 }
 
-impl MoveCtx<'_> {
+impl<'a> MoveCtx<'a> {
     pub fn node(&mut self, id: NodeId) -> &mut crate::nodes::Node {
         self.nodes.get_mut(id)
     }
@@ -57,11 +58,11 @@ impl MoveCtx<'_> {
         }
     }
 
-    pub fn st<S: 'static>(&self, h: St<S>) -> &S {
+    pub fn st<S: 'static>(&self, h: St<S>) -> &'a S {
         state(self.states, h)
     }
 
-    pub fn portal(&self, pair: usize) -> &PortalPair {
+    pub fn portal(&self, pair: usize) -> &'a PortalPair {
         &self.portals[pair]
     }
 }
@@ -232,11 +233,10 @@ impl Default for World {
 }
 
 impl World {
-    pub fn add(&mut self, mut col: Collider) -> ColId {
+    pub fn add(&mut self, node: NodeId, shape: Shape, opts: ColliderOpts) -> ColId {
         assert!(!self.finalized, "world is finalized");
         let id = self.colliders.len() as ColId;
-        col.index = id;
-        self.colliders.push(col);
+        self.colliders.push(Collider::new(id, node, shape, opts));
         id
     }
 
@@ -284,7 +284,7 @@ impl World {
         for i in 0..self.colliders.len() {
             self.colliders[i].sync(&self.nodes);
             let c = &self.colliders[i];
-            if c.is_static {
+            if c.opts.is_static {
                 // (A non-finite extent would make the grid loop over cells for ever.)
                 let (ex, ez) = c.extent_xz();
                 assert!(
@@ -366,12 +366,12 @@ impl World {
     }
 
     /// Fingerprint of the collision geometry at the current time.
-    pub fn hash(&self, static_only: bool) -> String {
+    pub fn hash(&self, static_only: bool) -> Fingerprint {
         let mut h = Fnv::default();
         let mut mix = |v: f64| h.mix(v, 1e3);
         let mut n = 0;
         for c in &self.colliders {
-            if static_only && !c.is_static {
+            if static_only && !c.opts.is_static {
                 continue;
             }
             n += 1;
@@ -384,9 +384,9 @@ impl World {
                 Shape::Sphere { r } => mix(r),
             }
             mix(if c.enabled { 1.0 } else { 0.0 });
-            mix(c.hit + c.bounce * 3.0 + c.pad * 7.0 + c.slip * 11.0);
+            mix(c.opts.hit + c.opts.bounce * 3.0 + c.opts.pad * 7.0 + c.opts.slip * 11.0);
         }
-        format!("{n}:{:016x}", h.finish())
+        Fingerprint { n, h: h.finish() }
     }
 
     /// Colliders near (x, z): static ones from the grid, then moving ones within reach.

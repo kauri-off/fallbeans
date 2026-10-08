@@ -1,5 +1,9 @@
 //! Every line the player reads, in Russian.
+use fb_proto::{Award, AwardKind};
+use fb_shared::cause::{Cause, Hazard};
 use fb_shared::outfit::{Glasses, Hat};
+use fb_shared::rules::RoundNote;
+use fb_sim::physics::Power;
 
 pub const LOGO: &str = "Fall Beans";
 pub const TAB_ROOMS: &str = "Комнаты";
@@ -79,6 +83,9 @@ pub const BACK_TO_OWN: &str = "Вернуться в свою комнату";
 pub const OWN_ROOM_NOTE: &str =
     "Своя комната у каждого одна. Пока вас нет, хостом в ней кто-то из оставшихся; вернётесь — роль снова ваша.";
 pub const PRACTICE: &str = "Тренировка одной карты с ботами";
+/// Who the server's lines in the chat are from.
+pub const SERVER: &str = "Сервер";
+pub const PLAY_MAP: &str = "Играть карту (3 бота)";
 pub const IN_LOBBY: &str = "в лобби";
 pub const IN_GAME: &str = "идёт игра";
 pub const YOUR_ROOM: &str = "ваша комната";
@@ -131,12 +138,21 @@ pub const PRESET_LOW: &str = "Низкое";
 pub const PRESET_HIGH: &str = "Высокое";
 pub const UPSCALER: &str = "Масштабирование (включено всегда)";
 pub const UPSCALE: &str = "Режим масштабирования";
-/// The upscaling modes' chips (`render/quality.rs`'s `UPSCALES`).
-pub fn upscale(id: &str) -> &'static str {
-    match id {
-        "quality" => "Качество",
-        "balanced" => "Баланс",
-        _ => "Ультра-качество",
+pub fn preset(p: crate::render::quality::Preset) -> &'static str {
+    use crate::render::quality::Preset;
+    match p {
+        Preset::Low => PRESET_LOW,
+        Preset::High => PRESET_HIGH,
+    }
+}
+/// The upscaling modes' chips (`Upscale::PICKS`).
+pub fn upscale(m: crate::render::quality::Upscale) -> &'static str {
+    use crate::render::quality::Upscale;
+    match m {
+        Upscale::Ultra => "Ультра-качество",
+        Upscale::Quality => "Качество",
+        Upscale::Balanced => "Баланс",
+        Upscale::Performance => "Производительность",
     }
 }
 pub const UPSCALER_AUTO: &str = "Авто";
@@ -263,6 +279,27 @@ pub fn ordinal(n: usize) -> String {
     format!("{n}-е")
 }
 
+/// An award's icon, title, and what it was won with.
+pub fn award(a: &Award) -> (&'static str, &'static str, String) {
+    let v = a.value;
+    match a.kind {
+        AwardKind::Fastest => ("⚡", "Молния", "лучшие места в гонках".into()),
+        AwardKind::Survivor => ("🛡️", "Несокрушимость", format!("{v} с в игре")),
+        AwardKind::Bully => (
+            "💥",
+            "Задира",
+            plural(v, "сбитый соперник", "сбитых соперника", "сбитых соперников"),
+        ),
+        AwardKind::Grabber => ("🤲", "Цепкие руки", plural(v, "захват", "захвата", "захватов")),
+        AwardKind::Clumsy => ("🍌", "Неваляшка", plural(v, "падение", "падения", "падений")),
+        AwardKind::Sly => (
+            "🦊",
+            "Хитрая лиса",
+            format!("{} пути (и штрафы за них)", plural(v, "срезка", "срезки", "срезок")),
+        ),
+    }
+}
+
 /// Russian plural: `plural(5, "игрок", "игрока", "игроков")` → «5 игроков».
 pub fn plural(n: u32, one: &str, few: &str, many: &str) -> String {
     let (m10, m100) = (n % 10, n % 100);
@@ -292,8 +329,8 @@ pub fn rooms_count(n: usize) -> String {
     }
 }
 
-pub fn room_line(host: &str, playing: bool, mine: bool) -> String {
-    let host = if host.is_empty() { "—" } else { host };
+pub fn room_line(host: Option<&str>, playing: bool, mine: bool) -> String {
+    let host = host.unwrap_or("—");
     let phase = if playing { IN_GAME } else { IN_LOBBY };
     let mine = if mine {
         format!(" · {YOUR_ROOM}")
@@ -371,26 +408,28 @@ pub fn bell(mine: bool, name: &str, times: u32) -> String {
     }
 }
 
-/// How the feed shows what knocked a bean off (collider tags and server causes).
-pub fn cause(c: &str) -> (&'static str, String) {
-    let (icon, text) = match c {
-        "hammer" => ("🔨", "молот"),
-        "rotor" => ("🌀", "вертушка"),
-        "ball" => ("🎳", "шар"),
-        "bumper" => ("💥", "отбойник"),
-        "wall" => ("🧱", "стена"),
-        "pusher" => ("🧱", "толкатель"),
-        "drum" => ("🥁", "барабан"),
-        "sweeper" => ("🧹", "метла"),
-        "gate" => ("🚪", "ворота"),
-        "tile" => ("🔶", "плитка ушла из-под ног"),
-        "fall" => ("🕳", "падение"),
-        "tackle" => ("🤸", "сбит нырком"),
-        "grab" => ("✊", "захват"),
-        "shortcut" => ("🚫", "срезка пути"),
-        other => return ("💫", other.to_string()),
-    };
-    (icon, text.to_string())
+/// How the feed shows what knocked a bean off.
+pub fn cause(c: Cause) -> (&'static str, &'static str) {
+    match c {
+        Cause::Hazard(h) => match h {
+            Hazard::Hammer => ("🔨", "молот"),
+            Hazard::Rotor => ("🌀", "вертушка"),
+            Hazard::Ball => ("🎳", "шар"),
+            Hazard::Bumper => ("💥", "отбойник"),
+            Hazard::Wall => ("🧱", "стена"),
+            Hazard::Pusher => ("🧱", "толкатель"),
+            Hazard::Drum => ("🥁", "барабан"),
+            Hazard::Peg => ("📍", "штырь"),
+            Hazard::Block => ("🧊", "блок"),
+            Hazard::Glove => ("🥊", "перчатка"),
+            Hazard::Gate => ("🚪", "ворота"),
+        },
+        Cause::Fall => ("🕳", "падение"),
+        Cause::Tackle => ("🤸", "сбит нырком"),
+        Cause::Grab => ("✊", "захват"),
+        Cause::Shortcut => ("🚫", "срезка пути"),
+        Cause::Dev => ("🛠", "команда разработчика"),
+    }
 }
 
 pub fn ko_line(cause_text: &str, out: bool, shortcut: bool) -> String {
@@ -465,13 +504,29 @@ pub fn menu_lead(pad: bool, host: bool) -> String {
     }
 }
 
+/// A bonus taken, in the feed (`who`: None for the player).
+pub fn bonus_note(kind: Power, who: Option<&str>) -> String {
+    let (icon, title) = bonus(kind);
+    format!("{icon} {}: {title}!", who.unwrap_or("Вы"))
+}
+
 /// A bonus kind's icon and name.
-pub fn bonus(kind: u8) -> (&'static str, &'static str) {
-    use fb_sim::physics::power;
+pub fn bonus(kind: Power) -> (&'static str, &'static str) {
     match kind {
-        power::GIANT => ("🍄", "Великан"),
-        power::JUMP => ("🦘", "Мега-прыжок"),
-        _ => ("⚡", "Ускорение"),
+        Power::Giant => ("🍄", "Великан"),
+        Power::Jump => ("🦘", "Мега-прыжок"),
+        Power::Speed => ("⚡", "Ускорение"),
+    }
+}
+
+/// What a player's round came to, in the results.
+pub fn round_note(n: RoundNote) -> String {
+    match n {
+        RoundNote::Finish(Some(t)) => format!("финиш за {}", fmt_sec(t)),
+        RoundNote::Finish(None) => "без финиша".into(),
+        RoundNote::Survived(Some(t)) => format!("в игре {} с", t.floor()),
+        RoundNote::Survived(None) => "до конца раунда".into(),
+        RoundNote::Points(v) => format!("очки: {v}"),
     }
 }
 

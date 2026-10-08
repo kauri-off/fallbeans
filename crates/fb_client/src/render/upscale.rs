@@ -23,8 +23,8 @@ use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::render_resource::TextureUsages;
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::sync_component::SyncComponent;
+use serde::{Deserialize, Serialize};
 
-use super::quality::Quality;
 use crate::settings::Graphics;
 use crate::view::MainCamera;
 
@@ -55,7 +55,6 @@ impl Upscaler {
         }
     }
 
-    /// The setting's upscaler: `None` (automatic) for "" and any other name.
     pub fn from_id(id: &str) -> Option<Upscaler> {
         Upscaler::ALL.into_iter().find(|u| u.id() == id)
     }
@@ -67,6 +66,24 @@ impl Upscaler {
             Upscaler::Fsr3 => "AMD FSR 3.1",
             Upscaler::Fsr1 => "AMD FSR 1",
         }
+    }
+}
+
+/// The upscaler setting, saved by its id: "" (and any other name) is `None`, automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct UpscalerSetting(pub Option<Upscaler>);
+
+impl Serialize for UpscalerSetting {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0.map_or("", Upscaler::id))
+    }
+}
+
+impl<'de> Deserialize<'de> for UpscalerSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(Upscaler::from_id(&String::deserialize(d)?)))
     }
 }
 
@@ -170,7 +187,7 @@ impl Default for Upscaling {
 impl Upscaling {
     /// A temporal upscaler draws now (the main pass is smaller than the target).
     pub fn temporal(&self, g: &Graphics) -> bool {
-        self.active.temporal() && Quality::scale(&g.upscale) < 1.0
+        self.active.temporal() && g.upscale.scale() < 1.0
     }
 }
 
@@ -313,7 +330,7 @@ fn decide(
     info!(
         "upscaling: {} at {:.0}% of the resolution (setting {:?}; Vulkan {}, DLSS {}, FSR 3.1 {})",
         up.active.name(),
-        Quality::scale(&g.upscale) * 100.0,
+        g.upscale.scale() * 100.0,
         g.upscaler,
         offer.vulkan,
         offer.dlss,
@@ -322,7 +339,7 @@ fn decide(
 }
 
 fn resolve(offer: Offer, g: &Graphics, faults: &Faults) -> Upscaling {
-    let want = Upscaler::from_id(&g.upscaler);
+    let want = g.upscaler.0;
     Upscaling {
         active: pick(offer.without_failed(faults), want),
         chosen: pick(offer, want),
@@ -418,7 +435,7 @@ fn apply(
     if !jitter {
         ec.insert(TemporalJitter::default());
     }
-    let want = mip_bias(Quality::scale(&g.upscale));
+    let want = mip_bias(g.upscale.scale());
     if bias.is_none_or(|b| b.0 != want) {
         ec.insert(MipBias(want));
     }
@@ -430,6 +447,7 @@ fn apply(
 
 #[cfg(test)]
 mod tests {
+    use super::super::quality::Upscale;
     use super::*;
 
     #[test]
@@ -467,7 +485,7 @@ mod tests {
         let faults = Faults::default();
         faults.report(Upscaler::Dlss, "evaluate");
         let g = Graphics {
-            upscaler: "dlss".into(),
+            upscaler: UpscalerSetting(Some(Upscaler::Dlss)),
             ..Graphics::default()
         };
         let up = resolve(rtx, &g, &faults);
@@ -476,7 +494,7 @@ mod tests {
 
     #[test]
     fn ultra_quality_is_77_percent() {
-        let s = Quality::scale(super::super::quality::UPSCALE);
+        let s = Upscale::default().scale();
         assert_eq!(s, 0.77);
         assert_eq!(render_size(UVec2::new(1600, 900), s), UVec2::new(1232, 693));
         assert_eq!(render_size(UVec2::new(1920, 1080), s), UVec2::new(1478, 832));
@@ -486,8 +504,8 @@ mod tests {
         // log2(0.77) − 1 ≈ −1.377.
         assert!((mip_bias(s) + 1.377).abs() < 1e-3);
         let full = UVec2::new(1920, 1080);
-        assert_eq!(render_size(full, Quality::scale("quality")), UVec2::new(1286, 724));
-        assert_eq!(render_size(full, Quality::scale("balanced")), UVec2::new(1133, 637));
+        assert_eq!(render_size(full, Upscale::Quality.scale()), UVec2::new(1286, 724));
+        assert_eq!(render_size(full, Upscale::Balanced.scale()), UVec2::new(1133, 637));
     }
 
     #[test]

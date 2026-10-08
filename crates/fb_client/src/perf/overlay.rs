@@ -1,10 +1,13 @@
 //! The F4 overlay: a line, then percentiles, graph, GPU passes and scene, then the profiler.
+use std::time::Duration;
+
 use bevy::asset::embedded_asset;
 use bevy::camera::MainPassResolutionOverride;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::shader::ShaderRef;
+use bevy::time::common_conditions::on_real_timer;
 use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin};
 
 use super::profiler::{self, Kind};
@@ -56,7 +59,15 @@ impl Plugin for OverlayPlugin {
         embedded_asset!(app, "graph.wgsl");
         app.add_plugins(UiMaterialPlugin::<GraphMaterial>::default());
         app.add_systems(Startup, setup);
-        app.add_systems(Update, (toggle, text, graph).chain());
+        app.add_systems(
+            Update,
+            (
+                toggle,
+                text.run_if(on_real_timer(Duration::from_millis(250))),
+                graph.run_if(on_real_timer(Duration::from_secs_f32(1.0 / 30.0))),
+            )
+                .chain(),
+        );
     }
 }
 
@@ -191,7 +202,7 @@ fn setup_line(
     let size = target.map_or("—".into(), |t| {
         let (pw, ph) = (t.x, t.y);
         match low {
-            Some(l) => format!("{pw}×{ph} → main pass {}×{} ({upscaler} {})", l.x, l.y, g.upscale),
+            Some(l) => format!("{pw}×{ph} → main pass {}×{} ({upscaler} {})", l.x, l.y, g.upscale.id()),
             None => format!("{pw}×{ph} ({upscaler} off)"),
         }
     });
@@ -233,13 +244,11 @@ fn text(
     recording: Res<super::capture::Recording>,
     mut head: Query<&mut Text, (With<Head>, Without<Body>)>,
     mut body: Query<&mut Text, (With<Body>, Without<Head>)>,
-    mut at: Local<f32>,
 ) {
-    let now = time.elapsed_secs();
-    if perf.mode == Mode::Off || now - *at < 0.25 {
+    if perf.mode == Mode::Off {
         return;
     }
-    *at = now;
+    let now = time.elapsed_secs();
     let (Ok(mut head), Ok(mut body)) = (head.single_mut(), body.single_mut()) else {
         return;
     };
@@ -352,18 +361,10 @@ fn cpu_body(perf: &Perf) -> String {
 }
 
 /// The graph's frames: the last 256, 30 times a second.
-fn graph(
-    time: Res<Time<Real>>,
-    perf: Res<Perf>,
-    node: Query<&MaterialNode<GraphMaterial>>,
-    mut graphs: ResMut<Assets<GraphMaterial>>,
-    mut at: Local<f32>,
-) {
-    let now = time.elapsed_secs();
-    if perf.mode != Mode::Full || now - *at < 1.0 / 30.0 {
+fn graph(perf: Res<Perf>, node: Query<&MaterialNode<GraphMaterial>>, mut graphs: ResMut<Assets<GraphMaterial>>) {
+    if perf.mode != Mode::Full {
         return;
     }
-    *at = now;
     let Ok(node) = node.single() else { return };
     let Some(mut m) = graphs.get_mut(&node.0) else {
         return;

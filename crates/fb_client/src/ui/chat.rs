@@ -31,10 +31,8 @@ struct ChatLog;
 #[derive(Component)]
 struct ChatInput;
 
-fn build_chat(mut commands: Commands, layers: Query<(Entity, &Layer)>, f: Res<Fonts>) {
-    let Some((e, _)) = layers.iter().find(|(_, l)| **l == Layer::Chat) else {
-        return;
-    };
+fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
+    let e = layers[Layer::Chat];
     let f = &*f;
     commands.entity(e).with_children(|l| {
         l.spawn((
@@ -156,7 +154,9 @@ fn log(
     let f = &*f;
     rebuild(&mut commands, e, |p| {
         for l in shown {
-            let color = session.player(l.id).map_or(Color::WHITE, |p| super::suit(p.color));
+            let color =
+                l.id.and_then(|id| session.player(id))
+                    .map_or(Color::WHITE, |p| super::suit(p.color));
             let name_ink = color.mix(&Color::WHITE, 0.5);
             let mut line = p.spawn((Text::default(), TextLayout::default(), Pickable::IGNORE));
             line.with_children(|t| {

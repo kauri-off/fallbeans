@@ -1,5 +1,7 @@
 //! Drums: a staircase of drums surging and easing (or a launch pad to a walkway over them), drums with
 //! pegs, rollers, logs rolling you sideways and changing direction, in an order from the seed.
+use fb_shared::cause::Hazard;
+use fb_shared::rgb;
 use fb_sim::bots::{BotView, SharedTest, Waypoint};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
@@ -7,6 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, pick_sections, race_course, rotor_decks, trampoline_gap,
     with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
@@ -48,9 +51,9 @@ fn drum(
         parent: Some(axis),
         dynamic: true,
         rot: Some(V3::new(0.0, 0.0, m::PI / 2.0)),
-        seg: Some(36),
+        seg: 36,
         col: ColliderOpts {
-            tag: Some("drum"),
+            tag: Some(Hazard::Drum),
             ..Default::default()
         },
         ..Default::default()
@@ -69,7 +72,7 @@ fn drum(
             0.16,
             len - 0.2,
             0.32,
-            pal::hex("#ffffff"),
+            pal::solid(rgb(0xffffff)),
             stripe,
         );
     }
@@ -82,7 +85,7 @@ fn drum(
             rot: Some(V3::new(0.0, a, 0.0)),
             col: ColliderOpts {
                 hit: 0.9,
-                tag: Some("peg"),
+                tag: Some(Hazard::Peg),
                 ..Default::default()
             },
             ..Default::default()
@@ -185,10 +188,10 @@ fn drum_stairs() -> Segment {
             route
         };
         let beam_route = vec![
-            Waypoint::spread(6.5, z0 + 2.5, 0.0),
-            Waypoint::spread(9.5, z0 + 3.4, 0.0),
-            Waypoint::spread(9.5, beam_z0 + 2.0, 0.0),
-            Waypoint::spread(9.5, end_z - 0.5, 0.0),
+            Waypoint::exact(6.5, z0 + 2.5),
+            Waypoint::exact(9.5, z0 + 3.4),
+            Waypoint::exact(9.5, beam_z0 + 2.0),
+            Waypoint::exact(9.5, end_z - 0.5),
             Waypoint::spread(5.0, end_z + 2.0, 0.3),
             Waypoint::spread(0.0, end_z + 3.0, 1.0),
         ];
@@ -250,7 +253,7 @@ fn log_run(n: u32) -> Segment {
                 Waypoint::spread(0.0, c - l / 2.0 + 1.2, 0.1)
                     .jump_when(move |bot| bot.body.pos.z > e - 1.5 && bot.body.pos.z < e + 0.2),
             );
-            route.push(Waypoint::spread(0.0, c + l / 2.0 - 2.2, 0.0));
+            route.push(Waypoint::exact(0.0, c + l / 2.0 - 2.2));
             edge = c + l / 2.0;
             zz = c + l / 2.0;
         }
@@ -375,8 +378,8 @@ impl MapDef for DrumRoll {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["circus", "candy", "royal"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Circus, LookId::Candy, LookId::Royal]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

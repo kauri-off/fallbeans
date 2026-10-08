@@ -2,12 +2,13 @@
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use bevy::prelude::*;
 use bevy::settings::{ReflectSettingsGroup, SettingsGroup};
 use fb_net::HTTP_PORT;
+use fb_proto::Health;
+
+use crate::job::Job;
 
 /// How often the list asks every server again while it is on screen.
 const REFRESH_S: f32 = 10.0;
@@ -19,7 +20,7 @@ pub struct Servers {
     /// As the player typed them.
     pub list: Vec<String>,
     /// The one played on last (first in the list).
-    pub last: String,
+    pub last: Option<String>,
 }
 
 impl Servers {
@@ -34,15 +35,16 @@ impl Servers {
 
     pub fn remove(&mut self, addr: &str) {
         self.list.retain(|s| s != addr);
-        if self.last == addr {
-            self.last.clear();
+        if self.last.as_deref() == Some(addr) {
+            self.last = None;
         }
     }
 
     /// The last one first, then as added.
     pub fn ordered(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.list.iter().filter(|s| **s == self.last).cloned().collect();
-        v.extend(self.list.iter().filter(|s| **s != self.last).cloned());
+        let last = |s: &&String| Some(s.as_str()) == self.last.as_deref();
+        let mut v: Vec<String> = self.list.iter().filter(last).cloned().collect();
+        v.extend(self.list.iter().filter(|s| !last(s)).cloned());
         v
     }
 }
@@ -135,28 +137,19 @@ pub fn check(addr: &str) -> Status {
         let Ok(mut r) = got else {
             continue;
         };
-        let Ok(v) = r
-            .body_mut()
-            .with_config()
-            .limit(HEALTH_MAX)
-            .read_json::<serde_json::Value>()
-        else {
+        let Ok(h) = r.body_mut().with_config().limit(HEALTH_MAX).read_json::<Health>() else {
             continue;
         };
-        if v.get("version").is_none() {
-            continue;
-        }
-        let n = |k: &str| v[k].as_u64().unwrap_or(0);
         // (Whatever the server's owner wrote: one short line of visible characters, as a room title.)
-        let name = v["name"].as_str().map(fb_shared::text::sanitize_title);
-        let build = fb_shared::text::sanitize_chat(v["build"].as_str().unwrap_or_default());
+        let name = h.name.as_deref().map(fb_shared::text::sanitize_title);
+        let build = fb_shared::text::sanitize_chat(&h.build);
         return Status::Up(Info {
             base,
             name: name.filter(|s| !s.is_empty()),
-            protocol: n("version") as u32,
+            protocol: h.version,
             build: build.chars().take(BUILD_MAX).collect(),
-            rooms: n("rooms"),
-            players: n("players"),
+            rooms: h.rooms,
+            players: h.players,
         });
     }
     Status::Down
@@ -166,7 +159,7 @@ pub fn check(addr: &str) -> Status {
 #[derive(Resource, Default)]
 pub struct States {
     pub of: BTreeMap<String, Status>,
-    pending: Vec<(String, Mutex<Receiver<Status>>)>,
+    pending: Vec<(String, Job<Status>)>,
     next: Option<f32>,
 }
 
@@ -188,19 +181,13 @@ pub struct Target(pub Option<String>);
 /// Checks the list's servers while the list is on screen.
 pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, mut states: ResMut<States>) {
     let states = &mut *states;
-    let mut done = vec![];
-    states.pending.retain(|(addr, rx)| {
-        let got = rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
-        match got {
-            Err(TryRecvError::Empty) => true,
-            Ok(s) => {
-                done.push((addr.clone(), s));
-                false
-            }
-            Err(TryRecvError::Disconnected) => false,
-        }
-    });
-    states.of.extend(done);
+    let (done, pending) = std::mem::take(&mut states.pending)
+        .into_iter()
+        .partition::<Vec<_>, _>(|(_, job)| job.ready());
+    states.pending = pending;
+    states
+        .of
+        .extend(done.into_iter().filter_map(|(addr, job)| Some((addr, job.join()?))));
     states.of.retain(|a, _| servers.list.contains(a));
     let now = time.elapsed_secs();
     if target.0.is_some() {
@@ -215,14 +202,10 @@ pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, m
         if states.pending.iter().any(|(a, _)| a == addr) {
             continue;
         }
-        let (tx, rx) = channel();
         let a = addr.clone();
-        let _ = std::thread::Builder::new()
-            .name("fb-server-check".into())
-            .spawn(move || {
-                let _ = tx.send(check(&a));
-            });
-        states.pending.push((addr.clone(), Mutex::new(rx)));
+        if let Ok(job) = Job::spawn("server-check", move || check(&a)) {
+            states.pending.push((addr.clone(), job));
+        }
     }
 }
 
@@ -261,9 +244,9 @@ mod tests {
         assert!(s.add("b"));
         assert!(!s.add("a"));
         assert!(!s.add("a b"));
-        s.last = "b".into();
+        s.last = Some("b".into());
         assert_eq!(s.ordered(), ["b", "a"]);
         s.remove("b");
-        assert_eq!((s.ordered(), s.last.as_str()), (vec!["a".to_string()], ""));
+        assert_eq!((s.ordered(), s.last), (vec!["a".to_string()], None));
     }
 }

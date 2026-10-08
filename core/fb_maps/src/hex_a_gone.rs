@@ -3,13 +3,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use fb_shared::rgb;
 use fb_sim::bots::{HumanOpts, LandCheck, Note, humanize, init_bot, unstick};
 use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapEvent, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
+use fb_sim::scene::Surface;
 use fb_sim::scene::{Finish, Form, Palette, Part, Piece, pal};
 use fb_sim::world::St;
 
@@ -85,8 +88,8 @@ impl MapDef for HexAGone {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["lava", "neon", "starlight"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Lava, LookId::Neon, LookId::Starlight]
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
@@ -154,9 +157,14 @@ impl MapDef for HexAGone {
         }
         if !b.server() {
             let parts = FLOOR_PALS.map(|p| {
-                Part::toned(Form::Cyl([SIZE * 0.97, THICK, 6.0]), p[0], "#ffffff", Finish::Glossy)
-                    .on("tile")
-                    .painted(p)
+                Part::toned(
+                    Form::Cyl([SIZE * 0.97, THICK, 6.0]),
+                    p[0],
+                    rgb(0xffffff),
+                    Finish::Glossy,
+                )
+                .on(Surface::Tile)
+                .painted(p)
             });
             let spots = Arc::new(spots);
             b.special_look(ROOT, "hex-tiles", &parts, move |w, t, out| {
@@ -202,13 +210,13 @@ impl MapDef for HexAGone {
                 init_bot(bot);
                 let p = bot.body.pos;
                 let floor = floor_of(p.y);
-                let speed = bot.mem.traits.spd;
+                let speed = bot.mem.traits().spd;
                 let fl = bot.world.st(falls);
                 // Keep moving (tiles drop half a second after being touched) towards intact ground,
                 // preferring directions with more intact tiles ahead and staying away from the rim.
                 let heading = match bot.mem.get(heading_note) {
                     Some(h) => h,
-                    None => bot.rng.next() * m::PI * 2.0,
+                    None => bot.rng.unit() * m::PI * 2.0,
                 };
                 let t = bot.t;
                 let mut best = heading;
@@ -230,7 +238,7 @@ impl MapDef for HexAGone {
                     let ex = p.x + m::sin(a) * 4.0;
                     let ez = p.z + m::cos(a) * 4.0;
                     score -= 0f64.at_least(m::hypot(ex, ez) - SIZE * 1.5 * (RINGS - 1) as f64) * 2.0;
-                    score += (bot.rng.next() - 0.5) * 0.4;
+                    score += (bot.rng.unit() - 0.5) * 0.4;
                     if score > best_score {
                         best_score = score;
                         best = a;
@@ -240,7 +248,7 @@ impl MapDef for HexAGone {
                 out.mx = m::sin(best) * speed * 0.7;
                 out.mz = m::cos(best) * speed * 0.7;
                 // Hop along: tiles only drop where we land.
-                if bot.body.grounded && t > 0.0 && bot.rng.next() < 0.8 {
+                if bot.body.grounded && t > 0.0 && bot.rng.unit() < 0.8 {
                     out.jump = true;
                 }
                 // A gap right ahead: jump it (if there is ground beyond).

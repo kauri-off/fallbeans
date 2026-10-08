@@ -112,8 +112,8 @@ fn update(
         .ok()
         .map(|f| &f.body)
         .map_or("no bean yet".to_string(), |b| {
-            let bonus = if b.power != 0 {
-                format!(" | bonus {}", b.power)
+            let bonus = if let Some(p) = b.power {
+                format!(" | bonus {p:?}")
             } else {
                 String::new()
             };

@@ -78,8 +78,8 @@ pub struct Opts {
     #[arg(long, value_enum, default_value_t = Transport::Auto)]
     pub transport: Transport,
     /// The player's name for this run (the saved one otherwise).
-    #[arg(long, default_value = "")]
-    pub name: String,
+    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub name: Option<String>,
     /// Identity from an earlier session for this run (the saved one otherwise).
     #[arg(long)]
     pub token: Option<String>,

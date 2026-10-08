@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_shared::INTRO_S;
-use fb_sim::collider::Contact;
+use fb_sim::collider::{ColId, Contact};
 use fb_sim::math::V3;
 use fb_sim::world::World;
 use lightyear::prelude::*;
@@ -41,10 +41,9 @@ pub struct CameraOverride {
 pub struct Rig {
     smooth_target: Vec3,
     arm: f32,
-    /// Jump straight to the follow pose next frame (a new map, a respawn, another bean to watch).
-    first: bool,
-    /// The last frame was a scripted shot: the follow camera eases in from it.
-    from_shot: bool,
+    follow: Follow,
+    /// Colliders near the arm (kept from frame to frame).
+    near: Vec<ColId>,
     /// Shake energy (0…1), decays; the offset grows with its square.
     trauma: f32,
     shake_t: f32,
@@ -67,8 +66,8 @@ impl Default for Rig {
         Self {
             smooth_target: Vec3::ZERO,
             arm: DISTANCE,
-            first: true,
-            from_shot: false,
+            follow: Follow::Snap,
+            near: Vec::new(),
             trauma: 0.0,
             shake_t: 0.0,
             pose_pos: Vec3::ZERO,
@@ -85,6 +84,16 @@ impl Default for Rig {
     }
 }
 
+/// How the follow camera goes on from the last frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Follow {
+    /// Jump straight to the follow pose (a new map, a respawn, another bean to watch).
+    Snap,
+    /// The last frame was a scripted shot: ease in from it.
+    FromShot,
+    Following,
+}
+
 /// The direction from the looked-at point to the eye.
 fn back(cam: &CameraAngles) -> Vec3 {
     let cp = cam.pitch.cos();
@@ -92,15 +101,18 @@ fn back(cam: &CameraAngles) -> Vec3 {
 }
 
 /// Smoothstep of x from `min` to `max`.
-fn smoothstep(x: f32, min: f32, max: f32) -> f32 {
-    if x <= min {
-        return 0.0;
-    }
-    if x >= max {
-        return 1.0;
-    }
-    let x = (x - min) / (max - min);
-    x * x * (3.0 - 2.0 * x)
+pub fn smoothstep(x: f32, min: f32, max: f32) -> f32 {
+    let t = ((x - min) / (max - min)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The spawn point of the local player's bean.
+fn my_spawn(map: &Map, session: &Session) -> Option<V3> {
+    let i = session
+        .me
+        .and_then(|me| map.info.participants.iter().position(|p| *p == me))
+        .unwrap_or(0);
+    map.spec.spawns.get(i % map.spec.spawns.len().max(1)).copied()
 }
 
 impl Rig {
@@ -109,8 +121,7 @@ impl Rig {
     }
 
     fn snap(&mut self) {
-        self.first = true;
-        self.from_shot = false;
+        self.follow = Follow::Snap;
     }
 
     fn apply_shake(&mut self, pos: &mut Vec3, dt: f32) {
@@ -135,18 +146,16 @@ impl Rig {
     /// The follow camera: the arm marches out from the bean and stops before the first solid collider.
     fn follow(&mut self, cam: &CameraAngles, focus: Vec3, dt: f32, world: Option<&World>) -> (Vec3, Vec3) {
         let target = focus + Vec3::Y * LOOK_UP;
-        let fresh = self.first && !self.from_shot;
-        if self.first && self.from_shot {
+        let mode = core::mem::replace(&mut self.follow, Follow::Following);
+        if mode == Follow::FromShot {
             // Leaving a scripted shot: start from the camera as it is, and ease in.
             self.pose_pos = self.pos;
             self.pose_look = self.look;
             self.arm = DISTANCE;
             self.handover = 1.0;
         }
-        self.from_shot = false;
-        if self.first {
+        if mode != Follow::Following {
             self.smooth_target = target;
-            self.first = false;
         } else {
             self.smooth_target = self.smooth_target.lerp(target, 1.0 - (-dt * 14.0).exp());
         }
@@ -154,16 +163,15 @@ impl Rig {
         let mut want = DISTANCE;
         if let Some(world) = world {
             const STEPS: usize = 12;
-            let mut near = Vec::new();
             let mut hit = Contact::default();
             'arm: for i in 1..=STEPS {
                 let d = DISTANCE * i as f32 / STEPS as f32;
                 let p = self.smooth_target + dir * d;
                 let probe = V3::new(p.x as f64, p.y as f64, p.z as f64);
-                world.query(probe.x, probe.z, 0.6, &mut near);
-                for &ci in &near {
+                world.query(probe.x, probe.z, 0.6, &mut self.near);
+                for &ci in &self.near {
                     let c = world.col(ci);
-                    if c.enabled && c.hit == 0.0 && !c.trigger && c.contact(probe, 0.3, &mut hit) {
+                    if c.enabled && c.opts.hit == 0.0 && !c.opts.trigger && c.contact(probe, 0.3, &mut hit) {
                         want = (d - DISTANCE / STEPS as f32).max(1.2);
                         break 'arm;
                     }
@@ -176,7 +184,7 @@ impl Rig {
             self.arm + (want - self.arm) * (1.0 - (-dt * 4.0).exp())
         };
         let want_pos = self.smooth_target + dir * self.arm;
-        if fresh {
+        if mode == Follow::Snap {
             self.pose_pos = want_pos;
             self.pose_look = self.smooth_target;
         } else {
@@ -195,8 +203,7 @@ impl Rig {
         self.pos = self.pos.lerp(eye, k);
         self.look = self.look.lerp(look, k);
         // Hand over to the follow camera without a jump.
-        self.first = true;
-        self.from_shot = true;
+        self.follow = Follow::FromShot;
         (self.pos, self.look)
     }
 }
@@ -271,11 +278,7 @@ pub fn place_camera(
     // A new arena: down the course in races, towards the middle in arenas.
     if rig.generation != Some(map.generation) {
         rig.generation = Some(map.generation);
-        let i = session
-            .me
-            .and_then(|me| map.info.participants.iter().position(|p| *p == me))
-            .unwrap_or(0);
-        let spawn = map.spec.spawns.get(i % map.spec.spawns.len().max(1)).copied();
+        let spawn = my_spawn(&map, &session);
         let yaw = match spawn {
             Some(p) if map.spec.face_center && map.spec.finish.is_none() => (-p.x).atan2(-p.z) as f32,
             _ => 0.0,
@@ -354,15 +357,8 @@ fn intro_shot(map: &Map, session: &Session, t: f32) -> (Vec3, Vec3) {
     let intro = INTRO_S as f32;
     let f = ((t + intro) / (intro - INTRO_HANDOVER)).clamp(0.0, 1.0);
     let e = f * f * (3.0 - 2.0 * f);
-    let i = session
-        .me
-        .and_then(|me| map.info.participants.iter().position(|p| *p == me))
-        .unwrap_or(0);
-    let start = spec
-        .spawns
-        .get(i % spec.spawns.len().max(1))
-        .map_or(Vec3::ZERO, |p| p.as_vec3());
-    let lerp = |a: f32, b: f32, k: f32| a + (b - a) * k;
+    let start = my_spawn(map, session).map_or(Vec3::ZERO, |p| p.as_vec3());
+    let lerp = f32::lerp;
     if let Some(fin) = &spec.finish {
         let (fz, fy) = (fin.z as f32, fin.y as f32);
         let ez = lerp(fz + 14.0, start.z - 9.0, e);

@@ -1,6 +1,7 @@
 //! The fork: a narrow bridge under swinging hammers (short, but you must time it) or a walled zig-zag
 //! with pushers (safe, but longer); then seesaws, tipping bridges, belts, gloves and hammers in an order
 //! and with timings from the seed.
+use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
@@ -8,6 +9,7 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, conveyor, glove_alley, hammer_bridges, moving_platforms, pick_sections, race_course,
     rotor_decks, seesaws, tipping_bridge, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
@@ -76,7 +78,7 @@ fn fork() -> Segment {
                 dynamic: true,
                 col: ColliderOpts {
                     hit: 0.7,
-                    tag: Some("pusher"),
+                    tag: Some(Hazard::Pusher),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -87,10 +89,10 @@ fn fork() -> Segment {
         s.b.bonus(bx, y, z0 + 15.5);
         s.b.box_(0.0, y - 1.0, z1 + 4.0, 18.0, 2.0, 8.0, pal::PURPLE, o());
 
-        let mut bridge = vec![Waypoint::spread(bx, z0 + 0.5, 0.0)];
+        let mut bridge = vec![Waypoint::exact(bx, z0 + 0.5)];
         for &(z, w, ph) in &hammers {
-            bridge.push(Waypoint::spread(bx, z - 2.6, 0.0));
-            bridge.push(Waypoint::spread(bx, z + 2.0, 0.0).wait(move |bot| {
+            bridge.push(Waypoint::exact(bx, z - 2.6));
+            bridge.push(Waypoint::exact(bx, z + 2.0).wait(move |bot| {
                 [0.0, 0.2, 0.4, 0.6, 0.8]
                     .iter()
                     .all(|dt| (head_x(w, ph, bot.t + dt) - bx).abs() > 2.6)
@@ -100,9 +102,9 @@ fn fork() -> Segment {
         for (k, &(z, x0, _)) in zig.iter().enumerate() {
             let gx = if x0 > 3.0 { 3.4 } else { 6.6 };
             let (pz, w, ph) = pushers[k];
-            walls.push(Waypoint::spread(gx, z - 1.4, 0.0));
-            walls.push(Waypoint::spread(gx, z + 1.4, 0.0));
-            walls.push(Waypoint::spread(gx, pz + 1.4, 0.0).wait(move |bot| {
+            walls.push(Waypoint::exact(gx, z - 1.4));
+            walls.push(Waypoint::exact(gx, z + 1.4));
+            walls.push(Waypoint::exact(gx, pz + 1.4).wait(move |bot| {
                 (pusher_x(w, ph, bot.t + 0.35) - gx).abs() > 1.6 && (pusher_x(w, ph, bot.t) - gx).abs() > 1.6
             }));
         }
@@ -125,8 +127,8 @@ impl MapDef for HammerSwing {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["factory", "desert", "lava"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Factory, LookId::Desert, LookId::Lava]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

@@ -8,6 +8,7 @@ use bevy::audio::Volume;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_sim::map::MapSfx;
 use lightyear::prelude::*;
 
 use crate::game::{Cue, Map};
@@ -52,24 +53,15 @@ impl Sfx {
         Sfx::Pickup,
         Sfx::Click,
     ];
+}
 
-    /// What a map asks for (`MapSfx`), by name.
-    fn of_map(name: &str) -> Option<Sfx> {
-        Some(match name {
-            "break" => Sfx::Break,
-            "warn" | "count" => Sfx::Count,
-            "steal" | "boing" => Sfx::Boing,
-            "pickup" => Sfx::Pickup,
-            "hit" | "tackle" | "fall" => Sfx::Hit,
-            "jump" => Sfx::Jump,
-            "go" => Sfx::Go,
-            "qualify" | "finish" | "results" => Sfx::Qualify,
-            "out" => Sfx::Out,
-            "win" => Sfx::Win,
-            "grab" => Sfx::Grab,
-            "click" => Sfx::Click,
-            _ => return None,
-        })
+impl From<MapSfx> for Sfx {
+    fn from(s: MapSfx) -> Self {
+        match s {
+            MapSfx::Break => Sfx::Break,
+            MapSfx::Pickup => Sfx::Pickup,
+            MapSfx::Steal => Sfx::Boing,
+        }
     }
 }
 
@@ -99,13 +91,33 @@ impl Wave {
     }
 }
 
-/// A tone from f1 to f2 Hz over `dur` s, fading from `vol` to silence, starting `delay` s in.
+/// A tone from `from` to `to` Hz over `dur` s, fading from `vol` to silence, starting `delay` s in.
 #[derive(Clone, Copy)]
-struct Tone(f32, f32, f32, Wave, f32, f32);
+struct Tone {
+    from: f32,
+    to: f32,
+    dur: f32,
+    wave: Wave,
+    vol: f32,
+    delay: f32,
+}
+
+impl Tone {
+    fn after(self, delay: f32) -> Self {
+        Self { delay, ..self }
+    }
+}
 
 fn tones(s: Sfx) -> Vec<Tone> {
     use Wave::*;
-    let t = |f1, f2, dur, w, vol| Tone(f1, f2, dur, w, vol, 0.0);
+    let t = |from, to, dur, wave, vol| Tone {
+        from,
+        to,
+        dur,
+        wave,
+        vol,
+        delay: 0.0,
+    };
     match s {
         Sfx::Jump => vec![t(330.0, 620.0, 0.14, Triangle, 0.1)],
         Sfx::Dive => vec![t(500.0, 180.0, 0.2, Triangle, 0.1)],
@@ -115,7 +127,7 @@ fn tones(s: Sfx) -> Vec<Tone> {
         Sfx::Break => vec![t(140.0, 50.0, 0.3, Square, 0.08)],
         Sfx::Pickup => vec![
             t(988.0, 988.0, 0.07, Triangle, 0.1),
-            Tone(1319.0, 1319.0, 0.16, Triangle, 0.1, 0.07),
+            t(1319.0, 1319.0, 0.16, Triangle, 0.1).after(0.07),
         ],
         Sfx::Count => vec![t(520.0, 520.0, 0.18, Square, 0.07)],
         Sfx::Click => vec![t(700.0, 900.0, 0.05, Triangle, 0.05)],
@@ -123,25 +135,33 @@ fn tones(s: Sfx) -> Vec<Tone> {
         Sfx::Qualify => [523.0, 659.0, 784.0, 1046.0]
             .iter()
             .enumerate()
-            .map(|(i, f)| Tone(*f, *f, 0.18, Triangle, 0.12, i as f32 * 0.09))
+            .map(|(i, f)| t(*f, *f, 0.18, Triangle, 0.12).after(i as f32 * 0.09))
             .collect(),
         Sfx::Out => [440.0, 330.0, 220.0]
             .iter()
             .enumerate()
-            .map(|(i, f)| Tone(*f, f * 0.95, 0.22, Sawtooth, 0.07, i as f32 * 0.14))
+            .map(|(i, f)| t(*f, f * 0.95, 0.22, Sawtooth, 0.07).after(i as f32 * 0.14))
             .collect(),
         Sfx::Win => [523.0, 659.0, 784.0, 1046.0, 784.0, 1046.0]
             .iter()
             .enumerate()
-            .map(|(i, f)| Tone(*f, *f, 0.25, Triangle, 0.12, i as f32 * 0.12))
+            .map(|(i, f)| t(*f, *f, 0.25, Triangle, 0.12).after(i as f32 * 0.12))
             .collect(),
     }
 }
 
 fn synth(tones: &[Tone]) -> Vec<f32> {
-    let len = tones.iter().map(|t| t.5 + t.2 + 0.02).fold(0.0, f32::max);
+    let len = tones.iter().map(|t| t.delay + t.dur + 0.02).fold(0.0, f32::max);
     let mut out = vec![0.0f32; (len * RATE as f32).ceil() as usize];
-    for &Tone(f1, f2, dur, wave, vol, delay) in tones {
+    for &Tone {
+        from: f1,
+        to: f2,
+        dur,
+        wave,
+        vol,
+        delay,
+    } in tones
+    {
         let start = (delay * RATE as f32) as usize;
         let n = ((dur + 0.02) * RATE as f32) as usize;
         let mut phase = 0.0f32;
@@ -294,10 +314,7 @@ fn on_cues(
                     (Sfx::Boing, 0.5)
                 }
             }
-            Cue::Sfx(name) => match Sfx::of_map(name) {
-                Some(s) => (s, 1.0),
-                None => continue,
-            },
+            Cue::Sfx(s) => (s, 1.0),
             _ => continue,
         };
         if matches!(s, Sfx::Qualify | Sfx::Out | Sfx::Win) {

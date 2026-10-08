@@ -7,7 +7,7 @@ pub fn o() -> PrimOpts {
     PrimOpts::default()
 }
 
-/// Drawn only (`noCollide`).
+/// Drawn only (`no_collide`).
 pub fn deco() -> PrimOpts {
     PrimOpts {
         no_collide: true,

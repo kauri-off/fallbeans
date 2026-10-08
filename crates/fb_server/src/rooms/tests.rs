@@ -1,6 +1,7 @@
 //! Rooms, the hub, dev tools and the hub's rules for rooms and PINs.
 use std::collections::BTreeMap;
 
+use bevy::ecs::entity::Entity;
 use fb_arena::{ArenaKind, PawnStatus};
 use fb_proto::*;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
@@ -8,8 +9,12 @@ use fb_shared::rng::Rng;
 use fb_sim::math::V3;
 
 use super::hub::Hub;
-use super::room::{Practice, Room, RoomOptions, Who};
+use super::room::{Game, Practice, Room, RoomOptions, Who};
 use super::{ConnId, Inputs, Out, ticks};
+
+fn conn(n: u32) -> ConnId {
+    ConnId(Entity::from_raw_u32(n).expect("an index"))
+}
 
 /// What every client holds down, and one-tick presses on top.
 #[derive(Default)]
@@ -34,7 +39,7 @@ struct Bench {
     real: u64,
     inputs: Script,
     mail: BTreeMap<ConnId, Vec<Out>>,
-    next_conn: ConnId,
+    next_conn: u32,
 }
 
 fn opts() -> RoomOptions {
@@ -77,13 +82,14 @@ impl Bench {
         self.hello_with(Who {
             uid: uid.into(),
             name: name.into(),
-            ..Default::default()
+            color: None,
+            outfit: None,
         })
     }
 
     fn hello_with(&mut self, who: Who) -> Client {
         self.next_conn += 1;
-        let conn = self.next_conn;
+        let conn = conn(self.next_conn);
         let id = self.room.join(conn, who).expect("room has space");
         self.pump();
         Client { conn, id }
@@ -235,12 +241,12 @@ fn only_the_host_starts_and_only_with_enough_players() {
     let mut t = Bench::new(opts());
     let a = t.hello("A", "ua");
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
     let b = t.hello("B", "ub");
     t.ctl(b, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Round);
+    assert_eq!(t.room.phase(), Phase::Round);
     let mut parts = t.arena_msg(b).unwrap().participants;
     parts.sort_unstable();
     assert_eq!(parts, [a.id, b.id]);
@@ -252,14 +258,14 @@ fn start_and_abort_spam_builds_at_most_one_arena_a_second() {
     let a = t.hello("A", "ua");
     t.hello("B", "ub");
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Round);
+    assert_eq!(t.room.phase(), Phase::Round);
     t.ctl(a, ClientMsg::Abort);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
     t.advance(1.0);
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Round);
+    assert_eq!(t.room.phase(), Phase::Round);
 }
 
 #[test]
@@ -288,7 +294,7 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
         t.events(a)
             .any(|e| matches!(e, MapEventKind::Ko { id, out: true, .. } if *id == b.id))
     );
-    t.until(5.0, |t| t.room.phase == Phase::Results, |_| {});
+    t.until(5.0, |t| t.room.phase() == Phase::Results, |_| {});
     let rows = t
         .msgs(a)
         .find_map(|m| {
@@ -307,7 +313,7 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     t.hold(b, 127, 0);
     t.until(
         20.0,
-        |t| t.room.phase == Phase::Podium,
+        |t| t.room.phase() == Phase::Podium,
         |t| {
             t.inputs.press.insert(a.id, BTN_JUMP);
         },
@@ -325,7 +331,7 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     assert_eq!((end[0].id, end[0].total), (a.id, 20));
     assert_eq!(t.room.arena.kind, ArenaKind::Podium);
     t.advance(21.0);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
     assert_eq!(t.lobby(a).players.iter().find(|p| p.id == a.id).unwrap().crowns, 1);
 }
 
@@ -341,7 +347,7 @@ fn bots_count_as_players_and_are_simulated_on_the_server() {
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Round);
+    assert_eq!(t.room.phase(), Phase::Round);
     t.advance(6.0);
     assert!(t.room.arena.pawn(bot).unwrap().progress > 5.0);
 }
@@ -401,7 +407,7 @@ fn lets_the_host_hand_the_role_to_another_connected_player() {
     t.ctl(a, ClientMsg::Host(b.id));
     assert_eq!(t.lobby(a).host, Some(b.id));
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.room.phase, Phase::Lobby);
+    assert_eq!(t.room.phase(), Phase::Lobby);
 }
 
 #[test]
@@ -438,14 +444,14 @@ fn practice_rooms_start_immediately_with_bots_and_loop() {
     let mut t = Bench::new(RoomOptions {
         min_players: 1,
         practice: Some(Practice {
-            game: "jump-club".into(),
+            game: Game::by_id("jump-club").expect("a game"),
             bots: 2,
         }),
         intro_ticks: 12,
         ..opts()
     });
     let a = t.hello("A", "ua");
-    assert_eq!(t.room.phase, Phase::Round);
+    assert_eq!(t.room.phase(), Phase::Round);
     assert_eq!(t.arena_msg(a).unwrap().participants.len(), 3);
     // Stop right at the first round's end: rounds can be short (everyone falls).
     let ended = |t: &Bench| {
@@ -474,8 +480,7 @@ fn ignores_dev_commands_unless_the_server_runs_with_dev() {
         m,
         ServerMsg::DevAck {
             q: Some(1),
-            ok: false,
-            ..
+            result: Err(_),
         }
     )));
 }
@@ -505,19 +510,19 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
     for i in 0..160 {
         for c in [a, b] {
             // Inputs change, or (sometimes) do not arrive and the last is held.
-            if rng.next() < 0.15 {
+            if rng.unit() < 0.15 {
                 continue;
             }
-            let buttons = if rng.next() < 0.05 {
+            let buttons = if rng.unit() < 0.05 {
                 BTN_JUMP
-            } else if rng.next() < 0.03 {
+            } else if rng.unit() < 0.03 {
                 BTN_DIVE
-            } else if rng.next() < 0.1 {
+            } else if rng.unit() < 0.1 {
                 BTN_GRAB
             } else {
                 0
             };
-            let mx = (rng.next() * 254.0 - 127.0).round() as i8;
+            let mx = (rng.unit() * 254.0 - 127.0).round() as i8;
             t.inputs.held.insert(c.id, InputFrame { mx, mz: 100, buttons });
         }
         match i {
@@ -585,7 +590,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
         },
     );
     cmd(&mut t, DevCmd::EndRound);
-    assert_eq!(t.room.phase, Phase::Results);
+    assert_eq!(t.room.phase(), Phase::Results);
     assert!(t.room.round_prepared());
     t.until(15.0, |t| t.room.arena.map.meta().id == "door-dash", |_| {});
     assert!(!t.room.round_prepared());
@@ -615,7 +620,7 @@ fn a_bot_gives_up_its_place_and_status_follows_the_arena() {
     let a = t.hello("A", "ua");
     t.ctl(a, ClientMsg::AddBot);
     let b = t.hello("B", "ub");
-    assert!(t.room.players.iter().all(|p| !p.bot));
+    assert!(t.room.players.iter().all(|p| !p.is_bot()));
     assert_eq!(t.room.arena.pawn(b.id).map(|p| p.status), Some(PawnStatus::Play));
 }
 
@@ -638,7 +643,7 @@ struct HubBench {
     hub: Hub,
     real: u64,
     mail: BTreeMap<ConnId, Vec<Out>>,
-    next_conn: ConnId,
+    next_conn: u32,
 }
 
 impl HubBench {
@@ -673,9 +678,10 @@ impl HubBench {
 
     fn open_from(&mut self, ip: &str, uid: &str) -> ConnId {
         self.next_conn += 1;
-        self.hub.open(self.next_conn, ip.into(), uid.into());
+        let c = conn(self.next_conn);
+        self.hub.open(c, ip.parse().ok(), (!uid.is_empty()).then(|| uid.into()));
         self.pump();
-        self.next_conn
+        c
     }
 
     fn send(&mut self, c: ConnId, m: ClientMsg) {
@@ -769,7 +775,14 @@ fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
         },
     );
     let denied = |t: &HubBench| t.last(d, |m| matches!(m, ServerMsg::Denied { .. }));
-    assert!(matches!(denied(&t), Some(ServerMsg::Denied { reason: DenyReason::Pin, msg, .. }) if msg.is_empty()));
+    assert!(matches!(
+        denied(&t),
+        Some(ServerMsg::Denied {
+            reason: DenyReason::Pin,
+            msg: None,
+            ..
+        })
+    ));
     let wrong = if pin == "0000" { "1111" } else { "0000" };
     t.send(
         d,
@@ -778,7 +791,14 @@ fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
             pin: Some(wrong.into()),
         },
     );
-    assert!(matches!(denied(&t), Some(ServerMsg::Denied { reason: DenyReason::Pin, msg, .. }) if !msg.is_empty()));
+    assert!(matches!(
+        denied(&t),
+        Some(ServerMsg::Denied {
+            reason: DenyReason::Pin,
+            msg: Some(_),
+            ..
+        })
+    ));
     t.send(
         d,
         ClientMsg::Join {
@@ -907,10 +927,7 @@ fn hub_closes_a_room_that_panics_and_carries_on() {
     t.pump();
     assert!(r.is_none());
     assert_eq!(t.hub.listed().count(), 0);
-    assert!(
-        t.last(c, |m| matches!(m, ServerMsg::Home { msg } if !msg.is_empty()))
-            .is_some()
-    );
+    assert!(t.last(c, |m| matches!(m, ServerMsg::Home { msg: Some(_) })).is_some());
     // Still served: a new room opens.
     t.send(
         c,
@@ -1052,8 +1069,7 @@ fn dev_commands_are_the_hosts_and_warps_are_capped() {
         m,
         ServerMsg::DevAck {
             q: Some(1),
-            ok: false,
-            ..
+            result: Err(_),
         }
     )));
     let before = t.room.arena.tick;
@@ -1065,7 +1081,7 @@ fn dev_commands_are_the_hosts_and_warps_are_capped() {
         },
     );
     let capped =
-        |m: &ServerMsg| matches!(m, ServerMsg::DevAck { q: Some(2), ok: true, msg } if msg.contains("at most"));
+        |m: &ServerMsg| matches!(m, ServerMsg::DevAck { q: Some(2), result: Ok(msg) } if msg.contains("at most"));
     assert!(t.msgs(a).any(capped));
     let warped = t.room.arena.tick - before;
     assert!(warped > 0 && warped <= ticks(30.0) as i64 + 6, "{warped}");
@@ -1131,23 +1147,22 @@ fn a_survival_round_with_one_player_left_is_played_not_won_at_once() {
     t.room.quit(b.id);
     t.pump();
     t.advance(0.5);
-    assert_eq!(t.room.phase, Phase::Round);
-    assert!(t.room.round.as_ref().is_some_and(|r| !r.over));
+    assert_eq!(t.room.phase(), Phase::Round);
+    assert!(t.room.round_live());
 }
 
 #[test]
 fn backs_off_a_warning_that_keeps_coming() {
     let mut b = super::Backoff::default();
-    let s = ticks(1.0);
-    assert_eq!(b.hit(1000), Some(0));
-    assert_eq!(b.hit(1001), None);
-    assert_eq!(b.hit(1000 + s), Some(1));
+    assert_eq!(b.hit(10.0), Some(0));
+    assert_eq!(b.hit(10.01), None);
+    assert_eq!(b.hit(11.0), Some(1));
     // Now two seconds.
-    assert_eq!(b.hit(1000 + 2 * s), None);
-    assert_eq!(b.hit(1000 + 3 * s), Some(1));
+    assert_eq!(b.hit(12.0), None);
+    assert_eq!(b.hit(13.0), Some(1));
     // Quiet for long: from the start again.
-    assert_eq!(b.hit(1000 + 100 * s), Some(0));
-    assert_eq!(b.hit(1000 + 101 * s), Some(0));
+    assert_eq!(b.hit(110.0), Some(0));
+    assert_eq!(b.hit(111.0), Some(0));
 }
 
 #[test]
@@ -1168,7 +1183,7 @@ fn hub_changes_a_rooms_pin_while_it_is_being_guessed() {
         panic!("no lobby");
     };
     let pin = lobby.pin.expect("the host's PIN");
-    let room = lobby.room.id;
+    let room = lobby.room.id.expect("a listed room");
     let wrong = if pin == "0000" { "1111" } else { "0000" };
     for i in 0..30 {
         let c = t.open_from(&format!("198.51.100.{i}"), &format!("g{i}"));
@@ -1181,7 +1196,7 @@ fn hub_changes_a_rooms_pin_while_it_is_being_guessed() {
             },
         );
     }
-    assert!(t.last(host, |m| matches!(m, ServerMsg::Chat { id: 0, .. })).is_some());
+    assert!(t.last(host, |m| matches!(m, ServerMsg::Notice(_))).is_some());
     let new_pin = t.hub.listed().next().unwrap().1.pin.clone().expect("still private");
     // The right PIN still gets in, from an address nobody guessed from.
     let friend = t.open_from("192.0.2.7", "friend");
@@ -1289,8 +1304,5 @@ fn hub_tells_everyone_when_the_server_goes_down() {
     let c = t.hello(Hello::default());
     t.hub.shutdown("Сервер перезапускается");
     t.pump();
-    assert!(
-        t.last(c, |m| matches!(m, ServerMsg::Home { msg } if !msg.is_empty()))
-            .is_some()
-    );
+    assert!(t.last(c, |m| matches!(m, ServerMsg::Home { msg: Some(_) })).is_some());
 }

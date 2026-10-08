@@ -1,3 +1,5 @@
+use fb_shared::cause::Hazard;
+
 use crate::m::{self, MinMax};
 use crate::math::{Affine, V3};
 use crate::nodes::{NodeId, Nodes};
@@ -19,7 +21,7 @@ pub struct ColliderOpts {
     pub pad: f64,
     pub conveyor: Option<V3>,
     /// Hazard name for knockout credit ("hammer", "rotor", …).
-    pub tag: Option<&'static str>,
+    pub tag: Option<Hazard>,
     /// Ice: 0 normal grip, 1 almost none.
     pub slip: f64,
     /// Touches are reported to the map.
@@ -50,22 +52,7 @@ pub struct Collider {
     pub shape: Shape,
     pub enabled: bool,
     pub index: ColId,
-    pub is_static: bool,
-    pub bounce: f64,
-    pub hit: f64,
-    pub pad: f64,
-    pub conveyor: Option<V3>,
-    pub tag: Option<&'static str>,
-    pub slip: f64,
-    pub on_touch: bool,
-    pub on_ground: bool,
-    pub nav_skip: bool,
-    pub sinks: bool,
-    pub sweep: bool,
-    pub trigger: bool,
-    pub ladder: bool,
-    pub launch: Option<V3>,
-    pub no_grab: bool,
+    pub opts: ColliderOpts,
     pub cur: Affine,
     pub prev: Affine,
     pub inv: Affine,
@@ -77,7 +64,7 @@ pub struct Collider {
 }
 
 impl Collider {
-    pub fn new(node: NodeId, shape: Shape, o: ColliderOpts) -> Self {
+    pub fn new(index: ColId, node: NodeId, shape: Shape, opts: ColliderOpts) -> Self {
         let radius = match shape {
             Shape::Box { hx, hy, hz } => m::hypot3(hx, hy, hz),
             Shape::Cyl { r, hh } => m::hypot(r, hh),
@@ -87,23 +74,11 @@ impl Collider {
             node,
             shape,
             enabled: true,
-            index: u32::MAX,
-            is_static: o.is_static,
-            bounce: o.bounce,
-            hit: o.hit,
-            pad: o.pad,
-            conveyor: o.conveyor,
-            tag: o.tag,
-            slip: o.slip,
-            on_touch: o.on_touch,
-            on_ground: o.on_ground,
-            nav_skip: o.nav_skip,
-            sinks: o.sinks,
-            sweep: o.sweep,
-            trigger: o.trigger || o.ladder,
-            ladder: o.ladder,
-            launch: o.launch,
-            no_grab: o.no_grab,
+            index,
+            opts: ColliderOpts {
+                trigger: opts.trigger || opts.ladder,
+                ..opts
+            },
             cur: Affine::IDENTITY,
             prev: Affine::IDENTITY,
             inv: Affine::IDENTITY,
@@ -116,7 +91,7 @@ impl Collider {
 
     /// Reads the node's world matrix (its chain must be up to date); the previous one is kept.
     pub fn sync(&mut self, nodes: &Nodes) {
-        if self.is_static && self.synced {
+        if self.opts.is_static && self.synced {
             self.prev = self.cur;
             return;
         }
@@ -243,10 +218,10 @@ impl Collider {
         true
     }
 
-    /// Distance along a ray (unit `dir`) to where it enters the shape, or −1; `normal` gets the world normal.
-    pub fn raycast(&self, origin: V3, dir: V3, max_t: f64, normal: &mut V3) -> f64 {
+    /// Distance along a ray (unit `dir`) to where it enters the shape, and the world normal there.
+    pub fn raycast(&self, origin: V3, dir: V3, max_t: f64) -> Option<(f64, V3)> {
         if self.degenerate {
-            return -1.0;
+            return None;
         }
         let o = self.inv.transform_point3(origin);
         let d = self.inv.transform_vector3(dir).normalize_or_zero();
@@ -259,12 +234,12 @@ impl Collider {
                 let da = [d.x, d.y, d.z];
                 let mut t0 = f64::NEG_INFINITY;
                 let mut t1 = f64::INFINITY;
-                let mut axis: i32 = -1;
+                let mut axis = None;
                 for a in 0..3 {
                     let (ha, o1, d1) = (h[a], oa[a], da[a]);
                     if d1.abs() < 1e-9 {
                         if o1.abs() > ha {
-                            return -1.0;
+                            return None;
                         }
                         continue;
                     }
@@ -275,28 +250,24 @@ impl Collider {
                     }
                     if ta > t0 {
                         t0 = ta;
-                        axis = a as i32;
+                        axis = Some(a);
                     }
                     t1 = t1.at_most(tb);
                     if t0 > t1 {
-                        return -1.0;
+                        return None;
                     }
                 }
-                if axis < 0 || t0 < 0.0 || t0 > max_t {
-                    return -1.0;
+                let axis = axis?;
+                if t0 < 0.0 || t0 > max_t {
+                    return None;
                 }
                 t = t0;
-                let s = -m::sign(da[axis as usize]);
-                match axis {
-                    0 => nl.x = s,
-                    1 => nl.y = s,
-                    _ => nl.z = s,
-                }
+                nl[axis] = -m::sign(da[axis]);
             }
             Shape::Cyl { r, hh } => {
                 let mut best = f64::INFINITY;
                 if m::hypot(o.x, o.z) <= r && o.y.abs() <= hh {
-                    return -1.0;
+                    return None;
                 }
                 if d.y.abs() > 1e-9 {
                     for cy in [hh, -hh] {
@@ -324,7 +295,7 @@ impl Collider {
                     }
                 }
                 if best > max_t {
-                    return -1.0;
+                    return None;
                 }
                 t = best;
             }
@@ -332,22 +303,21 @@ impl Collider {
                 let b = o.dot(d);
                 let c = o.length_squared() - r * r;
                 if c <= 0.0 {
-                    return -1.0;
+                    return None;
                 }
                 let disc = b * b - c;
                 if disc < 0.0 {
-                    return -1.0;
+                    return None;
                 }
                 let tt = -b - m::sqrt(disc);
                 if tt < 0.0 || tt > max_t {
-                    return -1.0;
+                    return None;
                 }
                 t = tt;
                 nl = (o + d * t) / r;
             }
         }
-        *normal = self.cur.transform_vector3(nl).normalize_or_zero();
-        t
+        Some((t, self.cur.transform_vector3(nl).normalize_or_zero()))
     }
 
     pub fn surface_velocity(&self, local: V3, dt: f64) -> V3 {
@@ -373,6 +343,7 @@ mod tests {
         let mut nodes = Nodes::default();
         let n = nodes.add(ROOT, V3::ZERO);
         let mut c = Collider::new(
+            0,
             n,
             Shape::Box {
                 hx: 1.0,
@@ -384,16 +355,15 @@ mod tests {
         nodes.update_all();
         c.sync(&nodes);
         let mut hit = Contact::default();
-        let mut normal = V3::ZERO;
         assert!(c.contact(V3::new(0.0, 1.2, 0.0), 0.5, &mut hit));
-        assert!(c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0, &mut normal) > 0.0);
+        assert!(
+            c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0)
+                .is_some_and(|(t, _)| t > 0.0)
+        );
         nodes.get_mut(n).scale = V3::ZERO;
         nodes.update_all();
         c.sync(&nodes);
         assert!(!c.contact(V3::new(0.0, 0.2, 0.0), 0.5, &mut hit));
-        assert_eq!(
-            c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0, &mut normal),
-            -1.0
-        );
+        assert_eq!(c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0), None);
     }
 }

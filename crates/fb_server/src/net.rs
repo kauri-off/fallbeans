@@ -47,14 +47,21 @@ struct LinkedAt(f64);
 #[derive(Resource, Default)]
 pub struct Shutdown {
     pub signal: Arc<AtomicBool>,
-    /// Server time the players were told, and the transports were stopped.
-    told: Option<f64>,
-    stopped: Option<f64>,
+    stage: Stage,
+}
+
+/// How far the shutdown is, and since when (server time, s).
+#[derive(Default, Clone, Copy, Debug)]
+enum Stage {
+    #[default]
+    Running,
+    Told(f64),
+    Stopped(f64),
 }
 
 impl Shutdown {
     fn going(&self) -> bool {
-        self.told.is_some() || self.signal.load(Ordering::Relaxed)
+        !matches!(self.stage, Stage::Running) || self.signal.load(Ordering::Relaxed)
     }
 }
 
@@ -183,21 +190,21 @@ fn shut_down(
         return;
     }
     let now = time.elapsed_secs_f64();
-    match (shutdown.told, shutdown.stopped) {
-        (None, _) => {
+    match shutdown.stage {
+        Stage::Running => {
             info!("shutting down: telling the players");
             if let Some(mut rooms) = rooms {
                 rooms.hub.shutdown("Сервер перезапускается");
             }
-            shutdown.told = Some(now);
+            shutdown.stage = Stage::Told(now);
         }
-        (Some(told), None) if now - told >= SHUTDOWN_TELL_S => {
+        Stage::Told(at) if now - at >= SHUTDOWN_TELL_S => {
             for server in &servers {
                 commands.trigger(Stop { entity: server });
             }
-            shutdown.stopped = Some(now);
+            shutdown.stage = Stage::Stopped(now);
         }
-        (Some(_), Some(stopped)) if now - stopped >= SHUTDOWN_STOP_S => {
+        Stage::Stopped(at) if now - at >= SHUTDOWN_STOP_S => {
             info!("shut down");
             exit.write(AppExit::Success);
         }
@@ -233,7 +240,7 @@ fn on_connected(
         Some(via) => info!("connected: {:?} from {from} via {via}", remote.0),
         None => info!("connected: {:?} from {from}", remote.0),
     }
-    rooms.hub.open(conn_of(link), from, uid);
+    rooms.hub.open(conn_of(link), ip, uid);
 }
 
 /// A client is gone (it left, timed out, or was let go of).

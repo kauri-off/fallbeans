@@ -13,6 +13,7 @@ use bevy::log::tracing_subscriber::filter::FilterFn;
 use bevy::log::tracing_subscriber::fmt::MakeWriter;
 use bevy::log::tracing_subscriber::{Layer, fmt};
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_real_timer;
 
 use crate::ui::{Action, UiAction};
 
@@ -270,16 +271,10 @@ pub struct LogsPlugin;
 impl Plugin for LogsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, open_folder);
-        app.add_systems(Last, flush_now_and_then);
-    }
-}
-
-/// The log file's buffer out every second, and at the exit.
-fn flush_now_and_then(time: Res<Time<Real>>, mut exit: MessageReader<AppExit>, mut at: Local<f32>) {
-    let now = time.elapsed_secs();
-    if exit.read().next().is_some() || now - *at >= FLUSH_EVERY.as_secs_f32() {
-        *at = now;
-        flush();
+        app.add_systems(
+            Last,
+            flush.run_if(on_real_timer(FLUSH_EVERY).or_eager(on_message::<AppExit>)),
+        );
     }
 }
 

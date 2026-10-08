@@ -2,13 +2,16 @@
 //! budgets and bot balance.
 use std::collections::{BTreeMap, BTreeSet};
 
+use fb_arena::StateHash;
 use fb_arena::{Arena, ArenaKind, PawnStatus, Stepper, tick_bodies, touch_hook};
+use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::Genre;
+use fb_shared::hash::Fingerprint;
 use fb_shared::m::MinMax;
 use fb_shared::{DT, MAX_PLAYERS, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
 use fb_sim::map::MapDef;
-use fb_sim::math::V3;
+use fb_sim::math::{V3, dist_xz};
 use fb_sim::nav::{Nav, NavGrid, PathOpts};
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::physics::{Body, BodyInput, R, SPHERES, StepEvents};
@@ -94,7 +97,7 @@ fn overlap(body: &Body, arena: &Arena) -> (f64, Option<ColId>) {
     world.query(body.pos.x, body.pos.z, 1.5, &mut near);
     for &i in &near {
         let col = world.col(i);
-        if !col.enabled || col.trigger {
+        if !col.enabled || col.opts.trigger {
             continue;
         }
         for h in SPHERES {
@@ -121,8 +124,12 @@ fn label(arena: &Arena, c: Option<ColId>) -> String {
         Shape::Cyl { .. } => "cyl",
         Shape::Sphere { .. } => "sphere",
     };
-    let tag = c.tag.map_or(String::new(), |t| format!(" ({t})"));
-    format!("#{} {shape}{tag}{}", c.index, if c.is_static { "" } else { " moving" })
+    let tag = c.opts.tag.map_or(String::new(), |t| format!(" ({})", t.name()));
+    format!(
+        "#{} {shape}{tag}{}",
+        c.index,
+        if c.opts.is_static { "" } else { " moving" }
+    )
 }
 
 // ------------------------------------------------------------------ meta & spec rules
@@ -172,7 +179,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let lowest = sp.iter().map(|p| p.y).fold(f64::INFINITY, m::min);
     if spec.kill_y > lowest - 2.0 {
         out.error(format!(
-            "killY {} is within 2 m of the lowest spawn (y {})",
+            "kill_y {} is within 2 m of the lowest spawn (y {})",
             spec.kill_y,
             r3(lowest)
         ));
@@ -230,7 +237,7 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     out.metric("colliders", world.colliders.len());
     out.metric("moving", world.dynamic.len());
     out.metric("movers", world.movers.len());
-    out.metric("hash", world.hash(false));
+    out.metric("hash", world.hash(false).to_string());
 }
 
 // ------------------------------------------------------------------ spawns and respawns
@@ -259,7 +266,10 @@ fn stand_test(arena: &mut Arena, p: V3, t0: f64, seconds: f64) -> Stand {
     let mut fell = false;
     simulate(arena, &mut b, t0, seconds, BodyInput::default(), |t, b, ev| {
         if hit.is_none() && (ev.hazard.is_some() || ev.knocked || ev.stunned) {
-            hit = Some(ev.hazard.unwrap_or(if ev.knocked { "knocked" } else { "stunned" }));
+            hit = Some(
+                ev.hazard
+                    .map_or(if ev.knocked { "knocked" } else { "stunned" }, Hazard::name),
+            );
             hit_at = t - t0;
         }
         if b.pos.y < kill_y {
@@ -273,9 +283,9 @@ fn stand_test(arena: &mut Arena, p: V3, t0: f64, seconds: f64) -> Stand {
         hit,
         hit_at,
         fell,
-        drift: m::hypot(b.pos.x - p.x, b.pos.z - p.z),
+        drift: dist_xz(b.pos, p),
         grounded: b.grounded,
-        ground: (b.ground_col >= 0).then_some(b.ground_col as ColId),
+        ground: b.ground_col,
         dy: b.pos.y - p.y,
         end: b.pos,
     }
@@ -292,7 +302,7 @@ fn spawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             out.error(format!("spawn {i} starts {} m inside {what}", r3(r.start.0)))
                 .at(p);
         }
-        let static_ground = r.ground.is_some_and(|g| a.world.col(g).is_static);
+        let static_ground = r.ground.is_some_and(|g| a.world.col(g).opts.is_static);
         if r.fell {
             out.error(format!("a bean on spawn {i} falls off without moving")).at(p);
         } else if r.hit.is_none() && !r.grounded {
@@ -316,7 +326,7 @@ fn spawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 .at(p);
         }
     }
-    out.metric("worstStartOverlap", r3(worst));
+    out.metric("worst_start_overlap", r3(worst));
 }
 
 fn respawn(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
@@ -482,12 +492,12 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 let cb = world.col(ib);
                 if ib == ia
                     || !cb.enabled
-                    || ca.sinks
-                    || cb.sinks
-                    || ca.trigger
-                    || cb.trigger
+                    || ca.opts.sinks
+                    || cb.opts.sinks
+                    || ca.opts.trigger
+                    || cb.opts.trigger
                     || related(&a, ca, cb)
-                    || (!cb.is_static && ib < ia)
+                    || (!cb.opts.is_static && ib < ia)
                 {
                     continue;
                 }
@@ -520,7 +530,7 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         out.info(format!("{} more clipping pairs", list.len() - 12));
     }
     out.metric("pairs", list.len());
-    out.metric("worstDepth", r3(list.first().map_or(0.0, |p| p.depth)));
+    out.metric("worst_depth", r3(list.first().map_or(0.0, |p| p.depth)));
     out.metric("checks", checks);
 }
 
@@ -532,12 +542,12 @@ fn nav(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let clock = Clock::start();
     let forbidden = a.spec.forbidden.as_deref().map(|f| f as &dyn Fn(V3) -> bool);
     let grid = NavGrid::build(&a.world, forbidden);
-    out.metric("buildMs", r1(clock.ms()));
+    out.metric("build_ms", r1(clock.ms()));
     let mut off_grid = Vec::new();
     for (i, p) in a.spec.spawns.clone().into_iter().enumerate() {
         // Moving floors (platforms, tiles that drop) are not in the grid by design.
         let r = stand_test(&mut a, p, 0.0, 0.3);
-        if r.ground.is_some_and(|g| !a.world.col(g).is_static) {
+        if r.ground.is_some_and(|g| !a.world.col(g).opts.is_static) {
             continue;
         }
         off_grid.push((i, p));
@@ -558,7 +568,7 @@ fn nav(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         && let Some(fin) = a.spec.finish
     {
         let path = nav.path(a.spec.spawns[0], 0.0, fin.z + 1.0, Some(fin.y), &PathOpts::default());
-        out.metric("staticPathToFinish", path.is_some());
+        out.metric("static_path_to_finish", path.is_some());
         if path.is_none() {
             out.info("no path to the finish over static ground alone (jumps or moving parts are needed)");
         }
@@ -571,7 +581,7 @@ fn nav(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 /// unseeded randomness are kept out of the core at compile time: `core/clippy.toml`.)
 fn determinism(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let seconds = if ctx.quick { 8 } else { 25 };
-    let runs: Vec<(String, Vec<String>)> = [0, 1]
+    let runs: Vec<(Fingerprint, Vec<StateHash>)> = [0, 1]
         .par_iter()
         .map(|_| {
             let mut h = Harness::new(
@@ -625,7 +635,7 @@ fn limits(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let clock = Clock::start();
     h.run_to(3.0 + if ctx.quick { 4.0 } else { 12.0 });
     let per_tick = clock.ms() / (h.arena.tick - tick0).max(1) as f64;
-    out.metric("msPerTick", r3(per_tick));
+    out.metric("ms_per_tick", r3(per_tick));
     // 120 ticks/s on one core shared with the other rooms: keep a round well under 10% of a core.
     if per_tick > 0.8 {
         out.warn(format!("{} ms per tick with 8 bots (budget 0.8 ms)", r3(per_tick)));
@@ -642,7 +652,7 @@ pub(crate) struct SeedRun {
     pub survivors: usize,
     pub top_score: f64,
     /// Falls that were not eliminations: (progress, cause).
-    pub falls: Vec<(f64, &'static str)>,
+    pub falls: Vec<(f64, Cause)>,
     pub bot_seconds: f64,
     sim_ms: f64,
     ticks: i64,
@@ -691,7 +701,7 @@ pub(crate) fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
     r.finish_times = h.finishes.iter().map(|f| f.1).collect();
     r.out_times = h.falls.iter().filter(|f| f.out).map(|f| f.t).collect();
     r.survivors = h.alive();
-    r.top_score = h.arena.scores.values().copied().fold(0.0, m::max);
+    r.top_score = h.arena.scores.values().copied().max().unwrap_or(0).max(0) as f64;
     r.falls = h
         .falls
         .iter()
@@ -722,7 +732,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         }
         for &(progress, cause) in &r.falls {
             falls += 1;
-            let key = format!("z≈{} {cause}", (progress / 5.0).round() * 5.0);
+            let key = format!("z≈{} {}", (progress / 5.0).round() * 5.0, cause.name());
             match spots.iter_mut().find(|(k, _)| *k == key) {
                 Some(s) => s.1 += 1,
                 None => spots.push((key, 1)),
@@ -744,9 +754,9 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     out.metric("seeds", runs.len());
     // (A fall in a survival round is an elimination: there are no falls to count.)
     if meta.genre != Genre::Survival {
-        out.metric("fallsPerBotMin", r1(falls as f64 / bot_seconds * 60.0));
+        out.metric("falls_per_bot_min", r1(falls as f64 / bot_seconds * 60.0));
     }
-    out.metric("msPerTick8Bots", r3(sim_ms / ticks.max(1) as f64));
+    out.metric("ms_per_tick_8_bots", r3(sim_ms / ticks.max(1) as f64));
     if stuck > 0 {
         out.metric("stuck", stuck as u32);
     }
@@ -754,15 +764,15 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     hot.sort_by_key(|s| std::cmp::Reverse(s.1));
     if !hot.is_empty() {
         let s: Vec<String> = hot.iter().take(3).map(|(k, v)| format!("{k} ×{v}")).collect();
-        out.metric("fallHotspots", s.join("; "));
+        out.metric("fall_hotspots", s.join("; "));
     }
     match meta.genre {
         Genre::Race => {
             let rate = finish_times.len() as f64 / beans;
             let p50 = median(&finish_times);
-            out.metric("finishRate", r3(rate));
-            out.metric("finishP50", r1(p50));
-            out.metric("finishP90", r1(quantile(&finish_times, 0.9)));
+            out.metric("finish_rate", r3(rate));
+            out.metric("finish_p50", r1(p50));
+            out.metric("finish_p90", r1(quantile(&finish_times, 0.9)));
             let pct = (rate * 100.0).round();
             if rate < 0.3 {
                 out.error(format!("only {pct}% of bots finish"));
@@ -787,10 +797,10 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 .iter()
                 .map(|r| r.out_times.iter().copied().fold(meta.duration, m::min))
                 .collect();
-            out.metric("firstOut", r1(firsts.iter().sum::<f64>() / n));
-            out.metric("outP50", r1(median(&out_times)));
+            out.metric("first_out", r1(firsts.iter().sum::<f64>() / n));
+            out.metric("out_p50", r1(median(&out_times)));
             out.metric(
-                "survivorsAtEnd",
+                "survivors_at_end",
                 r1(runs.iter().map(|r| r.survivors as f64).sum::<f64>() / n),
             );
             if first_outs.iter().any(|&t| t < 3.0) {
@@ -801,7 +811,7 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             }
         }
         Genre::Points => {
-            out.metric("topScoreAvg", r1(runs.iter().map(|r| r.top_score).sum::<f64>() / n));
+            out.metric("top_score_avg", r1(runs.iter().map(|r| r.top_score).sum::<f64>() / n));
             if runs.iter().all(|r| r.top_score <= 0.0) {
                 out.warn("bots never score in this points game");
             }

@@ -9,12 +9,44 @@ pub mod room;
 #[cfg(test)]
 mod tests;
 
+use core::fmt;
+
+use bevy::ecs::entity::Entity;
 use fb_proto::{MapEventMsg, Pid, ServerMsg};
 use fb_shared::TICK_RATE;
 use fb_shared::input::InputFrame;
 
-/// A connection (the network layer's link).
-pub type ConnId = u64;
+/// A connection: the network layer's link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConnId(pub Entity);
+
+/// A player's identity: the same person on every connection they make (`auth::Auth::identity`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Uid(String);
+
+impl Uid {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Uid {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<String> for Uid {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl fmt::Display for Uid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// Something to send.
 #[derive(Clone, Debug, PartialEq)]
@@ -45,23 +77,28 @@ pub fn ticks(s: f64) -> u64 {
     (s * TICK_RATE as f64).round() as u64
 }
 
+/// Server ticks in seconds.
+pub fn secs(ticks: u64) -> f64 {
+    ticks as f64 / TICK_RATE as f64
+}
+
 /// A warning that backs off while it keeps coming: logged at once, then at most after 1 s, 2 s, 4 s … (up to
 /// 256 s); quiet for a whole step and it starts over.
 #[derive(Clone, Debug, Default)]
 pub struct Backoff {
-    /// Server tick before which it is only counted.
-    next: u64,
+    /// Time (s) before which it is only counted.
+    next: f64,
     step: u32,
     hushed: u32,
 }
 
 impl Backoff {
-    fn period(step: u32) -> u64 {
-        ticks(1.0) << step.min(8)
+    fn period(step: u32) -> f64 {
+        f64::from(1u32 << step.min(8))
     }
 
-    /// It happened at server tick `now`: Some(times it was left out since the last line) when to log it.
-    pub fn hit(&mut self, now: u64) -> Option<u32> {
+    /// It happened at `now` (s, any origin): Some(times it was left out since the last line) when to log it.
+    pub fn hit(&mut self, now: f64) -> Option<u32> {
         if now < self.next {
             self.hushed += 1;
             return None;
@@ -75,9 +112,21 @@ impl Backoff {
     }
 }
 
-/// A random number from the system (room codes, PINs, seeds: not simulation).
-pub fn random_u32() -> u32 {
-    let mut b = [0u8; 4];
-    getrandom::fill(&mut b).expect("system randomness");
-    u32::from_le_bytes(b)
+/// Messages counted per second of server ticks.
+#[derive(Clone, Debug, Default)]
+pub struct RateWindow {
+    start: u64,
+    count: u32,
+}
+
+impl RateWindow {
+    /// One more at server tick `now`: how many there were in its window so far, this one included.
+    pub fn hit(&mut self, now: u64) -> u32 {
+        if now.saturating_sub(self.start) > ticks(1.0) {
+            self.start = now;
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count
+    }
 }

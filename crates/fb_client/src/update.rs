@@ -1,15 +1,16 @@
 //! Self-update from the latest GitHub release (NSIS and AppImage install it; Flatpak links to it).
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bevy::prelude::*;
 use semver::Version;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::job::Job;
 use crate::opts::Opts;
 
 const REPO: &str = "kauri-off/fallbeans";
@@ -83,8 +84,8 @@ pub enum State {
 pub struct Update {
     pub install: Option<Install>,
     pub state: State,
-    checking: Option<Mutex<Receiver<Option<Release>>>>,
-    working: Option<Mutex<Receiver<Result<(), String>>>>,
+    checking: Option<Job<Option<Release>>>,
+    working: Option<Job<Result<(), String>>>,
     got: Arc<AtomicU64>,
     total: u64,
     release: Option<Release>,
@@ -100,10 +101,10 @@ impl Plugin for UpdatePlugin {
 }
 
 /// The game's own threads that may fail without ending it are named so (`crash::background`).
-fn spawn_named(name: &str, f: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new().name(format!("fb-{name}")).spawn(f) {
-        warn!("update: no thread for {name}: {e}");
-    }
+fn spawn_named<T: Send + 'static>(name: &str, f: impl FnOnce() -> T + Send + 'static) -> Option<Job<T>> {
+    Job::spawn(name, f)
+        .inspect_err(|e| warn!("update: no thread for {name}: {e}"))
+        .ok()
 }
 
 fn start(mut commands: Commands, opts: Res<Opts>) {
@@ -111,16 +112,14 @@ fn start(mut commands: Commands, opts: Res<Opts>) {
     if install == Some(Install::Nsis) {
         spawn_named("update-cleanup", remove_old_installers);
     }
-    let checking = install.clone().map(|i| {
-        let (tx, rx) = channel();
+    let checking = install.clone().and_then(|i| {
         spawn_named("update-check", move || {
             let r = latest(&i);
             if let Err(e) = &r {
                 warn!("update check: {e}");
             }
-            let _ = tx.send(r.ok().flatten());
-        });
-        Mutex::new(rx)
+            r.ok().flatten()
+        })
     });
     commands.insert_resource(Update {
         install,
@@ -177,31 +176,41 @@ pub fn newer(tag: &str, current: &str) -> bool {
     matches!((parse(tag), parse(current)), (Ok(t), Ok(c)) if t > c)
 }
 
+/// A release as GitHub's API describes it.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GithubRelease {
+    tag_name: String,
+    html_url: String,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
 /// The latest release, if newer than this build.
 fn latest(install: &Install) -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let v: serde_json::Value = agent(Some(Duration::from_secs(10)), None)
+    let v: GithubRelease = agent(Some(Duration::from_secs(10)), None)
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .call()
         .and_then(|mut r| r.body_mut().read_json())
         .map_err(|e| format!("{url}: {e}"))?;
-    let tag = v["tag_name"].as_str().unwrap_or_default();
+    let tag = v.tag_name.as_str();
     if !newer(tag, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }
-    let assets = v["assets"].as_array().cloned().unwrap_or_default();
     let find = |pred: &dyn Fn(&str) -> bool| {
-        assets.iter().find_map(|a| {
-            let name = a["name"].as_str()?;
-            pred(name).then(|| {
-                (
-                    name.to_string(),
-                    a["browser_download_url"].as_str().unwrap_or_default().to_string(),
-                    a["size"].as_u64().unwrap_or(0),
-                )
-            })
-        })
+        v.assets
+            .iter()
+            .find(|a| pred(&a.name))
+            .map(|a| (a.name.clone(), a.browser_download_url.clone(), a.size))
     };
     let asset = install
         .asset_suffix()
@@ -209,7 +218,7 @@ fn latest(install: &Install) -> Result<Option<Release>, String> {
     let sums = find(&|n: &str| n == SUMS).map(|(_, url, _)| url);
     Ok(Some(Release {
         version: tag.trim_start_matches('v').to_string(),
-        page: v["html_url"].as_str().unwrap_or_default().to_string(),
+        page: v.html_url.clone(),
         asset,
         sums,
     }))
@@ -230,40 +239,23 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
         }
     }
     let u = &mut *update;
-    if let Some(rx) = &u.checking {
-        let got = rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
-        match got {
-            Err(TryRecvError::Empty) => {}
-            Ok(r) => {
-                u.checking = None;
-                if let Some(r) = r {
-                    info!("update: {} is out", r.version);
-                    u.release = Some(r.clone());
-                    u.state = State::Available(r);
-                }
-            }
-            Err(TryRecvError::Disconnected) => u.checking = None,
-        }
+    if let Some(r) = Job::take(&mut u.checking).flatten().flatten() {
+        info!("update: {} is out", r.version);
+        u.release = Some(r.clone());
+        u.state = State::Available(r);
     }
-    if let Some(rx) = &u.working {
-        let got = rx.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
-        match got {
-            Err(TryRecvError::Empty) => u.state = State::Downloading(u.got.load(Ordering::Relaxed), u.total),
-            Ok(Ok(())) => {
-                u.working = None;
-                u.state = State::Restarting;
-                exit.write(AppExit::Success);
-            }
-            Ok(Err(e)) => {
-                warn!("update: {e}");
-                u.working = None;
-                u.state = State::Failed(e);
-            }
-            Err(TryRecvError::Disconnected) => {
-                u.working = None;
-                u.state = State::Failed("the update thread is gone".into());
-            }
+    match Job::take(&mut u.working) {
+        None if u.working.is_some() => u.state = State::Downloading(u.got.load(Ordering::Relaxed), u.total),
+        None => {}
+        Some(Some(Ok(()))) => {
+            u.state = State::Restarting;
+            exit.write(AppExit::Success);
         }
+        Some(Some(Err(e))) => {
+            warn!("update: {e}");
+            u.state = State::Failed(e);
+        }
+        Some(None) => u.state = State::Failed("the update thread is gone".into()),
     }
 }
 
@@ -285,14 +277,12 @@ impl Update {
         let (Some((name, url, size)), Some(sums)) = (release.asset, release.sums) else {
             return;
         };
-        let (tx, rx) = channel();
         self.got.store(0, Ordering::Relaxed);
         self.total = size;
         let got = self.got.clone();
-        spawn_named("update", move || {
-            let _ = tx.send(fetch_and_install(&install, &name, &url, size, &sums, &got));
+        self.working = spawn_named("update", move || {
+            fetch_and_install(&install, &name, &url, size, &sums, &got)
         });
-        self.working = Some(Mutex::new(rx));
         self.state = State::Downloading(0, size);
     }
 }

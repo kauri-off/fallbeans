@@ -6,13 +6,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use fb_arena::{Stepper, tick_bodies, touch_hook};
 use fb_shared::m::MinMax;
+use fb_shared::rgb;
 use fb_shared::rng::Rng;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::{ColliderOpts, Contact};
 use fb_sim::map::Touches;
-use fb_sim::math::V3;
-use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, StepEvents, power};
+use fb_sim::math::{V3, dist_xz};
+use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, Power, StepEvents};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
 
@@ -79,7 +80,7 @@ impl Sim {
         let mut worst = 0.0f64;
         for col in &self.world.colliders {
             for i in 0..2 {
-                if col.sweep && col.contact(self.body.sphere(i), 0.5, &mut hit) {
+                if col.opts.sweep && col.contact(self.body.sphere(i), 0.5, &mut hit) {
                     worst = worst.at_least(hit.depth);
                 }
             }
@@ -93,14 +94,14 @@ fn grid_finds_every_collider_a_brute_force_search_finds() {
     let mut rng = Rng::new(5);
     let mut b = Builder::new(1, false);
     for i in 0..300 {
-        let x = (rng.next() - 0.5) * 120.0;
-        let z = (rng.next() - 0.5) * 120.0;
+        let x = (rng.unit() - 0.5) * 120.0;
+        let z = (rng.unit() - 0.5) * 120.0;
         if i % 3 == 0 {
-            let (y, r, h) = (rng.next() * 5.0, 0.5 + rng.next() * 3.0, 1.0 + rng.next() * 2.0);
+            let (y, r, h) = (rng.unit() * 5.0, 0.5 + rng.unit() * 3.0, 1.0 + rng.unit() * 2.0);
             b.cyl(x, y, z, r, h, pal::BLUE, PrimOpts::default());
         } else {
-            let (y, sx, sz) = (rng.next() * 5.0, 0.5 + rng.next() * 10.0, 0.5 + rng.next() * 10.0);
-            let rot = Some(V3::new(0.0, rng.next() * 6.0, rng.next() * 0.4));
+            let (y, sx, sz) = (rng.unit() * 5.0, 0.5 + rng.unit() * 10.0, 0.5 + rng.unit() * 10.0);
+            let rot = Some(V3::new(0.0, rng.unit() * 6.0, rng.unit() * 0.4));
             b.box_(
                 x,
                 y,
@@ -120,8 +121,8 @@ fn grid_finds_every_collider_a_brute_force_search_finds() {
     world.finalize(0.0);
     let mut got = Vec::new();
     for _ in 0..200 {
-        let x = (rng.next() - 0.5) * 130.0;
-        let z = (rng.next() - 0.5) * 130.0;
+        let x = (rng.unit() - 0.5) * 130.0;
+        let z = (rng.unit() - 0.5) * 130.0;
         let r = 1.7;
         world.query(x, z, r, &mut got);
         for (i, c) in world.colliders.iter().enumerate() {
@@ -272,7 +273,7 @@ fn a_sweeping_arm_tosses_a_lying_bean_up_and_over_itself() {
             overlap = overlap.at_least(s.arm_overlap());
         }
         top = top.at_least(s.body.pos.y);
-        drag = drag.at_least(m::hypot(s.body.pos.x - start.x, s.body.pos.z - start.z));
+        drag = drag.at_least(dist_xz(s.body.pos, start));
     }
     assert!(top > 0.7, "{top}");
     assert!(overlap < 0.35, "{overlap}");
@@ -502,7 +503,7 @@ fn portals_send_a_bean_out_of_the_other_end_facing_its_way() {
     b.portal(
         end(0.0, 5.0, m::PI),
         end(20.0, 0.0, m::PI / 2.0),
-        "#a66bff",
+        rgb(0xa66bff),
         PortalOpts::default(),
     );
     let mut s = Sim::new(b);
@@ -527,7 +528,7 @@ fn a_giant_is_bigger_heavier_and_shrugs_off_knocks() {
     block(&mut b, 0.0, -1.0, 0.0, 20.0, 2.0, 20.0);
     let mut s = Sim::new(b);
     s.reset(0.0, 0.02, 0.0);
-    s.body.give_power(power::GIANT, 0.0);
+    s.body.give_power(Power::Giant, 0.0);
     s.run(0.0, 10, IDLE);
     assert_eq!(s.body.size, GIANT_SIZE);
     assert_eq!(s.body.mass(), GIANT_MASS);

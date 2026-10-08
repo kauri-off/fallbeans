@@ -91,7 +91,7 @@ fn resolution(
     up: Res<Upscaling>,
     cams: Query<(Entity, &Camera, Option<&MainPassResolutionOverride>, Has<Fsr>), With<MainCamera>>,
 ) {
-    let scale = super::quality::Quality::scale(&g.upscale);
+    let scale = g.upscale.scale();
     let fsr1 = up.active == Upscaler::Fsr1;
     for (e, cam, now, has) in &cams {
         if scale >= 1.0 {

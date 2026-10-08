@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::bots::BotBrain;
 use crate::builder::Builder;
 use crate::collider::ColId;
+use crate::looks::LookId;
 use crate::math::V3;
 use crate::physics::{Body, StepEvents, Touch};
 use crate::world::World;
@@ -48,7 +49,7 @@ pub enum MapEvent {
     /// Bean `id` took star `k`.
     Star { k: u32, id: u32 },
     /// Bean `from` fell with `n` stars: they go to `to` (who knocked it down), or burn.
-    Drop { from: u32, to: Option<u32>, n: f64 },
+    Drop { from: u32, to: Option<u32>, n: i64 },
     /// Bean `to` snatched a star from `from`.
     Snatch { from: u32, to: u32 },
     /// Who has a tail now; `by` has just got one.
@@ -66,6 +67,15 @@ pub enum SegEvent {
     Fall { i: u32, at: f64 },
 }
 
+/// A sound a map plays on a client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapSfx {
+    /// A panel or a door breaking.
+    Break,
+    Pickup,
+    Steal,
+}
+
 /// Something map logic tells the room (server) or the view (client).
 #[derive(Clone, Debug, PartialEq)]
 pub enum MapOut {
@@ -76,23 +86,39 @@ pub enum MapOut {
     },
     Score {
         id: u32,
-        v: f64,
+        v: i64,
     },
     /// Client: a sound to play.
-    Sfx(&'static str),
+    Sfx(MapSfx),
     /// Client: a bean's decoration (a tail, a badge by the name tag).
     Decorate {
         id: u32,
-        deco: BeanDeco,
+        change: DecoChange,
     },
 }
 
-/// Decorations a map puts on beans (client).
+/// A change a map makes to a bean's decorations (client).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DecoChange {
+    Tail(bool),
+    /// Shown by the name tag.
+    Badge(Option<String>),
+}
+
+/// Decorations a map has put on a bean (client).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BeanDeco {
-    pub tail: Option<bool>,
-    /// Shown by the name tag ("" for none).
+    pub tail: bool,
     pub badge: Option<String>,
+}
+
+impl BeanDeco {
+    pub fn apply(&mut self, change: DecoChange) {
+        match change {
+            DecoChange::Tail(on) => self.tail = on,
+            DecoChange::Badge(b) => self.badge = b,
+        }
+    }
 }
 
 /// The beans in play (server: all of them, in the order they joined; client: the local one).
@@ -138,7 +164,7 @@ pub struct Cx<'a> {
     pub me: Option<u32>,
     pub world: &'a mut World,
     pub bodies: &'a mut dyn Bodies,
-    pub scores: &'a mut BTreeMap<u32, f64>,
+    pub scores: &'a mut BTreeMap<u32, i64>,
     pub out: &'a mut Vec<MapOut>,
     /// The spec's handler, for `emit` (taken while it runs: an event handler does not emit).
     pub on_event: Option<&'a mut OnEvent>,
@@ -146,7 +172,30 @@ pub struct Cx<'a> {
     pub in_event: bool,
 }
 
-impl Cx<'_> {
+impl<'a> Cx<'a> {
+    /// A context without the spec's event handler.
+    pub fn new(
+        server: bool,
+        t: f64,
+        me: Option<u32>,
+        world: &'a mut World,
+        bodies: &'a mut dyn Bodies,
+        scores: &'a mut BTreeMap<u32, i64>,
+        out: &'a mut Vec<MapOut>,
+    ) -> Self {
+        Self {
+            server,
+            t,
+            me,
+            world,
+            bodies,
+            scores,
+            out,
+            on_event: None,
+            in_event: false,
+        }
+    }
+
     pub fn emit(&mut self, ev: MapEvent) {
         if !self.server {
             return;
@@ -165,24 +214,24 @@ impl Cx<'_> {
         }
     }
 
-    pub fn score(&self, id: u32) -> f64 {
-        self.scores.get(&id).copied().unwrap_or(0.0)
+    pub fn score(&self, id: u32) -> i64 {
+        self.scores.get(&id).copied().unwrap_or(0)
     }
 
-    pub fn set_score(&mut self, id: u32, v: f64) {
+    pub fn set_score(&mut self, id: u32, v: i64) {
         self.scores.insert(id, v);
         self.out.push(MapOut::Score { id, v });
     }
 
-    pub fn sfx(&mut self, s: &'static str) {
+    pub fn sfx(&mut self, s: MapSfx) {
         if !self.server {
             self.out.push(MapOut::Sfx(s));
         }
     }
 
-    pub fn decorate(&mut self, id: u32, deco: BeanDeco) {
+    pub fn decorate(&mut self, id: u32, change: DecoChange) {
         if !self.server {
-            self.out.push(MapOut::Decorate { id, deco });
+            self.out.push(MapOut::Decorate { id, change });
         }
     }
 }
@@ -215,8 +264,6 @@ pub struct MapSpec {
     pub finish: Option<Finish>,
     /// Out-of-course places (on top of frames, behind walls): standing there counts as a shortcut.
     pub forbidden: Option<PosTest>,
-    /// What a fall is blamed on when no hazard or player was involved (default "fall").
-    pub fall_cause: Option<&'static str>,
     /// Point the camera looks at in arenas.
     pub view: Option<V3>,
     pub face_center: bool,
@@ -244,7 +291,7 @@ pub trait MapDef: Sync {
     fn meta(&self) -> &'static GameMeta;
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec;
     /// Looks of the map (`looks.rs`), its signature one first; none: the classic look.
-    fn looks(&self) -> &'static [&'static str] {
+    fn looks(&self) -> &'static [LookId] {
         &[]
     }
 }
@@ -259,9 +306,9 @@ pub fn spec_problems(spec: &MapSpec) -> Vec<&'static str> {
         out.push("a spawn is not a finite position");
     }
     if !spec.kill_y.is_finite() {
-        out.push("killY is not a number");
+        out.push("kill_y is not a number");
     } else if spec.spawns.iter().any(|p| p.y <= spec.kill_y) {
-        out.push("a spawn is below killY");
+        out.push("a spawn is below kill_y");
     }
     if spec.checkpoints.iter().any(|c| !c.p.is_finite() || !c.z.is_finite()) {
         out.push("a checkpoint is not finite");

@@ -18,6 +18,7 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
 use fb_sim::looks::Pattern;
+use fb_sim::scene;
 
 pub type SurfaceMaterial = ExtendedMaterial<StandardMaterial, Surface>;
 
@@ -63,29 +64,6 @@ impl Kind {
         Kind::Carpet,
     ];
 
-    pub fn of(name: &str) -> Option<Kind> {
-        Some(match name {
-            "plastic" => Kind::Plastic,
-            "padded" => Kind::Padded,
-            "rubber" => Kind::Rubber,
-            "metal" => Kind::Metal,
-            "fabric" => Kind::Fabric,
-            "ice" => Kind::Ice,
-            "cloud" => Kind::Cloud,
-            "gold" => Kind::Gold,
-            "wood" => Kind::Wood,
-            "glossy" => Kind::Glossy,
-            "tile" => Kind::Tile,
-            "leaf" => Kind::Leaf,
-            "grass" => Kind::Grass,
-            "rock" => Kind::Rock,
-            "cloth" => Kind::Cloth,
-            "glass" => Kind::Glass,
-            "carpet" => Kind::Carpet,
-            _ => return None,
-        })
-    }
-
     /// Surface of a model's material, by the material's name in the asset pack.
     pub fn of_model(material: &str) -> Option<Kind> {
         Some(match material {
@@ -104,6 +82,30 @@ impl Kind {
             "Flag" => Kind::Cloth,
             _ => Kind::Plastic,
         })
+    }
+}
+
+impl From<scene::Surface> for Kind {
+    fn from(s: scene::Surface) -> Self {
+        match s {
+            scene::Surface::Plastic => Kind::Plastic,
+            scene::Surface::Padded => Kind::Padded,
+            scene::Surface::Rubber => Kind::Rubber,
+            scene::Surface::Metal => Kind::Metal,
+            scene::Surface::Fabric => Kind::Fabric,
+            scene::Surface::Ice => Kind::Ice,
+            scene::Surface::Cloud => Kind::Cloud,
+            scene::Surface::Gold => Kind::Gold,
+            scene::Surface::Wood => Kind::Wood,
+            scene::Surface::Glossy => Kind::Glossy,
+            scene::Surface::Tile => Kind::Tile,
+            scene::Surface::Leaf => Kind::Leaf,
+            scene::Surface::Grass => Kind::Grass,
+            scene::Surface::Rock => Kind::Rock,
+            scene::Surface::Cloth => Kind::Cloth,
+            scene::Surface::Glass => Kind::Glass,
+            scene::Surface::Carpet => Kind::Carpet,
+        }
     }
 }
 

@@ -14,8 +14,8 @@ impl Rng {
         self.a
     }
 
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> f64 {
+    /// Uniform in [0, 1).
+    pub fn unit(&mut self) -> f64 {
         self.a = self.a.wrapping_add(0x6d2b_79f5);
         let a = self.a;
         let mut t = (a ^ (a >> 15)).wrapping_mul(1 | a);
@@ -23,16 +23,21 @@ impl Rng {
         (t ^ (t >> 14)) as f64 / 4_294_967_296.0
     }
 
+    /// Uniform in 0..len (0 for len 0).
+    pub fn index(&mut self, len: usize) -> usize {
+        (self.unit() * len as f64).floor() as usize
+    }
+
     /// One element, drawn uniformly. Panics on an empty slice.
     pub fn pick<'a, T>(&mut self, a: &'a [T]) -> &'a T {
-        &a[(self.next() * a.len() as f64).floor() as usize]
+        &a[self.index(a.len())]
     }
 }
 
 /// Fisher–Yates, drawing from the end down.
 pub fn shuffle<T>(a: &mut [T], rng: &mut Rng) {
     for i in (1..a.len()).rev() {
-        let j = (rng.next() * (i + 1) as f64).floor() as usize;
+        let j = rng.index(i + 1);
         a.swap(i, j);
     }
 }
@@ -42,9 +47,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matches_js() {
+    fn mulberry32_sequence() {
         let mut r = Rng::new(12345);
-        let got: Vec<f64> = (0..4).map(|_| r.next()).collect();
+        let got: Vec<f64> = (0..4).map(|_| r.unit()).collect();
         assert_eq!(
             got,
             [

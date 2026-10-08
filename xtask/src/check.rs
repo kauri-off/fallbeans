@@ -5,9 +5,10 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Instant;
 
+use anyhow::Result;
 use clap::Args;
 
-use crate::{cargo, dev_features, target_dir, with_features};
+use crate::{Reported, cargo, dev_features, reported, strip_ansi, target_dir, with_features};
 
 #[derive(Args)]
 pub struct CheckArgs {
@@ -142,24 +143,7 @@ fn is_log_line(line: &str) -> bool {
     stamped || tick
 }
 
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for c in chars.by_ref() {
-                if c.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-pub fn check(a: &CheckArgs) -> bool {
+pub fn check(a: &CheckArgs) -> Result<()> {
     let path = target_dir().join("check.log");
     let _ = std::fs::create_dir_all(target_dir());
     let mut ch = Check {
@@ -173,16 +157,19 @@ pub fn check(a: &CheckArgs) -> bool {
     };
     if !ch.step("fmt", cargo().args(["fmt", "--all", "--check"]), |_| {}) {
         summary(&["fmt FAILED (cargo fmt --all)".into()]);
-        return false;
+        return Err(Reported.into());
     }
     let mut clippy = cargo();
     clippy.args(["clippy", "--locked", "--workspace", "--all-targets"]);
     // (DLSS's code too when its SDK is there: clippy links nothing, so `dynamic` does not get in the way.)
-    with_features(&mut clippy, &[features.clone(), crate::dlss_features()].concat());
+    with_features(
+        &mut clippy,
+        &[features.as_slice(), &crate::dlss_features()[..]].concat(),
+    );
     clippy.args(["--", "-D", "warnings"]);
     if !ch.step("clippy", &mut clippy, |_| {}) {
         summary(&["fmt ok".into(), "clippy FAILED".into()]);
-        return false;
+        return Err(Reported.into());
     }
     let test_cmd = |extra: &[&str]| {
         let mut c = cargo();
@@ -220,7 +207,7 @@ pub fn check(a: &CheckArgs) -> bool {
     }
     parts.push(t);
     summary(&parts);
-    ok
+    reported(ok)
 }
 
 #[cfg(test)]

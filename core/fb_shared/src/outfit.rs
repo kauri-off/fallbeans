@@ -1,6 +1,8 @@
 //! What a bean wears besides its suit colour (visual only).
 use serde::{Deserialize, Serialize};
 
+use crate::{Rgb, rgb};
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Hat {
     #[default]
@@ -57,7 +59,7 @@ pub const GLASSES: [Glasses; 6] = [
     Glasses::Visor,
 ];
 
-/// Colours of the hat, the belly and the shoes (`TINTS[tint as usize]`).
+/// Colours of the hat, the belly and the shoes.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tint {
     White,
@@ -74,29 +76,37 @@ pub enum Tint {
     Black,
 }
 
-pub const TINTS: [&str; 12] = [
-    "#ffffff", "#ffd23f", "#ff8a3d", "#ff3b3b", "#ff5fa2", "#a66bff", "#3fa9ff", "#39e0d0", "#4fdc6a", "#8b5a2b",
-    "#9ea3b0", "#2b2b33",
-];
-
-pub const TINT_LIST: [Tint; 12] = [
-    Tint::White,
-    Tint::Yellow,
-    Tint::Orange,
-    Tint::Red,
-    Tint::Pink,
-    Tint::Purple,
-    Tint::Blue,
-    Tint::Teal,
-    Tint::Green,
-    Tint::Brown,
-    Tint::Grey,
-    Tint::Black,
-];
-
 impl Tint {
-    pub fn hex(self) -> &'static str {
-        TINTS[self as usize]
+    pub const ALL: [Tint; 12] = [
+        Tint::White,
+        Tint::Yellow,
+        Tint::Orange,
+        Tint::Red,
+        Tint::Pink,
+        Tint::Purple,
+        Tint::Blue,
+        Tint::Teal,
+        Tint::Green,
+        Tint::Brown,
+        Tint::Grey,
+        Tint::Black,
+    ];
+
+    pub const fn rgb(self) -> Rgb {
+        match self {
+            Tint::White => rgb(0xffffff),
+            Tint::Yellow => rgb(0xffd23f),
+            Tint::Orange => rgb(0xff8a3d),
+            Tint::Red => rgb(0xff3b3b),
+            Tint::Pink => rgb(0xff5fa2),
+            Tint::Purple => rgb(0xa66bff),
+            Tint::Blue => rgb(0x3fa9ff),
+            Tint::Teal => rgb(0x39e0d0),
+            Tint::Green => rgb(0x4fdc6a),
+            Tint::Brown => rgb(0x8b5a2b),
+            Tint::Grey => rgb(0x9ea3b0),
+            Tint::Black => rgb(0x2b2b33),
+        }
     }
 }
 
@@ -127,7 +137,7 @@ pub fn bot_outfit(id: u32) -> Outfit {
         hat_color: if h(2) % 2 == 1 {
             None
         } else {
-            Some(TINT_LIST[pick(3, TINTS.len())])
+            Some(Tint::ALL[pick(3, Tint::ALL.len())])
         },
         glasses: if !h(4).is_multiple_of(3) {
             Glasses::None
@@ -138,7 +148,7 @@ pub fn bot_outfit(id: u32) -> Outfit {
         shoes: if h(6) % 2 == 1 {
             None
         } else {
-            Some(TINT_LIST[pick(7, TINTS.len())])
+            Some(Tint::ALL[pick(7, Tint::ALL.len())])
         },
     }
 }
@@ -148,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bot_outfits_match_ts() {
+    fn bot_outfits_are_stable() {
         let o = |hat, hat_color, glasses, shoes| Outfit {
             hat,
             hat_color,

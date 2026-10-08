@@ -2,14 +2,13 @@
 //! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::time::Duration;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use bevy::prelude::*;
 use fb_net::PROTOCOL_VERSION;
-use fb_proto::{Phase, SessionReply, SessionRequest};
+use fb_proto::{Phase, SessionReply, SessionRequest, TransportKind};
 use lightyear::connection::client::Connected;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::{ConnectToken, NetcodeClient};
@@ -17,6 +16,7 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use lightyear::websocket::client::WebSocketTarget;
 
+use crate::job::Job;
 use crate::opts::{Opts, Transport};
 use crate::servers::Target;
 use crate::session::Session;
@@ -28,8 +28,6 @@ pub const UDP_TRY_S: f32 = 2.0;
 const PROBE_EVERY_S: f32 = 60.0;
 /// Wait before asking the HTTP API again after a failed request.
 const RETRY_S: f32 = 2.0;
-
-type Asked = Mutex<Receiver<Result<SessionReply, String>>>;
 
 #[derive(Resource)]
 pub struct Conn {
@@ -44,17 +42,15 @@ pub struct Conn {
     pub connected: bool,
     /// The player's identity from the HTTP API, kept for later requests: the same player after a reconnect.
     pub identity: Option<String>,
-    asking: Option<Asked>,
+    asking: Option<Job<Result<SessionReply, String>>>,
     /// When to ask the HTTP API for a connection.
     next_try: Option<f32>,
     /// `auto` on WebSocket: the UDP check under way, when the next one is due, and that UDP worked.
-    probe: Option<Mutex<Receiver<bool>>>,
+    probe: Option<Job<bool>>,
     next_probe: Option<f32>,
     udp_works: bool,
-    /// The link is being closed to come back over UDP.
-    moving: bool,
-    /// The link is being closed to say hello again (into practice and back): reconnect at once, same transport.
-    pub restart: bool,
+    /// Why the link is being closed on purpose.
+    redial: Option<Redial>,
     /// The link was up at least once (a drop after that is a reconnect).
     pub ever: bool,
     /// Why `auto` went over WebSocket, and when (None while on UDP or with WebSocket asked for).
@@ -63,6 +59,15 @@ pub struct Conn {
     pub udp_check: Option<(f32, bool)>,
     /// The last failure to connect, and how many times in a row (`again`).
     failing: Option<(String, u32)>,
+}
+
+/// A link closed on purpose, to connect again at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Redial {
+    /// To say hello again (into practice and back), over the same transport.
+    Restart,
+    /// To come back over UDP.
+    ToUdp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,7 +158,11 @@ fn session_request(conn: &Conn, transport: Transport) -> SessionRequest {
     SessionRequest {
         identity: conn.identity.clone(),
         protocol: PROTOCOL_VERSION,
-        transport: if transport == Transport::Ws { "ws" } else { "udp" }.into(),
+        transport: if transport == Transport::Ws {
+            TransportKind::Ws
+        } else {
+            TransportKind::Udp
+        },
     }
 }
 
@@ -258,23 +267,21 @@ fn spike_link(
 /// Closes the link to connect again right away (the hello goes out anew).
 pub fn restart(commands: &mut Commands, conn: &mut Conn) {
     if let Some(entity) = conn.entity {
-        conn.restart = true;
+        conn.redial = Some(Redial::Restart);
         hang_up(commands, entity);
     }
 }
 
 /// Asks the HTTP API for a connect token on a thread of its own.
 fn ask(conn: &mut Conn, now: f32) {
-    let (tx, rx) = channel();
     let url = format!("{}/api/session", conn.http);
     let req = session_request(conn, conn.transport);
-    // Named: a panic here is not a crash of the game (`crash.rs`); a thread that fails to start drops `tx`.
-    let _ = std::thread::Builder::new().name("fb-session".into()).spawn(move || {
-        let _ = tx.send(request(&url, &req));
-    });
-    conn.asking = Some(Mutex::new(rx));
     conn.next_try = None;
     conn.started = now;
+    match Job::spawn("session", move || request(&url, &req)) {
+        Ok(job) => conn.asking = Some(job),
+        Err(e) => failed(conn, format!("no thread for the request: {e}"), now),
+    }
 }
 
 /// A socket of the server address's family on any port (an IPv4 socket cannot send to an IPv6 address,
@@ -399,8 +406,7 @@ pub fn open(commands: &mut Commands, opts: &Opts, identity: Option<String>, http
         probe: None,
         next_probe: None,
         udp_works: false,
-        moving: false,
-        restart: false,
+        redial: None,
         ever: false,
         fallback: None,
         udp_check: None,
@@ -433,15 +439,10 @@ fn receive_session(
     if conn.next_try.is_some_and(|t| now >= t) && !session.refused {
         ask(&mut conn, now);
     }
-    let Some(asking) = &conn.asking else { return };
-    let got = asking.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
-    let reply = match got {
-        Err(TryRecvError::Empty) => return,
-        Err(TryRecvError::Disconnected) => Err("the request thread is gone".to_string()),
-        Ok(r) => r,
+    let Some(reply) = Job::take(&mut conn.asking) else {
+        return;
     };
-    conn.asking = None;
-    let reply = match reply {
+    let reply = match reply.unwrap_or_else(|| Err("the request thread is gone".to_string())) {
         Ok(r) => r,
         Err(e) => return failed(&mut conn, e, now),
     };
@@ -540,16 +541,15 @@ fn watch_link(
     if session.refused {
         return;
     }
-    if core::mem::take(&mut conn.restart) {
-        ask(&mut conn, now);
-        return;
-    }
-    if core::mem::take(&mut conn.moving) {
-        info!("UDP works again: moving back to it");
-        conn.transport = Transport::Udp;
-        conn.fallback = None;
-        ask(&mut conn, now);
-        return;
+    match conn.redial.take() {
+        Some(Redial::Restart) => return ask(&mut conn, now),
+        Some(Redial::ToUdp) => {
+            info!("UDP works again: moving back to it");
+            conn.transport = Transport::Udp;
+            conn.fallback = None;
+            return ask(&mut conn, now);
+        }
+        None => {}
     }
     let reason = gone.map_or(String::new(), |d| d.reason.to_string());
     if was {
@@ -602,16 +602,15 @@ fn back_to_udp(
 ) {
     let Some(mut conn) = conn else { return };
     let Some(entity) = conn.entity else { return };
-    if !conn.connected || conn.moving || opts.transport != Transport::Auto || conn.transport != Transport::Ws {
+    if !conn.connected || conn.redial.is_some() || opts.transport != Transport::Auto || conn.transport != Transport::Ws
+    {
         return;
     }
     let now = time.elapsed_secs();
-    if let Some(probe) = &conn.probe {
-        let got = probe.lock().unwrap_or_else(|e| e.into_inner()).try_recv();
-        match got {
-            Err(TryRecvError::Empty) => {}
-            Ok(works) => {
-                conn.probe = None;
+    if conn.probe.is_some() {
+        match Job::take(&mut conn.probe) {
+            None => {}
+            Some(Some(works)) => {
                 conn.udp_works = works;
                 conn.udp_check = Some((now, works));
                 if !works {
@@ -619,20 +618,16 @@ fn back_to_udp(
                     conn.next_probe = Some(now + PROBE_EVERY_S);
                 }
             }
-            Err(TryRecvError::Disconnected) => {
-                conn.probe = None;
-                conn.next_probe = Some(now + PROBE_EVERY_S);
-            }
+            Some(None) => conn.next_probe = Some(now + PROBE_EVERY_S),
         }
     } else if conn.next_probe.is_some_and(|t| now >= t) {
         conn.next_probe = None;
         let url = format!("{}/api/session", conn.http);
         let req = session_request(&conn, Transport::Udp);
-        conn.probe = Some(Mutex::new(crate::probe::start(
-            url,
-            req,
-            conditioner(&opts, Transport::Udp, now),
-        )));
+        match crate::probe::start(url, req, conditioner(&opts, Transport::Udp, now)) {
+            Ok(job) => conn.probe = Some(job),
+            Err(_) => conn.next_probe = Some(now + PROBE_EVERY_S),
+        }
     }
     let calm = session.room.is_none()
         || session
@@ -640,7 +635,7 @@ fn back_to_udp(
             .as_ref()
             .is_some_and(|l| matches!(l.phase, Phase::Results | Phase::Podium));
     if conn.udp_works && calm {
-        conn.moving = true;
+        conn.redial = Some(Redial::ToUdp);
         hang_up(&mut commands, entity);
     }
 }

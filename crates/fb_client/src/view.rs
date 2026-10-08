@@ -11,10 +11,13 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_shared::Rgb;
 use fb_sim::V3;
+use fb_sim::looks::{Pattern, ResolvedLook};
 use fb_sim::math::Affine;
 use fb_sim::nodes::Nodes;
-use fb_sim::physics::power;
+use fb_sim::physics::Power;
+use fb_sim::scene::Palette;
 use fb_sim::scene::{LookOut, PrimKind, SceneItem};
 use lightyear::prelude::*;
 
@@ -28,8 +31,6 @@ use crate::render::quality::Quality;
 use crate::render::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
 use crate::settings::Controls;
 use crate::specials::{MapPrim, SpecialCache, SpecialRoot, pose_specials};
-use fb_sim::looks::{Pattern, ResolvedLook};
-use fb_sim::scene::{Palette, pal};
 
 pub struct ViewPlugin;
 
@@ -56,6 +57,15 @@ impl Plugin for ViewPlugin {
         app.init_resource::<SpecialCache>();
         app.init_resource::<Drawn>();
         app.add_systems(Update, (spectate, mouse_look).chain());
+    }
+}
+
+/// A power's colour (bonus bubbles, the aura).
+pub const fn power_color(p: Power) -> Color {
+    match p {
+        Power::Giant => Color::srgb_u8(0xff, 0x6f, 0x91),
+        Power::Jump => Color::srgb_u8(0x58, 0xd6, 0x8d),
+        Power::Speed => Color::srgb_u8(0xff, 0xd2, 0x3f),
     }
 }
 
@@ -108,10 +118,9 @@ pub fn setup_camera(mut commands: Commands, offscreen: Option<Res<crate::Offscre
     }
 }
 
-pub fn hex(c: &str) -> Color {
-    Srgba::hex(c.trim_start_matches('#'))
-        .map(Color::from)
-        .unwrap_or(Color::WHITE)
+pub fn color(c: Rgb) -> Color {
+    let [r, g, b] = c.bytes();
+    Color::srgba_u8(r, g, b, c.alpha)
 }
 
 fn mat4(m: &Affine) -> Mat4 {
@@ -561,7 +570,7 @@ fn spawn_map(
                 let prop = commands
                     .spawn((
                         WorldAssetRoot(scene),
-                        Prop::new(name, *tint, n.pos.x, n.pos.z),
+                        Prop::new(*name, *tint, n.pos.x, n.pos.z),
                         Transform::default(),
                         Visibility::default(),
                         ChildOf(piece),
@@ -569,7 +578,7 @@ fn spawn_map(
                     .id();
                 // Standing still, it shades the map, and the ground shades its foot; moving, what it passes.
                 let world = mat4(&n.world);
-                let parts = ao_kit.model(name, &assets, &meshes);
+                let parts = ao_kit.model(*name, &assets, &meshes);
                 if fixed.get(*node as usize) == Some(&true) {
                     ao::model_solids(&parts, &world, &mut solids);
                     if ao::GROUNDED.contains(name) {
@@ -661,16 +670,12 @@ fn spawn_map(
         meshes.add(Circle::new(0.42).mesh().resolution(32)),
         meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40)),
     ];
-    let mut looks: HashMap<u8, [Handle<StandardMaterial>; 3]> = HashMap::new();
+    let mut looks: HashMap<Power, [Handle<StandardMaterial>; 3]> = HashMap::new();
     for b in &map.bonuses.list {
         let [bubble, card, ring] = looks
             .entry(b.kind)
             .or_insert_with(|| {
-                let color = hex(match b.kind {
-                    power::GIANT => "#ff6f91",
-                    power::JUMP => "#58d68d",
-                    _ => "#ffd23f",
-                });
+                let color = power_color(b.kind);
                 let (icon, _) = crate::ui::text::bonus(b.kind);
                 [
                     materials.add(StandardMaterial {
@@ -729,19 +734,6 @@ fn spawn_map(
     }
 }
 
-/// The classic palettes (`scene::pal`) in the order of the looks' palettes.
-pub const PALETTES: [Palette; 9] = [
-    pal::BLUE,
-    pal::PURPLE,
-    pal::PINK,
-    pal::YELLOW,
-    pal::GREEN,
-    pal::WHITE,
-    pal::ORANGE,
-    pal::RED,
-    pal::TEAL,
-];
-
 /// What a primitive is painted with: the palette as the
 /// round's look repaints it with the look's pattern, or a plain colour; and its surface (padded for big
 /// floors, rubber for balls, plastic otherwise).
@@ -751,8 +743,8 @@ pub fn prim_spec(
     dims: [f64; 3],
     pal: Palette,
     freq: Option<f64>,
-    surface: Option<&'static str>,
-    pattern: Option<&'static str>,
+    surface: Option<fb_sim::scene::Surface>,
+    pattern: Option<Pattern>,
 ) -> Spec {
     let [a, b, c] = dims;
     let big = match kind {
@@ -765,10 +757,10 @@ pub fn prim_spec(
         _ if big => Kind::Padded,
         _ => Kind::Plastic,
     };
-    let kind = surface.and_then(Kind::of).unwrap_or(fallback);
+    let kind = surface.map_or(fallback, Kind::from);
     // Ice keeps its piece's colour, lighter and bluer: clear ice over it.
-    let tone = |c: &str| {
-        let c = hex(c).to_linear();
+    let tone = |c: Rgb| {
+        let c = color(c).to_linear();
         if kind == Kind::Ice {
             LinearRgba::new(c.red * 0.6 + 0.2, c.green * 0.6 + 0.3, c.blue * 0.6 + 0.4, c.alpha)
         } else {
@@ -778,18 +770,15 @@ pub fn prim_spec(
     if pal[0] == pal[1] {
         return Spec::plain(tone(pal[0]), Some(kind));
     }
-    let tones: [String; 2] = match PALETTES.iter().position(|p| *p == pal) {
-        Some(i) if look.look.id != "classic" => look.palette[i].clone(),
-        _ => [pal[0].to_string(), pal[1].to_string()],
-    };
+    let tones = look.repaint(pal).unwrap_or(pal);
     Spec {
         paint: Some(Paint {
-            c1: tone(tones[0].as_str()),
-            c2: tone(tones[1].as_str()),
+            c1: tone(tones[0]),
+            c2: tone(tones[1]),
             freq: freq.unwrap_or(0.25) as f32,
             dir: Vec2::ONE,
             speed: 0.0,
-            kind: pattern.and_then(Pattern::of).unwrap_or(look.pattern),
+            kind: pattern.unwrap_or(look.pattern),
         }),
         ..Spec::plain(LinearRgba::WHITE, Some(kind))
     }
@@ -900,7 +889,7 @@ fn place_bonuses(
         let Some(b) = map.bonuses.list.get(v.0 as usize) else {
             continue;
         };
-        let shown = t >= b.appear_at && b.taken_by.is_none_or(|_| t < b.taken_at + 0.35);
+        let shown = t >= b.appear_at && b.taken.is_none_or(|(_, at)| t < at + 0.35);
         vis.set_if_neq(if shown {
             Visibility::Inherited
         } else {
@@ -910,11 +899,7 @@ fn place_bonuses(
             continue;
         }
         let grow = ((t - b.appear_at) / 0.5 + if b.appear_at <= 0.0 { 1.0 } else { 0.0 }).min(1.0);
-        let gone = if b.taken_by.is_none() {
-            0.0
-        } else {
-            (t - b.taken_at) / 0.35
-        };
+        let gone = b.taken.map_or(0.0, |(_, at)| (t - at) / 0.35);
         let s = (grow * (1.0 + gone * 0.8) * (1.0 - gone)).max(0.01) as f32;
         let i = v.0 as f64;
         let bob = ((t * 2.4 + i).sin() * 0.15) as f32;

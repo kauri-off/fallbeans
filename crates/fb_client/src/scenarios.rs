@@ -1,15 +1,15 @@
 //! A player's paths through the client (`harness`): every crash found in play gets its path here first.
+use bevy::input::keyboard::Key;
+use bevy::prelude::{KeyCode, Vec2, World};
 use fb_arena::ArenaKind;
 use fb_net::ClientMsg;
 use fb_proto::{DenyReason, DevCmd, Phase};
 
-use bevy::input::keyboard::Key;
-use bevy::prelude::{KeyCode, Vec2, World};
-
 use crate::harness::Game;
 use crate::keys::Bind;
+use crate::render::quality::Preset;
 use crate::session::Session;
-use crate::ui::{Action, Field, HomeTab, Knob, MenuTab, Ui, UiAction};
+use crate::ui::{Action, Field, Fold, HomeTab, Knob, MenuTab, Ui, UiAction};
 
 /// In the dev room's lobby, where the menu opens by itself on entry.
 fn in_lobby(g: &mut Game) {
@@ -308,10 +308,7 @@ fn private_room_pin_and_a_second_player() {
     g.type_text(wrong);
     g.enter();
     g.until(5.0, "a wrong PIN told", |w| {
-        w.resource::<Session>()
-            .denied
-            .as_ref()
-            .is_some_and(|d| !d.msg.is_empty())
+        w.resource::<Session>().denied.as_ref().is_some_and(|d| d.msg.is_some())
     });
     // (The box is redrawn with the message; the field keeps the keyboard.)
     g.erase(Field::Pin);
@@ -469,8 +466,8 @@ fn rebind_a_key_mid_round() {
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
     });
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold("keys")));
-    let jump = |g: &Game| g.res::<crate::settings::Bindings>().keys(Bind::Jump);
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
+    let jump = |g: &Game| g.res::<crate::settings::Bindings>().keys(Bind::Jump).to_vec();
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
     });
@@ -662,8 +659,8 @@ fn rebind_takes_a_key_from_another_action() {
     g.press(5.0, "Настройки", |a| {
         matches!(a, Action::HomeTab(HomeTab::Settings))
     });
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold("keys")));
-    let keys = |g: &Game, b: Bind| g.res::<crate::settings::Bindings>().keys(b);
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
+    let keys = |g: &Game, b: Bind| g.res::<crate::settings::Bindings>().keys(b).to_vec();
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
     });
@@ -722,7 +719,9 @@ fn practice_and_back() {
         let s = w.resource::<Session>();
         s.practice && s.arena.as_ref().is_some_and(|a| a.kind == ArenaKind::Round)
     };
-    g.press(5.0, "Тренировка", |a| matches!(a, Action::Fold("practice")));
+    g.press(5.0, "Тренировка", |a| {
+        matches!(a, Action::Fold(Fold::Practice))
+    });
     g.press(2.0, "Тренировка: прыжки", practice("jump-club"));
     g.until(15.0, "the practice round", in_practice);
     g.frames(120);
@@ -737,7 +736,7 @@ fn practice_and_back() {
     create_room(&mut g, "Тренируюсь", false);
     let room = g.res::<Session>().room.clone();
     // (The fold stays open as it was left at the room list.)
-    assert!(g.res::<Ui>().open.contains("practice"));
+    assert!(g.res::<Ui>().open.contains(&Fold::Practice));
     g.press(2.0, "Тренировка: двери", practice("door-dash"));
     g.until(15.0, "the practice round", in_practice);
     g.frames(120);
@@ -849,7 +848,7 @@ fn settings_at_the_room_list() {
         matches!(a, Action::HomeTab(HomeTab::Settings))
     });
     sliders(&mut g);
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold("keys")));
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
     });
@@ -928,14 +927,14 @@ fn every_setting_mid_round() {
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
     });
-    g.press(2.0, "Графика", |a| matches!(a, Action::Fold("gfx")));
+    g.press(2.0, "Графика", |a| matches!(a, Action::Fold(Fold::Gfx)));
     let n = press_every(&mut g, |a| matches!(a, Action::Set(_) | Action::Gfx(_)));
     assert!(n >= 14, "only {n} options on screen");
     // Back through the presets, each with a few frames of the round behind the menu.
-    for p in ["low", "high"] {
+    for p in [Preset::Low, Preset::High] {
         g.press(
             2.0,
-            p,
+            crate::ui::text::preset(p),
             |a| matches!(a, Action::Gfx(crate::ui::GfxPick::Preset(x)) if *x == p),
         );
         g.frames(30);

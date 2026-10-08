@@ -68,7 +68,7 @@ impl Nodes {
         self.0[id as usize].world = world;
     }
 
-    /// `updateWorldMatrix(true, false)`: the chain from the root down to `id`.
+    /// Updates the world matrices of the chain from the root down to `id`.
     pub fn update_chain(&mut self, id: NodeId) {
         if let Some(p) = self.0[id as usize].parent {
             self.update_chain(p);

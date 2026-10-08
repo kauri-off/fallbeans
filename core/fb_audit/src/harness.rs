@@ -1,6 +1,7 @@
 //! Headless rounds for audits, benchmarks and tools: a server arena with bots only (or idle pawns),
 //! started at a fixed seed, with what it reports collected.
 use fb_arena::{Arena, ArenaEvent, ArenaKind, PawnStatus};
+use fb_shared::cause::Cause;
 use fb_shared::input::InputFrame;
 use fb_shared::{DT, TICK_RATE};
 use fb_sim::map::{MapDef, MapEvent};
@@ -11,7 +12,7 @@ pub struct Fall {
     pub id: u32,
     pub t: f64,
     pub out: bool,
-    pub cause: &'static str,
+    pub cause: Cause,
     pub by: Option<u32>,
     /// Progress (z, or the map's progress) reached before the fall.
     pub progress: f64,

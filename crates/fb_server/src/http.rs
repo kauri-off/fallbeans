@@ -16,11 +16,14 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use bevy::log::Level;
 use bevy::prelude::*;
+use fb_net::logbook;
 use fb_net::{PROTOCOL_ID, PROTOCOL_VERSION};
-use fb_proto::{SessionReply, SessionRequest};
+use fb_proto::{Health, Pid, SessionReply, SessionRequest, TransportKind};
 use fb_shared::text::sanitize_title;
 use lightyear::netcode::ConnectToken;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener as TokioListener, TcpStream};
@@ -28,13 +31,14 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Sleep;
 
 use crate::auth::{
-    Auth, Budget, DEBUG_COOKIE, DEBUG_TTL_S, Limiter, address_key, random_bytes, read_cookie, same_key, to_user_data,
+    AddrKey, Auth, Budget, DEBUG_COOKIE, DEBUG_TTL_S, Limiter, address_key, random_bytes, read_cookie, same_key,
+    to_user_data,
 };
+use crate::metrics::Sample;
 use crate::opts::Opts;
 use crate::play::Rooms;
-use crate::rooms::debug::{room_state, room_trace};
+use crate::rooms::debug::{RoomState, room_state, room_trace};
 use crate::rooms::room::Room;
-use fb_net::logbook;
 
 const BASE: &str = "/fallbeans";
 /// A connect token is good for one connection attempt this soon.
@@ -82,7 +86,7 @@ struct Counts {
 /// What the main loop tells the HTTP API without being asked.
 #[derive(Default)]
 pub struct Shared {
-    samples: Mutex<VecDeque<Value>>,
+    samples: Mutex<VecDeque<Sample>>,
     counts: Mutex<Option<Counts>>,
     /// The HTTP thread is gone: nobody can get a connect token any more (`watch_http`).
     down: AtomicBool,
@@ -98,7 +102,7 @@ impl Drop for Down {
 }
 
 impl Shared {
-    pub fn sample(&self, v: Value) {
+    pub fn sample(&self, v: Sample) {
         let mut s = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         if s.len() == SAMPLES {
             s.pop_front();
@@ -106,7 +110,7 @@ impl Shared {
         s.push_back(v);
     }
 
-    fn samples(&self, n: usize) -> Vec<Value> {
+    fn samples(&self, n: usize) -> Vec<Sample> {
         let s = self.samples.lock().unwrap_or_else(|e| e.into_inner());
         s.iter().skip(s.len().saturating_sub(n)).cloned().collect()
     }
@@ -276,19 +280,19 @@ impl Hush {
 }
 
 /// The open connections per address (`auth::address_key`).
-type PerAddress = Arc<Mutex<BTreeMap<String, usize>>>;
+type PerAddress = Arc<Mutex<BTreeMap<AddrKey, usize>>>;
 
 /// One connection counted against its address until it is dropped (None: this machine, not counted).
-struct AddressSlot(Option<(PerAddress, String)>);
+struct AddressSlot(Option<(PerAddress, AddrKey)>);
 
 impl AddressSlot {
     /// A place for a connection from `ip`, or None when its address has CONNECTIONS_PER_ADDRESS open.
     fn take(per_address: &PerAddress, ip: IpAddr) -> Option<Self> {
-        let Some(key) = address_key(&ip.to_string()) else {
+        let Some(key) = address_key(ip) else {
             return Some(Self(None));
         };
         let mut open = per_address.lock().unwrap_or_else(|e| e.into_inner());
-        let n = open.entry(key.clone()).or_insert(0);
+        let n = open.entry(key).or_insert(0);
         if *n >= CONNECTIONS_PER_ADDRESS {
             return None;
         }
@@ -459,7 +463,7 @@ fn publish_counts(rooms: Option<Res<Rooms>>, shared: Res<HttpShared>) {
         .hub
         .rooms
         .values()
-        .map(|room| room.players.iter().filter(|p| !p.bot).count())
+        .map(|room| room.players.iter().filter(|p| !p.is_bot()).count())
         .sum();
     *shared.0.counts.lock().unwrap_or_else(|e| e.into_inner()) = Some(Counts {
         at: Instant::now(),
@@ -711,16 +715,16 @@ async fn health(State(api): State<Api>) -> Response {
     let Some(c) = counts.filter(|c| c.at.elapsed() <= MAIN_LOOP_PATIENCE) else {
         return respond(json!({ "ok": false }), false, StatusCode::SERVICE_UNAVAILABLE);
     };
-    let v = json!({
-        "ok": true,
-        "name": api.name,
-        "version": PROTOCOL_VERSION,
-        "build": &*api.build,
-        "rooms": c.rooms,
-        "players": c.players,
-        "practice": c.practice,
-    });
-    respond(v, false, StatusCode::OK)
+    let v = Health {
+        ok: true,
+        name: api.name.clone(),
+        version: PROTOCOL_VERSION,
+        build: api.build.to_string(),
+        rooms: c.rooms as u64,
+        players: c.players as u64,
+        practice: c.practice as u64,
+    };
+    respond(json!(v), false, StatusCode::OK)
 }
 
 /// The player's identity (theirs if still valid, else a new one) and a connect token for one connection.
@@ -733,11 +737,7 @@ async fn session(
     let (ip, proxied) = client_ip(peer.remote, &headers);
     api.check_proxy(peer.remote, &headers);
     let now_ms = api.started.elapsed().as_millis() as u64;
-    let allowed = api
-        .sessions
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .allow(&ip.to_string(), now_ms);
+    let allowed = api.sessions.lock().unwrap_or_else(|e| e.into_inner()).allow(ip, now_ms);
     if !allowed {
         // (The client takes any error for a failed attempt and asks again in a few seconds.)
         return (StatusCode::TOO_MANY_REQUESTS, "too many sessions").into_response();
@@ -756,7 +756,7 @@ async fn session(
     };
     if req.protocol == PROTOCOL_VERSION {
         let host = api.token_host(&headers, peer.local, proxied).await;
-        let timeout = api.link_timeout.unwrap_or(if req.transport == "ws" {
+        let timeout = api.link_timeout.unwrap_or(if req.transport == TransportKind::Ws {
             WS_TIMEOUT_S
         } else {
             UDP_TIMEOUT_S
@@ -790,14 +790,34 @@ fn room_at<'a>(rooms: &'a Rooms, q: Option<&str>) -> Option<&'a Room> {
         .or_else(|| q.parse().ok().and_then(|i| all.nth(i)))
 }
 
+/// The query of `/api/debug/…`.
+#[derive(Deserialize, Default)]
+struct DebugQuery {
+    /// `text`: plain text instead of JSON.
+    format: Option<String>,
+    room: Option<String>,
+    n: Option<usize>,
+    #[serde(default, deserialize_with = "level")]
+    level: Option<Level>,
+    id: Option<Pid>,
+    s: Option<f64>,
+    /// A replay's number, or `current`.
+    i: Option<String>,
+}
+
+fn level<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Level>, D::Error> {
+    let s = String::deserialize(d)?;
+    s.parse().map(Some).map_err(serde::de::Error::custom)
+}
+
 async fn debug(
     State(api): State<Api>,
     ConnectInfo(peer): ConnectInfo<Peer>,
     headers: HeaderMap,
     Path(what): Path<String>,
-    Query(q): Query<BTreeMap<String, String>>,
+    Query(q): Query<DebugQuery>,
 ) -> Response {
-    let text = q.get("format").is_some_and(|f| f == "text");
+    let text = q.format.as_deref() == Some("text");
     let (ip, _) = client_ip(peer.remote, &headers);
     api.check_proxy(peer.remote, &headers);
     if !api.debug_allowed(ip, &headers) {
@@ -808,8 +828,7 @@ async fn debug(
         };
         return respond(json!({ "ok": false, "error": error }), text, StatusCode::FORBIDDEN);
     }
-    let num = |k: &str, d: f64| q.get(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
-    let room_q = q.get("room").cloned();
+    let room_q = q.room.clone();
     let busy = || {
         respond(
             json!({ "ok": false, "error": "no answer from the rooms" }),
@@ -821,16 +840,12 @@ async fn debug(
         "state" => {
             let Some((rooms, conns, tick)) = api
                 .ask(|r| {
-                    let rooms: Vec<Value> = r
+                    let rooms: Vec<RoomState> = r
                         .hub
                         .rooms
                         .values()
                         .enumerate()
-                        .map(|(i, room)| {
-                            let mut v = room_state(room);
-                            v["room"] = i.into();
-                            v
-                        })
+                        .map(|(i, room)| room_state(room, i))
                         .collect();
                     (rooms, r.hub.sessions.len(), r.hub.real_tick())
                 })
@@ -853,11 +868,11 @@ async fn debug(
                 "rooms": rooms,
             })
         }
-        "health" => json!({ "samples": api.shared.samples(num("n", 120.0) as usize) }),
-        "logs" => json!({ "lines": logbook::recent(q.get("level").map(String::as_str), num("n", 100.0) as usize) }),
+        "health" => json!({ "samples": api.shared.samples(q.n.unwrap_or(120)) }),
+        "logs" => json!({ "lines": logbook::recent(q.level, q.n.unwrap_or(100)) }),
         "trace" => {
-            let id = q.get("id").and_then(|v| v.parse().ok());
-            let s = num("s", 10.0).clamp(1.0, 30.0);
+            let id = q.id;
+            let s = q.s.unwrap_or(10.0).clamp(1.0, 30.0);
             match api
                 .ask(move |r| room_at(r, room_q.as_deref()).map(|room| room_trace(room, id, s)))
                 .await
@@ -870,11 +885,11 @@ async fn debug(
                         StatusCode::NOT_FOUND,
                     );
                 }
-                Some(Some(v)) => v,
+                Some(Some(v)) => json!(v),
             }
         }
         "replay" => {
-            let i = q.get("i").filter(|v| *v != "current").and_then(|v| v.parse().ok());
+            let i = q.i.as_deref().filter(|v| *v != "current").and_then(|v| v.parse().ok());
             let Some(rec) = api.ask(move |r| room_at(r, room_q.as_deref())?.debug_replay(i)).await else {
                 return busy();
             };
@@ -922,11 +937,11 @@ async fn login(
     let key = key.strip_prefix("key=").unwrap_or(key);
     let now_ms = api.started.elapsed().as_millis() as u64;
     let mut guesses = api.guesses.lock().unwrap_or_else(|e| e.into_inner());
-    if !guesses.allow(&ip.to_string(), "debug", now_ms) {
+    if !guesses.allow(Some(ip), "debug", now_ms) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();
     }
     let Some(want) = api.debug_key.as_deref().filter(|want| same_key(key, want)) else {
-        guesses.failed(&ip.to_string(), "debug", now_ms);
+        guesses.failed(Some(ip), "debug", now_ms);
         warn!(%ip, "bad debug key");
         return (StatusCode::FORBIDDEN, "wrong key").into_response();
     };

@@ -9,7 +9,7 @@ pub mod stats;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bevy::diagnostic::DiagnosticsStore;
 use bevy::prelude::*;
@@ -18,6 +18,7 @@ use bevy::render::mesh::allocator::MeshAllocator;
 use bevy::render::render_resource::PipelineCache;
 use bevy::render::view::prepare_windows;
 use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::time::common_conditions::on_real_timer;
 
 use self::profiler::{Kind, Slot};
 use self::stats::Frame;
@@ -56,7 +57,7 @@ impl Plugin for PerfPlugin {
         app.init_resource::<MainStart>().init_resource::<scene::Probe>();
         app.add_systems(First, main_start);
         app.add_systems(Last, collect.before(crate::render::quality::limit_fps));
-        app.add_systems(Update, count_scene);
+        app.add_systems(Update, count_scene.run_if(on_real_timer(Duration::from_millis(500))));
         if let Some(r) = app.get_sub_app_mut(RenderApp) {
             r.insert_resource(shared).init_resource::<RenderStart>().add_systems(
                 Render,
@@ -413,19 +414,11 @@ impl Spike {
 /// The scene's counts, twice a second while the overlay shows them or a recording runs. A command: the
 /// counting needs the whole world, and an exclusive system would stop `Update` at a sync point every frame
 /// even when it has nothing to do; the command runs where `Update` applies its commands anyway.
-fn count_scene(
-    mut commands: Commands,
-    time: Res<Time<Real>>,
-    perf: Res<Perf>,
-    recording: Res<capture::Recording>,
-    mut at: Local<f32>,
-) {
-    let now = time.elapsed_secs();
-    let want = perf.mode == Mode::Full || recording.0.is_some();
-    if !want || now - *at < 0.5 {
+fn count_scene(mut commands: Commands, time: Res<Time<Real>>, perf: Res<Perf>, recording: Res<capture::Recording>) {
+    if perf.mode != Mode::Full && recording.0.is_none() {
         return;
     }
-    *at = now;
+    let now = time.elapsed_secs();
     commands.queue(move |world: &mut World| {
         let scene = scene::count(world, now);
         let passes = gpu::passes(world.resource::<DiagnosticsStore>(), Instant::now());

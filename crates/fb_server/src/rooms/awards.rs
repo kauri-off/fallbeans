@@ -1,5 +1,5 @@
 //! Fun titles at the end of a game.
-use fb_proto::{Award, Pid};
+use fb_proto::{Award, AwardKind, Pid};
 
 /// A player's numbers over a whole game.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -15,18 +15,6 @@ pub struct GameStats {
     pub race_ranks: Vec<f64>,
     /// Seconds survived in survival rounds (the full round when not eliminated).
     pub survived: f64,
-}
-
-fn plural(n: i64, one: &str, few: &str, many: &str) -> String {
-    let (m10, m100) = (n % 10, n % 100);
-    let word = if m10 == 1 && m100 != 11 {
-        one
-    } else if (2..=4).contains(&m10) && !(12..=14).contains(&m100) {
-        few
-    } else {
-        many
-    };
-    format!("{n} {word}")
 }
 
 /// The single best player for a score at or above `min` (ties: nobody).
@@ -52,60 +40,26 @@ fn best(players: &[(Pid, &GameStats)], score: impl Fn(&GameStats) -> Option<f64>
 
 /// Each award goes to the single best player for it.
 pub fn compute_awards(players: &[(Pid, &GameStats)]) -> Vec<Award> {
-    let mut awards = Vec::new();
-    let mut add = |key: &str, icon: &str, title: &str, r: Option<(Pid, f64)>, text: &dyn Fn(i64) -> String| {
-        if let Some((id, v)) = r {
-            awards.push(Award {
-                key: key.into(),
-                title: title.into(),
-                icon: icon.into(),
-                id,
-                text: text(v as i64),
-            });
-        }
-    };
     let rank = |s: &GameStats| {
         (!s.race_ranks.is_empty()).then(|| 1.0 - s.race_ranks.iter().sum::<f64>() / s.race_ranks.len() as f64)
     };
-    add("fastest", "⚡", "Молния", best(players, rank, 0.5), &|_| {
-        "лучшие места в гонках".into()
-    });
-    add(
-        "survivor",
-        "🛡️",
-        "Несокрушимость",
-        best(players, |s| Some(s.survived.round()), 1.0),
-        &|v| format!("{v} с в игре"),
-    );
-    add(
-        "bully",
-        "💥",
-        "Задира",
-        best(players, |s| Some(s.kos.into()), 1.0),
-        &|v| plural(v, "сбитый соперник", "сбитых соперника", "сбитых соперников"),
-    );
-    add(
-        "grabber",
-        "🤲",
-        "Цепкие руки",
-        best(players, |s| Some(s.grabs.into()), 3.0),
-        &|v| plural(v, "захват", "захвата", "захватов"),
-    );
-    add(
-        "clumsy",
-        "🍌",
-        "Неваляшка",
-        best(players, |s| Some(s.falls.into()), 2.0),
-        &|v| plural(v, "падение", "падения", "падений"),
-    );
-    add(
-        "sly",
-        "🦊",
-        "Хитрая лиса",
-        best(players, |s| Some(s.shortcuts.into()), 1.0),
-        &|v| format!("{} пути (и штрафы за них)", plural(v, "срезка", "срезки", "срезок")),
-    );
-    awards
+    [
+        (AwardKind::Fastest, best(players, rank, 0.5)),
+        (AwardKind::Survivor, best(players, |s| Some(s.survived.round()), 1.0)),
+        (AwardKind::Bully, best(players, |s| Some(s.kos.into()), 1.0)),
+        (AwardKind::Grabber, best(players, |s| Some(s.grabs.into()), 3.0)),
+        (AwardKind::Clumsy, best(players, |s| Some(s.falls.into()), 2.0)),
+        (AwardKind::Sly, best(players, |s| Some(s.shortcuts.into()), 1.0)),
+    ]
+    .into_iter()
+    .filter_map(|(kind, r)| {
+        r.map(|(id, v)| Award {
+            kind,
+            id,
+            value: v as u32,
+        })
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -128,16 +82,14 @@ mod tests {
             ..Default::default()
         };
         let awards = compute_awards(&[(1, &a), (2, &b)]);
-        let keys: Vec<(&str, Pid, &str)> = awards.iter().map(|w| (&*w.key, w.id, &*w.text)).collect();
+        let got: Vec<(AwardKind, Pid, u32)> = awards.iter().map(|w| (w.kind, w.id, w.value)).collect();
         assert_eq!(
-            keys,
+            got,
             [
-                ("fastest", 1, "лучшие места в гонках"),
-                ("survivor", 1, "42 с в игре"),
-                ("bully", 1, "2 сбитых соперника"),
+                (AwardKind::Fastest, 1, 0),
+                (AwardKind::Survivor, 1, 42),
+                (AwardKind::Bully, 1, 2),
             ]
         );
-        assert_eq!(plural(21, "a", "b", "c"), "21 a");
-        assert_eq!(plural(12, "a", "b", "c"), "12 c");
     }
 }

@@ -8,7 +8,6 @@ use bevy::prelude::*;
 use fb_shared::outfit::{Glasses, Hat};
 
 use crate::shapes;
-use crate::view::hex;
 
 /// Tipped back a little so that the front of a hat clears the visor.
 const HAT_Y: f32 = 1.42;
@@ -18,14 +17,36 @@ const EYE_Y: f32 = 1.235;
 /// Just in front of the eyes (their glints reach z ≈ 0.61).
 const LENS_Z: f32 = 0.63;
 
+const BLUE: Color = Color::srgb_u8(0x3f, 0xa9, 0xff);
+const PINK: Color = Color::srgb_u8(0xff, 0x5f, 0xa2);
+const EAR_PINK: Color = Color::srgb_u8(0xff, 0xb3, 0xcf);
+const YELLOW: Color = Color::srgb_u8(0xff, 0xd2, 0x3f);
+const CREAM: Color = Color::srgb_u8(0xff, 0xf4, 0xd6);
+const RED: Color = Color::srgb_u8(0xff, 0x3b, 0x3b);
+const GREEN: Color = Color::srgb_u8(0x4f, 0xdc, 0x6a);
+const TEAL: Color = Color::srgb_u8(0x39, 0xe0, 0xd0);
+const BROWN: Color = Color::srgb_u8(0x8b, 0x5a, 0x2b);
+const GREY: Color = Color::srgb_u8(0x9e, 0xa3, 0xb0);
+const DARK: Color = Color::srgb_u8(0x2b, 0x2b, 0x33);
+const FRAME_BLACK: Color = Color::srgb_u8(0x15, 0x15, 0x1c);
+const LENS: Color = Color::srgb_u8(0x1d, 0x22, 0x33);
+
 /// A mesh by its recipe (the key of the mesh cache).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
     Dome(f32, f32),
     Ball(f32),
     Cyl(f32, f32, f32, u32),
-    /// Radius top, bottom, height, segments, open, theta start, theta length.
-    CylPart(f32, f32, f32, u32, bool, f32, f32),
+    /// A part of a cylinder's side, from angle `start` round `length`; `open`: without its caps.
+    CylPart {
+        top: f32,
+        bottom: f32,
+        height: f32,
+        segments: u32,
+        open: bool,
+        start: f32,
+        length: f32,
+    },
     Cone(f32, f32, u32),
     Torus(f32, f32, u32, u32),
     Box(f32, f32, f32),
@@ -41,7 +62,15 @@ impl Shape {
             Shape::Dome(r, h) => shapes::dome(r, h),
             Shape::Ball(r) => shapes::ball(r),
             Shape::Cyl(rt, rb, h, n) => shapes::cylinder(rt, rb, h, n, false, (0.0, TAU)),
-            Shape::CylPart(rt, rb, h, n, open, t0, tl) => shapes::cylinder(rt, rb, h, n, open, (t0, tl)),
+            Shape::CylPart {
+                top,
+                bottom,
+                height,
+                segments,
+                open,
+                start,
+                length,
+            } => shapes::cylinder(top, bottom, height, segments, open, (start, length)),
             Shape::Cone(r, h, n) => shapes::cone(r, h, n),
             Shape::Torus(r, t, a, b) => shapes::torus(r, t, a, b),
             Shape::Box(x, y, z) => Cuboid::new(x, y, z).into(),
@@ -58,7 +87,7 @@ impl Shape {
 /// A material by its options; `suit` takes the bean's own suit material.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mat {
-    pub color: String,
+    pub color: Color,
     pub rough: f32,
     pub metal: f32,
     pub glow: f32,
@@ -66,9 +95,9 @@ pub struct Mat {
     pub suit: bool,
 }
 
-fn mat(color: &str) -> Mat {
+fn mat(color: Color) -> Mat {
     Mat {
-        color: color.into(),
+        color,
         rough: 0.6,
         metal: 0.0,
         glow: 0.0,
@@ -94,6 +123,29 @@ impl Mat {
         self.both = true;
         self
     }
+
+    fn key(&self) -> MatKey {
+        let c = self.color.to_srgba();
+        MatKey {
+            color: [c.red, c.green, c.blue, c.alpha].map(f32::to_bits),
+            rough: self.rough.to_bits(),
+            metal: self.metal.to_bits(),
+            glow: self.glow.to_bits(),
+            both: self.both,
+            suit: self.suit,
+        }
+    }
+}
+
+/// A `Mat` as `Wardrobe`'s cache tells materials apart.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MatKey {
+    color: [u32; 4],
+    rough: u32,
+    metal: u32,
+    glow: u32,
+    both: bool,
+    suit: bool,
 }
 
 /// Parts that move: driven every frame by the bean's time and speed.
@@ -151,12 +203,8 @@ impl Part {
 }
 
 /// A second colour that stands out against `c` (bands, trims).
-fn contrast(c: &str) -> &'static str {
-    if Hsla::from(hex(c)).lightness < 0.35 {
-        "#ff3b3b"
-    } else {
-        "#2b2b33"
-    }
+fn contrast(c: Color) -> Color {
+    if Hsla::from(c).lightness < 0.35 { RED } else { DARK }
 }
 
 /// An accessory and how far above its usual place a winner's crown goes (on top of a hat).
@@ -166,21 +214,26 @@ pub struct Accessory {
 }
 
 /// A hat: `tint` its colour (None: its own default).
-pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
-    if kind == Hat::None {
-        return None;
-    }
-    let main = |def: &str| mat(tint.unwrap_or(def));
+pub fn make_hat(kind: Hat, tint: Option<Color>) -> Option<Accessory> {
+    let main = |def: Color| mat(tint.unwrap_or(def));
     let s = [-1.0f32, 1.0];
     let (kids, crown_lift, tilt_z): (Vec<Part>, f32, f32) = match kind {
         Hat::None => return None,
         Hat::Cap => {
-            let m = main("#3fa9ff");
+            let m = main(BLUE);
             (
                 vec![
                     part(Shape::Dome(0.41, 0.225), m.clone(), 0.0, 0.0, 0.0),
                     part(
-                        Shape::CylPart(0.3, 0.3, 0.025, 28, false, -FRAC_PI_2, PI),
+                        Shape::CylPart {
+                            top: 0.3,
+                            bottom: 0.3,
+                            height: 0.025,
+                            segments: 28,
+                            open: false,
+                            start: -FRAC_PI_2,
+                            length: PI,
+                        },
                         m,
                         0.0,
                         0.015,
@@ -188,44 +241,38 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
                     )
                     .rot(-0.12, 0.0, 0.0)
                     .scale(1.0, 1.0, 1.1),
-                    part(
-                        Shape::Ball(0.035),
-                        mat(contrast(tint.unwrap_or("#3fa9ff"))),
-                        0.0,
-                        0.22,
-                        0.0,
-                    ),
+                    part(Shape::Ball(0.035), mat(contrast(tint.unwrap_or(BLUE))), 0.0, 0.22, 0.0),
                 ],
                 0.16,
                 0.0,
             )
         }
         Hat::Beanie => {
-            let m = main("#ff5fa2");
+            let m = main(PINK);
             (
                 vec![
                     part(Shape::Dome(0.42, 0.3), m.clone(), 0.0, 0.0, 0.0),
                     part(Shape::Torus(0.41, 0.06, 10, 36), m, 0.0, 0.03, 0.0).rot(FRAC_PI_2, 0.0, 0.0),
-                    part(Shape::Ball(0.1), mat("#ffffff").rough(0.9), 0.0, 0.36, 0.0),
+                    part(Shape::Ball(0.1), mat(Color::WHITE).rough(0.9), 0.0, 0.36, 0.0),
                 ],
                 0.3,
                 0.0,
             )
         }
         Hat::Party => {
-            let c = tint.unwrap_or("#ffd23f");
+            let c = tint.unwrap_or(YELLOW);
             (
                 vec![
                     part(Shape::Cone(0.19, 0.5, 24), mat(c), 0.0, 0.33, 0.0),
                     part(Shape::Torus(0.15, 0.03, 8, 24), mat(contrast(c)), 0.0, 0.22, 0.0).rot(FRAC_PI_2, 0.0, 0.0),
-                    part(Shape::Ball(0.06), mat("#ffffff").rough(0.9), 0.0, 0.6, 0.0),
+                    part(Shape::Ball(0.06), mat(Color::WHITE).rough(0.9), 0.0, 0.6, 0.0),
                 ],
                 0.05,
                 0.25,
             )
         }
         Hat::Tophat => {
-            let c = tint.unwrap_or("#2b2b33");
+            let c = tint.unwrap_or(DARK);
             let m = mat(c).rough(0.45);
             (
                 vec![
@@ -238,14 +285,22 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             )
         }
         Hat::Cowboy => {
-            let c = tint.unwrap_or("#8b5a2b");
+            let c = tint.unwrap_or(BROWN);
             let m = mat(c).rough(0.8).both();
             (
                 vec![
                     part(Shape::CowboyBrim, m.clone(), 0.0, 0.02, 0.0).scale(1.0, 1.0, 0.85),
                     part(Shape::CowboyCrown, m, 0.0, 0.02, 0.0).scale(1.0, 1.0, 0.9),
                     part(
-                        Shape::CylPart(0.315, 0.315, 0.06, 32, true, 0.0, TAU),
+                        Shape::CylPart {
+                            top: 0.315,
+                            bottom: 0.315,
+                            height: 0.06,
+                            segments: 32,
+                            open: true,
+                            start: 0.0,
+                            length: TAU,
+                        },
                         mat(contrast(c)).both(),
                         0.0,
                         0.08,
@@ -258,13 +313,13 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             )
         }
         Hat::Viking => {
-            let m = mat(tint.unwrap_or("#9ea3b0")).rough(0.35).metal(0.6);
-            let horn = mat("#fff4d6").rough(0.5);
+            let m = mat(tint.unwrap_or(GREY)).rough(0.35).metal(0.6);
+            let horn = mat(CREAM).rough(0.5);
             let mut v = vec![
                 part(Shape::Dome(0.43, 0.3), m, 0.0, 0.0, 0.0),
                 part(
                     Shape::Torus(0.42, 0.04, 8, 36),
-                    mat("#ffd23f").rough(0.35).metal(0.7),
+                    mat(YELLOW).rough(0.35).metal(0.7),
                     0.0,
                     0.01,
                     0.0,
@@ -277,18 +332,18 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             (v, 0.26, 0.0)
         }
         Hat::Propeller => {
-            let m = main("#4fdc6a");
+            let m = main(GREEN);
             let rotor = group(Vec3::Y * 0.34).wiggle(Wiggle::Rotor).with([
-                part(Shape::Box(0.24, 0.012, 0.07), mat("#ff3b3b"), -0.13, 0.0, 0.0).rot(-0.25, 0.0, 0.0),
-                part(Shape::Box(0.24, 0.012, 0.07), mat("#3fa9ff"), 0.13, 0.0, 0.0).rot(0.25, 0.0, 0.0),
-                part(Shape::Ball(0.03), mat("#ffd23f"), 0.0, 0.0, 0.0),
+                part(Shape::Box(0.24, 0.012, 0.07), mat(RED), -0.13, 0.0, 0.0).rot(-0.25, 0.0, 0.0),
+                part(Shape::Box(0.24, 0.012, 0.07), mat(BLUE), 0.13, 0.0, 0.0).rot(0.25, 0.0, 0.0),
+                part(Shape::Ball(0.03), mat(YELLOW), 0.0, 0.0, 0.0),
             ]);
             (
                 vec![
                     part(Shape::Dome(0.41, 0.24), m, 0.0, 0.0, 0.0),
                     part(
                         Shape::Cyl(0.015, 0.015, 0.12, 8),
-                        mat("#9ea3b0").metal(0.6).rough(0.4),
+                        mat(GREY).metal(0.6).rough(0.4),
                         0.0,
                         0.28,
                         0.0,
@@ -300,8 +355,8 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             )
         }
         Hat::Bunny => {
-            let m = tint.map_or_else(|| mat("#ffffff").rough(0.85), mat);
-            let inner = mat("#ffb3cf").rough(0.85);
+            let m = tint.map_or_else(|| mat(Color::WHITE).rough(0.85), mat);
+            let inner = mat(EAR_PINK).rough(0.85);
             let ears = s.iter().enumerate().map(|(i, &s)| {
                 group(Vec3::new(s * 0.13, 0.08, 0.0))
                     .rot(0.0, 0.0, -s * 0.18)
@@ -317,11 +372,11 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             let m = tint.map_or_else(
                 || Mat {
                     suit: true,
-                    ..mat("#ffffff")
+                    ..mat(Color::WHITE)
                 },
                 mat,
             );
-            let inner = mat("#ffb3cf").rough(0.85);
+            let inner = mat(EAR_PINK).rough(0.85);
             let ears = s.map(|s| {
                 group(Vec3::new(s * 0.22, 0.08, 0.0)).rot(0.0, 0.0, -s * 0.45).with([
                     part(Shape::Cone(0.13, 0.24, 20), m.clone(), 0.0, 0.1, 0.0).scale(1.0, 1.0, 0.5),
@@ -331,7 +386,7 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             (ears.into(), 0.0, 0.0)
         }
         Hat::Horns => {
-            let m = mat(tint.unwrap_or("#ff3b3b")).rough(0.4);
+            let m = mat(tint.unwrap_or(RED)).rough(0.4);
             let horns =
                 s.map(|s| part(Shape::Cone(0.065, 0.2, 16), m.clone(), s * 0.19, 0.12, 0.06).rot(0.2, 0.0, -s * 0.4));
             (horns.into(), 0.0, 0.0)
@@ -340,7 +395,7 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             vec![
                 part(
                     Shape::Torus(0.24, 0.028, 10, 40),
-                    mat(tint.unwrap_or("#ffd23f")).rough(0.3).glow(0.8),
+                    mat(tint.unwrap_or(YELLOW)).rough(0.3).glow(0.8),
                     0.0,
                     0.33,
                     0.0,
@@ -352,14 +407,11 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
             0.0,
         ),
         Hat::Flower => {
-            let petal = mat(tint.unwrap_or("#ff5fa2"));
-            let mut head = group(Vec3::Y * 0.26).rot(0.35, 0.0, 0.0).with([part(
-                Shape::Ball(0.05),
-                mat("#ffd23f"),
-                0.0,
-                0.0,
-                0.02,
-            )]);
+            let petal = mat(tint.unwrap_or(PINK));
+            let mut head =
+                group(Vec3::Y * 0.26)
+                    .rot(0.35, 0.0, 0.0)
+                    .with([part(Shape::Ball(0.05), mat(YELLOW), 0.0, 0.0, 0.02)]);
             for i in 0..6 {
                 let a = i as f32 / 6.0 * TAU;
                 head.kids.push(
@@ -367,14 +419,14 @@ pub fn make_hat(kind: Hat, tint: Option<&str>) -> Option<Accessory> {
                 );
             }
             let flower = group(Vec3::new(0.14, 0.06, 0.06)).wiggle(Wiggle::Flower).with([
-                part(Shape::Cyl(0.014, 0.014, 0.24, 8), mat("#4fdc6a"), 0.0, 0.12, 0.0),
+                part(Shape::Cyl(0.014, 0.014, 0.24, 8), mat(GREEN), 0.0, 0.12, 0.0),
                 head,
             ]);
             (vec![flower], 0.0, 0.0)
         }
         Hat::Antenna => {
-            let stalk = mat("#2b2b33");
-            let tip = mat(tint.unwrap_or("#ffd23f")).rough(0.35).glow(0.35);
+            let stalk = mat(DARK);
+            let tip = mat(tint.unwrap_or(YELLOW)).rough(0.35).glow(0.35);
             let arms = s.iter().enumerate().map(|(i, &s)| {
                 group(Vec3::new(s * 0.12, 0.1, 0.02))
                     .rot(0.0, 0.0, -s * 0.3)
@@ -433,10 +485,10 @@ fn frames(m: &Mat, r: f32) -> Vec<Part> {
 pub fn make_glasses(kind: Glasses) -> Option<Accessory> {
     let kids: Vec<Part> = match kind {
         Glasses::None => return None,
-        Glasses::Round => frames(&mat("#2b2b33").rough(0.3).metal(0.4), 0.1),
+        Glasses::Round => frames(&mat(DARK).rough(0.3).metal(0.4), 0.1),
         Glasses::Shades => {
-            let mut v = frames(&mat("#15151c").rough(0.3), 0.105);
-            let lens = mat("#1d2233").rough(0.08).metal(0.5);
+            let mut v = frames(&mat(FRAME_BLACK).rough(0.3), 0.105);
+            let lens = mat(LENS).rough(0.08).metal(0.5);
             v.extend(
                 [-1.0f32, 1.0].map(|s| {
                     part(Shape::Circle(0.105, 32), lens.clone(), s * EYE_X, EYE_Y, LENS_Z).scale(1.0, 0.85, 1.0)
@@ -445,7 +497,7 @@ pub fn make_glasses(kind: Glasses) -> Option<Accessory> {
             v
         }
         Glasses::Hearts => {
-            let m = mat("#ff5fa2").rough(0.2).glow(0.2);
+            let m = mat(PINK).rough(0.2).glow(0.2);
             let mut v: Vec<Part> = [-1.0f32, 1.0]
                 .map(|s| part(Shape::Heart(0.02), m.clone(), s * EYE_X, EYE_Y, LENS_Z - 0.015).scale(1.05, 1.05, 1.05))
                 .into();
@@ -456,7 +508,7 @@ pub fn make_glasses(kind: Glasses) -> Option<Accessory> {
             v
         }
         Glasses::Monocle => {
-            let gold = mat("#ffd23f").rough(0.25).metal(0.8);
+            let gold = mat(YELLOW).rough(0.25).metal(0.8);
             vec![
                 part(Shape::Torus(0.1, 0.016, 8, 32), gold.clone(), -EYE_X, EYE_Y, LENS_Z),
                 part(
@@ -471,17 +523,33 @@ pub fn make_glasses(kind: Glasses) -> Option<Accessory> {
         }
         Glasses::Visor => {
             let (r, arc) = (0.55, 0.62);
-            let rim = mat("#2b2b33").rough(0.4);
+            let rim = mat(DARK).rough(0.4);
             let mut v = vec![part(
-                Shape::CylPart(r, r, 0.15, 32, true, -arc, arc * 2.0),
-                mat("#39e0d0").rough(0.1).metal(0.3).glow(0.35).both(),
+                Shape::CylPart {
+                    top: r,
+                    bottom: r,
+                    height: 0.15,
+                    segments: 32,
+                    open: true,
+                    start: -arc,
+                    length: arc * 2.0,
+                },
+                mat(TEAL).rough(0.1).metal(0.3).glow(0.35).both(),
                 0.0,
                 EYE_Y,
                 LENS_Z - r,
             )];
             for dy in [-1.0, 1.0] {
                 v.push(part(
-                    Shape::CylPart(r + 0.005, r + 0.005, 0.02, 32, true, -arc, arc * 2.0),
+                    Shape::CylPart {
+                        top: r + 0.005,
+                        bottom: r + 0.005,
+                        height: 0.02,
+                        segments: 32,
+                        open: true,
+                        start: -arc,
+                        length: arc * 2.0,
+                    },
                     rim.clone().both(),
                     0.0,
                     EYE_Y + dy * 0.08,
@@ -502,7 +570,7 @@ pub fn make_glasses(kind: Glasses) -> Option<Accessory> {
 #[derive(Resource, Default)]
 pub struct Wardrobe {
     meshes: Vec<(Shape, Handle<Mesh>)>,
-    mats: HashMap<String, Handle<StandardMaterial>>,
+    mats: HashMap<MatKey, Handle<StandardMaterial>>,
 }
 
 impl Wardrobe {
@@ -516,11 +584,10 @@ impl Wardrobe {
     }
 
     pub fn material(&mut self, m: &Mat, materials: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
-        let key = format!("{m:?}");
         self.mats
-            .entry(key)
+            .entry(m.key())
             .or_insert_with(|| {
-                let c = hex(&m.color);
+                let c = m.color;
                 materials.add(StandardMaterial {
                     base_color: c,
                     perceptual_roughness: m.rough,

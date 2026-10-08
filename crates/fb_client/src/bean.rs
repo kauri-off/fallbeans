@@ -7,6 +7,7 @@ use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 use fb_net::Anim;
+use fb_sim::physics::Power;
 
 /// Height of the tip-over pivot (the lower collision sphere).
 pub const PIVOT_Y: f32 = 0.5;
@@ -128,7 +129,7 @@ pub struct Frame {
     /// The held bean's feet in the model's space, and its size.
     pub grab_at: Option<(Vec3, f32)>,
     pub size: f32,
-    pub power: u8,
+    pub power: Option<Power>,
     pub pose: Option<Podium>,
 }
 
@@ -595,7 +596,7 @@ impl BeanAnim {
         self.out.crying = self.expr == Expr::Cry;
         // Giants grow (and shrink back) with a wobble.
         self.out.grow = self.grow.step(f.size, 90.0, 9.0, dt).max(0.5);
-        self.out.aura = (f.power != 0).then(|| 1.0 + (t * 6.0).sin() * 0.12);
+        self.out.aura = f.power.is_some().then(|| 1.0 + (t * 6.0).sin() * 0.12);
         for (i, seg) in self.out.tail.iter_mut().enumerate() {
             // Each segment follows the one before: a wagging, trailing tail.
             *seg = (
@@ -968,7 +969,7 @@ mod tests {
             yaw: t * 0.3,
             grab_at: (anim == Anim::Grab).then_some((Vec3::new(0.3, 0.9, 0.8), 1.0)),
             size: if anim == Anim::Dive { 1.6 } else { 1.0 },
-            power: 1,
+            power: Some(Power::Giant),
             pose: None,
         }
     }
@@ -1008,7 +1009,7 @@ mod tests {
             yaw: 0.0,
             grab_at: None,
             size: 1.0,
-            power: 0,
+            power: None,
             pose: None,
         }
     }

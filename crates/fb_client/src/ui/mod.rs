@@ -26,6 +26,7 @@ use bevy::window::PrimaryWindow;
 use fb_proto::{ClientMsg, Outfit};
 
 use crate::settings::Display;
+use crate::view::color;
 
 const BOLD: &[u8] = include_bytes!("../../../../assets/fonts/Nunito-Bold.ttf");
 const BLACK: &[u8] = include_bytes!("../../../../assets/fonts/Nunito-Black.ttf");
@@ -51,15 +52,11 @@ pub fn rem(x: f32) -> Val {
     px(x * 16.0)
 }
 
-pub fn hex(c: &str) -> Color {
-    crate::view::hex(c)
-}
-
 /// A suit colour (index into `COLORS`) as a swatch; the rainbow shows its middle.
 pub fn suit(i: u8) -> Color {
     match fb_shared::COLORS.get(i as usize) {
-        Some(&fb_shared::RAINBOW) | None => Color::srgb(1.0, 0.69, 0.25),
-        Some(c) => hex(c),
+        Some(fb_shared::Suit::Color(c)) => color(*c),
+        Some(fb_shared::Suit::Rainbow) | None => Color::srgb(1.0, 0.69, 0.25),
     }
 }
 
@@ -99,7 +96,7 @@ pub struct Ui {
     /// F3: the network and performance overlay.
     pub debug: bool,
     /// Folded parts that are open.
-    pub open: BTreeSet<&'static str>,
+    pub open: BTreeSet<Fold>,
     /// The create-room form's "private" box.
     pub create_private: bool,
     /// The address typed to add a server is not one.
@@ -108,6 +105,27 @@ pub struct Ui {
     pub pad: bool,
     /// Waiting for the key to bind to this action.
     pub rebinding: Option<crate::keys::Bind>,
+}
+
+/// A folded part of a screen (by name in BRP's `fb/ui`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Fold {
+    Gfx,
+    Keys,
+    Problems,
+    Practice,
+    Outfit,
+    DevMaps,
+}
+
+impl Ui {
+    /// Opens a folded part, or folds it.
+    pub fn toggle(&mut self, f: Fold) {
+        if !self.open.remove(&f) {
+            self.open.insert(f);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,11 +141,11 @@ pub enum Toggle {
 /// A graphics choice of several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GfxPick {
-    Preset(&'static str),
+    Preset(crate::render::quality::Preset),
     Fps(u32),
-    Backend(&'static str),
-    Upscaler(&'static str),
-    Upscale(&'static str),
+    Backend(Option<crate::opts::Backend>),
+    Upscaler(Option<crate::render::upscale::Upscaler>),
+    Upscale(crate::render::quality::Upscale),
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +163,7 @@ pub enum Action {
     HomeTab(HomeTab),
     MenuTab(MenuTab),
     /// Opens or folds a folded part.
-    Fold(&'static str),
+    Fold(Fold),
     SaveName(Field),
     Join(String),
     SubmitPin(String),
@@ -793,11 +811,11 @@ pub fn fold(
     p: &mut ChildSpawnerCommands,
     f: &Fonts,
     ui: &Ui,
-    key: &'static str,
+    key: Fold,
     title: &str,
     body: impl FnOnce(&mut ChildSpawnerCommands),
 ) {
-    let open = ui.open.contains(key);
+    let open = ui.open.contains(&key);
     let mark = if open { "− " } else { "+ " };
     stack(p, |c| {
         button(c, f, &format!("{mark}{title}"), Look::Fold, Action::Fold(key));
@@ -828,6 +846,18 @@ pub enum Layer {
     Menu,
     Chat,
     Tags,
+}
+
+/// Every layer's entity.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct Layers([Entity; 6]);
+
+impl core::ops::Index<Layer> for Layers {
+    type Output = Entity;
+
+    fn index(&self, l: Layer) -> &Entity {
+        &self.0[l as usize]
+    }
 }
 
 pub struct UiPlugin;
@@ -874,6 +904,7 @@ impl Plugin for UiPlugin {
 }
 
 fn setup(mut commands: Commands) {
+    let mut layers = [Entity::PLACEHOLDER; 6];
     commands
         .spawn((
             UiRoot,
@@ -893,20 +924,23 @@ fn setup(mut commands: Commands) {
                 (Layer::Home, 4),
                 (Layer::Banner, 5),
             ] {
-                r.spawn((
-                    layer,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        width: percent(100),
-                        height: percent(100),
-                        display: bevy::ui::Display::None,
-                        ..default()
-                    },
-                    ZIndex(z),
-                    Pickable::IGNORE,
-                ));
+                layers[layer as usize] = r
+                    .spawn((
+                        layer,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: percent(100),
+                            height: percent(100),
+                            display: bevy::ui::Display::None,
+                            ..default()
+                        },
+                        ZIndex(z),
+                        Pickable::IGNORE,
+                    ))
+                    .id();
             }
         });
+    commands.insert_resource(Layers(layers));
 }
 
 /// Shows a layer or hides it.
@@ -1041,7 +1075,7 @@ fn show_placeholders(
 ) {
     for (p, mut vis) in hints {
         if let Ok(t) = fields.get(p.0) {
-            let empty = t.value().to_string().is_empty();
+            let empty = t.value().chars().next().is_none();
             vis.set_if_neq(if empty {
                 Visibility::Inherited
             } else {
@@ -1084,11 +1118,7 @@ fn ui_actions(
         match a {
             Action::HomeTab(t) => ui.home_tab = *t,
             Action::MenuTab(t) => ui.menu_tab = *t,
-            Action::Fold(k) => {
-                if !ui.open.remove(k) {
-                    ui.open.insert(k);
-                }
-            }
+            Action::Fold(k) => ui.toggle(*k),
             Action::Set(t) => {
                 match t {
                     Toggle::InvertMouse => controls.invert_mouse_y ^= true,
@@ -1105,11 +1135,11 @@ fn ui_actions(
             }
             Action::Gfx(pick) => {
                 match *pick {
-                    GfxPick::Preset(p) => gfx.preset = p.into(),
+                    GfxPick::Preset(p) => gfx.preset = p,
                     GfxPick::Fps(n) => gfx.fps_limit = n,
-                    GfxPick::Backend(b) => gfx.backend = b.into(),
-                    GfxPick::Upscaler(u) => gfx.upscaler = u.into(),
-                    GfxPick::Upscale(m) => gfx.upscale = m.into(),
+                    GfxPick::Backend(b) => gfx.backend = crate::backend::BackendSetting(b),
+                    GfxPick::Upscaler(u) => gfx.upscaler = crate::render::upscale::UpscalerSetting(u),
+                    GfxPick::Upscale(m) => gfx.upscale = m,
                 }
                 crate::settings::save_soon(&mut commands);
             }
@@ -1154,9 +1184,9 @@ impl Options<'_> {
             ),
             (&self.binds.jump, &self.binds.dive, &self.binds.grab),
             ui.rebinding,
-            ui.open.contains("keys"),
+            ui.open.contains(&Fold::Keys),
             &*self.gfx,
-            ui.open.contains("gfx"),
+            ui.open.contains(&Fold::Gfx),
             // (Paired: `Debug` stops at tuples of 12.)
             (
                 self.quality.as_ref().map(|q| q.tier),
@@ -1234,8 +1264,8 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             Look::Check(display.fullscreen),
             Action::Set(Toggle::Fullscreen),
         );
-        fold(c, f, ui, "gfx", text::GRAPHICS, |k| graphics(k, f, o));
-        fold(c, f, ui, "keys", text::KEYS, |k| {
+        fold(c, f, ui, Fold::Gfx, text::GRAPHICS, |k| graphics(k, f, o));
+        fold(c, f, ui, Fold::Keys, text::KEYS, |k| {
             for b in crate::keys::BINDS {
                 row(k, false, |r| {
                     r.spawn(Node {
@@ -1255,7 +1285,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
                         if ui.rebinding == Some(b) {
                             rich(n, f, text::PRESS_KEY, 14.0, PINK);
                         } else {
-                            heading(n, f, &crate::keys::labels(&o.binds.keys(b)));
+                            heading(n, f, &crate::keys::labels(o.binds.keys(b)));
                         }
                     });
                     button(r, f, text::CHANGE, Look::Tiny, Action::Rebind(b));
@@ -1264,7 +1294,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
             muted(k, f, text::KEYS_NOTE);
             button(k, f, text::RESET_KEYS, Look::Tiny, Action::ResetKeys);
         });
-        fold(c, f, ui, "problems", text::PROBLEMS, |k| {
+        fold(c, f, ui, Fold::Problems, text::PROBLEMS, |k| {
             muted(k, f, text::PROBLEMS_NOTE);
             button(k, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         });
@@ -1273,6 +1303,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, ui: &U
 
 fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     use crate::opts::Backend;
+    use crate::render::quality::Preset;
     let g = &*o.gfx;
     let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &[(&str, GfxPick, bool, bool)]| {
         stack(p, |c| {
@@ -1284,9 +1315,9 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
             });
         });
     };
-    let presets: Vec<(&str, GfxPick, bool, bool)> = [("low", text::PRESET_LOW), ("high", text::PRESET_HIGH)]
+    let presets: Vec<(&str, GfxPick, bool, bool)> = [Preset::Low, Preset::High]
         .into_iter()
-        .map(|(id, s)| (s, GfxPick::Preset(id), g.preset == id, true))
+        .map(|p| (text::preset(p), GfxPick::Preset(p), g.preset == p, true))
         .collect();
     chips(p, text::PRESET, &presets);
     if let Some(q) = &o.quality {
@@ -1300,16 +1331,16 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
             .map(|(n, s)| (s, GfxPick::Fps(n), g.fps_limit == n, true))
             .collect();
     chips(p, text::FPS_LIMIT, &fps);
-    // (Only what this system runs; a saved name it cannot, an old "gl" among them, is "auto".)
-    let saved = Backend::from_setting(&g.backend);
+    // (Only what this system runs; a saved one it cannot is "auto".)
+    let saved = g.backend.runnable();
     let backends: Vec<(&str, GfxPick, bool, bool)> = [
-        ("", text::BACKEND_AUTO, None),
-        ("dx12", "DirectX 12", Some(Backend::Dx12)),
-        ("vulkan", "Vulkan", Some(Backend::Vulkan)),
+        (text::BACKEND_AUTO, None),
+        ("DirectX 12", Some(Backend::Dx12)),
+        ("Vulkan", Some(Backend::Vulkan)),
     ]
     .into_iter()
-    .filter(|(_, _, b)| b.is_none_or(Backend::available))
-    .map(|(id, s, b)| (s, GfxPick::Backend(id), saved == b, true))
+    .filter(|(_, b)| b.is_none_or(Backend::available))
+    .map(|(s, b)| (s, GfxPick::Backend(b), saved == b, true))
     .collect();
     chips(p, text::BACKEND, &backends);
 }
@@ -1323,18 +1354,18 @@ fn upscalers(
 ) {
     use crate::render::upscale::Upscaler;
     let up = o.upscaling.as_deref().copied().unwrap_or_default();
-    let saved = Upscaler::from_id(&o.gfx.upscaler).filter(|u| up.offer.has(*u));
-    let mut items = vec![(text::UPSCALER_AUTO, GfxPick::Upscaler(""), saved.is_none(), true)];
+    let saved = o.gfx.upscaler.0.filter(|u| up.offer.has(*u));
+    let mut items = vec![(text::UPSCALER_AUTO, GfxPick::Upscaler(None), saved.is_none(), true)];
     items.extend(Upscaler::ALL.into_iter().map(|u| {
         (
             text::upscaler(u),
-            GfxPick::Upscaler(u.id()),
+            GfxPick::Upscaler(Some(u)),
             saved == Some(u),
             up.offer.has(u),
         )
     }));
     chips(p, text::UPSCALER, &items);
-    let modes: Vec<(&str, GfxPick, bool, bool)> = crate::render::quality::UPSCALES
+    let modes: Vec<(&str, GfxPick, bool, bool)> = crate::render::quality::Upscale::PICKS
         .into_iter()
         .map(|m| (text::upscale(m), GfxPick::Upscale(m), o.gfx.upscale == m, true))
         .collect();
@@ -1357,7 +1388,7 @@ pub fn rebind(
 ) {
     let Some(b) = ui.rebinding else { return };
     let in_room = session.room.is_some() && session.arena.is_some();
-    let shown = ui.open.contains("keys")
+    let shown = ui.open.contains(&Fold::Keys)
         && if in_room {
             ui.menu && ui.menu_tab == MenuTab::Settings
         } else {

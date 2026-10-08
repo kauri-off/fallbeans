@@ -3,6 +3,7 @@
 //! across some rows of the later bridges.
 use std::sync::Arc;
 
+use fb_shared::{rgb, rgba};
 use fb_sim::bots::{BotInput, BotView, HumanOpts, Note, Waypoint, humanize, init_bot, steer};
 use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
@@ -10,11 +11,13 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, moving_platforms, pick_sections, pistons, race_course, rotor_decks,
     seg_emit, tipping_bridge, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{Cx, GameMeta, Genre, MapCtx, MapDef, MapSpec, SegEvent};
+use fb_sim::map::{Cx, GameMeta, Genre, MapCtx, MapDef, MapSfx, MapSpec, SegEvent};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{Glove, GloveOpts, glove_puncher};
+use fb_sim::scene::Surface;
 use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 use fb_sim::world::St;
 
@@ -58,7 +61,7 @@ fn break_tile(cx: &mut Cx, st: St<Vec<Pane>>, real: bool, i: usize, at: f64) {
         return;
     }
     pane.fall_at = Some(at);
-    cx.sfx("break");
+    cx.sfx(MapSfx::Break);
 }
 
 fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segment {
@@ -191,10 +194,16 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             .collect();
         if !s.b.server() {
             let parts = [
-                Part::toned(Form::Box([PANE, THICK, PANE]), "#bfe9ffa6", "#8ceaa2c0", Finish::Glass).on("glass"),
-                Part::new(Form::Box([PANE, 0.14, 0.12]), "#9aa3c7", Finish::Metal).on("metal"),
-                Part::new(Form::Box([0.12, 0.14, PANE]), "#9aa3c7", Finish::Metal).on("metal"),
-                Part::new(Form::Box([0.7, 0.12, 0.7]), "#d9f3ffb0", Finish::Glass).on("glass"),
+                Part::toned(
+                    Form::Box([PANE, THICK, PANE]),
+                    rgba(0xbfe9ffa6),
+                    rgba(0x8ceaa2c0),
+                    Finish::Glass,
+                )
+                .on(Surface::Glass),
+                Part::new(Form::Box([PANE, 0.14, 0.12]), rgb(0x9aa3c7), Finish::Metal).on(Surface::Metal),
+                Part::new(Form::Box([0.12, 0.14, PANE]), rgb(0x9aa3c7), Finish::Metal).on(Surface::Metal),
+                Part::new(Form::Box([0.7, 0.12, 0.7]), rgba(0xd9f3ffb0), Finish::Glass).on(Surface::Glass),
             ];
             let panes: Vec<(f64, f64)> = tiles.iter().map(|t| (t.x, t.z)).collect();
             // Shards fly apart in a fixed pattern per pane.
@@ -246,7 +255,7 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                     0.5,
                     0.7,
                     l,
-                    pal::hex("#7d86ad"),
+                    pal::solid(rgb(0x7d86ad)),
                     deco(),
                 );
             }
@@ -268,8 +277,12 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 .position(|r| r.first().map_or(0.0, |&i| tiles[i].z) > p.z + 0.5)
             else {
                 // Off the last pane straight ahead (a diagonal step could land on a fake one beside it).
-                let x = if p.z < end + 0.5 { p.x } else { bot.mem.traits.off * 3.0 };
-                steer(bot, x, end + 3.0, out, bot.mem.traits.spd);
+                let x = if p.z < end + 0.5 {
+                    p.x
+                } else {
+                    bot.mem.traits().off * 3.0
+                };
+                steer(bot, x, end + 3.0, out, bot.mem.traits().spd);
                 return true;
             };
             let row = &rows_of[ri];
@@ -298,18 +311,14 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 let known = choices.iter().copied().find(|&i| lit(i));
                 // Nobody has stood on this row yet: a guess, after a look round (the careful ones look
                 // longer, in case somebody else tries first).
-                let pick = known.or_else(|| {
-                    choices
-                        .get((bot.rng.next() * choices.len() as f64).floor() as usize)
-                        .copied()
-                });
+                let pick = known.or_else(|| choices.get(bot.rng.index(choices.len())).copied());
                 bot.mem
                     .set(k_col, pick.map_or(cur.unwrap_or(row.len() / 2), |i| tiles[i].col));
                 let wait = bot.t
                     + if known.is_some() {
                         0.05
                     } else {
-                        0.3 + bot.rng.next() * 0.6 + bot.mem.traits.skill * 0.4
+                        0.3 + bot.rng.unit() * 0.6 + bot.mem.traits().skill * 0.4
                     };
                 bot.mem.set(k_wait, wait);
             }
@@ -319,7 +328,7 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 .copied()
                 .find(|&i| Some(tiles[i].col) == col)
                 .unwrap_or(row[0])];
-            let standing = bot.body.grounded && bot.body.ground_col >= 0;
+            let standing = bot.body.grounded && bot.body.ground_col.is_some();
             if bot.t < bot.mem.get(k_wait).unwrap_or(0.0) && standing {
                 out.mx = 0.0;
                 out.mz = 0.0;
@@ -337,14 +346,14 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 return true;
             }
             // Line up first, then step straight across: cutting the corner would cross a broken pane's hole.
-            let on = tiles.iter().find(|t| t.collider as i32 == bot.body.ground_col);
+            let on = tiles.iter().find(|t| Some(t.collider) == bot.body.ground_col);
             let exit_x = on.map_or(target.x, |on| (on.x - 0.95).at_least((on.x + 0.95).at_most(target.x)));
             let exit_z = on.map_or(target.z - PANE / 2.0 - 0.4, |on| on.z + PANE / 2.0) - 0.45;
             let aligned = (p.x - exit_x).abs() < 0.35 || p.z > exit_z + 0.2;
             if standing && !aligned && p.z < target.z - PANE / 2.0 {
                 steer(bot, exit_x, exit_z.at_most(p.z.at_least(exit_z - 1.0)), out, 0.7);
             } else {
-                steer(bot, target.x, target.z + 0.3, out, bot.mem.traits.spd);
+                steer(bot, target.x, target.z + 0.3, out, bot.mem.traits().spd);
             }
             let opts = HumanOpts {
                 precise: true,
@@ -371,8 +380,8 @@ impl MapDef for HiddenBridge {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["starlight", "neon", "ocean"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Starlight, LookId::Neon, LookId::Ocean]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
@@ -384,7 +393,7 @@ impl MapDef for HiddenBridge {
             tipping_bridge(5),
         ];
         let mut mids = pick_sections(&mut b.rng, pool, 2).into_iter();
-        let mut rows = |lo: usize| lo + (b.rng.next() * 3.0).floor() as usize;
+        let mut rows = |lo: usize| lo + b.rng.index(3);
         let (r0, r1, r2) = (rows(8), rows(6), rows(5));
         let sections = vec![
             glass_bridge(r0, 5, &[]),

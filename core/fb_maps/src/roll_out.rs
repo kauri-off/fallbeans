@@ -3,12 +3,16 @@
 //! there too). Only falling out of a drum ends your round.
 use std::collections::BTreeSet;
 
+use fb_shared::NEVER;
+use fb_shared::rgb;
 use fb_sim::bots::{HumanOpts, Note, humanize, init_bot};
 use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
+use fb_sim::scene::Surface;
 use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 
 use crate::util::deco;
@@ -51,8 +55,8 @@ impl MapDef for RollOut {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["ocean", "jungle", "meadow"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Ocean, LookId::Jungle, LookId::Meadow]
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
@@ -65,7 +69,7 @@ impl MapDef for RollOut {
             let mut missing = BTreeSet::new();
             // The outer drums lose one slat more than the middle one.
             while missing.len() < if z == 0.0 { 4 } else { 5 } {
-                let k = (b.rng.next() * N as f64).floor() as u32;
+                let k = b.rng.index(N as usize) as u32;
                 if k > 2 && k < N - 2 {
                     missing.insert(k);
                 }
@@ -95,7 +99,7 @@ impl MapDef for RollOut {
                 );
             }
             if !b.server() {
-                let rim = [Part::new(Form::Torus(R, 0.25), "#5a3fb8", Finish::Matte).on("rubber")];
+                let rim = [Part::new(Form::Torus(R, 0.25), rgb(0x5a3fb8), Finish::Matte).on(Surface::Rubber)];
                 b.special(
                     group,
                     "drum-rims",
@@ -131,7 +135,16 @@ impl MapDef for RollOut {
                             rot: Some(V3::new(0.0, 0.0, (k as f64 / 3.0) * m::PI)),
                             ..deco()
                         };
-                        b.box_(0.0, 0.0, dz * 1.06, 0.3, R * 2.0 - 0.6, 0.3, pal::hex("#5a3fb8"), o);
+                        b.box_(
+                            0.0,
+                            0.0,
+                            dz * 1.06,
+                            0.3,
+                            R * 2.0 - 0.6,
+                            0.3,
+                            pal::solid(rgb(0x5a3fb8)),
+                            o,
+                        );
                     }
                 }
             }
@@ -170,7 +183,7 @@ impl MapDef for RollOut {
                 // The top of the drum carries us sideways at −ω·R; "up" is against it.
                 let carry = -omega * rs * mirror;
                 let up = if carry == 0.0 { 0.0 } else { -m::sign(carry) };
-                let lane = ring.z + ((bot.id % 3) as f64 - 1.0) * 1.5 + bot.mem.traits.off * 0.4;
+                let lane = ring.z + ((bot.id % 3) as f64 - 1.0) * 1.5 + bot.mem.traits().off * 0.4;
                 // Holes as intervals along the surface, in metres towards "up" from the bot.
                 let theta = ring.angle(t);
                 let phi = m::atan2(p.x, p.y - CY);
@@ -202,8 +215,8 @@ impl MapDef for RollOut {
                 let mz = (-1f64).at_least(1f64.at_most((lane - p.z) * 0.6));
                 // A hole coming at us: hop when its near edge reaches our feet. Worse players jump a little
                 // early or late.
-                let slop = (1.0 - bot.mem.traits.skill) * 0.5;
-                let late = (bot.rng.next() - 0.5) * slop;
+                let slop = (1.0 - bot.mem.traits().skill) * 0.5;
+                let late = (bot.rng.unit() - 0.5) * slop;
                 let grounded = bot.body.grounded;
                 if let Some((near, far)) = ahead
                     && up != 0.0
@@ -222,7 +235,7 @@ impl MapDef for RollOut {
                             .at_most(0.2f64.at_least((span - carry.abs() * 0.75) / 0.75 / 8.5));
                     bot.mem.set(hop_mx, mx);
                     bot.mem.set(hop_until, bot.t + 0.7);
-                } else if !grounded && bot.mem.get(hop_until).unwrap_or(-1.0) > bot.t {
+                } else if !grounded && bot.mem.get(hop_until).unwrap_or(NEVER) > bot.t {
                     mx = bot.mem.get(hop_mx).unwrap_or(mx);
                 }
                 let l = m::hypot(mx, mz);

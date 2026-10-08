@@ -8,9 +8,11 @@ mod play;
 mod sdk;
 mod stress;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Child, Command, ExitCode};
 
+use anyhow::{Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -55,7 +57,7 @@ enum Task {
 }
 
 /// What both server and clients take.
-#[derive(Args, Clone, Debug)]
+#[derive(Args, Clone, Debug, Default)]
 pub struct Shared {
     /// One-way latency on every incoming packet, ms (RTT ≈ 2 × lag).
     #[arg(long, default_value_t = 0)]
@@ -112,7 +114,7 @@ impl Shared {
             .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
     }
 
-    pub fn build(&self) -> bool {
+    pub fn build(&self) -> Result<()> {
         let mut c = cargo();
         c.args(["build", "-p", "fb_server", "-p", "fb_client"]);
         let features = if self.release {
@@ -122,11 +124,11 @@ impl Shared {
             dev_features()
         };
         with_features(&mut c, &features);
-        let built = run(&mut c);
-        if built && let Some(dir) = self.bin("fb_client").parent() {
-            dist::upscalers_into(dir, None);
+        run(&mut c)?;
+        if let Some(dir) = self.bin("fb_client").parent() {
+            let _ = dist::upscalers_into(dir, None);
         }
-        built
+        Ok(())
     }
 
     /// The built `name` to run: a debug build finds Bevy's and Rust's shared libraries, as under `cargo run`.
@@ -165,7 +167,7 @@ pub fn dylib_env(c: &mut Command) {
     } else {
         "LD_LIBRARY_PATH"
     };
-    let sysroot = Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+    let sysroot = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
         .current_dir(root())
         .args(["--print", "sysroot"])
         .output()
@@ -205,20 +207,13 @@ pub fn with_features(c: &mut Command, features: &[&str]) {
 }
 
 /// Starts a server and gives it half a second: gone by then (its ports held by another one), it is an error.
-pub fn start_server(c: &mut Command) -> Option<std::process::Child> {
-    let mut server = match c.spawn() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("cannot start the server: {e}");
-            return None;
-        }
-    };
+pub fn start_server(c: &mut Command) -> Result<Child> {
+    let mut server = c.spawn().map_err(|e| anyhow!("cannot start the server: {e}"))?;
     std::thread::sleep(std::time::Duration::from_millis(500));
     if let Ok(Some(status)) = server.try_wait() {
-        eprintln!("the server exited at once ({status}): another one on its ports?");
-        return None;
+        bail!("the server exited at once ({status}): another one on its ports?");
     }
-    Some(server)
+    Ok(server)
 }
 
 /// The client's `dlss` feature (NVIDIA DLSS 4.5 before AMD FSR 3.1): on when the DLSS SDK is there to build it
@@ -227,7 +222,7 @@ pub fn dlss() -> bool {
     let Some(sdk) = sdk::var("DLSS_SDK") else {
         return false;
     };
-    if !Path::new(&sdk).join("include").join("nvsdk_ngx.h").is_file() {
+    if !sdk.join("include").join("nvsdk_ngx.h").is_file() {
         eprintln!("DLSS_SDK has no include/nvsdk_ngx.h: the client is built without DLSS");
         return false;
     }
@@ -246,13 +241,44 @@ pub fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), |d| root().join(d))
 }
 
-pub fn run(cmd: &mut Command) -> bool {
+/// A failure the user has seen already (the tool's own output, `check`'s summary): nothing more to print.
+#[derive(Debug)]
+pub struct Reported;
+
+impl fmt::Display for Reported {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("failed")
+    }
+}
+
+impl std::error::Error for Reported {}
+
+/// `Err(Reported)` unless `ok`.
+pub fn reported(ok: bool) -> Result<()> {
+    if ok { Ok(()) } else { Err(Reported.into()) }
+}
+
+/// Prints a failure the user has not seen yet; whether `r` went well.
+pub fn report(r: Result<()>) -> bool {
+    r.inspect_err(|e| {
+        if !e.is::<Reported>() {
+            eprintln!("{e:#}");
+        }
+    })
+    .is_ok()
+}
+
+/// Runs `cmd`, whose own output tells why it failed.
+pub fn run(cmd: &mut Command) -> Result<()> {
     eprintln!("$ {cmd:?}");
-    cmd.status().is_ok_and(|s| s.success())
+    let status = cmd
+        .status()
+        .map_err(|e| anyhow!("cannot start {}: {e}", cmd.get_program().display()))?;
+    reported(status.success())
 }
 
 pub fn cargo() -> Command {
-    let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    let mut c = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     c.current_dir(root());
     sdk::apply(&mut c);
     c
@@ -272,18 +298,14 @@ fn letters(mut i: u32) -> String {
     String::from_utf8(s).unwrap_or_default()
 }
 
-fn dev(a: &DevArgs) -> bool {
-    if !a.shared.build() {
-        return false;
-    }
-    let Some(mut server) = start_server(
+fn dev(a: &DevArgs) -> Result<()> {
+    a.shared.build()?;
+    let mut server = start_server(
         a.shared
             .command("fb_server")
             .args(a.shared.server_args())
             .args(["--dev", "--solo"]),
-    ) else {
-        return false;
-    };
+    )?;
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = a.shared.command("fb_client");
@@ -319,52 +341,68 @@ fn dev(a: &DevArgs) -> bool {
     }
     let _ = server.kill();
     let _ = server.wait();
-    true
+    Ok(())
 }
 
 /// Blender bakes and exports every model of blender/models.blend straight into assets/models.
-fn export_models() -> bool {
-    let blender = std::env::var("BLENDER").unwrap_or_else(|_| "blender".into());
-    let ok = run(Command::new(blender).current_dir(root()).args([
+fn export_models() -> Result<()> {
+    let blender = std::env::var_os("BLENDER").unwrap_or_else(|| "blender".into());
+    run(Command::new(blender).current_dir(root()).args([
         "-b",
         "blender/models.blend",
         "--python",
         "blender/export.py",
         "--",
         "assets/models",
-    ]));
-    if !ok {
-        eprintln!("(Blender not found or failed: set BLENDER=/path/to/blender)");
-    }
-    ok
+    ]))
+    .inspect_err(|_| eprintln!("(Blender not found or failed: set BLENDER=/path/to/blender)"))
 }
 
-/// Loads every model in a dev build of the client (the build `dev` and `check` share).
-fn check_assets() -> bool {
-    let s = Shared {
-        lag: 0,
-        jitter: 0,
-        loss: 0.0,
-        map: String::new(),
-        seed: None,
-        release: false,
-    };
-    s.build() && run(s.command("fb_client").arg("--check-assets"))
+/// Loads every model in a dev build of the client (the build `dev` and `check` share), exported first with `export`.
+fn assets(export: bool) -> Result<()> {
+    if export {
+        export_models()?;
+    }
+    let s = Shared::default();
+    s.build()?;
+    run(s.command("fb_client").arg("--check-assets"))
+}
+
+/// The text of a line without its terminal colors and other escape sequences.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn main() -> ExitCode {
-    let ok = match Cli::parse().task {
+    let done = match Cli::parse().task {
         Task::Check(a) => check::check(&a),
         Task::Play(a) => play::play(&a),
         Task::Doctor => doctor::doctor(),
         Task::Setup(a) => sdk::setup(&a),
         Task::Audit { args } => run(cargo().args(["run", "--release", "-p", "fb_audit", "--"]).args(args)),
-        Task::Assets { export } => (!export || export_models()) && check_assets(),
+        Task::Assets { export } => assets(export),
         Task::Dev(a) => dev(&a),
         Task::Stress(a) => stress::stress(&a),
         Task::Perf(a) => perf::perf(&a),
         Task::FuzzUi(a) => fuzz::fuzz(&a),
         Task::Dist(a) => dist::dist(&a),
     };
-    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if report(done) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }

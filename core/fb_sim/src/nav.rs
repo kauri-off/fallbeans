@@ -3,11 +3,12 @@
 //! A* finds routes on it; moving parts are left to the map's bot logic.
 use std::sync::Mutex;
 
+use fb_shared::hash::{Fingerprint, Fnv};
+
 use crate::collider::{ColId, Collider, Shape};
 use crate::m::{self, MinMax};
-use crate::math::V3;
+use crate::math::{V3, dist_xz};
 use crate::world::World;
-use fb_shared::hash::Fnv;
 
 pub const NAV_CELL: f64 = 0.5;
 const LAYERS: usize = 4;
@@ -21,20 +22,27 @@ const DOWN: V3 = V3::new(0.0, -1.0, 0.0);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NavPoint {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub pos: V3,
     /// Jump on the way to this point (a climb or a gap).
     pub jump: bool,
 }
 
-#[derive(Default)]
 pub struct PathOpts<'a> {
     /// Extra cost of standing at (x, z) (e.g. other beans in the way).
     pub cost: Option<&'a dyn Fn(f64, f64) -> f64>,
-    /// Goal radius (m), default 0.8.
-    pub radius: Option<f64>,
-    pub max_nodes: Option<usize>,
+    /// Goal radius (m).
+    pub radius: f64,
+    pub max_nodes: usize,
+}
+
+impl Default for PathOpts<'_> {
+    fn default() -> Self {
+        Self {
+            cost: None,
+            radius: 0.8,
+            max_nodes: 6000,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -57,7 +65,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
             let half = [hx, hy, hz];
             let oo = [o.x, o.y, o.z];
             let dd = [d.x, d.y, d.z];
-            let mut axis = -1i32;
+            let mut axis = None;
             let mut sign = 0.0;
             for i in 0..3 {
                 let (di, oi, h) = (dd[i], oo[i], half[i]);
@@ -76,7 +84,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                 }
                 if a > t0 {
                     t0 = a;
-                    axis = i as i32;
+                    axis = Some(i);
                     sign = sg;
                 }
                 t1 = t1.at_most(b);
@@ -84,12 +92,9 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
                     return None;
                 }
             }
-            n = match axis {
-                0 => V3::new(sign, 0.0, 0.0),
-                1 => V3::new(0.0, sign, 0.0),
-                2 => V3::new(0.0, 0.0, sign),
-                _ => return None,
-            };
+            let mut e = [0.0; 3];
+            e[axis?] = sign;
+            n = V3::from_array(e);
         }
         Shape::Cyl { r, hh } => {
             let mut cap_a = f64::NEG_INFINITY;
@@ -223,7 +228,7 @@ const DIRS: [(i64, i64); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1)
 #[derive(Default)]
 struct Search {
     g: Vec<f64>,
-    from: Vec<i64>,
+    from: Vec<Option<usize>>,
     how: Vec<u8>,
     seen: Vec<u32>,
     generation: u32,
@@ -238,7 +243,7 @@ pub struct NavGrid {
     /// Surface height per node (cell · LAYERS + layer), NaN where there is none.
     ys: Vec<f64>,
     /// Collider carrying the node (it may disappear: hex tiles, fake bridge tiles).
-    cols: Vec<i64>,
+    cols: Vec<Option<ColId>>,
     /// Extra cost of a node: walls and edges close by.
     pen: Vec<f64>,
     search: Mutex<Search>,
@@ -258,7 +263,7 @@ impl Clone for NavGrid {
 
 /// What the grid is built on: static ground that is there now and that it is told about.
 fn solid(c: &Collider) -> bool {
-    c.is_static && c.enabled && !c.nav_skip && !c.trigger
+    c.opts.is_static && c.enabled && !c.opts.nav_skip && !c.opts.trigger
 }
 
 /// The grid together with the world whose colliders it checks (they may be switched off).
@@ -277,11 +282,11 @@ impl NavGrid {
             nx,
             nz,
             ys: vec![f64::NAN; n],
-            cols: vec![-1; n],
+            cols: vec![None; n],
             pen: vec![0.0; n],
             search: Mutex::new(Search {
                 g: vec![0.0; n],
-                from: vec![0; n],
+                from: vec![None; n],
                 how: vec![0; n],
                 seen: vec![0; n],
                 generation: 0,
@@ -293,7 +298,7 @@ impl NavGrid {
     /// Fingerprint of what `build` reads: the static, solid colliders as they are now. A grid built earlier
     /// is still the world's while this is the same (a start gate that opens is skipped by the grid, and
     /// changes nothing here).
-    pub fn key(world: &World) -> String {
+    pub fn key(world: &World) -> Fingerprint {
         let mut h = Fnv::default();
         let mut mix = |v: f64| h.mix(v, 1e3);
         let mut n = 0;
@@ -311,10 +316,10 @@ impl NavGrid {
                 Shape::Cyl { r, hh } => mix(r + hh * 3.0),
                 Shape::Sphere { r } => mix(r),
             }
-            mix(c.bounce);
-            mix(c.hit);
+            mix(c.opts.bounce);
+            mix(c.opts.hit);
         }
-        format!("{n}:{:016x}", h.finish())
+        Fingerprint { n, h: h.finish() }
     }
 
     /// Builds the grid from the world's static, solid colliders as they are now.
@@ -371,7 +376,7 @@ impl NavGrid {
                     }
                     // Too steep, bouncy or hazardous to stand on.
                     let col = world.col(s.col);
-                    if s.ny < 0.6 || col.bounce != 0.0 || col.hit != 0.0 {
+                    if s.ny < 0.6 || col.opts.bounce != 0.0 || col.opts.hit != 0.0 {
                         continue;
                     }
                     let y = s.hi;
@@ -395,7 +400,7 @@ impl NavGrid {
                         continue;
                     }
                     nav.ys[cell * LAYERS + layer] = y;
-                    nav.cols[cell * LAYERS + layer] = s.col as i64;
+                    nav.cols[cell * LAYERS + layer] = Some(s.col);
                     layer += 1;
                 }
                 spans.push(list);
@@ -424,7 +429,7 @@ impl NavGrid {
                         if spans[other].iter().any(|s| s.lo < y + 1.4 && s.hi > y + 0.3) {
                             wall += 1;
                         }
-                        if nav.layer_near(world, other as i64, y, STEP) < 0 {
+                        if nav.layer_near(world, other, y, STEP).is_none() {
                             edge += 1;
                         }
                     }
@@ -445,9 +450,8 @@ impl NavGrid {
                         continue;
                     }
                     for (dx, dz) in DIRS {
-                        let cell = (iz as i64 + dz) * nx as i64 + ix as i64 + dx;
-                        let o = nav.layer_near(world, cell, y, STEP);
-                        if o >= 0 && pen2[o as usize] >= 1.0 {
+                        let cell = (iz as i64 + dz) as usize * nx + (ix as i64 + dx) as usize;
+                        if nav.layer_near(world, cell, y, STEP).is_some_and(|o| pen2[o] >= 1.0) {
                             nav.pen[id] = 0.4;
                             break;
                         }
@@ -466,25 +470,25 @@ impl NavGrid {
         self.z0 + (iz as f64 + 0.5) * NAV_CELL
     }
 
-    fn cell_of(&self, x: f64, z: f64) -> i64 {
+    fn cell_of(&self, x: f64, z: f64) -> Option<usize> {
         let ix = ((x - self.x0) / NAV_CELL).floor();
         let iz = ((z - self.z0) / NAV_CELL).floor();
         // (Written so that NaN is off the grid too.)
         if !(ix >= 0.0 && iz >= 0.0 && ix < self.nx as f64 && iz < self.nz as f64) {
-            return -1;
+            return None;
         }
-        iz as i64 * self.nx as i64 + ix as i64
+        Some(iz as usize * self.nx + ix as usize)
     }
 
-    /// Node of `cell` whose surface is within `tol` of y (the closest), or −1.
-    fn layer_near(&self, world: &World, cell: i64, y: f64, tol: f64) -> i64 {
-        if cell < 0 || cell >= (self.nx * self.nz) as i64 {
-            return -1;
+    /// Node of `cell` whose surface is within `tol` of y (the closest).
+    fn layer_near(&self, world: &World, cell: usize, y: f64, tol: f64) -> Option<usize> {
+        if cell >= self.nx * self.nz {
+            return None;
         }
-        let mut best = -1;
+        let mut best = None;
         let mut bd = tol;
         for l in 0..LAYERS {
-            let id = cell as usize * LAYERS + l;
+            let id = cell * LAYERS + l;
             let ly = self.ys[id];
             if ly.is_nan() {
                 break;
@@ -492,41 +496,35 @@ impl NavGrid {
             let d = (ly - y).abs();
             if d <= bd && self.alive(world, id) {
                 bd = d;
-                best = id as i64;
+                best = Some(id);
             }
         }
         best
     }
 
     fn alive(&self, world: &World, id: usize) -> bool {
-        let c = self.cols[id];
-        c >= 0 && world.colliders.get(c as usize).is_some_and(|c| c.enabled)
+        self.cols[id].is_some_and(|c| world.colliders.get(c as usize).is_some_and(|c| c.enabled))
     }
 
     /// Highest node of a cell at or a little above y (what a body at y stands on).
-    fn layer_below(&self, world: &World, cell: i64, y: f64) -> i64 {
-        if cell < 0 {
-            return -1;
-        }
+    fn layer_below(&self, world: &World, cell: usize, y: f64) -> Option<usize> {
         for l in 0..LAYERS {
-            let id = cell as usize * LAYERS + l;
+            let id = cell * LAYERS + l;
             let ly = self.ys[id];
             if ly.is_nan() {
                 break;
             }
             if ly <= y + 0.6 && self.alive(world, id) {
-                return id as i64;
+                return Some(id);
             }
         }
-        -1
+        None
     }
 
     fn point(&self, id: usize, jump: bool) -> NavPoint {
         let cell = id / LAYERS;
         NavPoint {
-            x: self.cx(cell % self.nx),
-            y: self.ys[id],
-            z: self.cz(cell / self.nx),
+            pos: V3::new(self.cx(cell % self.nx), self.ys[id], self.cz(cell / self.nx)),
             jump,
         }
     }
@@ -540,39 +538,38 @@ impl<'a> Nav<'a> {
     /// Ground height under (x, z) within `tol` of height y, or None.
     pub fn ground_at(&self, x: f64, z: f64, y: f64, tol: f64) -> Option<f64> {
         let g = self.grid;
-        let id = g.layer_near(self.world, g.cell_of(x, z), y, tol);
-        (id >= 0).then(|| g.ys[id as usize])
+        let id = g.layer_near(self.world, g.cell_of(x, z)?, y, tol)?;
+        Some(g.ys[id])
     }
 
     /// Is (x, z, y) on walkable ground and not right at an edge?
     pub fn safe(&self, x: f64, z: f64, y: f64) -> bool {
         let g = self.grid;
-        let id = g.layer_near(self.world, g.cell_of(x, z), y, 0.8);
-        id >= 0 && g.pen[id as usize] < 1.0
+        g.cell_of(x, z)
+            .and_then(|cell| g.layer_near(self.world, cell, y, 0.8))
+            .is_some_and(|id| g.pen[id] < 1.0)
     }
 
     /// The ground a body falling at (x, z) from height y lands on: its height and whether it is safe.
     pub fn floor_below(&self, x: f64, z: f64, y: f64) -> Option<(f64, bool)> {
         let g = self.grid;
-        let id = g.layer_below(self.world, g.cell_of(x, z), y);
-        (id >= 0).then(|| (g.ys[id as usize], g.pen[id as usize] < 1.0))
+        let id = g.layer_below(self.world, g.cell_of(x, z)?, y)?;
+        Some((g.ys[id], g.pen[id] < 1.0))
     }
 
     /// The node a body at p stands on (or the nearest one close by).
-    fn node_at(&self, x: f64, y: f64, z: f64) -> i64 {
+    fn node_at(&self, x: f64, y: f64, z: f64) -> Option<usize> {
         let g = self.grid;
-        let cell = g.cell_of(x, z);
-        let mut id = g.layer_below(self.world, cell, y);
-        if id >= 0 {
-            return id;
+        if let Some(id) = g.cell_of(x, z).and_then(|cell| g.layer_below(self.world, cell, y)) {
+            return Some(id);
         }
         // Standing on something that is not in the grid (a moving platform), or right at an edge.
         let ix = ((x - g.x0) / NAV_CELL).floor() as i64;
         let iz = ((z - g.z0) / NAV_CELL).floor() as i64;
-        let mut best = -1;
+        let mut best = None;
         let mut bd = f64::INFINITY;
         let mut r: i64 = 1;
-        while r <= 4 && best < 0 {
+        while r <= 4 && best.is_none() {
             for dz in -r..=r {
                 for dx in -r..=r {
                     if dx.abs().max(dz.abs()) != r {
@@ -583,15 +580,14 @@ impl<'a> Nav<'a> {
                     if jx < 0 || jz < 0 || jx >= g.nx as i64 || jz >= g.nz as i64 {
                         continue;
                     }
-                    id = g.layer_below(self.world, jz * g.nx as i64 + jx, y);
-                    if id < 0 {
+                    let Some(id) = g.layer_below(self.world, jz as usize * g.nx + jx as usize, y) else {
                         continue;
-                    }
-                    let dy = g.ys[id as usize] - y;
+                    };
+                    let dy = g.ys[id] - y;
                     let d = (dx * dx + dz * dz) as f64 + dy * dy;
                     if d < bd {
                         bd = d;
-                        best = id;
+                        best = Some(id);
                     }
                 }
             }
@@ -605,13 +601,9 @@ impl<'a> Nav<'a> {
     pub fn path(&self, p: V3, tx: f64, tz: f64, ty: Option<f64>, opts: &PathOpts) -> Option<Vec<NavPoint>> {
         let g = self.grid;
         let world = self.world;
-        let start = self.node_at(p.x, p.y, p.z);
-        if start < 0 {
-            return None;
-        }
-        let start = start as usize;
-        let radius = NAV_CELL.at_least(opts.radius.unwrap_or(0.8));
-        let max_nodes = opts.max_nodes.unwrap_or(6000);
+        let start = self.node_at(p.x, p.y, p.z)?;
+        let radius = NAV_CELL.at_least(opts.radius);
+        let max_nodes = opts.max_nodes;
         let mut guard = g.search.lock().unwrap_or_else(|e| e.into_inner());
         let s = &mut *guard;
         s.generation = s.generation.wrapping_add(1);
@@ -636,18 +628,14 @@ impl<'a> Nav<'a> {
         };
         s.seen[start] = gen_now;
         s.g[start] = 0.0;
-        s.from[start] = -1;
+        s.from[start] = None;
         s.how[start] = 0;
         s.heap.push(start, h(start));
-        let mut goal: i64 = -1;
+        let mut goal = None;
         let mut best = start;
         let mut best_h = h(start);
         let mut expanded = 0;
-        let try_edge = |s: &mut Search, from: usize, to: i64, cost: f64, jump: bool| {
-            if to < 0 {
-                return;
-            }
-            let to = to as usize;
+        let try_edge = |s: &mut Search, from: usize, to: usize, cost: f64, jump: bool| {
             let mut extra = 0.0;
             if let Some(c) = opts.cost {
                 let cell = to / LAYERS;
@@ -659,7 +647,7 @@ impl<'a> Nav<'a> {
             }
             s.seen[to] = gen_now;
             s.g[to] = gv;
-            s.from[to] = from as i64;
+            s.from[to] = Some(from);
             s.how[to] = u8::from(jump);
             s.heap.push(to, gv + h(to));
         };
@@ -670,7 +658,7 @@ impl<'a> Nav<'a> {
         } {
             let id = s.heap.pop();
             if is_goal(id) {
-                goal = id as i64;
+                goal = Some(id);
                 break;
             }
             let hid = h(id);
@@ -696,8 +684,8 @@ impl<'a> Nav<'a> {
                 let dist = if diag { NAV_CELL * m::SQRT2 } else { NAV_CELL };
                 // No cutting corners past walls or holes.
                 if diag
-                    && (g.layer_near(world, iz * nx + jx, y, STEP) < 0
-                        || g.layer_near(world, jz * nx + ix, y, STEP) < 0)
+                    && (g.layer_near(world, (iz * nx + jx) as usize, y, STEP).is_none()
+                        || g.layer_near(world, (jz * nx + ix) as usize, y, STEP).is_none())
                 {
                     continue;
                 }
@@ -713,12 +701,12 @@ impl<'a> Nav<'a> {
                     }
                     let dh = ly - y;
                     if dh.abs() <= STEP {
-                        try_edge(s, id, to as i64, dist, false);
+                        try_edge(s, id, to, dist, false);
                         linked = true;
                     } else if dh > STEP && dh <= JUMP_UP {
-                        try_edge(s, id, to as i64, dist + 2.5, true);
+                        try_edge(s, id, to, dist + 2.5, true);
                     } else if (-DROP..-STEP).contains(&dh) {
-                        try_edge(s, id, to as i64, dist + 0.6 - dh * 0.35, false);
+                        try_edge(s, id, to, dist + 0.6 - dh * 0.35, false);
                     }
                 }
                 if !linked && !diag {
@@ -736,16 +724,17 @@ impl<'a> Nav<'a> {
                         if jx < 0 || jz < 0 || jx >= nx || jz >= nz {
                             break;
                         }
-                        let other = jz * nx + jx;
-                        let land = g.layer_near(world, other, y - 0.6, 1.8);
-                        if land >= 0 && g.ys[land as usize] <= y + 1.1 {
+                        let other = (jz * nx + jx) as usize;
+                        if let Some(land) = g.layer_near(world, other, y - 0.6, 1.8)
+                            && g.ys[land] <= y + 1.1
+                        {
                             if k > 2 {
                                 try_edge(s, id, land, k as f64 * step * NAV_CELL + 3.0, true);
                             }
                             break;
                         }
                         // Something solid in the way at jumping height: no gap jump this way.
-                        if g.layer_near(world, other, y, JUMP_UP) >= 0 {
+                        if g.layer_near(world, other, y, JUMP_UP).is_some() {
                             break;
                         }
                         k += 1;
@@ -753,15 +742,15 @@ impl<'a> Nav<'a> {
                 }
             }
         }
-        let end = if goal >= 0 { goal as usize } else { best };
-        if end == start && goal < 0 {
+        let end = goal.unwrap_or(best);
+        if end == start && goal.is_none() {
             return None;
         }
         let mut raw = Vec::new();
-        let mut id = end as i64;
-        while id >= 0 {
-            raw.push(id as usize);
-            id = s.from[id as usize];
+        let mut id = Some(end);
+        while let Some(i) = id {
+            raw.push(i);
+            id = s.from[i];
         }
         raw.reverse();
         Some(self.smooth(&raw, &s.how))
@@ -790,17 +779,22 @@ impl<'a> Nav<'a> {
         let g = self.grid;
         let pa = g.point(a, false);
         let pb = g.point(b, false);
-        let len = m::hypot(pb.x - pa.x, pb.z - pa.z);
+        let len = dist_xz(pb.pos, pa.pos);
         let n = (len / (NAV_CELL * 0.5)).ceil() as i64;
-        let mut y = pa.y;
+        let mut y = pa.pos.y;
         for k in 1..n {
             let f = k as f64 / n as f64;
-            let cell = g.cell_of(pa.x + (pb.x - pa.x) * f, pa.z + (pb.z - pa.z) * f);
-            let id = g.layer_near(self.world, cell, y, STEP);
-            if id < 0 || g.pen[id as usize] >= 1.5 {
+            let cell = g.cell_of(
+                pa.pos.x + (pb.pos.x - pa.pos.x) * f,
+                pa.pos.z + (pb.pos.z - pa.pos.z) * f,
+            );
+            let Some(id) = cell.and_then(|cell| g.layer_near(self.world, cell, y, STEP)) else {
+                return false;
+            };
+            if g.pen[id] >= 1.5 {
                 return false;
             }
-            y = g.ys[id as usize];
+            y = g.ys[id];
         }
         true
     }

@@ -5,16 +5,21 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use fb_shared::cause::Hazard;
+use fb_shared::rgb;
+use fb_shared::rng::{Rng, shuffle};
+
 use crate::bots::{BOT_DT, BotBrain, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
 use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::m::{self, MinMax};
-use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapEvent, MapSpec, OnTick, PosTest, SegEvent};
+use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapEvent, MapSfx, MapSpec, OnTick, PosTest, SegEvent};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
+use crate::scene::Model;
+use crate::scene::Surface;
 use crate::scene::{Palette, pal};
-use fb_shared::rng::{Rng, shuffle};
 
 pub type SegHandler = Box<dyn FnMut(&mut Cx, &SegEvent) + Send + Sync>;
 
@@ -41,7 +46,7 @@ pub struct CourseNotes {
 
 impl SegCtx<'_> {
     pub fn rng(&mut self) -> f64 {
-        self.b.rng.next()
+        self.b.rng.unit()
     }
 
     /// Handles this section's events.
@@ -87,9 +92,6 @@ pub type FinishWith = Box<dyn FnOnce(&mut Builder, f64, f64) -> (Finish, Vec<Way
 pub struct CourseOpts {
     /// Sections in order (`pick_sections` for random ones).
     pub sections: Vec<Segment>,
-    /// Length of the finish platform.
-    pub finish_len: Option<f64>,
-    pub clouds: Option<u32>,
     pub finish_with: Option<FinishWith>,
 }
 
@@ -176,7 +178,7 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         max_y = max_y.at_least(finish.y + 1.0);
         finish
     } else {
-        let len = o.finish_len.unwrap_or(16.0);
+        let len = 16.0;
         b.box_(0.0, y - 1.0, zz + len / 2.0, 18.0, 2.0, len, pal::YELLOW, d());
         let finish_z = zz + 3.0;
         b.finish(0.0, y, finish_z);
@@ -190,14 +192,7 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
             half_width: None,
         }
     };
-    b.clouds_with(
-        0.0,
-        zz / 2.0,
-        60f64.at_least(zz * 0.45),
-        o.clouds.unwrap_or(40),
-        min_y - 30.0,
-        max_y + 6.0,
-    );
+    b.clouds_with(0.0, zz / 2.0, 60f64.at_least(zz * 0.45), 40, min_y - 30.0, max_y + 6.0);
     let picks: Vec<Note<usize>> = routes.iter().map(|_| b.note()).collect();
     MapSpec {
         spawns,
@@ -230,11 +225,7 @@ pub fn course_brain(sections: Vec<Vec<Vec<Waypoint>>>, picks: Vec<Note<usize>>) 
             let pick = match bot.mem.get(k) {
                 Some(v) => v,
                 None => {
-                    let v = if r.len() > 1 {
-                        (bot.rng.next() * r.len() as f64).floor() as usize
-                    } else {
-                        0
-                    };
+                    let v = if r.len() > 1 { bot.rng.index(r.len()) } else { 0 };
                     bot.mem.set(k, v);
                     v
                 }
@@ -404,7 +395,7 @@ pub fn hammer_bridges(n: u32) -> Segment {
         for bx in [-4.5, 4.5] {
             let p = if bx < 0.0 { pal::BLUE } else { pal::TEAL };
             s.b.box_(bx, y - 1.0, s.z + len / 2.0, 3.2, 2.0, len, p, d());
-            let mut route = vec![Waypoint::spread(bx, s.z + 0.8, 0.0)];
+            let mut route = vec![Waypoint::exact(bx, s.z + 0.8)];
             for k in 0..n {
                 // The two bridges' hammers are staggered (their heads swing over the other bridge).
                 let hz = s.z + 3.5 + k as f64 * 7.0 + if bx > 0.0 { 3.5 } else { 0.0 };
@@ -412,14 +403,14 @@ pub fn hammer_bridges(n: u32) -> Segment {
                 let ph = s.rng() * m::TAU;
                 s.b.hammer(bx, y + 7.4, hz, w, ph, 1.12, true);
                 let head_x = move |t: f64| bx + 6.0 * m::sin(m::sin(t * w + ph) * 1.12);
-                route.push(Waypoint::spread(bx, hz - 2.6, 0.0));
-                route.push(Waypoint::spread(bx, hz + 2.0, 0.0).wait(move |bot| {
+                route.push(Waypoint::exact(bx, hz - 2.6));
+                route.push(Waypoint::exact(bx, hz + 2.0).wait(move |bot| {
                     [0.0, 0.2, 0.4, 0.6, 0.8]
                         .iter()
                         .all(|dt| (head_x(bot.t + dt) - bx).abs() > 2.6)
                 }));
             }
-            route.push(Waypoint::spread(bx, s.z + len + 1.0, 0.0));
+            route.push(Waypoint::exact(bx, s.z + len + 1.0));
             routes.push(route);
         }
         let (z0, z_end) = (s.z, s.z + len);
@@ -513,10 +504,9 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
                     });
                 }
                 let open = move |t: f64| cycle_open(t, period, phase, share);
-                routes[di].push(Waypoint::spread(x, wz - 2.2, 0.0));
+                routes[di].push(Waypoint::exact(x, wz - 2.2));
                 routes[di].push(
-                    Waypoint::spread(x, wz + 1.6, 0.0)
-                        .wait(move |bot| open(bot.t + 0.15) > 0.7 && open(bot.t + 0.55) > 0.7),
+                    Waypoint::exact(x, wz + 1.6).wait(move |bot| open(bot.t + 0.15) > 0.7 && open(bot.t + 0.55) > 0.7),
                 );
             }
         }
@@ -540,12 +530,11 @@ const DOOR_PREDICTED: f64 = 1.0;
 
 struct Door {
     breakable: bool,
-    broken: bool,
     /// Sim time it broke: it tips over backwards and is gone 1.4 s later.
-    broken_at: f64,
+    broken: Option<f64>,
     /// Client: sim time its own prediction broke it (open for DOOR_PREDICTED; only the server's event
-    /// breaks it for good, a rollback may replay it earlier). −∞: never.
-    predicted: f64,
+    /// breaks it for good, a rollback may replay it earlier).
+    predicted: Option<f64>,
     obj: NodeId,
     col: ColId,
     x: f64,
@@ -574,7 +563,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
             let idx = &idx[..n_break];
             for i in 0..n {
                 let x = -w / 2.0 + dw / 2.0 + i as f64 * dw;
-                let obj = s.b.model("door", ROOT);
+                let obj = s.b.model(Model::Door, ROOT);
                 let nd = s.b.world.nodes.get_mut(obj);
                 nd.pos = V3::new(x, y, wz);
                 nd.scale.x = dw / 3.1;
@@ -600,9 +589,8 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 }
                 doors.push(Door {
                     breakable,
-                    broken: false,
-                    broken_at: 0.0,
-                    predicted: f64::NEG_INFINITY,
+                    broken: None,
+                    predicted: None,
                     obj,
                     col,
                     x,
@@ -616,17 +604,16 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
             let Some(d) = cx.world.st_mut(st).get_mut(id) else {
                 return;
             };
-            if d.broken || !d.breakable {
+            if d.broken.is_some() || !d.breakable {
                 return;
             }
             // (A break the client predicted was heard and seen then: it goes on from there.)
-            let heard = (cx.t - d.predicted).abs() < DOOR_PREDICTED;
-            d.broken = true;
-            d.broken_at = if heard { d.predicted } else { cx.t };
+            let heard = d.predicted.filter(|p| (cx.t - p).abs() < DOOR_PREDICTED);
+            d.broken = Some(heard.unwrap_or(cx.t));
             let col = d.col;
             cx.world.colliders[col as usize].enabled = false;
-            if !heard {
-                cx.sfx("break");
+            if heard.is_none() {
+                cx.sfx(MapSfx::Break);
             }
         };
         let predict_door = move |cx: &mut Cx, id: usize| {
@@ -634,26 +621,24 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
             let Some(d) = cx.world.st_mut(st).get_mut(id) else {
                 return;
             };
-            if d.broken || !d.breakable || (d.predicted..d.predicted + DOOR_PREDICTED).contains(&t) {
+            if d.broken.is_some() || !d.breakable || d.predicted.is_some_and(|p| (p..p + DOOR_PREDICTED).contains(&t)) {
                 return;
             }
-            d.predicted = t;
+            d.predicted = Some(t);
             let col = d.col;
             cx.world.colliders[col as usize].enabled = false;
-            cx.sfx("break");
+            cx.sfx(MapSfx::Break);
         };
         s.b.mover(move |t, ctx| {
-            for i in 0..ctx.st(st).len() {
-                let d = &ctx.st(st)[i];
-                let (obj, col, broken, broken_at, predicted) = (d.obj, d.col, d.broken, d.broken_at, d.predicted);
-                let since = if broken {
-                    broken_at
-                } else if predicted > f64::NEG_INFINITY {
+            for d in ctx.st(st) {
+                let since = if let Some(at) = d.broken {
+                    at
+                } else if let Some(predicted) = d.predicted {
                     // A client's own predicted break, open until the server's event (or DOOR_PREDICTED).
                     let open = (predicted..predicted + DOOR_PREDICTED).contains(&t);
-                    ctx.set_enabled(col, !open);
+                    ctx.set_enabled(d.col, !open);
                     if !open {
-                        let n = ctx.node(obj);
+                        let n = ctx.node(d.obj);
                         n.rot.x = 0.0;
                         n.visible = true;
                         continue;
@@ -663,7 +648,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     continue;
                 };
                 let dt = (t - since).at_least(0.0);
-                let n = ctx.node(obj);
+                let n = ctx.node(d.obj);
                 n.rot.x = (dt * dt * 7.0).at_most(m::PI / 2.0);
                 n.visible = dt <= 1.4;
             }
@@ -699,7 +684,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     .st(st)
                     .iter()
                     .filter(|d| d.row == r)
-                    .map(|d| (d.broken, d.x))
+                    .map(|d| (d.broken.is_some(), d.x))
                     .collect();
                 let mut pick = bot.mem.get(pick_key);
                 let open: Vec<usize> = (0..row.len()).filter(|&i| row[i].0).collect();
@@ -719,12 +704,12 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     None => {
                         let mask = bot.mem.get(tried_key).unwrap_or(0);
                         let mut options: Vec<usize> = (0..5).filter(|i| mask & (1 << i) == 0).collect();
-                        let pref = p.x + bot.mem.traits.off * 3.0;
+                        let pref = p.x + bot.mem.traits().off * 3.0;
                         options.sort_by(|&a, &c| {
                             let (da, dc) = ((row[a].1 - pref).abs(), (row[c].1 - pref).abs());
                             da.total_cmp(&dc)
                         });
-                        let first = bot.rng.next() < 0.7;
+                        let first = bot.rng.unit() < 0.7;
                         let at = if first {
                             0
                         } else {
@@ -732,7 +717,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                         };
                         match options.get(at) {
                             Some(&k) => k,
-                            None => (bot.rng.next() * 5.0).floor() as usize,
+                            None => bot.rng.index(5),
                         }
                     }
                 };
@@ -741,7 +726,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 if !broken && p.z > wz - 1.05 && (p.x - dx).abs() < 1.2 {
                     let push = bot.mem.get(notes.push).unwrap_or(0.0) + BOT_DT;
                     bot.mem.set(notes.push, push);
-                    if push > 0.25 + bot.mem.traits.react {
+                    if push > 0.25 + bot.mem.traits().react {
                         let tried = bot.mem.get(tried_key).unwrap_or(0) | (1 << pick);
                         bot.mem.set(tried_key, tried);
                         bot.mem.remove(pick_key);
@@ -882,7 +867,7 @@ pub fn conveyor(len: f64) -> Segment {
                 conveyor: Some(V3::new(0.0, 0.0, -speed)),
                 ..Default::default()
             },
-            surface: Some("rubber"),
+            surface: Some(Surface::Rubber),
             ..Default::default()
         };
         s.b.box_(0.0, y - 1.0, cz, 9.0, 2.0, len, pal::WHITE, belt);
@@ -901,7 +886,7 @@ pub fn conveyor(len: f64) -> Segment {
                 dynamic: true,
                 col: ColliderOpts {
                     hit: 0.9,
-                    tag: Some("pusher"),
+                    tag: Some(Hazard::Pusher),
                     sinks: true,
                     ..Default::default()
                 },
@@ -911,9 +896,9 @@ pub fn conveyor(len: f64) -> Segment {
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = px(t));
             s.b.bumper(-side * 2.9, y, pz + 4.0, 0.75, 10.0);
             let lane = -side * 1.9;
-            route.push(Waypoint::spread(lane, pz - 2.0, 0.0));
+            route.push(Waypoint::exact(lane, pz - 2.0));
             route.push(
-                Waypoint::spread(lane, pz + 1.5, 0.0).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
+                Waypoint::exact(lane, pz + 1.5).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
             );
         }
         s.b.bonus(0.0, y, s.z + len * 0.5);
@@ -972,7 +957,7 @@ pub fn trampoline_gap() -> Segment {
             .iter()
             .map(|&tx| {
                 vec![
-                    Waypoint::spread(tx, tz, 0.0),
+                    Waypoint::exact(tx, tz),
                     // Missed the trampoline (down in the basin, past it): back to the nearest one.
                     Waypoint::spread(tx * 0.5, far + 2.5, 0.3).detour(move |bot| {
                         (bot.body.pos.y < basin_y + 1.0).then_some((if bot.body.pos.x < 0.0 { -2.8 } else { 2.8 }, tz))
@@ -1005,7 +990,7 @@ pub fn portal_fork() -> Segment {
         for sx in [1.0, 8.0] {
             s.b.box_(sx, y + 1.2, s.z + len / 2.0, 0.8, 2.4, len, pal::PINK, d());
         }
-        let mut zig = vec![Waypoint::spread(4.5, s.z + 1.0, 0.0)];
+        let mut zig = vec![Waypoint::exact(4.5, s.z + 1.0)];
         for k in 0..4 {
             let wz = s.z + 4.0 + k as f64 * 5.5;
             let left = k % 2 == 0;
@@ -1020,10 +1005,10 @@ pub fn portal_fork() -> Segment {
                 d(),
             );
             let gx = if left { 6.3 } else { 2.7 };
-            zig.push(Waypoint::spread(gx, wz - 1.4, 0.0));
-            zig.push(Waypoint::spread(gx, wz + 1.4, 0.0));
+            zig.push(Waypoint::exact(gx, wz - 1.4));
+            zig.push(Waypoint::exact(gx, wz + 1.4));
         }
-        zig.push(Waypoint::spread(4.5, s.z + len + 1.0, 0.0));
+        zig.push(Waypoint::exact(4.5, s.z + len + 1.0));
         // Left: a short run, a gap, the portal.
         s.b.box_(-4.5, y - 1.0, s.z + 4.0, 6.0, 2.0, 8.0, pal::BLUE, d());
         let gap_end = s.z + 8.0 + 3.0 + s.rng() * 0.6;
@@ -1043,14 +1028,14 @@ pub fn portal_fork() -> Segment {
                 z: s.z + len + 3.2,
                 yaw: 0.0,
             },
-            "#39e0d0",
+            rgb(0x39e0d0),
             PortalOpts::default(),
         );
         s.b.bonus(-4.5, y, s.z + 5.0);
         let hop = vec![
-            Waypoint::spread(-4.5, s.z + 5.0, 0.0),
-            Waypoint::spread(-4.5, gap_end + 1.2, 0.0).jump_when(edge_jump(s.z + 8.0, 1.1)),
-            Waypoint::spread(-4.5, pz + 0.5, 0.0),
+            Waypoint::exact(-4.5, s.z + 5.0),
+            Waypoint::exact(-4.5, gap_end + 1.2).jump_when(edge_jump(s.z + 8.0, 1.1)),
+            Waypoint::exact(-4.5, pz + 0.5),
             Waypoint::spread(0.0, s.z + len + 5.0, 1.0),
         ];
         zig.push(Waypoint::spread(0.0, s.z + len + 5.0, 1.0));
@@ -1074,7 +1059,7 @@ pub fn glove_alley(n: u32) -> Segment {
         let len = n as f64 * 5.0 + 4.0;
         let w = 7.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::TEAL, d());
-        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.0)];
+        let mut route = vec![Waypoint::exact(0.0, s.z + 1.0)];
         for k in 0..n {
             let gz = s.z + 3.0 + k as f64 * 5.0;
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
@@ -1095,8 +1080,8 @@ pub fn glove_alley(n: u32) -> Segment {
                 },
             );
             let rest = side * (w / 2.0 + 2.6);
-            route.push(Waypoint::spread(0.0, gz - 2.2, 0.0));
-            route.push(Waypoint::spread(0.0, gz + 1.8, 0.0).wait(move |bot| {
+            route.push(Waypoint::exact(0.0, gz - 2.2));
+            route.push(Waypoint::exact(0.0, gz + 1.8).wait(move |bot| {
                 [0.0, 0.25, 0.5]
                     .iter()
                     .all(|dt| (gx.x_at(bot.t + dt) - rest).abs() < 1.2)
@@ -1153,7 +1138,7 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
                     parent: Some(gate),
                     dynamic: true,
                     col: ColliderOpts {
-                        tag: Some("gate"),
+                        tag: Some(Hazard::Gate),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -1186,7 +1171,7 @@ pub fn tipping_bridge(n: u32) -> Segment {
         let y = s.y;
         let flap = 3.0;
         s.b.box_(0.0, y - 1.0, s.z + 1.0, 6.0, 2.0, 2.0, pal::PURPLE, d());
-        let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.0)];
+        let mut route = vec![Waypoint::exact(0.0, s.z + 1.0)];
         let mut zz = s.z + 2.0;
         for k in 0..n {
             let c = zz + flap / 2.0 + 0.15;
@@ -1211,7 +1196,7 @@ pub fn tipping_bridge(n: u32) -> Segment {
             let dir = if s.rng() < 0.5 { -1.0 } else { 1.0 };
             s.b.mover(move |t, ctx| ctx.node(pivot).rot.z = dir * tip(t) * 1.35);
             route.push(
-                Waypoint::spread(0.0, c + flap / 2.0 - 0.3, 0.0)
+                Waypoint::exact(0.0, c + flap / 2.0 - 0.3)
                     .wait(move |bot| [0.1, 0.4, 0.7].iter().all(|dt| tip(bot.t + dt) < 0.05)),
             );
             zz += flap + 0.3;
@@ -1266,7 +1251,7 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                     dynamic: true,
                     col: ColliderOpts {
                         hit: 0.9,
-                        tag: Some("pusher"),
+                        tag: Some(Hazard::Pusher),
                         sinks: true,
                         ..Default::default()
                     },

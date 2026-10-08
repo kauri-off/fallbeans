@@ -2,25 +2,25 @@
 //! colliders and movers; the client also gets a `SceneDesc` to draw.
 use std::sync::Arc;
 
+use fb_shared::cause::Hazard;
+use fb_shared::rng::Rng;
+use fb_shared::{NEVER, Rgb, rgb};
+
 use crate::bots::Note;
-use crate::collider::{ColId, Collider, ColliderOpts, Shape};
+use crate::collider::{ColId, ColliderOpts, Shape};
+use crate::looks::Pattern;
 use crate::m::{self, MinMax};
 use crate::map::{Cx, MapEvent, MapOut, Touches};
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
 use crate::physics::{Body, PORTAL_T, StepEvents, Touch};
+use crate::scene::Surface;
 use crate::scene::{
-    Finish, Form, Look, LookOut, Palette, Part, Piece, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal,
+    Finish, Form, Look, LookOut, Model, Palette, Part, Piece, PrimKind, SceneDesc, SceneItem, SceneryRequest, pal,
 };
 use crate::world::{MoveCtx, PORTAL_CLOSED, PortalPair, St, World};
-use fb_shared::rng::Rng;
 
-pub const MODEL_NAMES: [&str; 19] = [
-    "bean", "crown", "hub", "arm", "hammer", "hex", "door", "finish", "bumper", "cloud", "tree", "pine", "flag",
-    "cone", "star", "island", "mushroom", "glove", "fan",
-];
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PrimOpts {
     pub col: ColliderOpts,
     pub freq: Option<f64>,
@@ -29,11 +29,28 @@ pub struct PrimOpts {
     pub no_collide: bool,
     /// The primitive moves (a mover changes it): its collider is re-read every tick.
     pub dynamic: bool,
-    pub seg: Option<u32>,
+    /// Sides of a cylinder.
+    pub seg: u32,
     /// Surface finish (default: padded for big floors, rubber for balls, plastic otherwise).
-    pub surface: Option<&'static str>,
+    pub surface: Option<Surface>,
     /// Pattern of a two-colour palette (default: the map's style).
-    pub pattern: Option<&'static str>,
+    pub pattern: Option<Pattern>,
+}
+
+impl Default for PrimOpts {
+    fn default() -> Self {
+        Self {
+            col: ColliderOpts::default(),
+            freq: None,
+            rot: None,
+            parent: None,
+            no_collide: false,
+            dynamic: false,
+            seg: 48,
+            surface: None,
+            pattern: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -50,11 +67,21 @@ impl Prim {
 }
 
 /// A decorative model's placement (`b.prop`).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct PropOpts {
     pub yaw: f64,
-    pub scale: Option<f64>,
-    pub tint: Option<&'static str>,
+    pub scale: f64,
+    pub tint: Option<Rgb>,
+}
+
+impl Default for PropOpts {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            scale: 1.0,
+            tint: None,
+        }
+    }
 }
 
 /// One end of a pair of portals: a ring standing at (x, y, z), facing `yaw`.
@@ -68,17 +95,29 @@ pub struct PortalEnd {
 
 pub type OpenFn = Arc<dyn Fn(f64) -> bool + Send + Sync>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PortalOpts {
     /// Only the first end takes beans in; the second only lets them out.
     pub one_way: bool,
-    /// Beans come out with at least this speed (m/s; default 6), thrown up at `lift` m/s when given.
-    pub speed: Option<f64>,
+    /// Beans come out with at least this speed (m/s), thrown up at `lift` m/s when given.
+    pub speed: f64,
     pub lift: Option<f64>,
-    /// How long (s) the ends stay shut after a trip (default PORTAL_CLOSED).
-    pub closed: Option<f64>,
+    /// How long (s) the ends stay shut after a trip.
+    pub closed: f64,
     /// Open only while this says so (a pure function of sim time): shut in between.
     pub open: Option<OpenFn>,
+}
+
+impl Default for PortalOpts {
+    fn default() -> Self {
+        Self {
+            one_way: false,
+            speed: 6.0,
+            lift: None,
+            closed: PORTAL_CLOSED,
+            open: None,
+        }
+    }
 }
 
 /// Shut right now (after a trip, or out of its rhythm)? (Not in the tick it closed: prediction may
@@ -96,8 +135,6 @@ pub struct Builder {
     pub bonus_spots: Vec<V3>,
     /// Touch handlers of colliders (moved into the map's spec after the build).
     pub touches: Touches,
-    /// Look of the map (client only): the pattern its palette materials use by default.
-    pub pattern: &'static str,
     /// Notes in bots' memory made so far.
     notes: u32,
 }
@@ -111,7 +148,6 @@ impl Builder {
             scene: with_scene.then(SceneDesc::default),
             bonus_spots: Vec::new(),
             touches: Touches::default(),
-            pattern: "stripes",
             notes: 0,
         }
     }
@@ -135,11 +171,11 @@ impl Builder {
         self.world.nodes.add(parent, V3::new(x, y, z))
     }
 
-    pub fn model(&mut self, name: &'static str, parent: NodeId) -> NodeId {
+    pub fn model(&mut self, name: Model, parent: NodeId) -> NodeId {
         self.model_tinted(name, parent, None)
     }
 
-    fn model_tinted(&mut self, name: &'static str, parent: NodeId, tint: Option<&'static str>) -> NodeId {
+    fn model_tinted(&mut self, name: Model, parent: NodeId, tint: Option<Rgb>) -> NodeId {
         let node = self.world.nodes.add(parent, V3::ZERO);
         if let Some(s) = &mut self.scene {
             s.items.push(SceneItem::Model { node, name, tint });
@@ -180,7 +216,7 @@ impl Builder {
     }
 
     pub fn collider(&mut self, node: NodeId, shape: Shape, o: ColliderOpts) -> ColId {
-        self.world.add(Collider::new(node, shape, o))
+        self.world.add(node, shape, o)
     }
 
     /// State the map keeps (movers, logic and bot brains reach it through the handle).
@@ -188,23 +224,23 @@ impl Builder {
         self.world.add_state(s)
     }
 
-    /// `col.onTouch`: called whenever a body touches the collider (once per contact, inside its step).
+    /// Called whenever a body touches the collider (once per contact, inside its step).
     pub fn on_touch(
         &mut self,
         col: ColId,
         f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
     ) {
-        self.world.colliders[col as usize].on_touch = true;
+        self.world.colliders[col as usize].opts.on_touch = true;
         self.touches.touch.insert(col, Box::new(f));
     }
 
-    /// `col.onGround`: called on every step a body stands on the collider.
+    /// Called on every step a body stands on the collider.
     pub fn on_ground(
         &mut self,
         col: ColId,
         f: impl FnMut(&mut Cx, &mut Body, &mut StepEvents, Touch) + Send + Sync + 'static,
     ) {
-        self.world.colliders[col as usize].on_ground = true;
+        self.world.colliders[col as usize].opts.on_ground = true;
         self.touches.ground.insert(col, Box::new(f));
     }
 
@@ -266,7 +302,7 @@ impl Builder {
     }
 
     pub fn cyl(&mut self, x: f64, y: f64, z: f64, r: f64, h: f64, p: Palette, o: PrimOpts) -> Prim {
-        let seg = o.seg.unwrap_or(48) as f64;
+        let seg = o.seg as f64;
         let node = self.prim(PrimKind::Cyl, [r, h, seg], p, x, y, z, &o, None);
         self.result(node, Shape::Cyl { r, hh: h / 2.0 }, o)
     }
@@ -334,7 +370,7 @@ impl Builder {
     }
 
     pub fn hub(&mut self, x: f64, y: f64, z: f64, scale: f64) {
-        let h = self.model("hub", ROOT);
+        let h = self.model(Model::Hub, ROOT);
         let n = self.world.nodes.get_mut(h);
         n.pos = V3::new(x, y, z);
         n.scale = V3::splat(scale);
@@ -366,7 +402,7 @@ impl Builder {
         for k in 0..count {
             let pivot = self.world.nodes.add(rotor, V3::ZERO);
             self.world.nodes.get_mut(pivot).rot.y = (k as f64 / count as f64) * m::PI * 2.0;
-            let arm = self.model("arm", pivot);
+            let arm = self.model(Model::Arm, pivot);
             self.world.nodes.get_mut(arm).scale = V3::new(len, 1.0, 1.0);
             let a = self.anchor(len / 2.0 + 0.3, 0.0, 0.0, pivot);
             self.collider(
@@ -378,7 +414,7 @@ impl Builder {
                 },
                 ColliderOpts {
                     hit,
-                    tag: Some("rotor"),
+                    tag: Some(Hazard::Rotor),
                     sweep: true,
                     ..Default::default()
                 },
@@ -389,7 +425,7 @@ impl Builder {
     }
 
     pub fn bumper(&mut self, x: f64, y: f64, z: f64, s: f64, power: f64) -> NodeId {
-        let b = self.model("bumper", ROOT);
+        let b = self.model(Model::Bumper, ROOT);
         let n = self.world.nodes.get_mut(b);
         n.pos = V3::new(x, y, z);
         n.scale = V3::splat(s);
@@ -403,7 +439,7 @@ impl Builder {
             ColliderOpts {
                 is_static: true,
                 bounce: power,
-                tag: Some("bumper"),
+                tag: Some(Hazard::Bumper),
                 ..Default::default()
             },
         );
@@ -422,7 +458,7 @@ impl Builder {
             }
             self.box_(x, y + 0.8, z, 9.6, 0.8, 1.2, pal::PURPLE, PrimOpts::default());
         }
-        let h = self.model("hammer", ROOT);
+        let h = self.model(Model::Hammer, ROOT);
         self.world.nodes.get_mut(h).pos = V3::new(x, y, z);
         let a = self.anchor(0.0, -6.0, 0.0, h);
         self.collider(
@@ -434,7 +470,7 @@ impl Builder {
             },
             ColliderOpts {
                 hit: 0.9,
-                tag: Some("hammer"),
+                tag: Some(Hazard::Hammer),
                 ..Default::default()
             },
         );
@@ -450,7 +486,7 @@ impl Builder {
             z,
             r + 0.2,
             0.6,
-            ["#5a3fb8", "#5a3fb8"],
+            [rgb(0x5a3fb8), rgb(0x5a3fb8)],
             PrimOpts::default(),
         );
         self.cyl(
@@ -473,8 +509,8 @@ impl Builder {
     }
 
     /// A bouncy mushroom standing at (x, y, z): its cap throws beans up at `power` m/s; the stem is solid.
-    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64, tint: Option<&'static str>) -> ColId {
-        let mush = self.model_tinted("mushroom", ROOT, tint);
+    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64, tint: Option<Rgb>) -> ColId {
+        let mush = self.model_tinted(Model::Mushroom, ROOT, tint);
         let n = self.world.nodes.get_mut(mush);
         n.pos = V3::new(x, y, z);
         n.scale = V3::splat(scale);
@@ -507,7 +543,7 @@ impl Builder {
     }
 
     /// A ladder up a wall: its foot at (x, y0, z) on the wall's face, up to y1, the rungs facing `yaw`.
-    pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64, color: &'static str) {
+    pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64, color: Rgb) {
         let h = y1 - y0;
         let holder = self.anchor(x, y0, z, ROOT);
         self.world.nodes.get_mut(holder).rot.y = yaw;
@@ -529,11 +565,11 @@ impl Builder {
         if self.server() {
             return;
         }
-        let wood = pal::hex(color);
+        let wood = pal::solid(color);
         let deco = PrimOpts {
             parent: Some(holder),
             no_collide: true,
-            surface: Some("wood"),
+            surface: Some(Surface::Wood),
             ..Default::default()
         };
         for sx in [-0.45, 0.45] {
@@ -550,7 +586,7 @@ impl Builder {
                 wood,
                 PrimOpts {
                     rot: Some(V3::new(0.0, 0.0, m::PI / 2.0)),
-                    seg: Some(8),
+                    seg: 8,
                     ..deco.clone()
                 },
             );
@@ -568,10 +604,10 @@ impl Builder {
                 z + m::sin(a) * (r + 0.1),
                 0.09,
                 1.2,
-                ["#39406b", "#39406b"],
+                [rgb(0x39406b), rgb(0x39406b)],
                 PrimOpts {
                     no_collide: true,
-                    seg: Some(10),
+                    seg: 10,
                     ..Default::default()
                 },
             );
@@ -618,7 +654,7 @@ impl Builder {
     }
 
     /// A decorative model (client only, no collision): trees, flags, cones, stars, fans, mushrooms.
-    pub fn prop(&mut self, name: &'static str, x: f64, y: f64, z: f64, o: PropOpts) -> Option<NodeId> {
+    pub fn prop(&mut self, name: Model, x: f64, y: f64, z: f64, o: PropOpts) -> Option<NodeId> {
         if self.server() {
             return None;
         }
@@ -626,12 +662,12 @@ impl Builder {
         let n = self.world.nodes.get_mut(node);
         n.pos = V3::new(x, y, z);
         n.rot.y = o.yaw;
-        n.scale = V3::splat(o.scale.unwrap_or(1.0));
+        n.scale = V3::splat(o.scale);
         Some(node)
     }
 
     pub fn finish(&mut self, x: f64, y: f64, z: f64) {
-        let f = self.model("finish", ROOT);
+        let f = self.model(Model::Finish, ROOT);
         self.world.nodes.get_mut(f).pos = V3::new(x, y, z);
         for sx in [-8.5, 8.5] {
             let a = self.anchor(x + sx, y + 3.0, z, ROOT);
@@ -647,9 +683,9 @@ impl Builder {
         // Stars twirling over the arch; flags just past the line (finished beans have left the course).
         for sx in [-5.0, 0.0, 5.0] {
             let star_y = y + 8.2 + if sx != 0.0 { 0.0 } else { 0.6 };
-            let scale = Some(if sx != 0.0 { 1.1 } else { 1.5 });
+            let scale = if sx != 0.0 { 1.1 } else { 1.5 };
             self.prop(
-                "star",
+                Model::Star,
                 x + sx,
                 star_y,
                 z,
@@ -661,11 +697,11 @@ impl Builder {
         }
         for sx in [-7.0, 7.0] {
             let o = PropOpts {
-                tint: Some(if sx < 0.0 { "#ffd23f" } else { "#4fdc6a" }),
+                tint: Some(if sx < 0.0 { rgb(0xffd23f) } else { rgb(0x4fdc6a) }),
                 yaw: if sx < 0.0 { m::PI } else { 0.0 },
-                scale: None,
+                ..Default::default()
             };
-            self.prop("flag", x + sx, y, z + 3.0, o);
+            self.prop(Model::Flag, x + sx, y, z + 3.0, o);
         }
     }
 
@@ -689,16 +725,16 @@ impl Builder {
         let flag = |tint, yaw| PropOpts {
             tint: Some(tint),
             yaw,
-            scale: None,
+            ..Default::default()
         };
-        self.prop("flag", -9.4, 1.2, z0 + 6.4, flag("#ff5fa2", m::PI));
-        self.prop("flag", 9.4, 1.2, z0 + 6.4, flag("#3fa9ff", 0.0));
+        self.prop(Model::Flag, -9.4, 1.2, z0 + 6.4, flag(rgb(0xff5fa2), m::PI));
+        self.prop(Model::Flag, 9.4, 1.2, z0 + 6.4, flag(rgb(0x3fa9ff), 0.0));
         for sx in [-1.0, 1.0] {
             let o = PropOpts {
-                scale: Some(0.9),
+                scale: 0.9,
                 ..Default::default()
             };
-            self.prop("cone", sx * 9.4, 1.2, z0 + 4.2, o);
+            self.prop(Model::Cone, sx * 9.4, 1.2, z0 + 4.2, o);
         }
         let (node, col) = (gate.node, gate.col());
         self.mover(move |t, ctx| {
@@ -712,13 +748,13 @@ impl Builder {
     /// sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip closes
     /// both ends (solid sashes) until a moment after the traveller is out. One-way: only `a` takes beans
     /// in. Returns the pair's index.
-    pub fn portal(&mut self, a: PortalEnd, b: PortalEnd, color: &'static str, o: PortalOpts) -> usize {
+    pub fn portal(&mut self, a: PortalEnd, b: PortalEnd, color: Rgb, o: PortalOpts) -> usize {
         let k = self.world.portals.len();
         self.world.portals.push(PortalPair {
-            at: -1e9,
+            at: NEVER,
             from: 0,
-            closed_until: -1e9,
-            close_for: o.closed.unwrap_or(PORTAL_CLOSED),
+            closed_until: NEVER,
+            close_for: o.closed,
         });
         let ends = [a, b];
         for (i, e) in ends.iter().enumerate() {
@@ -747,7 +783,7 @@ impl Builder {
                         ..Default::default()
                     },
                 );
-                let (open, speed, lift, yaw) = (o.open.clone(), o.speed.unwrap_or(6.0), o.lift, other.yaw);
+                let (open, speed, lift, yaw) = (o.open.clone(), o.speed, o.lift, other.yaw);
                 self.on_touch(trigger, move |cx, body, ev, _| {
                     let t = cx.world.t;
                     if body.in_portal() || portal_shut(&cx.world.portals[k], open.as_ref(), t) {
@@ -806,7 +842,7 @@ impl Builder {
                     0.5,
                     0.3,
                     0.5,
-                    pal::hex(color),
+                    pal::solid(color),
                     deco,
                 );
             }
@@ -815,24 +851,16 @@ impl Builder {
     }
 
     /// A portal end as drawn: frame, swirling disc, sashes while shut, a flash at each trip.
-    fn portal_look(
-        &mut self,
-        ring: NodeId,
-        k: usize,
-        i: u32,
-        exit_only: bool,
-        color: &'static str,
-        open: Option<OpenFn>,
-    ) {
+    fn portal_look(&mut self, ring: NodeId, k: usize, i: u32, exit_only: bool, color: Rgb, open: Option<OpenFn>) {
         let parts = [
-            Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy).on("glossy"),
+            Part::new(Form::Torus(1.35, 0.18), color, Finish::Glossy).on(Surface::Glossy),
             Part::new(
                 if exit_only { Form::Rings(1.2) } else { Form::Swirl(1.2) },
                 color,
                 Finish::Flat,
             ),
-            Part::new(Form::Sash(1.22), color, Finish::Metal).on("metal"),
-            Part::new(Form::Sphere(1.0), "#fff6d0", Finish::Light),
+            Part::new(Form::Sash(1.22), color, Finish::Metal).on(Surface::Metal),
+            Part::new(Form::Sphere(1.0), rgb(0xfff6d0), Finish::Light),
             Part::new(Form::Torus(1.35, 0.1), color, Finish::Light),
             Part::new(Form::Arrow, color, Finish::Flat),
         ];

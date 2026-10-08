@@ -1,177 +1,177 @@
 {
-  "balance/ball-hill/fallsPerBotMin": {
+  "balance/ball-hill/falls_per_bot_min": {
     "value": 0.189,
     "tol": 0.2
   },
-  "balance/ball-hill/finishP50": {
+  "balance/ball-hill/finish_p50": {
     "value": 74.418,
     "tol": 8.487
   },
-  "balance/ball-hill/finishRate": {
+  "balance/ball-hill/finish_rate": {
     "value": 0.953,
     "tol": 0.077
   },
-  "balance/bounce-park/fallsPerBotMin": {
+  "balance/bounce-park/falls_per_bot_min": {
     "value": 0.902,
     "tol": 0.456
   },
-  "balance/bounce-park/finishP50": {
+  "balance/bounce-park/finish_p50": {
     "value": 48.311,
     "tol": 2.416
   },
-  "balance/bounce-park/finishRate": {
+  "balance/bounce-park/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/cliff-climb/fallsPerBotMin": {
+  "balance/cliff-climb/falls_per_bot_min": {
     "value": 0.807,
     "tol": 0.324
   },
-  "balance/cliff-climb/finishP50": {
+  "balance/cliff-climb/finish_p50": {
     "value": 44.564,
     "tol": 3.746
   },
-  "balance/cliff-climb/finishRate": {
+  "balance/cliff-climb/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/crown-peak/fallsPerBotMin": {
+  "balance/crown-peak/falls_per_bot_min": {
     "value": 0.491,
     "tol": 0.237
   },
-  "balance/crown-peak/finishP50": {
+  "balance/crown-peak/finish_p50": {
     "value": 62.808,
     "tol": 6.557
   },
-  "balance/crown-peak/finishRate": {
+  "balance/crown-peak/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/door-dash/fallsPerBotMin": {
+  "balance/door-dash/falls_per_bot_min": {
     "value": 0.901,
     "tol": 0.435
   },
-  "balance/door-dash/finishP50": {
+  "balance/door-dash/finish_p50": {
     "value": 48.797,
     "tol": 3.896
   },
-  "balance/door-dash/finishRate": {
+  "balance/door-dash/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/drum-roll/fallsPerBotMin": {
+  "balance/drum-roll/falls_per_bot_min": {
     "value": 1.638,
     "tol": 0.616
   },
-  "balance/drum-roll/finishP50": {
+  "balance/drum-roll/finish_p50": {
     "value": 37.185,
     "tol": 2.757
   },
-  "balance/drum-roll/finishRate": {
+  "balance/drum-roll/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/frost-sky/fallsPerBotMin": {
+  "balance/frost-sky/falls_per_bot_min": {
     "value": 1.243,
     "tol": 0.491
   },
-  "balance/frost-sky/finishP50": {
+  "balance/frost-sky/finish_p50": {
     "value": 68.319,
     "tol": 7.924
   },
-  "balance/frost-sky/finishRate": {
+  "balance/frost-sky/finish_rate": {
     "value": 0.992,
     "tol": 0.05
   },
-  "balance/hammer-swing/fallsPerBotMin": {
+  "balance/hammer-swing/falls_per_bot_min": {
     "value": 0.684,
     "tol": 0.287
   },
-  "balance/hammer-swing/finishP50": {
+  "balance/hammer-swing/finish_p50": {
     "value": 50.278,
     "tol": 3.127
   },
-  "balance/hammer-swing/finishRate": {
+  "balance/hammer-swing/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/hex-a-gone/firstOut": {
+  "balance/hex-a-gone/first_out": {
     "value": 13.411,
     "tol": 8.65
   },
-  "balance/hex-a-gone/survivorsAtEnd": {
+  "balance/hex-a-gone/survivors_at_end": {
     "value": 0.0,
     "tol": 0.5
   },
-  "balance/hidden-bridge/fallsPerBotMin": {
+  "balance/hidden-bridge/falls_per_bot_min": {
     "value": 3.226,
     "tol": 0.484
   },
-  "balance/hidden-bridge/finishP50": {
+  "balance/hidden-bridge/finish_p50": {
     "value": 64.904,
     "tol": 6.184
   },
-  "balance/hidden-bridge/finishRate": {
+  "balance/hidden-bridge/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/jump-club/firstOut": {
+  "balance/jump-club/first_out": {
     "value": 7.404,
     "tol": 4.944
   },
-  "balance/jump-club/survivorsAtEnd": {
+  "balance/jump-club/survivors_at_end": {
     "value": 1.063,
     "tol": 1.124
   },
-  "balance/plate-drop/firstOut": {
+  "balance/plate-drop/first_out": {
     "value": 14.312,
     "tol": 6.551
   },
-  "balance/plate-drop/survivorsAtEnd": {
+  "balance/plate-drop/survivors_at_end": {
     "value": 0.063,
     "tol": 0.5
   },
-  "balance/portal-panic/fallsPerBotMin": {
+  "balance/portal-panic/falls_per_bot_min": {
     "value": 0.786,
     "tol": 0.53
   },
-  "balance/portal-panic/finishP50": {
+  "balance/portal-panic/finish_p50": {
     "value": 45.111,
     "tol": 4.61
   },
-  "balance/portal-panic/finishRate": {
+  "balance/portal-panic/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/roll-out/firstOut": {
+  "balance/roll-out/first_out": {
     "value": 11.504,
     "tol": 2.904
   },
-  "balance/roll-out/survivorsAtEnd": {
+  "balance/roll-out/survivors_at_end": {
     "value": 1.375,
     "tol": 1.586
   },
-  "balance/star-fall/fallsPerBotMin": {
+  "balance/star-fall/falls_per_bot_min": {
     "value": 0.497,
     "tol": 0.243
   },
-  "balance/star-fall/topScore": {
+  "balance/star-fall/top_score": {
     "value": 25.75,
     "tol": 7.066
   },
-  "balance/tail-tag/fallsPerBotMin": {
+  "balance/tail-tag/falls_per_bot_min": {
     "value": 1.381,
     "tol": 0.542
   },
-  "balance/tail-tag/topScore": {
+  "balance/tail-tag/top_score": {
     "value": 52.25,
     "tol": 5.225
   },
-  "balance/wall-rush/firstOut": {
+  "balance/wall-rush/first_out": {
     "value": 8.019,
     "tol": 5.914
   },
-  "balance/wall-rush/survivorsAtEnd": {
+  "balance/wall-rush/survivors_at_end": {
     "value": 1.813,
     "tol": 1.223
   },
@@ -179,35 +179,35 @@
     "value": 0.133,
     "tol": 0.005
   },
-  "physics/airTime": {
+  "physics/air_time": {
     "value": 0.75,
     "tol": 0.015
   },
-  "physics/diveDist": {
+  "physics/dive_dist": {
     "value": 8.641,
     "tol": 0.173
   },
-  "physics/diveRecover": {
+  "physics/dive_recover": {
     "value": 0.867,
     "tol": 0.017
   },
-  "physics/iceKeep": {
+  "physics/ice_keep": {
     "value": 0.912,
     "tol": 0.018
   },
-  "physics/jumpApex": {
+  "physics/jump_apex": {
     "value": 1.925,
     "tol": 0.039
   },
-  "physics/jumpDist": {
+  "physics/jump_dist": {
     "value": 6.375,
     "tol": 0.128
   },
-  "physics/stepJump": {
+  "physics/step_jump": {
     "value": 1.0,
     "tol": 0.02
   },
-  "physics/stepWalk": {
+  "physics/step_walk": {
     "value": 0.35,
     "tol": 0.007
   },

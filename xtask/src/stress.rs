@@ -7,9 +7,28 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
-use clap::Args;
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, ValueEnum};
 
-use crate::{Shared, target_dir};
+use crate::{Shared, reported, strip_ansi, target_dir};
+
+#[derive(ValueEnum, Clone, Copy, Debug)]
+enum Transport {
+    Udp,
+    Ws,
+    Auto,
+}
+
+impl Transport {
+    /// As the client takes it (`--transport`).
+    fn name(self) -> &'static str {
+        match self {
+            Transport::Udp => "udp",
+            Transport::Ws => "ws",
+            Transport::Auto => "auto",
+        }
+    }
+}
 
 #[derive(Args)]
 pub struct StressArgs {
@@ -21,8 +40,8 @@ pub struct StressArgs {
     /// Seconds the clients play (a round of jump-club is 3 s intro + 75 s + 8 s results).
     #[arg(long, default_value_t = 60)]
     secs: u64,
-    #[arg(long, value_parser = ["udp", "ws", "auto"], default_value = "udp")]
-    transport: String,
+    #[arg(long, value_enum, default_value_t = Transport::Udp)]
+    transport: Transport,
     /// Fails above this share of a client's ticks predicted with an input the server did not have in time.
     #[arg(long, default_value_t = 0.002)]
     max_late: f64,
@@ -53,49 +72,25 @@ pub struct StressArgs {
 /// `fb_net::errors::MARK`: a failed system or command in a release build.
 const ECS_ERROR: &str = "ECS ERROR";
 
-pub fn stress(a: &StressArgs) -> bool {
-    if !a.shared.build() {
-        return false;
-    }
+pub fn stress(a: &StressArgs) -> Result<()> {
+    a.shared.build()?;
     // The build leaves hundreds of MB of dirty pages: flushed in the middle of the run they block the
     // processes' log writes for seconds, and every connection times out.
     #[cfg(unix)]
     let _ = Command::new("sync").status();
     let dir = target_dir().join("stress");
     let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("target/stress");
-    let log = |name: &str| File::create(dir.join(name)).expect("log file");
-    let rooms: Vec<String> = (1..=a.rooms.max(1)).map(|i| format!("s{i}")).collect();
-    let server_flags = |trace: &str| {
-        let mut v = a.shared.server_args();
-        let exit = (a.secs + 4).to_string();
-        let open = rooms.join(",");
-        v.extend(
-            [
-                "--open-rooms",
-                &open,
-                "--intro",
-                "2",
-                "--respawn",
-                "--metrics-every",
-                "5",
-                "--exit-after",
-                &exit,
-                "--trace",
-                trace,
-            ]
-            .map(String::from),
-        );
-        v
+    fs::create_dir_all(&dir).with_context(|| dir.display().to_string())?;
+    let log = |name: &str| {
+        let path = dir.join(name);
+        File::create(&path).with_context(|| path.display().to_string())
     };
-
+    let room_count = a.rooms.max(1);
+    let rooms: Vec<String> = (1..=room_count).map(|i| format!("s{i}")).collect();
     let pin = match a.limit_server.then(server_cores) {
         None => None,
         Some(Some(p)) => Some(p),
-        Some(_) => {
-            eprintln!("--limit-server: a local server on Linux with at least 2 cores only");
-            return false;
-        }
+        Some(None) => bail!("--limit-server: a local server on Linux with at least 2 cores only"),
     };
     let mut server_cmd = match &pin {
         Some(p) => {
@@ -117,28 +112,34 @@ pub fn stress(a: &StressArgs) -> bool {
         None => a.shared.command("fb_server"),
     };
     server_cmd
-        .args(server_flags(&dir.join("server.trace").to_string_lossy()))
-        .stdout(log("server.log"))
-        .stderr(log("server.err.log"));
-    let Ok(mut child) = server_cmd.spawn() else {
-        eprintln!("cannot start the server");
-        return false;
-    };
+        .args(a.shared.server_args())
+        .args([
+            "--open-rooms",
+            &rooms.join(","),
+            "--intro",
+            "2",
+            "--respawn",
+            "--metrics-every",
+            "5",
+        ])
+        .args(["--exit-after", &(a.secs + 4).to_string(), "--trace"])
+        .arg(dir.join("server.trace"))
+        .stdout(log("server.log")?)
+        .stderr(log("server.err.log")?);
+    let mut server = server_cmd.spawn().map_err(|_| anyhow!("cannot start the server"))?;
     std::thread::sleep(Duration::from_millis(800));
     // Gone already (a port taken by a server left running, bad flags): the clients would wait for
     // nothing for the whole run.
-    if let Ok(Some(status)) = child.try_wait() {
-        eprintln!(
+    if let Ok(Some(status)) = server.try_wait() {
+        bail!(
             "stress: the server exited at once ({status}):\n{}",
             read_log(&dir, "server")
         );
-        return false;
     }
-    let mut server = child;
     let mut clients: Vec<Child> = Vec::new();
     for i in 0..a.clients {
-        let room = &rooms[i as usize % rooms.len()];
-        let in_room = (0..a.clients).filter(|j| *j as usize % rooms.len() == i as usize % rooms.len());
+        let room = &rooms[(i % room_count) as usize];
+        let in_room = (0..a.clients).filter(|j| j % room_count == i % room_count);
         let mut c = match &pin {
             Some(p) => {
                 let mut c = Command::new("taskset");
@@ -152,7 +153,7 @@ pub fn stress(a: &StressArgs) -> bool {
             "--name",
             &format!("stress {i}"),
             "--transport",
-            &a.transport,
+            a.transport.name(),
         ])
         .args(a.shared.play_args(room, in_room.count() as u32))
         .args(["--exit-after", &a.secs.to_string()])
@@ -160,8 +161,8 @@ pub fn stress(a: &StressArgs) -> bool {
         .args(&a.client_arg)
         .arg("--trace")
         .arg(dir.join(format!("client-{i}.trace")))
-        .stdout(log(&format!("client-{i}.log")))
-        .stderr(log(&format!("client-{i}.err.log")));
+        .stdout(log(&format!("client-{i}.log"))?)
+        .stderr(log(&format!("client-{i}.err.log"))?);
         match c.spawn() {
             Ok(child) => clients.push(child),
             Err(e) => eprintln!("client {i}: {e}"),
@@ -172,7 +173,7 @@ pub fn stress(a: &StressArgs) -> bool {
         a.clients,
         rooms.len(),
         a.secs,
-        a.transport,
+        a.transport.name(),
         a.shared.lag,
         a.shared.jitter,
         a.shared.loss,
@@ -219,32 +220,59 @@ struct Row {
     pos: [f64; 3],
 }
 
-/// A bean: its room and its player id there.
-type Bean = (String, u32);
+/// A bean: its room (`Rooms`) and its player id there.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Bean {
+    room: u32,
+    id: u32,
+}
+
+/// The rooms of the traces, numbered as they are first seen.
+#[derive(Default)]
+struct Rooms(Vec<String>);
+
+impl Rooms {
+    fn index(&mut self, name: &str) -> u32 {
+        let i = self.0.iter().position(|r| r == name).unwrap_or_else(|| {
+            self.0.push(name.to_string());
+            self.0.len() - 1
+        });
+        i as u32
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Traced {
+    tick: u32,
+    bean: Bean,
+    row: Row,
+}
 
 /// Lines `tag tick room id mx mz buttons x y z`.
-fn parse_trace(path: &Path, tag: &str) -> Vec<(u32, Bean, Row)> {
+fn parse_trace(path: &Path, tag: &str, rooms: &mut Rooms) -> Vec<Traced> {
     let text = fs::read_to_string(path).unwrap_or_default();
     text.lines()
         .filter_map(|l| {
-            let mut it = l.split(' ');
-            if it.next()? != tag {
+            let fields: Vec<&str> = l.split(' ').collect();
+            let [t, tick, room, id, mx, mz, buttons, x, y, z] = fields[..] else {
+                return None;
+            };
+            if t != tag {
                 return None;
             }
-            let v: Vec<&str> = it.collect();
-            if v.len() != 9 {
-                return None;
-            }
-            let i = |k: usize| v[k].parse::<i32>().ok();
-            let f = |k: usize| v[k].parse::<f64>().ok();
-            Some((
-                v[0].parse().ok()?,
-                (v[1].to_string(), v[2].parse().ok()?),
-                Row {
-                    input: (i(3)?, i(4)?, i(5)?),
-                    pos: [f(6)?, f(7)?, f(8)?],
+            let row = Row {
+                input: (mx.parse().ok()?, mz.parse().ok()?, buttons.parse().ok()?),
+                pos: [x.parse().ok()?, y.parse().ok()?, z.parse().ok()?],
+            };
+            let (tick, id) = (tick.parse().ok()?, id.parse().ok()?);
+            Some(Traced {
+                tick,
+                bean: Bean {
+                    room: rooms.index(room),
+                    id,
                 },
-            ))
+                row,
+            })
         })
         .collect()
 }
@@ -273,82 +301,99 @@ struct Divergence {
     first_other: Vec<u32>,
 }
 
-/// The first prediction of each tick (what the player saw) against the server's tick. Each run of
-/// mismatches is classified by its first tick: a respawn (the server teleported the bean), a late input,
-/// a push (another bean was within reach: the client sees it in the past) or something else.
-fn compare(
-    server: &HashMap<(u32, Bean), Row>,
-    by_tick: &BTreeMap<u32, Vec<(Bean, [f64; 3])>>,
-    teleports: &BTreeSet<(Bean, u32)>,
-    client: &[(u32, Bean, Row)],
-    connects: &BTreeSet<u32>,
-) -> Divergence {
-    let mut first: BTreeMap<u32, (&Bean, Row)> = BTreeMap::new();
-    for (tick, id, row) in client {
-        first.entry(*tick).or_insert((id, *row));
-    }
-    let mut d = Divergence::default();
-    let mut prev_bad = false;
-    let mut streaming = false;
-    for (&tick, &(id, c)) in &first {
-        let Some(s) = server.get(&(tick, id.clone())) else {
-            continue;
-        };
-        let late = c.input != s.input;
-        // Just after joining (and after a reconnect) the server has nothing from the client yet (its pawn is
-        // there before the client knows it is its own): compared from the first input the server got.
-        if connects.contains(&tick) {
-            streaming = false;
+/// The server's trace, indexed for the comparisons.
+struct Server {
+    rows: HashMap<(u32, Bean), Row>,
+    by_tick: BTreeMap<u32, Vec<(Bean, [f64; 3])>>,
+    teleports: BTreeSet<(Bean, u32)>,
+}
+
+impl Server {
+    fn new(traced: &[Traced]) -> Server {
+        let mut by_bean: BTreeMap<Bean, Vec<(u32, Row)>> = BTreeMap::new();
+        for t in traced {
+            by_bean.entry(t.bean).or_default().push((t.tick, t.row));
         }
-        streaming |= !late;
-        if !streaming {
-            continue;
-        }
-        d.ticks += 1;
-        if late {
-            d.late += 1;
-        }
-        let bad = dist(&c.pos, &s.pos) > 1e-3;
-        if bad && !prev_bad {
-            if (tick.saturating_sub(1)..=tick + 1).any(|t| teleports.contains(&(id.clone(), t))) {
-                d.runs_respawn += 1;
-            } else if late {
-                d.runs_late += 1;
-            } else if near_other(by_tick, tick, id, &s.pos) {
-                d.runs_push += 1;
-            } else {
-                d.runs_other += 1;
-                if d.first_other.len() < 8 {
-                    d.first_other.push(tick);
+        let mut teleports = BTreeSet::new();
+        for (&bean, rows) in &by_bean {
+            for w in rows.windows(2) {
+                let [(t0, r0), (t1, r1)] = w else { continue };
+                // Within a few ticks: the tick that starts a new round is not traced, and its gap is a move
+                // to the new spawn however near (a respawn is a jump of more than 2 m).
+                let gap = *t1 > t0 + 1;
+                if *t1 <= t0 + 3 && (gap || dist(&r0.pos, &r1.pos) > 2.0) {
+                    teleports.insert((bean, *t1));
                 }
             }
         }
-        prev_bad = bad;
-    }
-    d
-}
-
-/// Another bean of the room within reach (two bean widths) during the last 400 ms: the client draws, and
-/// pushes against, the others that far in the past (interpolation delay plus half the RTT).
-fn near_other(by_tick: &BTreeMap<u32, Vec<(Bean, [f64; 3])>>, tick: u32, id: &Bean, pos: &[f64; 3]) -> bool {
-    by_tick
-        .range(tick.saturating_sub(48)..=tick)
-        .flat_map(|(_, beans)| beans)
-        .any(|(o, p)| o.0 == id.0 && o.1 != id.1 && dist(p, pos) < 2.5)
-}
-
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut esc = false;
-    for ch in s.chars() {
-        match (esc, ch) {
-            (false, '\u{1b}') => esc = true,
-            (true, 'm') => esc = false,
-            (true, _) => {}
-            (false, c) => out.push(c),
+        let mut by_tick: BTreeMap<u32, Vec<(Bean, [f64; 3])>> = BTreeMap::new();
+        for t in traced {
+            by_tick.entry(t.tick).or_default().push((t.bean, t.row.pos));
+        }
+        Server {
+            rows: traced.iter().map(|t| ((t.tick, t.bean), t.row)).collect(),
+            by_tick,
+            teleports,
         }
     }
-    out
+
+    /// Another bean of the room within reach (two bean widths) during the last 400 ms: the client draws, and
+    /// pushes against, the others that far in the past (interpolation delay plus half the RTT).
+    fn near_other(&self, tick: u32, bean: Bean, pos: &[f64; 3]) -> bool {
+        self.by_tick
+            .range(tick.saturating_sub(48)..=tick)
+            .flat_map(|(_, beans)| beans)
+            .any(|(o, p)| o.room == bean.room && o.id != bean.id && dist(p, pos) < 2.5)
+    }
+
+    /// The first prediction of each tick (what the player saw) against the server's tick. Each run of
+    /// mismatches is classified by its first tick: a respawn (the server teleported the bean), a late input,
+    /// a push (another bean was within reach: the client sees it in the past) or something else.
+    fn compare(&self, client: &[Traced], connects: &BTreeSet<u32>) -> Divergence {
+        let mut first: BTreeMap<u32, (Bean, Row)> = BTreeMap::new();
+        for t in client {
+            first.entry(t.tick).or_insert((t.bean, t.row));
+        }
+        let mut d = Divergence::default();
+        let mut prev_bad = false;
+        let mut streaming = false;
+        for (&tick, &(bean, c)) in &first {
+            let Some(s) = self.rows.get(&(tick, bean)) else {
+                continue;
+            };
+            let late = c.input != s.input;
+            // Just after joining (and after a reconnect) the server has nothing from the client yet (its pawn is
+            // there before the client knows it is its own): compared from the first input the server got.
+            if connects.contains(&tick) {
+                streaming = false;
+            }
+            streaming |= !late;
+            if !streaming {
+                continue;
+            }
+            d.ticks += 1;
+            if late {
+                d.late += 1;
+            }
+            let bad = dist(&c.pos, &s.pos) > 1e-3;
+            if bad && !prev_bad {
+                if (tick.saturating_sub(1)..=tick + 1).any(|t| self.teleports.contains(&(bean, t))) {
+                    d.runs_respawn += 1;
+                } else if late {
+                    d.runs_late += 1;
+                } else if self.near_other(tick, bean, &s.pos) {
+                    d.runs_push += 1;
+                } else {
+                    d.runs_other += 1;
+                    if d.first_other.len() < 8 {
+                        d.first_other.push(tick);
+                    }
+                }
+            }
+            prev_bad = bad;
+        }
+        d
+    }
 }
 
 fn read_log(dir: &Path, name: &str) -> String {
@@ -377,62 +422,86 @@ fn num_before(line: &str, key: &str) -> Option<f64> {
     head.get(start..)?.parse().ok()
 }
 
-fn report(a: &StressArgs, dir: &Path) -> bool {
+/// A client's `stats:` line, the message only (the target, `fb_client::stats:`, would match the keys too).
+struct ClientStats {
+    rollbacks: Option<f64>,
+    out: Option<f64>,
+    frame_max: Option<f64>,
+    /// The clock resyncs, as the line lists them.
+    shifts: String,
+}
+
+impl ClientStats {
+    fn parse(line: &str) -> Option<ClientStats> {
+        let (_, m) = line.split_once(" stats: ")?;
+        let shifts = m
+            .split_once("shifts [")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map_or("", |(s, _)| s);
+        Some(ClientStats {
+            rollbacks: num_after(m, "rollbacks "),
+            out: num_after(m, "out "),
+            frame_max: num_after(m, "frame max "),
+            shifts: shifts.to_string(),
+        })
+    }
+}
+
+/// A server `metrics:` line (`fb_server::metrics`).
+struct Metrics {
+    players: Option<f64>,
+    tick_p99: Option<f64>,
+    tick_max: Option<f64>,
+    frame_max: Option<f64>,
+    input_missed: Option<f64>,
+    out_per_player: Option<f64>,
+    cpu: Option<f64>,
+    mem: Option<f64>,
+}
+
+impl Metrics {
+    fn parse(line: &str) -> Option<Metrics> {
+        line.contains("metrics: ").then(|| Metrics {
+            players: num_after(line, "players "),
+            tick_p99: num_after(line, "p99 "),
+            tick_max: num_after(line, "max "),
+            frame_max: num_after(line, "frame max "),
+            input_missed: num_after(line, "input missed "),
+            out_per_player: num_before(line, " per player"),
+            cpu: num_after(line, "cpu "),
+            mem: num_after(line, "mem "),
+        })
+    }
+}
+
+/// The largest of the values there are, NaN without one.
+fn worst(values: impl Iterator<Item = Option<f64>>) -> f64 {
+    values.flatten().fold(f64::NAN, f64::max)
+}
+
+fn report(a: &StressArgs, dir: &Path) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    let server_rows = parse_trace(&dir.join("server.trace"), "S");
-    let mut by_id: BTreeMap<Bean, Vec<(u32, Row)>> = BTreeMap::new();
-    for (tick, id, row) in &server_rows {
-        by_id.entry(id.clone()).or_default().push((*tick, *row));
-    }
-    let mut teleports = BTreeSet::new();
-    for (id, rows) in &by_id {
-        for w in rows.windows(2) {
-            // Within a few ticks: the tick that starts a new round is not traced, and its gap is a move
-            // to the new spawn however near (a respawn is a jump of more than 2 m).
-            let gap = w[1].0 > w[0].0 + 1;
-            if w[1].0 <= w[0].0 + 3 && (gap || dist(&w[0].1.pos, &w[1].1.pos) > 2.0) {
-                teleports.insert((id.clone(), w[1].0));
-            }
-        }
-    }
-    let server: HashMap<(u32, Bean), Row> = server_rows.iter().map(|(t, id, r)| ((*t, id.clone()), *r)).collect();
-    let mut by_tick: BTreeMap<u32, Vec<(Bean, [f64; 3])>> = BTreeMap::new();
-    for (t, id, r) in &server_rows {
-        by_tick.entry(*t).or_default().push((id.clone(), r.pos));
-    }
+    let mut rooms = Rooms::default();
+    let server = Server::new(&parse_trace(&dir.join("server.trace"), "S", &mut rooms));
 
     println!(
         "client  ticks   late   late%  respawn  late-runs  push  other  other/min  rollbacks  out B/s  frame-max  shifts"
     );
     for i in 0..a.clients {
-        let rows = parse_trace(&dir.join(format!("client-{i}.trace")), "C");
+        let rows = parse_trace(&dir.join(format!("client-{i}.trace")), "C", &mut rooms);
         let log = read_log(dir, &format!("client-{i}"));
-        // The message only: the target (`fb_client::stats:`) would match the keys too.
-        let stats = log
-            .lines()
-            .rev()
-            .find_map(|l| l.split_once(" stats: ").map(|(_, m)| m))
-            .unwrap_or("");
+        let stats: Vec<ClientStats> = log.lines().filter_map(ClientStats::parse).collect();
         let connects = connects(&dir.join(format!("client-{i}.trace")));
-        let d = compare(&server, &by_tick, &teleports, &rows, &connects);
+        let d = server.compare(&rows, &connects);
         // Stalls of this machine (the longest frame) and clock resyncs, the first (joining) one aside.
-        let stat_lines: Vec<&str> = log
-            .lines()
-            .filter_map(|l| l.split_once(" stats: ").map(|(_, m)| m))
-            .collect();
-        let frame_max = stat_lines
+        let frame_max = stats.iter().filter_map(|s| s.frame_max).fold(0.0, f64::max);
+        let shifts: Vec<&str> = stats
             .iter()
-            .filter_map(|l| num_after(l, "frame max "))
-            .fold(0.0, f64::max);
-        let shifts: Vec<&str> = stat_lines
-            .iter()
-            .filter_map(|l| {
-                let (_, rest) = l.split_once("shifts [")?;
-                Some(rest.split_once(']')?.0)
-            })
+            .map(|s| s.shifts.as_str())
             .filter(|s| !s.is_empty())
             .skip(1)
             .collect();
+        let last = stats.last();
         let minutes = d.ticks as f64 / 120.0 / 60.0;
         let late = d.late as f64 / d.ticks.max(1) as f64;
         let other = d.runs_other as f64 / minutes.max(1e-9);
@@ -446,8 +515,8 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
             d.runs_push,
             d.runs_other,
             other,
-            num_after(stats, "rollbacks ").unwrap_or(f64::NAN),
-            num_after(stats, "out ").unwrap_or(f64::NAN),
+            last.and_then(|s| s.rollbacks).unwrap_or(f64::NAN),
+            last.and_then(|s| s.out).unwrap_or(f64::NAN),
             frame_max,
             shifts.join(" "),
         );
@@ -496,28 +565,22 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
         ));
     }
     // Steady state: metric lines once everybody is in.
-    let metrics: Vec<&str> = slog
+    let metrics: Vec<Metrics> = slog
         .lines()
-        .filter(|l| l.contains("metrics: ") && num_after(l, "players ") == Some(a.clients as f64))
+        .filter_map(Metrics::parse)
+        .filter(|m| m.players == Some(a.clients as f64))
         .collect();
     println!("server  (steady-state metric lines: {})", metrics.len());
-    let worst = |f: &dyn Fn(&str) -> Option<f64>| metrics.iter().filter_map(|l| f(l)).fold(f64::NAN, f64::max);
-    let p99 = worst(&|l| num_after(l, "p99 "));
-    let max = worst(&|l| num_after(l, "max "));
-    let per_player = worst(&|l| num_before(l, " per player"));
-    let mem = worst(&|l| num_after(l, "mem "));
+    let p99 = worst(metrics.iter().map(|m| m.tick_p99));
+    let max = worst(metrics.iter().map(|m| m.tick_max));
+    let per_player = worst(metrics.iter().map(|m| m.out_per_player));
+    let mem = worst(metrics.iter().map(|m| m.mem));
     // The first line also holds the start and the joins (the clients' clocks not synced yet); the last one the
     // clients that already quit at `--exit-after` (still players to the server, whose inputs stopped).
-    let settled = metrics.iter().skip(1).take(metrics.len().saturating_sub(2));
-    let cpu = settled
-        .clone()
-        .filter_map(|l| num_after(l, "cpu "))
-        .fold(f64::NAN, f64::max);
-    let frame_max = settled
-        .clone()
-        .filter_map(|l| num_after(l, "frame max "))
-        .fold(f64::NAN, f64::max);
-    let missed: f64 = settled.filter_map(|l| num_after(l, "input missed ")).sum();
+    let settled = metrics.get(1..metrics.len().saturating_sub(1)).unwrap_or_default();
+    let cpu = worst(settled.iter().map(|m| m.cpu));
+    let frame_max = worst(settled.iter().map(|m| m.frame_max));
+    let missed: f64 = settled.iter().filter_map(|m| m.input_missed).sum();
     println!(
         "        tick p99 {p99:.0} µs, max {max:.0} µs | frame max {frame_max:.0} ms | input missed {missed:.0} ticks | out {per_player:.0} B/s per player | cpu {cpu:.1}% | mem {mem:.0} MB"
     );
@@ -534,13 +597,11 @@ fn report(a: &StressArgs, dir: &Path) -> bool {
         failures.push(format!("server: mem {mem:.0} MB (max {})", a.max_mem));
     }
 
+    for f in &failures {
+        println!("FAIL {f}");
+    }
     if failures.is_empty() {
         println!("stress: ok");
-        true
-    } else {
-        for f in &failures {
-            println!("FAIL {f}");
-        }
-        false
     }
+    reported(failures.is_empty())
 }

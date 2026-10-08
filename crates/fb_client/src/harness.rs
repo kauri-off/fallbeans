@@ -173,10 +173,9 @@ impl Game {
         crate::build(&mut app, opts, Some(noop_gpu(gpu)));
         // (The preset of the kind of GPU tested: every machine starts on High, a player may pick Low.)
         app.world_mut().resource_mut::<crate::settings::Graphics>().preset = match gpu {
-            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu => "high",
-            _ => "low",
-        }
-        .into();
+            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu => crate::render::quality::Preset::High,
+            _ => crate::render::quality::Preset::Low,
+        };
         ready(&mut app);
         self.peers.push(Peer {
             app,

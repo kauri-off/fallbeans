@@ -4,7 +4,7 @@ use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 use fb_sim::math::V3;
-use fb_sim::physics::{Body, BodyState, GIANT_SIZE, power};
+use fb_sim::physics::{Body, BodyState, GIANT_SIZE, Power};
 use serde::{Deserialize, Serialize};
 
 use crate::{Anim, BodyFull, RemotePose};
@@ -39,7 +39,7 @@ pub struct Full {
     land_impact: f32,
     tilt: f64,
     tilt_dir: f64,
-    power: u8,
+    power: Option<Power>,
     power_until: f64,
     climb_to: [f64; 3],
     teleports: u32,
@@ -56,7 +56,7 @@ impl From<BodyFull> for Full {
             vel: b.vel.to_array(),
             yaw: b.yaw,
             grounded: b.grounded,
-            ground_col: b.ground_col,
+            ground_col: b.ground_col.map_or(-1, |c| c as i32),
             state: b.state,
             state_t: b.state_t,
             coyote: b.coyote,
@@ -85,7 +85,7 @@ impl From<Full> for BodyFull {
                 vel: V3::from_array(w.vel),
                 yaw: w.yaw,
                 grounded: w.grounded,
-                ground_col: w.ground_col,
+                ground_col: u32::try_from(w.ground_col).ok(),
                 state: w.state,
                 state_t: w.state_t,
                 coyote: w.coyote,
@@ -97,7 +97,7 @@ impl From<Full> for BodyFull {
                 tilt_dir: w.tilt_dir,
                 power: w.power,
                 power_until: w.power_until,
-                size: if w.power == power::GIANT { GIANT_SIZE } else { 1.0 },
+                size: if w.power == Some(Power::Giant) { GIANT_SIZE } else { 1.0 },
                 climb_to: V3::from_array(w.climb_to),
             },
             teleports: w.teleports,
@@ -116,7 +116,7 @@ pub struct Pose {
     tilt: u8,
     tilt_dir: u8,
     anim: Anim,
-    power: u8,
+    power: Option<Power>,
     size: u8,
     /// cm/s.
     vel: [i16; 2],
@@ -178,10 +178,10 @@ mod tests {
         body.state_t = 0.4;
         body.tilt = 1.4;
         body.tilt_dir = -0.7;
-        body.power = power::GIANT;
+        body.power = Some(Power::Giant);
         body.power_until = 61.25;
         body.size = 1.8;
-        body.ground_col = 17;
+        body.ground_col = Some(17);
         BodyFull {
             body,
             teleports: 300,
@@ -202,7 +202,7 @@ mod tests {
         );
         assert_eq!(
             (back.body.state, back.body.ground_col, back.teleports),
-            (f.body.state, 17, 300)
+            (f.body.state, Some(17), 300)
         );
         assert_eq!(back.body.size, GIANT_SIZE);
         let exact = Body {

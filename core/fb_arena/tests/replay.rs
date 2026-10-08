@@ -64,7 +64,7 @@ fn replay_after_running_ahead_matches() {
         step(&mut world, &mut body, k);
         live.push(body.clone());
     }
-    let riding = live.iter().filter(|b| b.grounded && b.ground_col == 0).count();
+    let riding = live.iter().filter(|b| b.grounded && b.ground_col == Some(0)).count();
     assert!(
         riding > 150,
         "the bean should ride the platform: {riding} ticks, last {:?}",

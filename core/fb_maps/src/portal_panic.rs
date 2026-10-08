@@ -3,12 +3,14 @@
 //! void; in between, a few more challenges drawn from the seed.
 use std::sync::Arc;
 
+use fb_shared::{Rgb, rgb};
 use fb_sim::bots::{BotView, SharedTest, Waypoint, aim_landing};
 use fb_sim::builder::{Builder, OpenFn, PortalEnd, PortalOpts, portal_shut};
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, moving_platforms, pick_sections, pistons, portal_fork, race_course, rotor_decks,
     with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
@@ -29,27 +31,35 @@ static META: GameMeta = GameMeta::new(
     150.0,
 );
 
-const ONE_WAY: &str = "#39e0d0";
-const CANNON: &str = "#ff8a3d";
-const BLINK: &str = "#a66bff";
+const ONE_WAY: Rgb = rgb(0x39e0d0);
+const CANNON: Rgb = rgb(0xff8a3d);
+const BLINK: Rgb = rgb(0xa66bff);
 
 fn end(x: f64, y: f64, z: f64) -> PortalEnd {
     PortalEnd { x, y, z, yaw: 0.0 }
 }
 
-fn one_way(speed: Option<f64>, lift: Option<f64>, open: Option<OpenFn>) -> PortalOpts {
+fn one_way(open: Option<OpenFn>) -> PortalOpts {
     PortalOpts {
         one_way: true,
-        closed: Some(0.3),
-        speed,
-        lift,
+        closed: 0.3,
         open,
+        ..Default::default()
+    }
+}
+
+/// One-way, throwing beans out at `speed` and up at `lift` m/s.
+fn thrown(speed: f64, lift: f64) -> PortalOpts {
+    PortalOpts {
+        speed,
+        lift: Some(lift),
+        ..one_way(None)
     }
 }
 
 /// A stretch of the route that walks into a portal at (x, z) and carries on.
 fn through(x: f64, z: f64) -> [Waypoint; 2] {
-    [Waypoint::spread(x, z - 2.4, 0.0), Waypoint::spread(x, z + 0.6, 0.0)]
+    [Waypoint::exact(x, z - 2.4), Waypoint::exact(x, z + 0.6)]
 }
 
 /// Islands over gaps nobody can jump, each swept by a low bar: two one-way portals at the far end of each
@@ -89,18 +99,18 @@ fn portal_islands(n: usize) -> Segment {
                 let route = &mut routes[r];
                 let x = sx * 3.6;
                 if k == 0 {
-                    route.push(Waypoint::spread(x, iz + 2.0, 0.0));
+                    route.push(Waypoint::exact(x, iz + 2.0));
                 } else {
-                    route.push(Waypoint::spread(x, iz + il / 2.0, 0.0).jump_shared(&jump_when));
-                    route.push(Waypoint::spread(x, iz + il - 3.9, 0.0).jump_shared(&jump_when));
+                    route.push(Waypoint::exact(x, iz + il / 2.0).jump_shared(&jump_when));
+                    route.push(Waypoint::exact(x, iz + il - 3.9).jump_shared(&jump_when));
                 }
                 if k == n {
                     continue;
                 }
                 let ez = iz + il - 1.5;
                 let (nz, _) = islands[k + 1];
-                s.b.portal(end(x, y, ez), end(x, y, nz + 0.8), ONE_WAY, one_way(None, None, None));
-                route.push(Waypoint::spread(x, ez + 0.6, 0.0).jump_shared(&jump_when));
+                s.b.portal(end(x, y, ez), end(x, y, nz + 0.8), ONE_WAY, one_way(None));
+                route.push(Waypoint::exact(x, ez + 0.6).jump_shared(&jump_when));
             }
         }
         let (lz, ll) = islands[n];
@@ -136,12 +146,8 @@ fn blinking_portals() -> Segment {
             let open: OpenFn =
                 Arc::new(move |t: f64| t > 0.0 && (((t + ph) % period) + period) % period / period < share);
             let ez = s.z + near - 1.6;
-            let pair = s.b.portal(
-                end(x, y, ez),
-                end(x, y, far + 0.6),
-                BLINK,
-                one_way(None, None, Some(open.clone())),
-            );
+            let pair =
+                s.b.portal(end(x, y, ez), end(x, y, far + 0.6), BLINK, one_way(Some(open.clone())));
             // A lamp over each: green while it is open.
             if !s.b.server() {
                 let lamp = s.b.anchor(x, y + 3.35, ez, ROOT);
@@ -152,8 +158,8 @@ fn blinking_portals() -> Segment {
                 });
             }
             routes.push(vec![
-                Waypoint::spread(x, ez - 3.2, 0.0),
-                Waypoint::spread(x, ez + 0.6, 0.0).wait(move |bot| {
+                Waypoint::exact(x, ez - 3.2),
+                Waypoint::exact(x, ez + 0.6).wait(move |bot| {
                     let p = bot.world.portals[pair];
                     !portal_shut(&p, Some(&open), bot.t + 0.15) && !portal_shut(&p, Some(&open), bot.t + 0.5)
                 }),
@@ -189,17 +195,11 @@ fn portal_wall() -> Segment {
         let mut routes = Vec::new();
         for x in [-5.0, 0.0, 5.0] {
             let ez = wz - 3.0;
-            s.b.portal(
-                end(x, y, ez),
-                end(x, y + h, wz - 1.1),
-                CANNON,
-                one_way(Some(9.0), Some(6.0), None),
-            );
+            s.b.portal(end(x, y, ez), end(x, y + h, wz - 1.1), CANNON, thrown(9.0, 6.0));
             let land = wz + 9.0;
             let mut route: Vec<Waypoint> = through(x, ez).into();
             route.push(
-                Waypoint::spread(x, land, 0.0)
-                    .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, y, land, out)),
+                Waypoint::exact(x, land).drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, y, land, out)),
             );
             route.push(Waypoint::spread(0.0, wz + 13.0, 1.0));
             routes.push(route);
@@ -234,17 +234,12 @@ fn portal_cannons(n: usize) -> Segment {
             let nz = z + len + gap;
             for (r, x) in [-3.5, 3.5].into_iter().enumerate() {
                 let ez = z + 3.5;
-                s.b.portal(
-                    end(x, y, ez),
-                    end(x, y, z + len - 1.8),
-                    CANNON,
-                    one_way(Some(13.0), Some(10.0), None),
-                );
+                s.b.portal(end(x, y, ez), end(x, y, z + len - 1.8), CANNON, thrown(13.0, 10.0));
                 let land = nz + 3.5;
                 let yy = ny;
                 routes[r].extend(through(x, ez));
                 routes[r].push(
-                    Waypoint::spread(x, land, 0.0)
+                    Waypoint::exact(x, land)
                         .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, yy, land, out)),
                 );
             }
@@ -271,12 +266,7 @@ fn last_hop() -> Segment {
         s.b.box_(0.0, y - 1.0, s.z + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, o());
         let far = s.z + 6.0 + 9.0;
         s.b.box_(0.0, y - 1.0, far + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, o());
-        s.b.portal(
-            end(0.0, y, s.z + 4.0),
-            end(0.0, y, far + 0.5),
-            ONE_WAY,
-            one_way(None, None, None),
-        );
+        s.b.portal(end(0.0, y, s.z + 4.0), end(0.0, y, far + 0.5), ONE_WAY, one_way(None));
         let mut route: Vec<Waypoint> = through(0.0, s.z + 4.0).into();
         route.push(Waypoint::spread(0.0, far + 5.0, 0.5));
         SegOut {
@@ -293,8 +283,8 @@ impl MapDef for PortalPanic {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["neon", "starlight", "candy"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Neon, LookId::Starlight, LookId::Candy]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

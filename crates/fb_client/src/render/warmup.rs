@@ -33,7 +33,7 @@ use lightyear::prelude::LocalTimeline;
 use super::EnvLights;
 use super::ao::BakedAo;
 use super::lod::ModelLods;
-use super::quality::{Preset, Quality, preset_for};
+use super::quality::{Preset, Quality};
 use super::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
 use super::upscale::{Upscaler, Upscaling};
 use crate::face::{FaceKit, FaceSource};
@@ -113,13 +113,13 @@ struct Key {
 impl Key {
     fn of(g: &Graphics, up: &Upscaling) -> Key {
         Key {
-            preset: preset_for(g),
+            preset: g.preset,
             upscaler: up.active,
             shadows: g.shadows,
             aa: g.aa,
             grade: g.grade,
             motes: g.motes,
-            upscaled: Quality::scale(&g.upscale) < 1.0,
+            upscaled: g.upscale.scale() < 1.0,
         }
     }
 }
@@ -269,12 +269,7 @@ fn plan() -> Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> {
         "podium" => ArenaKind::Podium,
         _ => ArenaKind::Round,
     };
-    let own_look = |d: &dyn MapDef| {
-        d.looks()
-            .first()
-            .and_then(|&id| fb_sim::looks::by_id(id))
-            .unwrap_or(classic)
-    };
+    let own_look = |d: &dyn MapDef| d.looks().first().map_or(classic, |id| id.look());
     let mut out: Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> = Vec::new();
     let mut lobby = None;
     for &d in fb_maps::MAPS {
@@ -391,8 +386,8 @@ fn drive(
     let began = *w.began.get_or_insert(now);
     if w.stage == Stage::Assets {
         if kit.models.0.is_empty() {
-            kit.models.0 = fb_sim::builder::MODEL_NAMES
-                .iter()
+            kit.models.0 = fb_sim::scene::Model::ALL
+                .into_iter()
                 .map(|n| kit.assets.load(format!("models/{n}.glb")))
                 .collect();
             let looks = kit.env.make_all(&mut kit.images);

@@ -2,7 +2,7 @@
 use fb_proto::{Outfit, Pid};
 
 use super::awards::GameStats;
-use super::{Backoff, ConnId};
+use super::{Backoff, ConnId, RateWindow, Uid};
 
 /// A person (connected, or within the reconnect grace) or a bot.
 #[derive(Clone, Debug)]
@@ -16,17 +16,10 @@ pub struct Player {
     pub score: i64,
     pub crowns: u32,
     pub stats: GameStats,
-    /// The person's identity; empty for bots.
-    pub uid: String,
-    pub bot: bool,
-    /// A bot added to fill the empty places (it goes when the host turns that off).
-    pub auto: bool,
-    pub conn: Option<ConnId>,
-    /// Server tick the connection was lost at.
-    pub disconnected_at: u64,
+    pub kind: Kind,
     pub spectator: bool,
-    pub msg_window: u64,
-    pub msg_count: u32,
+    /// Control messages in the current second.
+    pub msgs: RateWindow,
     pub chat_at: Option<u64>,
     /// The "rate limited" warning about this player.
     pub rate_log: Backoff,
@@ -34,8 +27,20 @@ pub struct Player {
     pub rtt: u32,
 }
 
+#[derive(Clone, Debug)]
+pub enum Kind {
+    Human {
+        uid: Uid,
+        conn: Option<ConnId>,
+        /// Server tick the connection was lost at (None while connected).
+        disconnected_at: Option<u64>,
+    },
+    /// `auto`: added to fill the empty places (it goes when the host turns that off).
+    Bot { auto: bool },
+}
+
 impl Player {
-    pub fn new(id: Pid, name: String, color: u8, outfit: Outfit) -> Self {
+    fn new(id: Pid, name: String, color: u8, outfit: Outfit, kind: Kind) -> Self {
         Self {
             id,
             name,
@@ -44,17 +49,57 @@ impl Player {
             score: 0,
             crowns: 0,
             stats: GameStats::default(),
-            uid: String::new(),
-            bot: true,
-            auto: false,
-            conn: None,
-            disconnected_at: 0,
+            kind,
             spectator: false,
-            msg_window: 0,
-            msg_count: 0,
+            msgs: RateWindow::default(),
             chat_at: None,
             rate_log: Backoff::default(),
             rtt: 0,
+        }
+    }
+
+    pub fn human(id: Pid, name: String, color: u8, outfit: Outfit, uid: Uid, conn: ConnId) -> Self {
+        let kind = Kind::Human {
+            uid,
+            conn: Some(conn),
+            disconnected_at: None,
+        };
+        Self::new(id, name, color, outfit, kind)
+    }
+
+    pub fn bot(id: Pid, name: String, color: u8, outfit: Outfit, auto: bool) -> Self {
+        Self::new(id, name, color, outfit, Kind::Bot { auto })
+    }
+
+    pub fn is_bot(&self) -> bool {
+        matches!(self.kind, Kind::Bot { .. })
+    }
+
+    /// A bot that only fills an empty place.
+    pub fn auto(&self) -> bool {
+        matches!(self.kind, Kind::Bot { auto: true })
+    }
+
+    pub fn uid(&self) -> Option<&Uid> {
+        match &self.kind {
+            Kind::Human { uid, .. } => Some(uid),
+            Kind::Bot { .. } => None,
+        }
+    }
+
+    /// The person's connection (None for bots and the disconnected).
+    pub fn conn(&self) -> Option<ConnId> {
+        match self.kind {
+            Kind::Human { conn, .. } => conn,
+            Kind::Bot { .. } => None,
+        }
+    }
+
+    /// Takes part: a bot, or a connected person.
+    pub fn present(&self) -> bool {
+        match self.kind {
+            Kind::Human { conn, .. } => conn.is_some(),
+            Kind::Bot { .. } => true,
         }
     }
 }

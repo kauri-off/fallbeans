@@ -147,7 +147,7 @@ fn apply(
     let Some(mut m) = mats.get_mut(&h.0) else { return };
     m.u = match map {
         Some(map) if g.motes => {
-            let c = crate::view::hex(map.look.look.motes.color).to_linear();
+            let c = crate::view::color(map.look.look.motes.color).to_linear();
             MotesUniform {
                 tint: Vec4::new(c.red, c.green, c.blue, 1.0),
                 box_rise: Vec4::new(BOX, BOX * 0.5, BOX, map.look.look.motes.rise as f32),

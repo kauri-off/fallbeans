@@ -2,6 +2,7 @@
 //! come from the seed.
 use fb_sim::bots::{ArenaOpts, BOT_DT, BotInput, BotView, Note, arena_brain};
 use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
@@ -25,21 +26,21 @@ impl MapDef for JumpClub {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["neon", "starlight", "circus"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Neon, LookId::Starlight, LookId::Circus]
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
         let seen_at: Note<f64> = b.note();
         let seen_eta: Note<f64> = b.note();
         let rng = &mut b.rng;
-        let dir = if rng.next() < 0.5 { 1.0 } else { -1.0 };
+        let dir = if rng.unit() < 0.5 { 1.0 } else { -1.0 };
         let low_arms = 2;
-        let high_arms = if rng.next() < 0.35 { 1 } else { 2 };
-        let acc = 0.009 + rng.next() * 0.005;
+        let high_arms = if rng.unit() < 0.35 { 1 } else { 2 };
+        let acc = 0.009 + rng.unit() * 0.005;
         // The low bar starts 10° past a spawn pair and eases in: the first bean it reaches has over a second.
-        let low = SpinUp::new(-0.26, 1.1 + rng.next() * 0.15, acc);
-        let hk = 0.006 + rng.next() * 0.004;
+        let low = SpinUp::new(-0.26, 1.1 + rng.unit() * 0.15, acc);
+        let hk = 0.006 + rng.unit() * 0.004;
         let low_ang = move |t: f64| dir * low.angle(t);
         let low_omega = move |t: f64| dir * low.omega(t);
         let high_ang = move |t: f64| dir * (m::PI / 2.0 - if t <= 0.0 { 0.0 } else { 0.7 * t + hk * t * t });
@@ -76,7 +77,10 @@ impl MapDef for JumpClub {
             let high = arm_contact_eta(p, high_ang(t), high_omega(t), high_arms, 0.0, 0.0, 0.36);
             (eta, high)
         };
-        let mut opts = ArenaOpts::new(8.0);
+        let mut opts = ArenaOpts {
+            radius: 8.0,
+            ..Default::default()
+        };
         opts.safe = Some(Box::new(|x, z, _| m::hypot(x, z) > 3.5));
         opts.jump_when = Some(Box::new(move |bot: &mut BotView| {
             let t = bot.t.at_least(0.0);
@@ -99,7 +103,7 @@ impl MapDef for JumpClub {
             let when = eta / rate;
             let next = when - BOT_DT;
             // Worse bots react late (and sometimes too late).
-            let late = 0.15 + mem.traits.react * 0.3;
+            let late = 0.15 + mem.traits().react * 0.3;
             when > 0.1 && (when < late || (next < 0.1 && when < 0.32)) && high > 0.7
         }));
         let brain = arena_brain(opts);
@@ -116,7 +120,7 @@ impl MapDef for JumpClub {
             let low_first = eta < high;
             let clash = if low_first { high - eta < 0.8 } else { eta - high < 0.35 };
             // Better players spot it sooner.
-            let sees = 0.3 + bot.mem.traits.skill * 0.9;
+            let sees = 0.3 + bot.mem.traits().skill * 0.9;
             if !clash || eta.at_most(high) > sees || eta.at_most(high) < 0.08 {
                 return;
             }

@@ -237,9 +237,9 @@ mod tests {
     fn every_look_has_some_haze() {
         for l in fb_sim::looks::LOOKS {
             let h = haze_of(l);
-            assert!(h.haze.w > 0.0 && h.haze.w < 0.01, "{}: {}", l.id, h.haze.w);
+            assert!(h.haze.w > 0.0 && h.haze.w < 0.01, "{:?}: {}", l.id, h.haze.w);
             // A hundred metres of it at height 0 hide less than half of what is behind.
-            assert!((-h.haze.w * 100.0).exp() > 0.5, "{}", l.id);
+            assert!((-h.haze.w * 100.0).exp() > 0.5, "{:?}", l.id);
         }
     }
 }

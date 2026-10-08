@@ -2,15 +2,18 @@
 //! seed, shelves zig-zagging up over the void, and a tower of ladders to the finish at the top.
 use std::sync::Arc;
 
+use fb_shared::rgb;
 use fb_sim::bots::{BotView, SharedTest, Waypoint};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, hammer_bridges, pick_sections, race_course, sliding_gates, tipping_bridge, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::props::arm_contact_eta;
+use fb_sim::scene::Surface;
 use fb_sim::scene::{Palette, pal};
 
 use crate::util::o;
@@ -30,7 +33,7 @@ const STEP_PALS: [Palette; 6] = [pal::ORANGE, pal::YELLOW, pal::GREEN, pal::TEAL
 
 fn rock() -> PrimOpts {
     PrimOpts {
-        surface: Some("rock"),
+        surface: Some(Surface::Rock),
         ..Default::default()
     }
 }
@@ -87,7 +90,7 @@ fn ladder_wall(h: f64) -> Segment {
         );
         let lxs = [-5.25, -1.75, 1.75, 5.25];
         for lx in lxs {
-            s.b.ladder(lx, s.y, wf, s.y + h, m::PI, "#ffb347");
+            s.b.ladder(lx, s.y, wf, s.y + h, m::PI, rgb(0xffb347));
         }
         // The pendulum: its head sweeps along the face over every ladder, at the height of a climber.
         let py = s.y + h + 3.2;
@@ -108,8 +111,8 @@ fn ladder_wall(h: f64) -> Segment {
                 .iter()
                 .map(|&lx| {
                     vec![
-                        Waypoint::spread(lx, wf - 4.0, 0.0),
-                        Waypoint::spread(lx, wf + 1.2, 0.0).wait(move |bot| {
+                        Waypoint::exact(lx, wf - 4.0),
+                        Waypoint::exact(lx, wf + 1.2).wait(move |bot| {
                             let mut dt = 0.1;
                             while dt <= 1.5 {
                                 if (head_x(bot.t + dt) - lx).abs() < 2.4 {
@@ -158,7 +161,7 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
         let last = hops.len() - 1;
         for (k, &(hx, hy, hz)) in hops.iter().enumerate() {
             let (fx, fy, fhx, fz1) = from;
-            route.push(Waypoint::spread(hx, hz, 0.0).jump_when(move |bot| {
+            route.push(Waypoint::exact(hx, hz).jump_when(move |bot| {
                 let p = bot.body.pos;
                 if !bot.body.grounded || (p.y - fy).abs() > 0.4 {
                     return false;
@@ -202,10 +205,10 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
             let spread = 2.0 + s.rng() * 2.5;
             for (r, sx) in [-1.0, 1.0].into_iter().enumerate() {
                 let lx = sx * spread;
-                let color = if k % 2 == 1 { "#ffb347" } else { "#f4f1ff" };
+                let color = if k % 2 == 1 { rgb(0xffb347) } else { rgb(0xf4f1ff) };
                 s.b.ladder(lx, y - rise, face, y, m::PI, color);
-                routes[r].push(Waypoint::spread(lx, face - 2.6, 0.0).jump_shared(&jump_when));
-                routes[r].push(Waypoint::spread(lx, face + 1.2, 0.0));
+                routes[r].push(Waypoint::exact(lx, face - 2.6).jump_shared(&jump_when));
+                routes[r].push(Waypoint::exact(lx, face + 1.2));
             }
             jump_when = never.clone();
             if k < levels {
@@ -245,8 +248,8 @@ impl MapDef for CliffClimb {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["snow", "desert", "castle"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Snow, LookId::Desert, LookId::Castle]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

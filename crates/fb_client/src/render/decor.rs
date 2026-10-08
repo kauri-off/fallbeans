@@ -11,13 +11,15 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::world_serialization::WorldAssetRoot;
-use fb_sim::looks::{Pattern, ResolvedLook};
+use fb_shared::{Rgb, rgb};
+use fb_sim::looks::{LookId, Pattern, ResolvedLook, Swatch};
+use fb_sim::scene::Model;
 use fb_sim::scene::SceneryRequest;
 
 use super::props::Prop;
 use super::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
 use crate::game::Map;
-use crate::view::{MapRoot, frame_tick, hex};
+use crate::view::{MapRoot, color, frame_tick};
 
 /// Half size of the cloud model at scale 1 (x/z and y).
 const CLOUD_R: f32 = 3.9;
@@ -428,19 +430,26 @@ impl Kit<'_> {
         list[((self.rnd() * list.len() as f32) as usize).min(list.len() - 1)]
     }
 
-    fn col(&self, k: &str) -> String {
-        let i = fb_sim::looks::PAL_KEYS.iter().position(|p| *p == k).unwrap_or(0);
-        self.look.palette[i][0].clone()
+    fn col(&self, s: Swatch) -> Rgb {
+        self.look.tones(s)[0]
     }
 
-    fn col2(&self, k: &str) -> String {
-        let i = fb_sim::looks::PAL_KEYS.iter().position(|p| *p == k).unwrap_or(0);
-        self.look.palette[i][1].clone()
+    fn col2(&self, s: Swatch) -> Rgb {
+        self.look.tones(s)[1]
     }
 
     /// One of the look's bright palette colours.
-    fn bright(&mut self) -> String {
-        let k = self.pick(&["pink", "yellow", "blue", "green", "orange", "purple", "teal", "red"]);
+    fn bright(&mut self) -> Rgb {
+        let k = self.pick(&[
+            Swatch::Pink,
+            Swatch::Yellow,
+            Swatch::Blue,
+            Swatch::Green,
+            Swatch::Orange,
+            Swatch::Purple,
+            Swatch::Teal,
+            Swatch::Red,
+        ]);
         self.col(k)
     }
 
@@ -454,21 +463,21 @@ impl Kit<'_> {
         })
     }
 
-    fn plain(&mut self, c: &str, kind: Kind) -> Mat {
-        self.surface(Spec::plain(hex(c).to_linear(), Some(kind)))
+    fn plain(&mut self, c: Rgb, kind: Kind) -> Mat {
+        self.surface(Spec::plain(color(c).to_linear(), Some(kind)))
     }
 
-    fn plain_with(&mut self, c: &str, kind: Kind, f: impl FnOnce(&mut Spec)) -> Mat {
-        let mut spec = Spec::plain(hex(c).to_linear(), Some(kind));
+    fn plain_with(&mut self, c: Rgb, kind: Kind, f: impl FnOnce(&mut Spec)) -> Mat {
+        let mut spec = Spec::plain(color(c).to_linear(), Some(kind));
         f(&mut spec);
         self.surface(spec)
     }
 
-    fn pattern(&mut self, c1: &str, c2: &str, freq: f32, dir: [f32; 2], kind: Kind, p: Pattern) -> Mat {
+    fn pattern(&mut self, c1: Rgb, c2: Rgb, freq: f32, dir: [f32; 2], kind: Kind, p: Pattern) -> Mat {
         self.surface(Spec {
             paint: Some(Paint {
-                c1: hex(c1).to_linear(),
-                c2: hex(c2).to_linear(),
+                c1: color(c1).to_linear(),
+                c2: color(c2).to_linear(),
                 freq,
                 dir: Vec2::from(dir),
                 speed: 0.0,
@@ -478,12 +487,12 @@ impl Kit<'_> {
         })
     }
 
-    fn stripes(&mut self, c1: &str, c2: &str, freq: f32, dir: [f32; 2], p: Pattern) -> Mat {
+    fn stripes(&mut self, c1: Rgb, c2: Rgb, freq: f32, dir: [f32; 2], p: Pattern) -> Mat {
         self.pattern(c1, c2, freq, dir, Kind::Plastic, p)
     }
 
     /// Unlit, glowing (not dimmed by the light, no fog).
-    fn glow(&mut self, c: &str, opacity: f32) -> Mat {
+    fn glow(&mut self, c: Rgb, opacity: f32) -> Mat {
         let key = format!("{c}|{opacity}");
         if let Some(h) = self.glows.get(&key) {
             return Mat::G(h.clone());
@@ -492,7 +501,7 @@ impl Kit<'_> {
             .world
             .resource_mut::<Assets<StandardMaterial>>()
             .add(StandardMaterial {
-                base_color: hex(c).with_alpha(opacity),
+                base_color: color(c).with_alpha(opacity),
                 unlit: true,
                 fog_enabled: false,
                 alpha_mode: if opacity < 1.0 {
@@ -553,7 +562,7 @@ impl Kit<'_> {
     }
 
     /// A model (turned at random); a flag's cloth takes `tint`.
-    fn model(&mut self, name: &'static str, parent: Entity, at: [f32; 3], scale: f32, tint: Option<String>) -> Entity {
+    fn model(&mut self, name: Model, parent: Entity, at: [f32; 3], scale: f32, tint: Option<Rgb>) -> Entity {
         let paint = tint.map(|t| vec![("Flag", t, 0.0)]).unwrap_or_default();
         self.model_painted(name, parent, at, scale, paint)
     }
@@ -561,11 +570,11 @@ impl Kit<'_> {
     /// A model (turned at random) with materials repainted by name (`Prop::paint`).
     fn model_painted(
         &mut self,
-        name: &'static str,
+        name: Model,
         parent: Entity,
         at: [f32; 3],
         scale: f32,
-        paint: Vec<(&'static str, String, f32)>,
+        paint: Vec<(&'static str, Rgb, f32)>,
     ) -> Entity {
         let yaw = self.rnd() * 6.3;
         let scene = self
@@ -590,12 +599,12 @@ impl Kit<'_> {
     /// An island in the look's colours.
     fn island(&mut self, parent: Entity, t: Transform) -> Entity {
         let l = self.look.look;
-        let paint = if l.id != "classic" && l.id != "meadow" {
+        let paint = if !matches!(l.id, LookId::Classic | LookId::Meadow) {
             let i = l.island;
             vec![
-                ("Grass", i.grass.to_string(), 0.0),
-                ("Rock", i.rock.to_string(), 0.0),
-                ("Leaves", i.leaves.to_string(), 0.0),
+                ("Grass", i.grass, 0.0),
+                ("Rock", i.rock, 0.0),
+                ("Leaves", i.leaves, 0.0),
             ]
         } else {
             Vec::new()
@@ -607,7 +616,7 @@ impl Kit<'_> {
             .spawn((
                 Decor,
                 WorldAssetRoot(scene),
-                Prop::painted("island", paint),
+                Prop::painted(Model::Island, paint),
                 t,
                 Visibility::default(),
                 NotShadowCaster,
@@ -687,7 +696,7 @@ fn flora(k: &mut Kit, g: Entity) {
     for i in 0..n {
         let a = k.rnd() * 6.3;
         let r = if i > 0 { 1.2 + k.rnd() * 1.2 } else { 0.0 };
-        let name = k.pick(&["tree", "pine", "tree", "mushroom"]);
+        let name = k.pick(&[Model::Tree, Model::Pine, Model::Tree, Model::Mushroom]);
         let s = 0.55 + k.rnd() * 0.3;
         k.model(name, g, [a.cos() * r, 0.0, a.sin() * r], s, None);
     }
@@ -698,9 +707,9 @@ fn grove(k: &mut Kit, g: Entity) {
 }
 
 fn flowers(k: &mut Kit, g: Entity) {
-    let stem = k.plain("#4fae4a", Kind::Leaf);
-    let yellow = k.col("yellow");
-    let heart = k.plain(&yellow, Kind::Plastic);
+    let stem = k.plain(rgb(0x4fae4a), Kind::Leaf);
+    let yellow = k.col(Swatch::Yellow);
+    let heart = k.plain(yellow, Kind::Plastic);
     for _ in 0..9 {
         let a = k.rnd() * 6.3;
         let r = 0.4 + k.rnd() * 2.2;
@@ -708,7 +717,7 @@ fn flowers(k: &mut Kit, g: Entity) {
         let (x, z) = (a.cos() * r, a.sin() * r);
         k.part(g, Shape::Cyl, &stem, [x, h / 2.0, z], [0.05, h, 0.05], NO_ROT);
         let c = k.bright();
-        let head = k.plain(&c, Kind::Fabric);
+        let head = k.plain(c, Kind::Fabric);
         for p in 0..5 {
             let pa = p as f32 / 5.0 * core::f32::consts::TAU;
             k.part(
@@ -725,17 +734,17 @@ fn flowers(k: &mut Kit, g: Entity) {
 }
 
 fn windmill(k: &mut Kit, g: Entity) {
-    let white = k.col("white");
-    let red = k.col("red");
-    let pink = k.col("pink");
-    let yellow = k.col("yellow");
-    let wall = k.plain(&white, Kind::Wood);
+    let white = k.col(Swatch::White);
+    let red = k.col(Swatch::Red);
+    let pink = k.col(Swatch::Pink);
+    let yellow = k.col(Swatch::Yellow);
+    let wall = k.plain(white, Kind::Wood);
     k.part(g, Shape::Taper, &wall, [0.0, 2.6, 0.0], [1.0, 5.2, 1.0], NO_ROT);
-    let roof = k.plain(&red, Kind::Wood);
+    let roof = k.plain(red, Kind::Wood);
     k.part(g, Shape::Cone, &roof, [0.0, 5.9, 0.0], [1.1, 1.6, 1.1], NO_ROT);
     let base = Transform::from_xyz(0.0, 4.6, 0.75);
     let hub = k.group(Some(g), base);
-    let sail = k.stripes(&white, &pink, 2.2, [1.0, 0.0], Pattern::Stripes);
+    let sail = k.stripes(white, pink, 2.2, [1.0, 0.0], Pattern::Stripes);
     for i in 0..4 {
         let arm = k.group(
             Some(hub),
@@ -743,14 +752,14 @@ fn windmill(k: &mut Kit, g: Entity) {
         );
         k.part(arm, Shape::Box, &sail, [0.0, 1.7, 0.0], [0.55, 3.0, 0.06], NO_ROT);
     }
-    let y = k.plain(&yellow, Kind::Plastic);
+    let y = k.plain(yellow, Kind::Plastic);
     k.part(hub, Shape::Sphere, &y, [0.0, 0.0, 0.05], [0.25, 0.25, 0.25], NO_ROT);
     let sp = 0.6 + k.rnd() * 0.6;
     k.tick(move |t, tx| tx.set(hub, base.with_rotation(Quat::from_rotation_z(t * sp))));
 }
 
 fn tower(k: &mut Kit, g: Entity) {
-    let stone = k.stripes("#d8d2c6", "#bdb5a8", 1.6, [0.0, 1.0], Pattern::Checker);
+    let stone = k.stripes(rgb(0xd8d2c6), rgb(0xbdb5a8), 1.6, [0.0, 1.0], Pattern::Checker);
     k.part(g, Shape::Cyl, &stone, [0.0, 3.5, 0.0], [1.4, 7.0, 1.4], NO_ROT);
     for i in 0..8 {
         let a = i as f32 / 8.0 * core::f32::consts::TAU;
@@ -763,21 +772,21 @@ fn tower(k: &mut Kit, g: Entity) {
             [0.0, -a, 0.0],
         );
     }
-    let roof = k.pick(&["red", "blue", "purple"]);
+    let roof = k.pick(&[Swatch::Red, Swatch::Blue, Swatch::Purple]);
     let (c1, c2) = (k.col(roof), k.col2(roof));
-    let rm = k.stripes(&c1, &c2, 2.0, [0.0, 1.0], Pattern::Stripes);
+    let rm = k.stripes(c1, c2, 2.0, [0.0, 1.0], Pattern::Stripes);
     k.part(g, Shape::Cone, &rm, [0.0, 8.8, 0.0], [1.65, 2.6, 1.65], NO_ROT);
-    let door = k.plain("#3a3048", Kind::Plastic);
+    let door = k.plain(rgb(0x3a3048), Kind::Plastic);
     k.part(g, Shape::Box, &door, [0.0, 4.2, 1.38], [0.35, 0.7, 0.1], NO_ROT);
-    let y = k.col("yellow");
-    k.model("flag", g, [0.0, 9.9, 0.0], 0.45, Some(y));
+    let y = k.col(Swatch::Yellow);
+    k.model(Model::Flag, g, [0.0, 9.9, 0.0], 0.45, Some(y));
 }
 
 fn keep(k: &mut Kit, g: Entity) {
-    let stone = k.stripes("#d8d2c6", "#c4bcae", 1.4, [1.0, 1.0], Pattern::Checker);
+    let stone = k.stripes(rgb(0xd8d2c6), rgb(0xc4bcae), 1.4, [1.0, 1.0], Pattern::Checker);
     k.part(g, Shape::Box, &stone, [0.0, 2.4, 0.0], [4.0, 4.8, 4.0], NO_ROT);
-    let blue = k.col("blue");
-    let roof = k.plain(&blue, Kind::Plastic);
+    let blue = k.col(Swatch::Blue);
+    let roof = k.plain(blue, Kind::Plastic);
     for sx in [-1.0, 1.0] {
         for sz in [-1.0, 1.0] {
             k.part(
@@ -798,20 +807,20 @@ fn keep(k: &mut Kit, g: Entity) {
             );
         }
     }
-    let (r, y) = (k.col("red"), k.col("yellow"));
-    let banner = k.stripes(&r, &y, 1.8, [1.0, 0.0], Pattern::Chevron);
+    let (r, y) = (k.col(Swatch::Red), k.col(Swatch::Yellow));
+    let banner = k.stripes(r, y, 1.8, [1.0, 0.0], Pattern::Chevron);
     k.part(g, Shape::Box, &banner, [0.0, 3.2, 2.03], [1.3, 2.4, 0.05], NO_ROT);
-    let door = k.plain("#3a3048", Kind::Plastic);
+    let door = k.plain(rgb(0x3a3048), Kind::Plastic);
     k.part(g, Shape::Box, &door, [0.0, 0.8, 2.02], [1.0, 1.6, 0.05], NO_ROT);
 }
 
 fn banners(k: &mut Kit, g: Entity) {
-    let pole = k.plain_with("#d8c090", Kind::Gold, |s| {
+    let pole = k.plain_with(rgb(0xd8c090), Kind::Gold, |s| {
         s.metallic = Some(0.7);
         s.roughness = Some(0.3);
     });
     let ph = k.rnd() * 6.0;
-    let white = k.col("white");
+    let white = k.col(Swatch::White);
     let mut cloths = Vec::new();
     for i in 0..3 {
         let x = (i as f32 - 1.0) * 1.6;
@@ -820,7 +829,7 @@ fn banners(k: &mut Kit, g: Entity) {
         let c = k.bright();
         let base = Transform::from_xyz(x, 5.3, 0.1);
         let cloth = k.group(Some(g), base);
-        let m = k.stripes(&c, &white, 1.6, [0.0, 1.0], Pattern::Chevron);
+        let m = k.stripes(c, white, 1.6, [0.0, 1.0], Pattern::Chevron);
         k.part(cloth, Shape::Box, &m, [0.0, -1.3, 0.0], [0.9, 2.6, 0.04], NO_ROT);
         cloths.push((cloth, base));
     }
@@ -835,9 +844,9 @@ fn banners(k: &mut Kit, g: Entity) {
 fn gear(k: &mut Kit, g: Entity) {
     let base = Transform::from_xyz(0.0, 3.5, 0.0);
     let wheel = k.group(Some(g), base);
-    let (o, y) = (k.col("orange"), k.col("yellow"));
-    let c = k.pick(&[o.as_str(), y.as_str(), "#9aa3b0"]).to_string();
-    let metal = k.plain_with(&c, Kind::Metal, |s| {
+    let (o, y) = (k.col(Swatch::Orange), k.col(Swatch::Yellow));
+    let c = k.pick(&[o, y, rgb(0x9aa3b0)]);
+    let metal = k.plain_with(c, Kind::Metal, |s| {
         s.metallic = Some(0.6);
         s.roughness = Some(0.35);
     });
@@ -854,9 +863,9 @@ fn gear(k: &mut Kit, g: Entity) {
             [0.0, 0.0, a],
         );
     }
-    let hub = k.plain("#4a4f5a", Kind::Metal);
+    let hub = k.plain(rgb(0x4a4f5a), Kind::Metal);
     k.part(wheel, Shape::Cyl, &hub, [0.0; 3], [0.6, 0.9, 0.6], flat_x);
-    let bolt = k.plain("#3a3f4a", Kind::Metal);
+    let bolt = k.plain(rgb(0x3a3f4a), Kind::Metal);
     for i in 0..4 {
         let a = i as f32 * 1.57;
         k.part(
@@ -894,12 +903,12 @@ fn puffs(k: &mut Kit, g: Entity, mat: &Mat, y0: f32, rise: f32, drift: Vec3, siz
 }
 
 fn chimney(k: &mut Kit, g: Entity) {
-    let (r, w) = (k.col("red"), k.col("white"));
-    let m = k.stripes(&r, &w, 0.45, [0.0, 1.0], Pattern::Stripes);
+    let (r, w) = (k.col(Swatch::Red), k.col(Swatch::White));
+    let m = k.stripes(r, w, 0.45, [0.0, 1.0], Pattern::Stripes);
     k.part(g, Shape::Taper, &m, [0.0, 5.0, 0.0], [0.9, 10.0, 0.9], NO_ROT);
-    let top = k.plain("#4a4f5a", Kind::Metal);
+    let top = k.plain(rgb(0x4a4f5a), Kind::Metal);
     k.part(g, Shape::Cyl, &top, [0.0, 10.1, 0.0], [0.62, 0.4, 0.62], NO_ROT);
-    let smoke = k.plain_with("#e8e4de", Kind::Cloud, |s| {
+    let smoke = k.plain_with(rgb(0xe8e4de), Kind::Cloud, |s| {
         s.color.alpha = 0.75;
         s.alpha = AlphaMode::Blend;
     });
@@ -907,17 +916,17 @@ fn chimney(k: &mut Kit, g: Entity) {
 }
 
 fn tank(k: &mut Kit, g: Entity) {
-    let metal = k.plain_with("#aeb6c2", Kind::Metal, |s| {
+    let metal = k.plain_with(rgb(0xaeb6c2), Kind::Metal, |s| {
         s.metallic = Some(0.6);
         s.roughness = Some(0.3);
     });
-    let y = k.col("yellow");
-    let band = k.stripes(&y, "#3a3f4a", 1.4, [1.0, 1.0], Pattern::Chevron);
+    let y = k.col(Swatch::Yellow);
+    let band = k.stripes(y, rgb(0x3a3f4a), 1.4, [1.0, 1.0], Pattern::Chevron);
     k.part(g, Shape::Cyl, &band, [0.0, 0.4, 0.0], [2.0, 0.8, 2.0], NO_ROT);
     k.part(g, Shape::Cyl, &metal, [0.0, 2.2, 0.0], [1.9, 2.8, 1.9], NO_ROT);
     k.part(g, Shape::Dome, &metal, [0.0, 3.6, 0.0], [1.9, 0.9, 1.9], NO_ROT);
-    let teal = k.col("teal");
-    let pipe = k.plain(&teal, Kind::Metal);
+    let teal = k.col(Swatch::Teal);
+    let pipe = k.plain(teal, Kind::Metal);
     k.part(
         g,
         Shape::Cyl,
@@ -935,23 +944,23 @@ fn snow_pine(k: &mut Kit, g: Entity) {
         let a = k.rnd() * 6.3;
         let r = if i > 0 { 1.4 } else { 0.0 };
         let s = 0.7 + k.rnd() * 0.4;
-        let frost = if i > 0 { "#d4ece6" } else { "#e6f5f2" };
+        let frost = if i > 0 { rgb(0xd4ece6) } else { rgb(0xe6f5f2) };
         k.model_painted(
-            "pine",
+            Model::Pine,
             g,
             [a.cos() * r, 0.0, a.sin() * r],
             s,
-            vec![("Pine", frost.to_string(), 0.0)],
+            vec![("Pine", frost, 0.0)],
         );
     }
 }
 
 fn snowman(k: &mut Kit, g: Entity) {
-    let snow = k.plain("#ffffff", Kind::Cloth);
+    let snow = k.plain(rgb(0xffffff), Kind::Cloth);
     k.part(g, Shape::Sphere, &snow, [0.0, 0.9, 0.0], [1.0, 0.95, 1.0], NO_ROT);
     k.part(g, Shape::Sphere, &snow, [0.0, 2.2, 0.0], [0.72, 0.7, 0.72], NO_ROT);
     k.part(g, Shape::Sphere, &snow, [0.0, 3.15, 0.0], [0.52, 0.5, 0.52], NO_ROT);
-    let coal = k.plain("#2a2a33", Kind::Plastic);
+    let coal = k.plain(rgb(0x2a2a33), Kind::Plastic);
     for sx in [-1.0, 1.0] {
         k.part(g, Shape::Sphere, &coal, [sx * 0.18, 3.28, 0.44], [0.06; 3], NO_ROT);
     }
@@ -965,7 +974,7 @@ fn snowman(k: &mut Kit, g: Entity) {
             NO_ROT,
         );
     }
-    let nose = k.plain("#ff8a3d", Kind::Plastic);
+    let nose = k.plain(rgb(0xff8a3d), Kind::Plastic);
     k.part(
         g,
         Shape::Cone,
@@ -976,8 +985,8 @@ fn snowman(k: &mut Kit, g: Entity) {
     );
     k.part(g, Shape::Cyl, &coal, [0.0, 3.62, 0.0], [0.55, 0.06, 0.55], NO_ROT);
     k.part(g, Shape::Cyl, &coal, [0.0, 3.9, 0.0], [0.36, 0.55, 0.36], NO_ROT);
-    let red = k.col("red");
-    let scarf = k.plain(&red, Kind::Fabric);
+    let red = k.col(Swatch::Red);
+    let scarf = k.plain(red, Kind::Fabric);
     k.part(
         g,
         Shape::Torus,
@@ -997,11 +1006,11 @@ fn crystals(k: &mut Kit, g: Entity, glowing: bool) {
     for i in 0..n {
         let mat = if glowing {
             let c = k.bright();
-            k.glow(&c, 0.9)
+            k.glow(c, 0.9)
         } else {
-            k.plain_with("#cdeeff", Kind::Ice, |s| {
+            k.plain_with(rgb(0xcdeeff), Kind::Ice, |s| {
                 s.roughness = Some(0.35);
-                s.emissive = hex("#9fd8ff").to_linear() * 0.25;
+                s.emissive = color(rgb(0x9fd8ff)).to_linear() * 0.25;
             })
         };
         let a = i as f32 / n as f32 * core::f32::consts::TAU;
@@ -1039,16 +1048,16 @@ fn crystals_lit(k: &mut Kit, g: Entity) {
 fn planet(k: &mut Kit, g: Entity) {
     let body = k.group(Some(g), Transform::from_xyz(0.0, 3.0, 0.0));
     let c = k.bright();
-    let white = k.col("white");
-    let m = k.stripes(&c, &white, 0.9, [0.0, 1.0], Pattern::Waves);
+    let white = k.col(Swatch::White);
+    let m = k.stripes(c, white, 0.9, [0.0, 1.0], Pattern::Waves);
     k.part(body, Shape::Sphere, &m, [0.0; 3], [2.4; 3], NO_ROT);
     let tilt = k.group(
         Some(body),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, 0.5, 0.0, 0.3)),
     );
     let c1 = k.bright();
-    let g1 = k.glow(&c1, 0.85);
-    let g2 = k.glow(&white, 0.6);
+    let g1 = k.glow(c1, 0.85);
+    let g2 = k.glow(white, 0.6);
     let flat_x = [core::f32::consts::FRAC_PI_2, 0.0, 0.0];
     k.part(tilt, Shape::Ring, &g1, [0.0; 3], [3.8, 3.8, 1.0], flat_x);
     k.part(tilt, Shape::Ring, &g2, [0.0; 3], [4.4, 4.4, 1.0], flat_x);
@@ -1067,8 +1076,8 @@ fn orbs(k: &mut Kit, g: Entity) {
     for _ in 0..n {
         let c = k.bright();
         let o = k.group(Some(g), Transform::default());
-        let a = k.glow(&c, 1.0);
-        let b = k.glow(&c, 0.25);
+        let a = k.glow(c, 1.0);
+        let b = k.glow(c, 0.25);
         k.part(o, Shape::Sphere, &a, [0.0; 3], [0.45; 3], NO_ROT);
         k.part(o, Shape::Sphere, &b, [0.0; 3], [0.8; 3], NO_ROT);
         let (x, z, y, ph) = (
@@ -1091,22 +1100,22 @@ fn orbs(k: &mut Kit, g: Entity) {
 
 fn tent(k: &mut Kit, g: Entity) {
     let (a, b) = k.pick(&[
-        ("red", "white"),
-        ("blue", "yellow"),
-        ("pink", "white"),
-        ("purple", "yellow"),
+        (Swatch::Red, Swatch::White),
+        (Swatch::Blue, Swatch::Yellow),
+        (Swatch::Pink, Swatch::White),
+        (Swatch::Purple, Swatch::Yellow),
     ]);
     let (ca, cb) = (k.col(a), k.col(b));
-    let cloth = k.pattern(&ca, &cb, 2.4, [1.0, 0.0], Kind::Cloth, Pattern::Stripes);
+    let cloth = k.pattern(ca, cb, 2.4, [1.0, 0.0], Kind::Cloth, Pattern::Stripes);
     k.part(g, Shape::Cyl, &cloth, [0.0, 1.3, 0.0], [2.8, 2.6, 2.8], NO_ROT);
     k.part(g, Shape::Cone, &cloth, [0.0, 3.9, 0.0], [3.1, 2.6, 3.1], NO_ROT);
-    let door = k.plain("#3a2040", Kind::Plastic);
+    let door = k.plain(rgb(0x3a2040), Kind::Plastic);
     k.part(g, Shape::Box, &door, [0.0, 0.9, 2.72], [1.2, 1.8, 0.2], NO_ROT);
-    let y = k.col("yellow");
-    let gold = k.plain(&y, Kind::Gold);
+    let y = k.col(Swatch::Yellow);
+    let gold = k.plain(y, Kind::Gold);
     k.part(g, Shape::Cyl, &gold, [0.0, 5.4, 0.0], [0.06, 0.8, 0.06], NO_ROT);
-    k.model("flag", g, [0.0, 5.2, 0.0], 0.35, Some(y));
-    let (ma, mb) = (k.plain(&ca, Kind::Plastic), k.plain(&cb, Kind::Plastic));
+    k.model(Model::Flag, g, [0.0, 5.2, 0.0], 0.35, Some(y));
+    let (ma, mb) = (k.plain(ca, Kind::Plastic), k.plain(cb, Kind::Plastic));
     for i in 0..12 {
         let aa = i as f32 / 12.0 * core::f32::consts::TAU;
         let m = if i % 2 == 1 { &ma } else { &mb };
@@ -1123,14 +1132,14 @@ fn tent(k: &mut Kit, g: Entity) {
 
 fn balloon_bunch(k: &mut Kit, g: Entity) {
     let sway = k.group(Some(g), Transform::default());
-    let string = k.plain("#ffffff", Kind::Fabric);
+    let string = k.plain(rgb(0xffffff), Kind::Fabric);
     for i in 0..7 {
         let a = i as f32 / 7.0 * core::f32::consts::TAU;
         let r = 0.6 + k.rnd() * 0.6;
         let (x, z) = (a.cos() * r, a.sin() * r);
         let y = 3.6 + k.rnd() * 1.4;
         let c = k.bright();
-        let m = k.plain_with(&c, Kind::Rubber, |s| s.roughness = Some(0.25));
+        let m = k.plain_with(c, Kind::Rubber, |s| s.roughness = Some(0.25));
         k.part(sway, Shape::Sphere, &m, [x, y, z], [0.55, 0.68, 0.55], NO_ROT);
         let v = Vec3::new(x, y, z);
         let s = k.part(
@@ -1158,8 +1167,8 @@ fn balloon_bunch(k: &mut Kit, g: Entity) {
 }
 
 fn ferris(k: &mut Kit, g: Entity) {
-    let white = k.col("white");
-    let metal = k.plain_with(&white, Kind::Metal, |s| s.metallic = Some(0.4));
+    let white = k.col(Swatch::White);
+    let metal = k.plain_with(white, Kind::Metal, |s| s.metallic = Some(0.4));
     for sz in [-0.6, 0.6] {
         for sx in [-1.0f32, 1.0] {
             k.part(
@@ -1174,8 +1183,8 @@ fn ferris(k: &mut Kit, g: Entity) {
     }
     let base = Transform::from_xyz(0.0, 5.2, 0.0);
     let wheel = k.group(Some(g), base);
-    let pink = k.col("pink");
-    let rim = k.plain(&pink, Kind::Metal);
+    let pink = k.col(Swatch::Pink);
+    let rim = k.plain(pink, Kind::Metal);
     k.part(wheel, Shape::Ring, &rim, [0.0; 3], [3.8; 3], NO_ROT);
     k.part(wheel, Shape::Ring, &rim, [0.0; 3], [1.2; 3], NO_ROT);
     let mut cabins = Vec::new();
@@ -1192,7 +1201,7 @@ fn ferris(k: &mut Kit, g: Entity) {
         let at = Transform::from_xyz(a.cos() * 3.8, a.sin() * 3.8, 0.0);
         let cab = k.group(Some(wheel), at);
         let c = k.bright();
-        let m = k.plain(&c, Kind::Plastic);
+        let m = k.plain(c, Kind::Plastic);
         k.part(cab, Shape::Box, &m, [0.0, -0.45, 0.0], [0.7, 0.6, 0.7], NO_ROT);
         k.part(cab, Shape::Box, &metal, [0.0, -0.05, 0.0], [0.8, 0.08, 0.8], NO_ROT);
         cabins.push((cab, at));
@@ -1210,12 +1219,12 @@ fn neon_rings(k: &mut Kit, g: Entity) {
     let mut rings = Vec::new();
     for i in 0..3 {
         let c = k.bright();
-        let m = k.glow(&c, 1.0);
+        let m = k.glow(c, 1.0);
         let s = 2.8 - i as f32 * 0.6;
         rings.push((k.part(g, Shape::Ring, &m, [0.0, 3.5, 0.0], [s; 3], NO_ROT), s));
     }
-    let white = k.col("white");
-    let w = k.glow(&white, 1.0);
+    let white = k.col(Swatch::White);
+    let w = k.glow(white, 1.0);
     k.part(g, Shape::Sphere, &w, [0.0, 3.5, 0.0], [0.4; 3], NO_ROT);
     let sp = 0.4 + k.rnd() * 0.5;
     k.tick(move |t, tx| {
@@ -1234,13 +1243,13 @@ fn neon_rings(k: &mut Kit, g: Entity) {
 }
 
 fn pylon(k: &mut Kit, g: Entity) {
-    let dark = k.plain_with("#1d1438", Kind::Metal, |s| {
+    let dark = k.plain_with(rgb(0x1d1438), Kind::Metal, |s| {
         s.metallic = Some(0.5);
         s.roughness = Some(0.3);
     });
     k.part(g, Shape::Box, &dark, [0.0, 4.0, 0.0], [1.1, 8.0, 1.1], NO_ROT);
     let c = k.bright();
-    let edge = k.glow(&c, 1.0);
+    let edge = k.glow(c, 1.0);
     for sx in [-1.0, 1.0] {
         for sz in [-1.0, 1.0] {
             k.part(
@@ -1253,7 +1262,7 @@ fn pylon(k: &mut Kit, g: Entity) {
             );
         }
     }
-    let band = k.glow(&c, 0.8);
+    let band = k.glow(c, 0.8);
     for i in 0..4 {
         k.part(
             g,
@@ -1265,7 +1274,7 @@ fn pylon(k: &mut Kit, g: Entity) {
         );
     }
     let c2 = k.bright();
-    let tm = k.glow(&c2, 1.0);
+    let tm = k.glow(c2, 1.0);
     let top = k.part(g, Shape::Octa, &tm, [0.0, 9.3, 0.0], [0.7, 0.9, 0.7], NO_ROT);
     let ph = k.rnd() * 6.0;
     k.tick(move |t, tx| {
@@ -1281,22 +1290,22 @@ fn pylon(k: &mut Kit, g: Entity) {
 }
 
 fn lighthouse(k: &mut Kit, g: Entity) {
-    let red = k.col("red");
-    let m = k.stripes(&red, "#ffffff", 0.55, [0.0, 1.0], Pattern::Stripes);
+    let red = k.col(Swatch::Red);
+    let m = k.stripes(red, rgb(0xffffff), 0.55, [0.0, 1.0], Pattern::Stripes);
     k.part(g, Shape::Taper, &m, [0.0, 3.5, 0.0], [1.2, 7.0, 1.2], NO_ROT);
-    let metal = k.plain("#3a3f4a", Kind::Metal);
+    let metal = k.plain(rgb(0x3a3f4a), Kind::Metal);
     k.part(g, Shape::Cyl, &metal, [0.0, 7.1, 0.0], [1.05, 0.2, 1.05], NO_ROT);
-    let glass = k.plain_with("#ffffff", Kind::Glass, |s| {
+    let glass = k.plain_with(rgb(0xffffff), Kind::Glass, |s| {
         s.color.alpha = 0.5;
         s.alpha = AlphaMode::Blend;
     });
     k.part(g, Shape::Cyl, &glass, [0.0, 7.7, 0.0], [0.6, 1.0, 0.6], NO_ROT);
-    let lm = k.glow("#fff2a0", 1.0);
+    let lm = k.glow(rgb(0xfff2a0), 1.0);
     let lamp = k.part(g, Shape::Sphere, &lm, [0.0, 7.7, 0.0], [0.35; 3], NO_ROT);
-    let roof = k.plain(&red, Kind::Plastic);
+    let roof = k.plain(red, Kind::Plastic);
     k.part(g, Shape::Cone, &roof, [0.0, 8.6, 0.0], [0.8, 0.9, 0.8], NO_ROT);
     let beam = k.group(Some(g), Transform::from_xyz(0.0, 7.7, 0.0));
-    let bm = k.glow("#fff6c0", 0.18);
+    let bm = k.glow(rgb(0xfff6c0), 0.18);
     k.part(
         beam,
         Shape::Cone,
@@ -1318,7 +1327,7 @@ fn lighthouse(k: &mut Kit, g: Entity) {
 }
 
 fn palm(k: &mut Kit, g: Entity) {
-    let bark = k.stripes("#b88a5a", "#9a6f45", 3.0, [0.0, 1.0], Pattern::Stripes);
+    let bark = k.stripes(rgb(0xb88a5a), rgb(0x9a6f45), 3.0, [0.0, 1.0], Pattern::Stripes);
     let lean = (k.rnd() - 0.5) * 0.5;
     let (mut x, mut y) = (0.0f32, 0.0f32);
     for i in 0..7 {
@@ -1334,10 +1343,10 @@ fn palm(k: &mut Kit, g: Entity) {
         );
         y += 0.78;
     }
-    let lc = if k.look.look.id == "jungle" {
-        "#2fae4a"
+    let lc = if k.look.look.id == LookId::Jungle {
+        rgb(0x2fae4a)
     } else {
-        "#4fcf5a"
+        rgb(0x4fcf5a)
     };
     let leaf = k.plain(lc, Kind::Leaf);
     for i in 0..7 {
@@ -1355,7 +1364,7 @@ fn palm(k: &mut Kit, g: Entity) {
             [0.0, 0.0, -0.45],
         );
     }
-    let nut = k.plain("#7a5030", Kind::Plastic);
+    let nut = k.plain(rgb(0x7a5030), Kind::Plastic);
     for i in 0..3 {
         let a = i as f32 * 2.1;
         k.part(
@@ -1371,22 +1380,22 @@ fn palm(k: &mut Kit, g: Entity) {
 
 fn beach(k: &mut Kit, g: Entity) {
     let c = k.bright();
-    let pole = k.plain("#ffffff", Kind::Plastic);
+    let pole = k.plain(rgb(0xffffff), Kind::Plastic);
     k.part(g, Shape::Cyl, &pole, [0.0, 1.3, 0.0], [0.05, 2.6, 0.05], NO_ROT);
-    let shade = k.pattern(&c, "#ffffff", 3.0, [1.0, 0.0], Kind::Cloth, Pattern::Stripes);
+    let shade = k.pattern(c, rgb(0xffffff), 3.0, [1.0, 0.0], Kind::Cloth, Pattern::Stripes);
     k.part(g, Shape::Cone, &shade, [0.0, 2.75, 0.0], [1.6, 0.6, 1.6], NO_ROT);
     let c2 = k.bright();
-    let towel = k.stripes(&c2, "#ffffff", 2.0, [1.0, 0.0], Pattern::Stripes);
+    let towel = k.stripes(c2, rgb(0xffffff), 2.0, [1.0, 0.0], Pattern::Stripes);
     k.part(g, Shape::Box, &towel, [0.6, 0.03, 1.2], [1.0, 0.04, 1.9], NO_ROT);
     let c3 = k.bright();
-    let ball = k.pattern(&c3, "#ffffff", 2.2, [1.0, 0.0], Kind::Rubber, Pattern::Stripes);
+    let ball = k.pattern(c3, rgb(0xffffff), 2.2, [1.0, 0.0], Kind::Rubber, Pattern::Stripes);
     k.part(g, Shape::Sphere, &ball, [-1.3, 0.35, 0.8], [0.35; 3], NO_ROT);
     let yaw = k.rnd() * 6.3;
     k.set_tf(g, |t| t.rotation = Quat::from_rotation_y(yaw));
 }
 
 fn cactus(k: &mut Kit, g: Entity) {
-    let green = k.stripes("#5a9a4a", "#6aae56", 5.0, [1.0, 0.0], Pattern::Stripes);
+    let green = k.stripes(rgb(0x5a9a4a), rgb(0x6aae56), 5.0, [1.0, 0.0], Pattern::Stripes);
     let h = 3.2 + k.rnd() * 1.5;
     k.part(g, Shape::Cyl, &green, [0.0, h / 2.0, 0.0], [0.45, h, 0.45], NO_ROT);
     k.part(g, Shape::Sphere, &green, [0.0, h, 0.0], [0.45; 3], NO_ROT);
@@ -1411,24 +1420,30 @@ fn cactus(k: &mut Kit, g: Entity) {
         );
         k.part(g, Shape::Sphere, &green, [side * 0.9, ay + up, 0.0], [0.26; 3], NO_ROT);
     }
-    let pink = k.col("pink");
-    let flower = k.plain(&pink, Kind::Fabric);
+    let pink = k.col(Swatch::Pink);
+    let flower = k.plain(pink, Kind::Fabric);
     k.part(g, Shape::Sphere, &flower, [0.0, h + 0.4, 0.0], [0.2, 0.15, 0.2], NO_ROT);
     let yaw = k.rnd() * 6.3;
     k.set_tf(g, |t| t.rotation = Quat::from_rotation_y(yaw));
 }
 
 fn mesa(k: &mut Kit, g: Entity) {
-    let layers = ["#c8764a", "#e0a070", "#b8603a", "#e8b888", "#a8503a"];
+    let layers = [
+        rgb(0xc8764a),
+        rgb(0xe0a070),
+        rgb(0xb8603a),
+        rgb(0xe8b888),
+        rgb(0xa8503a),
+    ];
     let mut y = 0.0;
-    for (i, c) in layers.iter().enumerate() {
+    for (i, c) in layers.into_iter().enumerate() {
         let r = 4.0 - i as f32 * 0.35 - k.rnd() * 0.2;
         let h = 0.8 + k.rnd() * 0.6;
         let m = k.plain(c, Kind::Rock);
         k.part(g, Shape::Cyl, &m, [0.0, y - h / 2.0, 0.0], [r, h, r], NO_ROT);
         y -= h;
     }
-    let rock = k.plain("#a8503a", Kind::Rock);
+    let rock = k.plain(rgb(0xa8503a), Kind::Rock);
     k.part(
         g,
         Shape::Cone,
@@ -1437,16 +1452,16 @@ fn mesa(k: &mut Kit, g: Entity) {
         [3.0, 2.4, 3.0],
         [core::f32::consts::PI, 0.0, 0.0],
     );
-    let red = k.col("red");
-    k.model("flag", g, [0.0; 3], 0.5, Some(red));
+    let red = k.col(Swatch::Red);
+    k.model(Model::Flag, g, [0.0; 3], 0.5, Some(red));
 }
 
 fn pyramid(k: &mut Kit, g: Entity) {
-    let sand = k.stripes("#f0d090", "#e0bc78", 1.6, [0.0, 1.0], Pattern::Stripes);
+    let sand = k.stripes(rgb(0xf0d090), rgb(0xe0bc78), 1.6, [0.0, 1.0], Pattern::Stripes);
     let q = core::f32::consts::FRAC_PI_4;
     k.part(g, Shape::Cone4, &sand, [0.0, 1.8, 0.0], [3.0, 3.6, 3.0], [0.0, q, 0.0]);
-    let y = k.col("yellow");
-    let gold = k.plain_with(&y, Kind::Gold, |s| {
+    let y = k.col(Swatch::Yellow);
+    let gold = k.plain_with(y, Kind::Gold, |s| {
         s.metallic = Some(0.7);
         s.roughness = Some(0.3);
     });
@@ -1454,7 +1469,7 @@ fn pyramid(k: &mut Kit, g: Entity) {
 }
 
 fn big_plant(k: &mut Kit, g: Entity) {
-    let leaf = k.stripes("#2f9f3f", "#48b858", 2.0, [1.0, 0.0], Pattern::Stripes);
+    let leaf = k.stripes(rgb(0x2f9f3f), rgb(0x48b858), 2.0, [1.0, 0.0], Pattern::Stripes);
     for i in 0..7 {
         let yaw = i as f32 / 7.0 * core::f32::consts::TAU + k.rnd() * 0.3;
         let l = k.group(Some(g), Transform::from_rotation(Quat::from_rotation_y(yaw)));
@@ -1469,7 +1484,7 @@ fn big_plant(k: &mut Kit, g: Entity) {
         );
     }
     let c = k.bright();
-    let petal = k.plain(&c, Kind::Fabric);
+    let petal = k.plain(c, Kind::Fabric);
     for p in 0..6 {
         let a = p as f32 / 6.0 * core::f32::consts::TAU;
         k.part(
@@ -1481,15 +1496,15 @@ fn big_plant(k: &mut Kit, g: Entity) {
             [0.0, -a, 0.25],
         );
     }
-    let y = k.col("yellow");
-    let heart = k.plain(&y, Kind::Plastic);
+    let y = k.col(Swatch::Yellow);
+    let heart = k.plain(y, Kind::Plastic);
     k.part(g, Shape::Sphere, &heart, [0.0, 2.25, 0.0], [0.22, 0.18, 0.22], NO_ROT);
-    let stem = k.plain("#3f8f3a", Kind::Leaf);
+    let stem = k.plain(rgb(0x3f8f3a), Kind::Leaf);
     k.part(g, Shape::Cyl, &stem, [0.0, 1.1, 0.0], [0.08, 2.2, 0.08], NO_ROT);
 }
 
 fn volcano(k: &mut Kit, g: Entity) {
-    let rock = k.plain("#3a2a2a", Kind::Rock);
+    let rock = k.plain(rgb(0x3a2a2a), Kind::Rock);
     k.part(g, Shape::Taper, &rock, [0.0, 1.6, 0.0], [4.0, 3.2, 4.0], NO_ROT);
     k.part(
         g,
@@ -1499,9 +1514,9 @@ fn volcano(k: &mut Kit, g: Entity) {
         [4.0, 3.0, 4.0],
         [core::f32::consts::PI, 0.0, 0.0],
     );
-    let crater = k.glow("#ff7a2a", 1.0);
+    let crater = k.glow(rgb(0xff7a2a), 1.0);
     k.part(g, Shape::Cyl, &crater, [0.0, 3.22, 0.0], [2.3, 0.05, 2.3], NO_ROT);
-    let lava = k.glow("#ffb030", 0.9);
+    let lava = k.glow(rgb(0xffb030), 0.9);
     for _ in 0..3 {
         let a = k.rnd() * 6.3;
         k.part(
@@ -1513,7 +1528,7 @@ fn volcano(k: &mut Kit, g: Entity) {
             [0.3, -a + core::f32::consts::FRAC_PI_2, 0.0],
         );
     }
-    let smoke = k.plain_with("#5a4a4a", Kind::Cloud, |s| {
+    let smoke = k.plain_with(rgb(0x5a4a4a), Kind::Cloud, |s| {
         s.color.alpha = 0.6;
         s.alpha = AlphaMode::Blend;
     });
@@ -1521,9 +1536,9 @@ fn volcano(k: &mut Kit, g: Entity) {
 }
 
 fn rocks(k: &mut Kit, g: Entity) {
-    let dark = k.plain("#2e2426", Kind::Rock);
-    let first = k.plain("#4a2e2a", Kind::Rock);
-    let ember = k.glow("#ff8a3a", 1.0);
+    let dark = k.plain(rgb(0x2e2426), Kind::Rock);
+    let first = k.plain(rgb(0x4a2e2a), Kind::Rock);
+    let ember = k.glow(rgb(0xff8a3a), 1.0);
     let mut list = Vec::new();
     for i in 0..4 {
         let at = [(k.rnd() - 0.5) * 4.0, 1.0 + k.rnd() * 3.0, (k.rnd() - 0.5) * 4.0];
@@ -1549,7 +1564,7 @@ fn rocks(k: &mut Kit, g: Entity) {
 }
 
 fn shards(k: &mut Kit, g: Entity) {
-    let obsidian = k.plain_with("#241a2a", Kind::Glass, |s| {
+    let obsidian = k.plain_with(rgb(0x241a2a), Kind::Glass, |s| {
         s.roughness = Some(0.15);
         s.metallic = Some(0.3);
     });
@@ -1568,16 +1583,16 @@ fn shards(k: &mut Kit, g: Entity) {
             [rx, a, rz],
         );
     }
-    let glow = k.glow("#ff7a2a", 0.8);
+    let glow = k.glow(rgb(0xff7a2a), 0.8);
     k.part(g, Shape::Sphere, &glow, [0.0, 0.1, 0.0], [1.4, 0.1, 1.4], NO_ROT);
 }
 
 fn pillar(k: &mut Kit, g: Entity) {
-    let gold = k.plain_with("#f2c14e", Kind::Gold, |s| {
+    let gold = k.plain_with(rgb(0xf2c14e), Kind::Gold, |s| {
         s.metallic = Some(0.8);
         s.roughness = Some(0.25);
     });
-    let marble = k.stripes("#fff8ee", "#efe6f6", 2.0, [1.0, 1.0], Pattern::Waves);
+    let marble = k.stripes(rgb(0xfff8ee), rgb(0xefe6f6), 2.0, [1.0, 1.0], Pattern::Waves);
     k.part(g, Shape::Box, &marble, [0.0, 0.3, 0.0], [1.8, 0.6, 1.8], NO_ROT);
     k.part(g, Shape::Cyl, &marble, [0.0, 3.4, 0.0], [0.55, 5.6, 0.55], NO_ROT);
     for i in 0..3 {
@@ -1606,16 +1621,16 @@ fn crown(k: &mut Kit, g: Entity) {
         Some(g),
         Transform::from_xyz(0.0, 2.0, 0.0).with_rotation(Quat::from_rotation_x(0.15)),
     );
-    let gold = k.plain_with("#ffcf3f", Kind::Gold, |s| {
+    let gold = k.plain_with(rgb(0xffcf3f), Kind::Gold, |s| {
         s.metallic = Some(0.85);
         s.roughness = Some(0.2);
     });
     k.part(spin, Shape::Cyl, &gold, [0.0; 3], [2.0, 0.7, 2.0], NO_ROT);
-    let red = k.col("red");
-    let velvet = k.plain(&red, Kind::Fabric);
+    let red = k.col(Swatch::Red);
+    let velvet = k.plain(red, Kind::Fabric);
     k.part(spin, Shape::Cyl, &velvet, [0.0, 0.1, 0.0], [1.9, 0.72, 1.9], NO_ROT);
-    let (blue, pink, teal) = (k.col("blue"), k.col("pink"), k.col("teal"));
-    let (gb, gp, gt) = (k.glow(&blue, 1.0), k.glow(&pink, 1.0), k.glow(&teal, 1.0));
+    let (blue, pink, teal) = (k.col(Swatch::Blue), k.col(Swatch::Pink), k.col(Swatch::Teal));
+    let (gb, gp, gt) = (k.glow(blue, 1.0), k.glow(pink, 1.0), k.glow(teal, 1.0));
     for i in 0..7 {
         let a = i as f32 / 7.0 * core::f32::consts::TAU;
         let (c, s) = (a.cos(), a.sin());
@@ -1653,11 +1668,11 @@ fn crown(k: &mut Kit, g: Entity) {
 
 fn lollipop(k: &mut Kit, g: Entity) {
     let h = 3.5 + k.rnd() * 1.5;
-    let stick = k.plain("#ffffff", Kind::Plastic);
+    let stick = k.plain(rgb(0xffffff), Kind::Plastic);
     k.part(g, Shape::Cyl, &stick, [0.0, h / 2.0, 0.0], [0.09, h, 0.09], NO_ROT);
     let c = k.bright();
     let p = k.pick(&[Pattern::Waves, Pattern::Stripes, Pattern::Chevron]);
-    let candy = k.pattern(&c, "#ffffff", 2.6, [1.0, 1.0], Kind::Glossy, p);
+    let candy = k.pattern(c, rgb(0xffffff), 2.6, [1.0, 1.0], Kind::Glossy, p);
     let at = [0.0, h + 1.2, 0.0];
     let disc = k.part(
         g,
@@ -1681,8 +1696,8 @@ fn lollipop(k: &mut Kit, g: Entity) {
 }
 
 fn cane(k: &mut Kit, g: Entity) {
-    let red = k.col("red");
-    let stripes = k.pattern(&red, "#ffffff", 2.2, [1.0, 1.6], Kind::Glossy, Pattern::Stripes);
+    let red = k.col(Swatch::Red);
+    let stripes = k.pattern(red, rgb(0xffffff), 2.2, [1.0, 1.6], Kind::Glossy, Pattern::Stripes);
     k.part(g, Shape::Cyl, &stripes, [0.0, 2.2, 0.0], [0.28, 4.4, 0.28], NO_ROT);
     k.part(g, Shape::HalfTorus, &stripes, [0.7, 4.4, 0.0], [1.0; 3], NO_ROT);
     let yaw = k.rnd() * 6.3;
@@ -1695,17 +1710,17 @@ fn donut(k: &mut Kit, g: Entity) {
         Some(g),
         Transform::from_xyz(0.0, 1.5, 0.0).with_rotation(Quat::from_rotation_x(tilt)),
     );
-    let dough = k.plain("#e8b878", Kind::Plastic);
+    let dough = k.plain(rgb(0xe8b878), Kind::Plastic);
     let flat_x = [core::f32::consts::FRAC_PI_2, 0.0, 0.0];
     k.part(spin, Shape::Torus, &dough, [0.0; 3], [1.4; 3], flat_x);
     let c = k.bright();
-    let icing = k.plain_with(&c, Kind::Glossy, |s| s.roughness = Some(0.3));
+    let icing = k.plain_with(c, Kind::Glossy, |s| s.roughness = Some(0.3));
     k.part(spin, Shape::Torus, &icing, [0.0, 0.14, 0.0], [1.42, 1.42, 1.2], flat_x);
     for _ in 0..9 {
         let a = k.rnd() * 6.3;
         let r = 1.1 + k.rnd() * 0.6;
         let c = k.bright();
-        let m = k.plain(&c, Kind::Plastic);
+        let m = k.plain(c, Kind::Plastic);
         let yaw = k.rnd() * 3.0;
         k.part(
             spin,
@@ -1735,7 +1750,7 @@ fn gumdrops(k: &mut Kit, g: Entity) {
         let r = if i > 0 { 0.8 + k.rnd() * 1.6 } else { 0.0 };
         let s = 0.45 + k.rnd() * 0.4;
         let c = k.bright();
-        let m = k.plain_with(&c, Kind::Glossy, |sp| sp.roughness = Some(0.2));
+        let m = k.plain_with(c, Kind::Glossy, |sp| sp.roughness = Some(0.2));
         k.part(
             g,
             Shape::Dome,
@@ -1748,7 +1763,7 @@ fn gumdrops(k: &mut Kit, g: Entity) {
 }
 
 /// The pieces of each look (weighted).
-fn set_of(look: &str) -> Vec<Piece> {
+fn set_of(look: LookId) -> Vec<Piece> {
     let grove_ = piece(3.0, 5.0, true, 2.0, grove);
     let flowers_ = piece(2.6, 1.6, true, 1.0, flowers);
     let windmill_ = piece(2.2, 8.0, true, 1.0, windmill);
@@ -1756,63 +1771,63 @@ fn set_of(look: &str) -> Vec<Piece> {
     let palm_ = piece(2.8, 6.0, true, 2.0, palm);
     let crystals_ = |lit: bool| piece(1.8, 4.0, false, 1.0, if lit { crystals_lit } else { crystals_cold });
     match look {
-        "meadow" => vec![grove_, flowers_, windmill_],
-        "castle" => vec![
+        LookId::Meadow => vec![grove_, flowers_, windmill_],
+        LookId::Castle => vec![
             piece(2.0, 11.0, true, 2.0, tower),
             piece(3.2, 8.0, true, 1.0, keep),
             banners_,
             grove_,
         ],
-        "factory" => vec![
+        LookId::Factory => vec![
             piece(3.4, 7.0, false, 2.0, gear),
             piece(1.6, 13.0, true, 2.0, chimney),
             piece(2.6, 5.0, true, 1.0, tank),
         ],
-        "snow" => vec![
+        LookId::Snow => vec![
             piece(2.0, 5.0, true, 2.0, snow_pine),
             piece(1.3, 3.6, true, 1.0, snowman),
             crystals_(false),
         ],
-        "starlight" => vec![
+        LookId::Starlight => vec![
             piece(5.0, 6.0, false, 2.0, planet),
             piece(3.0, 5.0, false, 2.0, orbs),
             crystals_(true),
         ],
-        "circus" => vec![
+        LookId::Circus => vec![
             piece(3.3, 6.5, true, 2.0, tent),
             piece(2.0, 6.0, false, 2.0, balloon_bunch),
             piece(4.4, 10.0, true, 1.0, ferris),
             banners_,
         ],
-        "neon" => vec![
+        LookId::Neon => vec![
             piece(3.2, 7.0, false, 2.0, neon_rings),
             piece(1.5, 10.0, false, 2.0, pylon),
             crystals_(true),
         ],
-        "ocean" => vec![
+        LookId::Ocean => vec![
             piece(1.8, 10.0, true, 1.0, lighthouse),
             palm_,
             piece(2.8, 3.5, true, 1.0, beach),
         ],
-        "desert" => vec![
+        LookId::Desert => vec![
             piece(1.5, 5.0, true, 2.0, cactus),
             piece(4.4, 7.0, false, 1.0, mesa),
             piece(3.3, 4.0, true, 1.0, pyramid),
             palm_,
         ],
-        "jungle" => vec![palm_, piece(2.8, 3.5, true, 2.0, big_plant), flowers_, grove_],
-        "lava" => vec![
+        LookId::Jungle => vec![palm_, piece(2.8, 3.5, true, 2.0, big_plant), flowers_, grove_],
+        LookId::Lava => vec![
             piece(4.4, 7.0, false, 2.0, volcano),
             piece(2.8, 4.0, false, 2.0, rocks),
             piece(2.0, 5.0, true, 1.0, shards),
         ],
-        "royal" => vec![
+        LookId::Royal => vec![
             piece(1.4, 7.5, true, 2.0, pillar),
             piece(2.8, 4.0, false, 2.0, crown),
             banners_,
             grove_,
         ],
-        "candy" => vec![
+        LookId::Candy => vec![
             piece(1.6, 6.0, true, 2.0, lollipop),
             piece(1.4, 6.0, true, 1.0, cane),
             piece(2.2, 3.0, false, 2.0, donut),
@@ -1825,14 +1840,22 @@ fn set_of(look: &str) -> Vec<Piece> {
 // ---------------------------------------------------------------- the scenery
 
 /// Looks whose islands grow trees.
-const LEAFY: [&str; 7] = ["classic", "meadow", "castle", "circus", "royal", "jungle", "ocean"];
+const LEAFY: [LookId; 7] = [
+    LookId::Classic,
+    LookId::Meadow,
+    LookId::Castle,
+    LookId::Circus,
+    LookId::Royal,
+    LookId::Jungle,
+    LookId::Ocean,
+];
 
 fn islands(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
     let cx = (all.min.x + all.max.x) / 2.0;
     let cz = (all.min.z + all.max.z) / 2.0;
     let reach = (all.max.x - all.min.x).hypot(all.max.z - all.min.z) / 2.0;
     let count = 7;
-    let flora = ["tree", "pine", "mushroom", "tree", "pine"];
+    let flora = [Model::Tree, Model::Pine, Model::Mushroom, Model::Tree, Model::Pine];
     for n in 0..count {
         let scale = 0.8 + k.rnd() * 0.9;
         let mut pos = None;
@@ -1870,8 +1893,8 @@ fn islands(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
                 t.scale = Vec3::splat(fs);
             });
             let spread = match name {
-                "tree" => 1.6,
-                "pine" => 1.5,
+                Model::Tree => 1.6,
+                Model::Pine => 1.5,
                 _ => 1.1,
             };
             k.blob_shadow(g, [x, 0.47, z], spread * fs);
@@ -1888,10 +1911,10 @@ fn islands(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
 
 fn clouds(k: &mut Kit, root: Entity, boxes: &[Aabb], req: &SceneryRequest) {
     let cloud = k.look.look.sky.cloud;
-    let paint = if cloud.eq_ignore_ascii_case("#ffffff") {
+    let paint = if cloud == Rgb::WHITE {
         Vec::new()
     } else {
-        vec![("Cloud", cloud.to_string(), 0.5)]
+        vec![("Cloud", cloud, 0.5)]
     };
     for _ in 0..req.clouds {
         for _ in 0..40 {
@@ -1918,7 +1941,7 @@ fn clouds(k: &mut Kit, root: Entity, boxes: &[Aabb], req: &SceneryRequest) {
                 .spawn((
                     Decor,
                     WorldAssetRoot(scene),
-                    Prop::painted("cloud", paint.clone()),
+                    Prop::painted(Model::Cloud, paint.clone()),
                     Transform::from_translation(home).with_scale(Vec3::splat(scale)),
                     Visibility::default(),
                     NotShadowCaster,
@@ -1949,7 +1972,7 @@ fn clouds(k: &mut Kit, root: Entity, boxes: &[Aabb], req: &SceneryRequest) {
 /// A few small flocks circling well outside the course.
 fn birds(k: &mut Kit, root: Entity, all: Aabb) {
     let (flocks, per) = (2, 5);
-    let mat = k.plain_with("#4b3d7a", Kind::Fabric, |s| s.roughness = Some(0.7));
+    let mat = k.plain_with(rgb(0x4b3d7a), Kind::Fabric, |s| s.roughness = Some(0.7));
     let body = k
         .world
         .resource_mut::<Assets<Mesh>>()
@@ -2024,17 +2047,17 @@ fn birds(k: &mut Kit, root: Entity, all: Aabb) {
 /// Striped hot-air balloons far out, slowly rising, sinking and turning.
 fn balloons(k: &mut Kit, root: Entity, boxes: &[Aabb], all: Aabb) {
     let pals = [
-        ("#ff8cc8", "#ffffff"),
-        ("#ffd84a", "#ff9f4a"),
-        ("#7ccfff", "#ffffff"),
-        ("#a98bff", "#ffd84a"),
-        ("#6fe08a", "#ffffff"),
+        (rgb(0xff8cc8), rgb(0xffffff)),
+        (rgb(0xffd84a), rgb(0xff9f4a)),
+        (rgb(0x7ccfff), rgb(0xffffff)),
+        (rgb(0xa98bff), rgb(0xffd84a)),
+        (rgb(0x6fe08a), rgb(0xffffff)),
     ];
     let cx = (all.min.x + all.max.x) / 2.0;
     let cz = (all.min.z + all.max.z) / 2.0;
     let reach = (all.max.x - all.min.x).hypot(all.max.z - all.min.z) / 2.0;
-    let basket = k.plain("#b07a4a", Kind::Wood);
-    let rope = k.plain("#6b4f3a", Kind::Fabric);
+    let basket = k.plain(rgb(0xb07a4a), Kind::Wood);
+    let rope = k.plain(rgb(0x6b4f3a), Kind::Fabric);
     let count = 4;
     let envelope = k
         .world
@@ -2131,8 +2154,8 @@ fn ground(k: &mut Kit, root: Entity, all: Aabb) {
     let kind = if gr.glow { Kind::Glossy } else { Kind::Plastic };
     let mut spec = Spec {
         paint: Some(Paint {
-            c1: hex(gr.c1).to_linear(),
-            c2: hex(gr.c2).to_linear(),
+            c1: color(gr.c1).to_linear(),
+            c2: color(gr.c2).to_linear(),
             freq: gr.freq as f32,
             dir: Vec2::new(1.0, 0.6),
             speed: gr.speed as f32,
@@ -2141,7 +2164,7 @@ fn ground(k: &mut Kit, root: Entity, all: Aabb) {
         ..Spec::plain(LinearRgba::WHITE, Some(kind))
     };
     if gr.glow {
-        spec.emissive = hex(gr.c1).to_linear() * 0.8;
+        spec.emissive = color(gr.c1).to_linear() * 0.8;
     }
     let Mat::S(m) = k.surface(spec) else { return };
     let disc = k.world.resource_mut::<Assets<Mesh>>().add(
@@ -2626,7 +2649,7 @@ fn build(world: &mut World) {
         .world
         .colliders
         .iter()
-        .filter(|c| !c.trigger)
+        .filter(|c| !c.opts.trigger)
         .map(|c| {
             let (p, r) = (c.center.as_vec3(), c.radius as f32);
             Aabb {

@@ -4,8 +4,10 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::time::Duration;
 
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_real_timer;
 use fb_arena::PawnStatus;
 use fb_net::*;
 use fb_proto::Pid;
@@ -44,8 +46,6 @@ pub struct Rooms {
     rounds: BTreeMap<u32, Entity>,
     /// The room each link is in, as last told to Replicon.
     in_room: BTreeMap<ConnId, u32>,
-    /// Links to let go of once what was sent to them has gone out (server time, s).
-    closing: Vec<(Entity, f64)>,
     real: RealTick,
 }
 
@@ -113,7 +113,7 @@ fn count_far_inputs(
             continue;
         }
         far.count += n;
-        if let Some(hushed) = far.log.hit(u64::from(tick.0)) {
+        if let Some(hushed) = far.log.hit(crate::rooms::secs(u64::from(tick.0))) {
             warn!(
                 client = ?remote.0,
                 dropped = far.count,
@@ -153,7 +153,10 @@ impl Plugin for PlayPlugin {
         // Every frame: Lightyear drops the messages nobody read in the frame they came in, and half the
         // frames run no tick.
         app.add_systems(PreUpdate, receive.after(MessageSystems::Receive));
-        app.add_systems(Update, (close_links, measure_rtt));
+        app.add_systems(
+            Update,
+            (close_links, measure_rtt.run_if(on_real_timer(Duration::from_secs(1)))),
+        );
     }
 }
 
@@ -177,7 +180,6 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         pawns: BTreeMap::new(),
         rounds: BTreeMap::new(),
         in_room: BTreeMap::new(),
-        closing: Vec::new(),
         real,
     });
     if let Some(path) = &opts.trace {
@@ -187,11 +189,11 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
 }
 
 pub fn conn_of(link: Entity) -> ConnId {
-    link.to_bits()
+    ConnId(link)
 }
 
 fn link_of(conn: ConnId) -> Entity {
-    Entity::from_bits(conn)
+    conn.0
 }
 
 type InputBuf = InputBuffer<ActionState<FbInput>, FbInput>;
@@ -404,8 +406,9 @@ fn tick_rooms(
                 }
             }
             Out::Close(c) => {
-                let at = time.elapsed_secs_f64() + 0.5;
-                rooms.closing.push((link_of(c), at));
+                if let Ok(mut e) = commands.get_entity(link_of(c)) {
+                    e.insert(CloseAt(time.elapsed_secs_f64() + 0.5));
+                }
             }
         }
     }
@@ -483,7 +486,7 @@ fn publish(
                 && r.seed == room.arena.seed
                 && r.zero_tick == zero_tick
                 && r.fall == room.arena.fall
-                && r.static_hash == room.arena.static_hash
+                && r.static_hash == room.arena.static_hash.to_string()
         };
         let round = || Round {
             arena: room.arena_id,
@@ -492,7 +495,7 @@ fn publish(
             seed: room.arena.seed,
             zero_tick,
             fall: room.arena.fall,
-            static_hash: room.arena.static_hash.clone(),
+            static_hash: room.arena.static_hash.to_string(),
         };
         let existing = rounds.get(&key).copied();
         let fresh = match existing.map(|e| round_q.get_mut(e)) {
@@ -529,7 +532,7 @@ fn publish(
             // (A link already gone counts as nobody: the room hears of it in a moment.)
             let owner = room
                 .player(p.id)
-                .and_then(|pl| pl.conn)
+                .and_then(|pl| pl.conn())
                 .filter(|c| remotes.get(link_of(*c)).is_ok());
             let color = room.player(p.id).map_or(0, |pl| pl.color);
             live.push((key, p.id));
@@ -605,11 +608,7 @@ fn publish(
         keep
     });
     // Each link into the room it is in (Replicon shows it that room's entities only).
-    let want: BTreeMap<ConnId, u32> = hub
-        .sessions
-        .iter()
-        .filter_map(|(c, s)| Some((*c, s.member.as_ref().filter(|m| !m.gone)?.room?)))
-        .collect();
+    let want: BTreeMap<ConnId, u32> = hub.seated().collect();
     for (c, key) in &want {
         if in_room.get(c) != Some(key)
             && let Ok(mut e) = commands.get_entity(link_of(*c))
@@ -627,39 +626,27 @@ fn publish(
     *in_room = want;
 }
 
+/// A link the hub let go of, to close once what was sent to it has gone out (server time, s).
+#[derive(Component, Clone, Copy, Debug)]
+struct CloseAt(f64);
+
 /// Links the hub let go of: Lightyear forgets them (the client was told why and disconnects itself).
-fn close_links(time: Res<Time<Real>>, rooms: Option<ResMut<Rooms>>, mut commands: Commands) {
-    let Some(mut rooms) = rooms else { return };
+fn close_links(time: Res<Time<Real>>, links: Query<(Entity, &CloseAt)>, mut commands: Commands) {
     let now = time.elapsed_secs_f64();
-    rooms.closing.retain(|&(link, at)| {
-        if at > now {
-            return true;
+    for (link, at) in &links {
+        if at.0 <= now {
+            commands.entity(link).remove::<CloseAt>().insert(Disconnecting);
         }
-        if let Ok(mut e) = commands.get_entity(link) {
-            e.insert(Disconnecting);
-        }
-        false
-    });
+    }
 }
 
 /// Players' round trips into their rooms (shown in the lobby), once a second.
-fn measure_rtt(
-    time: Res<Time<Real>>,
-    mut last: Local<f64>,
-    rooms: Option<ResMut<Rooms>>,
-    links: Query<(Entity, &Link), With<ClientOf>>,
-) {
+fn measure_rtt(rooms: Option<ResMut<Rooms>>, links: Query<(Entity, &Link), With<ClientOf>>) {
     let Some(mut rooms) = rooms else { return };
-    let now = time.elapsed_secs_f64();
-    if now - *last < 1.0 {
-        return;
-    }
-    *last = now;
     for (link, l) in &links {
-        let Some(m) = rooms.hub.member(conn_of(link)) else {
+        let Some((key, id)) = rooms.hub.seat(conn_of(link)) else {
             continue;
         };
-        let (Some(key), id) = (m.room, m.id) else { continue };
         let rtt = l.stats.rtt.as_millis() as u32;
         if let Some(r) = rooms.hub.rooms.get_mut(&key) {
             r.set_rtt(id, rtt);

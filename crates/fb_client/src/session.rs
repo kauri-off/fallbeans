@@ -24,7 +24,7 @@ pub struct Session {
     pub lobby: Option<Lobby>,
     pub arena: Option<ArenaInfo>,
     /// Points of the current arena (the map's own scoring: stars, tails).
-    pub scores: BTreeMap<Pid, f64>,
+    pub scores: BTreeMap<Pid, i64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
     /// The last game's standings (the podium's poses).
@@ -47,14 +47,14 @@ pub struct Session {
     /// Shown beside the podium.
     pub game_end: Option<GameEnd>,
     pub chat: VecDeque<ChatLine>,
-    pub feed: Vec<FeedEntry>,
+    pub feed: VecDeque<FeedEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Denied {
     pub room: Option<String>,
     pub reason: DenyReason,
-    pub msg: String,
+    pub msg: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,7 +75,8 @@ pub struct GameEnd {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatLine {
     pub n: u32,
-    pub id: Pid,
+    /// None: the server.
+    pub id: Option<Pid>,
     pub name: String,
     pub text: String,
     /// Real time it came (seconds since start).
@@ -87,7 +88,7 @@ pub enum Feed {
     Ko {
         victim: Pid,
         by: Option<Pid>,
-        cause: String,
+        cause: Cause,
         out: bool,
         shortcut: bool,
     },
@@ -120,13 +121,27 @@ impl Session {
         self.me.is_some() && self.lobby.as_ref().is_some_and(|l| l.host == self.me)
     }
 
+    pub fn push_chat(&mut self, now: f32, id: Option<Pid>, name: String, text: String) {
+        let n = self.chat.back().map_or(0, |l| l.n + 1);
+        if self.chat.len() >= CHAT_MAX_LINES {
+            self.chat.pop_front();
+        }
+        self.chat.push_back(ChatLine {
+            n,
+            id,
+            name,
+            text,
+            at: now,
+        });
+    }
+
     pub fn push_feed(&mut self, now: f32, what: Feed) {
-        let n = self.feed.last().map_or(0, |f| f.n + 1);
+        let n = self.feed.back().map_or(0, |f| f.n + 1);
         self.feed.retain(|f| now - f.at < FEED_SECS);
         if self.feed.len() >= FEED_MAX {
-            self.feed.remove(0);
+            self.feed.pop_front();
         }
-        self.feed.push(FeedEntry { n, at: now, what });
+        self.feed.push_back(FeedEntry { n, at: now, what });
     }
 
     pub fn note(&mut self, now: f32, text: String) {
@@ -231,7 +246,7 @@ fn receive(
                     session.mine = mine;
                 }
                 ServerMsg::Denied { room, reason, msg } => {
-                    warn!("room {room:?} denied ({reason:?}): {msg}");
+                    warn!("room {room:?} denied ({reason:?}): {}", msg.as_deref().unwrap_or("-"));
                     // The room from a link or the one we were in is not to be had: the room list it is.
                     if session.arena.is_some() {
                         session.leave_room();
@@ -240,15 +255,11 @@ fn receive(
                 }
                 ServerMsg::Home { msg } => {
                     session.leave_room();
-                    session.denied = if msg.is_empty() {
-                        None
-                    } else {
-                        Some(Denied {
-                            room: None,
-                            reason: DenyReason::Gone,
-                            msg,
-                        })
-                    };
+                    session.denied = msg.map(|msg| Denied {
+                        room: None,
+                        reason: DenyReason::Gone,
+                        msg: Some(msg),
+                    });
                 }
                 ServerMsg::Welcome {
                     id,
@@ -335,32 +346,30 @@ fn receive(
                 ServerMsg::Chat { id, name, text } => {
                     // (Other people's words: not in the logs and reports a player sends.)
                     debug!("chat {name}: {text}");
-                    let n = session.chat.back().map_or(0, |l| l.n + 1);
-                    if session.chat.len() >= CHAT_MAX_LINES {
-                        session.chat.pop_front();
-                    }
-                    session.chat.push_back(ChatLine {
-                        n,
-                        id,
-                        name,
-                        text,
-                        at: now,
-                    });
+                    session.push_chat(now, Some(id), name, text);
                     if Some(id) != session.me {
-                        cues.write(Cue::Sfx("click"));
+                        cues.write(Cue::Sfx(crate::audio::Sfx::Click));
                     }
                 }
-                ServerMsg::DevAck { ok, msg, .. } => {
-                    info!("dev: {} {msg}", if ok { "ok" } else { "failed" });
-                    let mark = if ok { "" } else { "✖ " };
-                    session.note(now, format!("🛠 {mark}{msg}"));
+                ServerMsg::Notice(text) => {
+                    info!("server: {text}");
+                    session.push_chat(now, None, crate::ui::text::SERVER.into(), text);
+                    cues.write(Cue::Sfx(crate::audio::Sfx::Click));
+                }
+                ServerMsg::DevAck { result, .. } => {
+                    let line = match result {
+                        Ok(m) => m,
+                        Err(m) => format!("✖ {m}"),
+                    };
+                    info!("dev: {line}");
+                    session.note(now, format!("🛠 {line}"));
                 }
                 ServerMsg::Clock { rate } => info!("game time ×{rate}"),
                 ServerMsg::Scores(s) => {
                     // In the lobby a score is the bell on the tower, rung once more (bots ring it silently).
                     let lobby = session.arena.as_ref().is_some_and(|a| a.kind == ArenaKind::Lobby);
                     for (id, v) in s {
-                        let was = session.scores.insert(id, v).unwrap_or(0.0);
+                        let was = session.scores.insert(id, v).unwrap_or(0);
                         let bot = session
                             .lobby
                             .as_ref()

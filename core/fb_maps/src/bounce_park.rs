@@ -1,15 +1,18 @@
 //! Bounce all the way: a mushroom forest, hovering trampolines, catapults over walls, one more thing from
 //! the seed, a second (higher) forest and a giant trampoline up to the finish.
+use fb_shared::{Rgb, rgb};
 use fb_sim::bots::{Hop, Waypoint, WpX, aim_landing, hop_chain};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, bumper_ramp, pick_sections, race_course, seesaws, trampoline_gap, with_rests,
 };
+use fb_sim::looks::{LookId, Pattern};
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
+use fb_sim::scene::Surface;
 use fb_sim::scene::pal;
 
 use crate::util::o;
@@ -25,7 +28,13 @@ static META: GameMeta = GameMeta::new(
     150.0,
 );
 
-const CAPS: [&str; 5] = ["#ff5f6d", "#ff9f4a", "#a66bff", "#39c0ff", "#ff5fa2"];
+const CAPS: [Rgb; 5] = [
+    rgb(0xff5f6d),
+    rgb(0xff9f4a),
+    rgb(0xa66bff),
+    rgb(0x39c0ff),
+    rgb(0xff5fa2),
+];
 
 /// Giant mushrooms over the void, each cap a little higher than the last: bounce from cap to cap.
 fn mushroom_forest(n: usize, power: f64) -> Segment {
@@ -40,12 +49,12 @@ fn mushroom_forest(n: usize, power: f64) -> Segment {
         for k in 0..n {
             let sc = 1.3 + s.rng() * 0.35;
             let base = top - 1.92 * sc;
-            let cap = CAPS[(s.rng() * CAPS.len() as f64).floor() as usize];
+            let cap = *s.b.rng.pick(&CAPS);
             s.b.mushroom(x, base, z, sc, power, Some(cap));
             // A stalk down into the clouds (thinner than the stem: nothing to stand on).
             let stalk = PrimOpts {
-                surface: Some("leaf"),
-                seg: Some(16),
+                surface: Some(Surface::Leaf),
+                seg: 16,
                 ..Default::default()
             };
             s.b.cyl(x, base - 5.0, z, 0.3 * sc, 10.0, pal::GREEN, stalk);
@@ -97,15 +106,15 @@ fn hover_trampoline(
     let rim = PrimOpts {
         parent: Some(holder),
         dynamic: true,
-        surface: Some("rubber"),
+        surface: Some(Surface::Rubber),
         ..Default::default()
     };
     b.cyl(0.0, -0.03, 0.0, r + 0.3, 0.3, pal::ORANGE, rim);
     let mat = PrimOpts {
         parent: Some(holder),
         dynamic: true,
-        surface: Some("fabric"),
-        pattern: Some("dots"),
+        surface: Some(Surface::Fabric),
+        pattern: Some(Pattern::Dots),
         col: ColliderOpts {
             pad: power,
             ..Default::default()
@@ -116,16 +125,16 @@ fn hover_trampoline(
     let engine = PrimOpts {
         parent: Some(holder),
         no_collide: true,
-        surface: Some("metal"),
-        seg: Some(20),
+        surface: Some(Surface::Metal),
+        seg: 20,
         ..Default::default()
     };
-    b.cyl(0.0, -0.55, 0.0, r * 0.45, 0.8, pal::hex("#39406b"), engine);
+    b.cyl(0.0, -0.55, 0.0, r * 0.45, 0.8, pal::solid(rgb(0x39406b)), engine);
     let flame = PrimOpts {
         parent: Some(holder),
         no_collide: true,
-        surface: Some("glossy"),
-        seg: Some(16),
+        surface: Some(Surface::Glossy),
+        seg: 16,
         ..Default::default()
     };
     b.cyl(0.0, -1.0, 0.0, r * 0.25, 0.25, pal::YELLOW, flame);
@@ -201,10 +210,10 @@ fn pad_catapults(n: usize) -> Segment {
             for (r, x) in [-3.0, 3.0].into_iter().enumerate() {
                 s.b.pad(x, y, pz, 1.4, 16.0, Some((0.0, 8.0)));
                 let land = pz + 9.3;
-                routes[r].push(Waypoint::spread(x, pz - 2.0, 0.0));
-                routes[r].push(Waypoint::spread(x, pz, 0.0));
+                routes[r].push(Waypoint::exact(x, pz - 2.0));
+                routes[r].push(Waypoint::exact(x, pz));
                 routes[r].push(
-                    Waypoint::spread(x, land, 0.0)
+                    Waypoint::exact(x, land)
                         .drive(move |bot, out| !bot.body.grounded && aim_landing(bot, x, y, land, out)),
                 );
             }
@@ -272,7 +281,7 @@ fn big_bounce(rise: f64) -> Segment {
             .into_iter()
             .map(|k: f64| {
                 vec![
-                    Waypoint::spread(k * 2.8, s.z + 1.5, 0.0),
+                    Waypoint::exact(k * 2.8, s.z + 1.5),
                     Waypoint::spread(0.0, land.z, 0.5).drive_boxed(hop_chain(
                         s.b.note(),
                         hops(k > 0.0),
@@ -301,8 +310,8 @@ impl MapDef for BouncePark {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["jungle", "candy", "meadow"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Jungle, LookId::Candy, LookId::Meadow]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

@@ -24,6 +24,7 @@ use bevy::mesh::{Indices, MeshTag, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on};
+use fb_sim::scene::Model;
 use fb_sim::scene::PrimKind;
 
 use super::meshes::{self, edge_radius};
@@ -335,7 +336,7 @@ fn model_parts(
 
 /// The models' parts by name (`model_parts`), made once each is loaded.
 #[derive(Resource, Default)]
-pub struct ModelParts(HashMap<&'static str, Vec<(Mat4, Vec3)>>);
+pub struct ModelParts(HashMap<Model, Vec<(Mat4, Vec3)>>);
 
 /// The solids of a placed model's parts (`world`: its node's), the thin ones left out.
 pub fn model_solids(parts: &[(Mat4, Vec3)], world: &Mat4, out: &mut Vec<Solid>) {
@@ -362,8 +363,8 @@ pub struct AoKit<'w> {
 
 impl AoKit<'_> {
     /// The parts of a model (`model_parts`); none while its glTF is not in (the warm-up loads them all first).
-    pub fn model(&mut self, name: &'static str, assets: &AssetServer, meshes: &Assets<Mesh>) -> Vec<(Mat4, Vec3)> {
-        if let Some(p) = self.parts.0.get(name) {
+    pub fn model(&mut self, name: Model, assets: &AssetServer, meshes: &Assets<Mesh>) -> Vec<(Mat4, Vec3)> {
+        if let Some(p) = self.parts.0.get(&name) {
             return p.clone();
         }
         let handle: Handle<Gltf> = assets.load(format!("models/{name}.glb"));
@@ -921,7 +922,15 @@ fn gather(
 pub struct Grounded(pub f32);
 
 /// The models that stand on the ground they are placed on (not those that float or hang).
-pub const GROUNDED: [&str; 7] = ["tree", "pine", "mushroom", "cone", "flag", "bumper", "finish"];
+pub const GROUNDED: [Model; 7] = [
+    Model::Tree,
+    Model::Pine,
+    Model::Mushroom,
+    Model::Cone,
+    Model::Flag,
+    Model::Bumper,
+    Model::Finish,
+];
 
 /// The tag of a mesh standing on the ground at `y`: its bits, the lowest set (0 is no ground).
 fn ground_tag(y: f32) -> u32 {

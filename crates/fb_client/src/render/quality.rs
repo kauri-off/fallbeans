@@ -21,6 +21,7 @@ use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::ColorGrading;
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{PresentMode, PrimaryWindow};
+use serde::{Deserialize, Serialize};
 use wgpu_types::DeviceType;
 
 use super::Sun;
@@ -38,27 +39,53 @@ pub enum Tier {
     T2,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// Saved by name ("low", "high"); any other (an old "auto" or "medium") does not load: the default, High.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Reflect, Serialize, Deserialize)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum Preset {
     Low,
+    #[default]
     High,
 }
 
-impl Preset {
-    pub fn of(name: &str) -> Option<Preset> {
-        Some(match name {
-            "low" => Preset::Low,
-            "high" => Preset::High,
-            _ => return None,
-        })
-    }
+/// The upscaling mode, saved by name; the player picks among `PICKS`, the perf sweep also tries `Performance`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Reflect, Serialize, Deserialize)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Upscale {
+    /// The main pass at 77% of the resolution: the mode until the player picks another.
+    #[default]
+    Ultra,
+    Quality,
+    Balanced,
+    Performance,
 }
 
-/// The upscaling mode until the player picks another, ultra quality: the main pass at 77% of the resolution.
-pub const UPSCALE: &str = "ultra";
+impl Upscale {
+    pub const PICKS: [Upscale; 3] = [Upscale::Ultra, Upscale::Quality, Upscale::Balanced];
 
-/// The upscaling modes the player picks among (the perf sweep also tries "performance").
-pub const UPSCALES: [&str; 3] = ["ultra", "quality", "balanced"];
+    /// The render scale (1: full resolution).
+    pub fn scale(self) -> f32 {
+        match self {
+            Upscale::Ultra => 0.77,
+            Upscale::Quality => 0.67,
+            Upscale::Balanced => 0.59,
+            Upscale::Performance => 0.5,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Upscale::Ultra => "ultra",
+            Upscale::Quality => "quality",
+            Upscale::Balanced => "balanced",
+            Upscale::Performance => "performance",
+        }
+    }
+}
 
 /// What the graphics run with now: the tier and the preset in effect.
 #[derive(Resource, Clone, Debug)]
@@ -66,19 +93,6 @@ pub struct Quality {
     pub tier: Tier,
     pub preset: Preset,
     pub adapter: String,
-}
-
-impl Quality {
-    /// The render scale of an upscaling mode (1: full resolution).
-    pub fn scale(upscale: &str) -> f32 {
-        match upscale {
-            "ultra" => 0.77,
-            "quality" => 0.67,
-            "balanced" => 0.59,
-            "performance" => 0.5,
-            _ => 1.0,
-        }
-    }
 }
 
 pub struct QualityPlugin;
@@ -166,11 +180,6 @@ fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
     });
 }
 
-/// The preset the settings ask for: High for a name it does not know (an old "auto" or "medium").
-pub fn preset_for(g: &Graphics) -> Preset {
-    Preset::of(&g.preset).unwrap_or(Preset::High)
-}
-
 /// The camera, the sun and the window as the preset and switches say.
 fn apply(
     g: Res<Graphics>,
@@ -187,7 +196,7 @@ fn apply(
     mut done: Local<Option<(Preset, Upscaler, Graphics)>>,
 ) {
     let Some(mut q) = q else { return };
-    let preset = preset_for(&g);
+    let preset = g.preset;
     if q.preset != preset {
         q.preset = preset;
     }

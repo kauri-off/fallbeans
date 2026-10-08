@@ -37,6 +37,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::render::view::{ColorGrading, ColorGradingGlobal};
 use bevy::shader::ShaderRef;
+use fb_shared::Rgb;
 use fb_sim::looks::{Look, ResolvedLook};
 
 use crate::game::Map;
@@ -46,9 +47,8 @@ use crate::view::MainCamera;
 /// of light on a white surface come out as one: the look's colours keep their meaning.
 pub const LUX: f32 = 1000.0;
 
-/// Linear colour of a hex string.
-pub fn linear(hex: &str) -> LinearRgba {
-    crate::view::hex(hex).to_linear()
+pub fn linear(c: Rgb) -> LinearRgba {
+    crate::view::color(c).to_linear()
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
@@ -218,7 +218,7 @@ fn sun_dir(look: &ResolvedLook) -> Vec3 {
 
 fn sky_uniform(look: &ResolvedLook) -> SkyUniform {
     let l = look.look;
-    let v = |c: &str| linear(c).to_vec4();
+    let v = |c: Rgb| linear(c).to_vec4();
     SkyUniform {
         top: v(l.sky.top),
         horizon: v(l.sky.horizon),
@@ -256,7 +256,7 @@ fn apply_look(
         m.u = sky_uniform(look);
     }
     if let Ok((mut light, mut tf)) = sun.single_mut() {
-        light.color = crate::view::hex(l.sun.color);
+        light.color = crate::view::color(l.sun.color);
         light.illuminance = l.sun.intensity as f32 * LUX;
         *tf = Transform::from_translation(sun_dir(look) * SUN_DISTANCE).looking_at(Vec3::ZERO, Vec3::Y);
     }
@@ -264,28 +264,28 @@ fn apply_look(
         return;
     };
     // (How near it begins depends on the haze: `fog.rs`.)
-    fog.color = crate::view::hex(l.fog.color);
+    fog.color = crate::view::color(l.fog.color);
     grade.global = ColorGradingGlobal {
         exposure: (l.exposure as f32).log2(),
         post_saturation: l.saturation as f32,
         ..default()
     };
-    clear.0 = crate::view::hex(l.sky.horizon);
+    clear.0 = crate::view::color(l.sky.horizon);
     commands.entity(cam).insert(env.of(l, &mut images));
 }
 
 /// The looks' ambient light (`env.rs`), made once per look (≈70 KB each) and kept: a round of a look seen
 /// before makes none.
 #[derive(Resource, Default)]
-pub struct EnvLights(HashMap<&'static str, EnvironmentMapLight>);
+pub struct EnvLights(HashMap<fb_sim::looks::LookId, EnvironmentMapLight>);
 
 impl EnvLights {
     pub fn of(&mut self, l: &'static Look, images: &mut Assets<Image>) -> EnvironmentMapLight {
         self.0
             .entry(l.id)
             .or_insert_with(|| {
-                let c = |hex: &str| {
-                    let c = linear(hex);
+                let c = |rgb: Rgb| {
+                    let c = linear(rgb);
                     [c.red, c.green, c.blue]
                 };
                 let mut cube = |map| {

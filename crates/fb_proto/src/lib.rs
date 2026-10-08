@@ -1,6 +1,7 @@
 //! Messages between client and server besides replication and input:
 //! the room list, rooms and their lobby, game flow, chat, dev commands, map events. Everything a client
 //! sends passes `ClientMsg::check` (bounds and shapes) before the server looks at it.
+pub use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::ArenaKind;
 use fb_shared::rules::RoundRow;
 use fb_shared::{CHAT_MAX, COLORS, EMOTES, ROOM_PIN_DIGITS};
@@ -28,8 +29,35 @@ pub struct SessionRequest {
     /// The identity token of an earlier session; without a valid one the server makes a new player.
     pub identity: Option<String>,
     pub protocol: u32,
-    /// The transport the connection will go over: "udp" or "ws".
-    pub transport: String,
+    pub transport: TransportKind,
+}
+
+/// `GET /fallbeans/health`: a server up, its protocol and how busy it is.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Health {
+    pub ok: bool,
+    /// What the server's owner called it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `PROTOCOL_VERSION`.
+    pub version: u32,
+    #[serde(default)]
+    pub build: String,
+    #[serde(default)]
+    pub rooms: u64,
+    #[serde(default)]
+    pub players: u64,
+    #[serde(default)]
+    pub practice: u64,
+}
+
+/// The transport a connection goes over.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportKind {
+    #[default]
+    Udp,
+    Ws,
 }
 
 /// The player's identity to keep and a connect token (base64) for one attempt; none on another protocol.
@@ -227,9 +255,9 @@ impl DevCmd {
 
     pub fn name(&self) -> &'static str {
         match self {
-            DevCmd::SkipIntro => "skipIntro",
+            DevCmd::SkipIntro => "skip_intro",
             DevCmd::Warp { .. } => "warp",
-            DevCmd::EndRound => "endRound",
+            DevCmd::EndRound => "end_round",
             DevCmd::Start { .. } => "start",
             DevCmd::Lobby => "lobby",
             DevCmd::Rate { .. } => "rate",
@@ -295,8 +323,8 @@ pub enum Phase {
 /// A room as its members know it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RoomRef {
-    /// Empty for a practice room (not in the list).
-    pub id: String,
+    /// None for a practice room (not in the list).
+    pub id: Option<String>,
     pub title: String,
     pub private: bool,
 }
@@ -307,8 +335,8 @@ pub struct RoomInfo {
     pub id: String,
     pub title: String,
     pub private: bool,
-    /// Name of the current host.
-    pub host: String,
+    /// Name of the current host (None while there is none).
+    pub host: Option<String>,
     /// People in the room (bots are counted apart).
     pub players: u32,
     pub bots: u32,
@@ -367,7 +395,7 @@ pub struct ArenaInfo {
     pub late: bool,
     pub finished: Vec<Pid>,
     pub out: Vec<Pid>,
-    pub scores: Vec<(Pid, f64)>,
+    pub scores: Vec<(Pid, i64)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -383,11 +411,22 @@ pub struct Standing {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Award {
-    pub key: String,
-    pub title: String,
-    pub icon: String,
+    pub kind: AwardKind,
     pub id: Pid,
-    pub text: String,
+    /// What it was won with: seconds survived, knock-offs, grabs, falls, shortcuts.
+    pub value: u32,
+}
+
+/// A fun title at the end of a game.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AwardKind {
+    /// Best places in races.
+    Fastest,
+    Survivor,
+    Bully,
+    Grabber,
+    Clumsy,
+    Sly,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -401,7 +440,7 @@ pub enum RejectReason {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DenyReason {
-    /// With an empty message: the room asks for its PIN.
+    /// Without a message: the room asks for its PIN.
     Pin,
     Full,
     Gone,
@@ -428,11 +467,11 @@ pub enum ServerMsg {
     Denied {
         room: Option<String>,
         reason: DenyReason,
-        msg: String,
+        msg: Option<String>,
     },
-    /// The player is out of the room, back at the room list.
+    /// The player is out of the room, back at the room list (with why, when it was not their doing).
     Home {
-        msg: String,
+        msg: Option<String>,
     },
     /// Entered a room (`id` is the player's id there); its lobby and arena follow.
     Welcome {
@@ -455,7 +494,7 @@ pub enum ServerMsg {
         standings: Vec<Standing>,
         awards: Vec<Award>,
     },
-    Scores(Vec<(Pid, f64)>),
+    Scores(Vec<(Pid, i64)>),
     Emote {
         id: Pid,
         e: u8,
@@ -465,12 +504,13 @@ pub enum ServerMsg {
         name: String,
         text: String,
     },
+    /// The server says something in the room's chat.
+    Notice(String),
     Left(Pid),
-    /// Reply to a dev command (`q` echoes the request's).
+    /// Reply to a dev command (`q` echoes the request's): what it did, or why it could not.
     DevAck {
         q: Option<u32>,
-        ok: bool,
-        msg: String,
+        result: Result<String, String>,
     },
     /// Game time changed speed (dev; prediction is off while it is not 1).
     Clock {
@@ -496,7 +536,7 @@ pub enum MapEventKind {
         id: Pid,
         out: bool,
         by: Option<Pid>,
-        cause: String,
+        cause: Cause,
         shortcut: bool,
     },
     /// A map's own event.

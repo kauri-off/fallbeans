@@ -6,11 +6,12 @@ use std::collections::BTreeMap;
 
 use fb_arena::{Stepper, tick_bodies, touch_hook};
 use fb_shared::input::InputFrame;
+use fb_shared::rgb;
 use fb_shared::{DT, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::math::V3;
-use fb_sim::physics::{Body, StepEvents};
+use fb_sim::physics::{Body, Power, StepEvents};
 use fb_sim::scene::pal;
 
 /// How far a bean may stray from its recorded path, m: further, and the physics feels different.
@@ -21,7 +22,7 @@ const EVERY: i64 = 30;
 /// A scripted bean: where it starts, its bonus, its stick from a tick on and the buttons pressed on a tick.
 struct Bean {
     at: [f64; 3],
-    power: u8,
+    power: Option<Power>,
     stick: &'static [(i64, i8, i8)],
     press: &'static [(i64, u8)],
 }
@@ -29,14 +30,17 @@ struct Bean {
 const fn bean(at: [f64; 3], stick: &'static [(i64, i8, i8)], press: &'static [(i64, u8)]) -> Bean {
     Bean {
         at,
-        power: 0,
+        power: None,
         stick,
         press,
     }
 }
 
-const fn giant(power: u8, b: Bean) -> Bean {
-    Bean { power, ..b }
+const fn powered(power: Power, b: Bean) -> Bean {
+    Bean {
+        power: Some(power),
+        ..b
+    }
 }
 
 const ON: f64 = 0.02;
@@ -65,9 +69,12 @@ fn script(name: &str) -> (i64, Vec<Bean>) {
             720,
             vec![
                 bean([0.0, ON, 0.0], &[(1, 0, 127), (200, 0, 0)], &[(30, 1), (100, 2)]),
-                giant(2, bean([-8.0, ON, 0.0], &[(1, 0, 0)], &[(20, 1), (200, 1), (400, 1)])),
-                giant(
-                    3,
+                powered(
+                    Power::Jump,
+                    bean([-8.0, ON, 0.0], &[(1, 0, 0)], &[(20, 1), (200, 1), (400, 1)]),
+                ),
+                powered(
+                    Power::Speed,
                     bean(
                         [8.0, ON, -15.0],
                         &[(1, 0, 127), (100, 127, 0), (150, 0, -127), (250, -127, 0), (350, 0, 0)],
@@ -86,7 +93,7 @@ fn script(name: &str) -> (i64, Vec<Bean>) {
             vec![
                 bean([0.0, ON, -3.0], &[(1, 0, 127), (180, 0, 0)], &[]),
                 bean([0.0, ON, 3.0], &[(1, 0, -127), (180, 0, 0)], &[]),
-                giant(1, bean([6.0, ON, -4.0], &[(1, 0, 127), (240, 0, 0)], &[])),
+                powered(Power::Giant, bean([6.0, ON, -4.0], &[(1, 0, 127), (240, 0, 0)], &[])),
                 bean([6.0, ON, 1.0], &[(1, 0, 0)], &[]),
                 bean([-6.0, ON, -3.0], &[(1, 0, 127), (200, 0, 0)], &[(30, 2)]),
                 bean([-6.0, ON, 1.0], &[(1, 0, 0)], &[]),
@@ -135,7 +142,7 @@ fn script(name: &str) -> (i64, Vec<Bean>) {
             vec![
                 bean([0.0, ON, -0.6], &[(1, 0, 0)], &[]),
                 bean([0.0, ON, -8.0], &[(1, 0, 127), (300, 0, 0)], &[]),
-                giant(1, bean([0.0, ON, 1.6], &[(1, 0, 0)], &[])),
+                powered(Power::Giant, bean([0.0, ON, 1.6], &[(1, 0, 0)], &[])),
             ],
         ),
         "bounce" => (
@@ -265,9 +272,9 @@ fn build(name: &str, b: &mut Builder) {
             wall(b, 0.0, 1.3, 7.0, 6.0, 2.6, 6.0);
             wall(b, 8.0, 2.1, 7.0, 6.0, 4.2, 6.0);
             wall(b, -8.0, 2.5, 7.0, 6.0, 5.0, 6.0);
-            b.ladder(-8.0, 0.0, 4.0, 5.0, m::PI, "#ffb347");
+            b.ladder(-8.0, 0.0, 4.0, 5.0, m::PI, rgb(0xffb347));
             wall(b, -16.0, 2.5, 7.0, 6.0, 5.0, 6.0);
-            b.ladder(-16.0, 0.0, 4.0, 5.0, m::PI, "#ffb347");
+            b.ladder(-16.0, 0.0, 4.0, 5.0, m::PI, rgb(0xffb347));
         }
         "portal" => {
             b.box_(0.0, -1.0, 0.0, 60.0, 2.0, 60.0, pal::BLUE, PrimOpts::default());
@@ -275,16 +282,16 @@ fn build(name: &str, b: &mut Builder) {
             b.portal(
                 end(0.0, 5.0, m::PI),
                 end(20.0, 0.0, m::PI / 2.0),
-                "#a66bff",
+                rgb(0xa66bff),
                 PortalOpts::default(),
             );
             let o = PortalOpts {
                 one_way: true,
-                speed: Some(9.0),
+                speed: 9.0,
                 lift: Some(6.0),
                 ..Default::default()
             };
-            b.portal(end(-10.0, 5.0, m::PI), end(-10.0, 20.0, 0.0), "#ffffff", o);
+            b.portal(end(-10.0, 5.0, m::PI), end(-10.0, 20.0, 0.0), rgb(0xffffff), o);
         }
         _ => panic!("unknown scenario {name}"),
     }
@@ -323,8 +330,8 @@ fn path(name: &str) -> String {
         .map(|(d, id)| {
             let mut body = Body::new(id as i32);
             body.reset(V3::new(d.at[0], d.at[1], d.at[2]), 0.0);
-            if d.power != 0 {
-                body.give_power(d.power, 0.0);
+            if let Some(power) = d.power {
+                body.give_power(power, 0.0);
             }
             (id, body, StepEvents::default())
         })

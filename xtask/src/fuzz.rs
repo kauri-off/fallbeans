@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
+use serde::Deserialize;
 
 use crate::stress::wait_or_kill;
-use crate::{cargo, dev_features, dylib_env, root, target_dir, with_features};
+use crate::{cargo, dev_features, dylib_env, reported, root, target_dir, with_features};
 
 #[derive(Args)]
 pub struct FuzzArgs {
@@ -25,6 +27,25 @@ pub struct FuzzArgs {
 /// Past its seconds of play a seed has this long to finish, then it counts as hung and is killed.
 const GRACE: Duration = Duration::from_secs(120);
 
+/// The part of a line of cargo's `--message-format=json` that names a built binary.
+#[derive(Deserialize)]
+struct Artifact {
+    reason: String,
+    target: Option<Target>,
+    profile: Option<Profile>,
+    executable: Option<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct Target {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct Profile {
+    test: bool,
+}
+
 /// Builds the client's test binary and returns its path (run directly, so that a hung one can be killed: killing
 /// `cargo test` would leave it running).
 fn test_binary() -> Option<PathBuf> {
@@ -39,25 +60,18 @@ fn test_binary() -> Option<PathBuf> {
         return None;
     }
     String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
-        let v: serde_json::Value = serde_json::from_str(l).ok()?;
-        if v["reason"] == "compiler-artifact" && v["target"]["name"] == "fb_client" && v["profile"]["test"] == true {
-            v["executable"].as_str().map(PathBuf::from)
-        } else {
-            None
-        }
+        let a: Artifact = serde_json::from_str(l).ok()?;
+        let client = a.reason == "compiler-artifact"
+            && a.target.is_some_and(|t| t.name == "fb_client")
+            && a.profile.is_some_and(|p| p.test);
+        a.executable.filter(|_| client)
     })
 }
 
-pub fn fuzz(a: &FuzzArgs) -> bool {
-    let Some(exe) = test_binary() else {
-        eprintln!("the client's test binary did not build");
-        return false;
-    };
+pub fn fuzz(a: &FuzzArgs) -> Result<()> {
+    let exe = test_binary().ok_or_else(|| anyhow!("the client's test binary did not build"))?;
     let dir = target_dir().join("fuzz-ui");
-    if std::fs::create_dir_all(&dir).is_err() {
-        eprintln!("cannot create {}", dir.display());
-        return false;
-    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let first = a.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -119,5 +133,5 @@ pub fn fuzz(a: &FuzzArgs) -> bool {
                 .join("\n")
         );
     }
-    ok
+    reported(ok)
 }

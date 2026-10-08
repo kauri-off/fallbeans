@@ -94,7 +94,7 @@ struct ArenaInfo {
     late: bool
     finished: Vec<u32>
     out: Vec<u32>
-    scores: Vec<(u32, f64)>
+    scores: Vec<(u32, i64)>
 }
 enum ArenaKind {
     0 Lobby
@@ -102,11 +102,17 @@ enum ArenaKind {
     2 Podium
 }
 struct Award {
-    key: str
-    title: str
-    icon: str
+    kind: AwardKind
     id: u32
-    text: str
+    value: u32
+}
+enum AwardKind {
+    0 Fastest
+    1 Survivor
+    2 Bully
+    3 Grabber
+    4 Clumsy
+    5 Sly
 }
 struct BeanColor(u8)
 enum BodyState {
@@ -119,6 +125,14 @@ enum BodyState {
     6 Climb
     7 Portal
     8 Ladder
+}
+enum Cause {
+    0 fall
+    1 shortcut
+    2 tackle
+    3 grab
+    4 dev
+    5 hazard(Hazard)
 }
 enum ClientMsg {
     0 Hello(Hello)
@@ -189,7 +203,7 @@ struct Full {
     land_impact: f32
     tilt: f64
     tilt_dir: f64
-    power: u8
+    power: Option<Power>
     power_until: f64
     climb_to: [f64; 3]
     teleports: u32
@@ -224,6 +238,19 @@ enum Hat {
     11 Halo
     12 Flower
     13 Antenna
+}
+enum Hazard {
+    0 hammer
+    1 rotor
+    2 ball
+    3 bumper
+    4 wall
+    5 pusher
+    6 drum
+    7 peg
+    8 block
+    9 glove
+    10 gate
 }
 struct Hello {
     name: str
@@ -266,14 +293,14 @@ enum MapEvent {
     1 Seg { seg: u32, ev: SegEvent }
     2 Tile { i: u32, at: f64 }
     3 Star { k: u32, id: u32 }
-    4 Drop { from: u32, to: Option<u32>, n: f64 }
+    4 Drop { from: u32, to: Option<u32>, n: i64 }
     5 Snatch { from: u32, to: u32 }
     6 Tails { ids: Vec<u32>, by: u32 }
 }
 enum MapEventKind {
     0 Bonus { i: u32, id: u32, at: f64 }
     1 Finish { id: u32, place: u32, time: f64 }
-    2 Ko { id: u32, out: bool, by: Option<u32>, cause: str, shortcut: bool }
+    2 Ko { id: u32, out: bool, by: Option<u32>, cause: Cause, shortcut: bool }
     3 Map(MapEvent)
 }
 struct MapEventMsg {
@@ -313,10 +340,15 @@ struct Pose {
     tilt: u8
     tilt_dir: u8
     anim: Anim
-    power: u8
+    power: Option<Power>
     size: u8
     vel: [i16; 2]
     teleports: u8
+}
+enum Power {
+    0 Giant
+    1 Jump
+    2 Speed
 }
 enum RejectReason {
     0 Auth
@@ -324,18 +356,22 @@ enum RejectReason {
     2 Busy
     3 Moved
 }
+enum Result {
+    0 Ok(str)
+    1 Err(str)
+}
 struct RoomInfo {
     id: str
     title: str
     private: bool
-    host: str
+    host: Option<str>
     players: u32
     bots: u32
     max: u32
     phase: Phase
 }
 struct RoomRef {
-    id: str
+    id: Option<str>
     title: str
     private: bool
 }
@@ -348,6 +384,11 @@ struct Round {
     fall: FallBehaviour
     static_hash: str
 }
+enum RoundNote {
+    0 Finish(Option<f64>)
+    1 Survived(Option<f64>)
+    2 Points(i64)
+}
 struct RoundRow {
     id: u32
     place: u64
@@ -356,7 +397,7 @@ struct RoundRow {
     delta: i64
     total: i64
     ok: bool
-    note: str
+    note: RoundNote
     falls: u32
 }
 enum SegEvent {
@@ -368,19 +409,20 @@ enum ServerMsg {
     0 Ready { dev: bool }
     1 Reject { reason: RejectReason, msg: str }
     2 Rooms { rooms: Vec<RoomInfo>, mine: Option<str> }
-    3 Denied { room: Option<str>, reason: DenyReason, msg: str }
-    4 Home { msg: str }
+    3 Denied { room: Option<str>, reason: DenyReason, msg: Option<str> }
+    4 Home { msg: Option<str> }
     5 Welcome { id: u32, room: str, solo: bool, practice: bool, resumed: bool }
     6 Lobby(Lobby)
     7 Arena(ArenaInfo)
     8 RoundEnd { game: str, index: u32, total: u32, rows: Vec<RoundRow>, practice: bool }
     9 GameEnd { standings: Vec<Standing>, awards: Vec<Award> }
-    10 Scores(Vec<(u32, f64)>)
+    10 Scores(Vec<(u32, i64)>)
     11 Emote { id: u32, e: u8 }
     12 Chat { id: u32, name: str, text: str }
-    13 Left(u32)
-    14 DevAck { q: Option<u32>, ok: bool, msg: str }
-    15 Clock { rate: f64 }
+    13 Notice(str)
+    14 Left(u32)
+    15 DevAck { q: Option<u32>, result: Result }
+    16 Clock { rate: f64 }
 }
 struct Standing {
     id: u32

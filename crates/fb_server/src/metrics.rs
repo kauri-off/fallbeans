@@ -6,9 +6,35 @@ use std::time::Instant;
 
 use bevy::prelude::*;
 use fb_net::NetStats;
+use serde::Serialize;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use crate::http::HttpShared;
+
+/// One metrics period, for `/api/debug/health`.
+#[derive(Serialize, Clone, Debug)]
+pub struct Sample {
+    /// Unix time, s.
+    at: u64,
+    players: usize,
+    bots: usize,
+    rooms: usize,
+    tick_us: TickUs,
+    frame_max_ms: f64,
+    input_missed: u32,
+    out_bps: f64,
+    packets_per_s: f64,
+    cpu: f64,
+    mem_mb: f64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct TickUs {
+    mean: f64,
+    p50: u32,
+    p99: u32,
+    max: u32,
+}
 use crate::opts::Opts;
 use crate::play::{InputState, Pawn, RoomTick, Rooms};
 
@@ -121,8 +147,8 @@ fn report(
     let (mut players, mut bots, mut open) = (0, 0, 0);
     for room in rooms.iter().flat_map(|r| r.hub.rooms.values()) {
         open += 1;
-        players += room.players.iter().filter(|p| p.conn.is_some()).count();
-        bots += room.players.iter().filter(|p| p.bot).count();
+        players += room.players.iter().filter(|p| p.conn().is_some()).count();
+        bots += room.players.iter().filter(|p| p.is_bot()).count();
     }
     let (mut missed, mut missed_max) = (0, 0);
     for mut st in &mut pawns {
@@ -131,14 +157,27 @@ fn report(
     }
     let frame_max = core::mem::take(&mut t.frame_max) * 1000.0;
     let (cpu, mem) = usage.sample(span);
-    shared.0.sample(serde_json::json!({
-        "at": std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_secs(),
-        "players": players, "bots": bots, "rooms": open,
-        "tickUs": { "mean": mean.round(), "p50": pct(0.5), "p99": pct(0.99), "max": us.last().copied().unwrap_or(0) },
-        "frameMaxMs": frame_max.round(), "inputMissed": missed,
-        "outBps": bytes.round(), "packetsPerS": packets.round(),
-        "cpu": (cpu * 10.0).round() / 10.0, "memMb": mem.round(),
-    }));
+    shared.0.sample(Sample {
+        at: std::time::SystemTime::UNIX_EPOCH
+            .elapsed()
+            .unwrap_or_default()
+            .as_secs(),
+        players,
+        bots,
+        rooms: open,
+        tick_us: TickUs {
+            mean: mean.round(),
+            p50: pct(0.5),
+            p99: pct(0.99),
+            max: us.last().copied().unwrap_or(0),
+        },
+        frame_max_ms: frame_max.round(),
+        input_missed: missed,
+        out_bps: bytes.round(),
+        packets_per_s: packets.round(),
+        cpu: (cpu * 10.0).round() / 10.0,
+        mem_mb: mem.round(),
+    });
     let idle = players == 0;
     if core::mem::replace(&mut t.idle, idle) && idle {
         return;

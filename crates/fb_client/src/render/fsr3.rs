@@ -75,7 +75,7 @@ impl Plugin for Fsr3Plugin {
             }
         };
         let out = UVec2::new(1600, 900);
-        let render = super::upscale::render_size(out, super::quality::Quality::scale(super::quality::UPSCALE));
+        let render = super::upscale::render_size(out, super::quality::Upscale::default().scale());
         match ffx::Upscaler::new(api.clone(), &device, render, out, flags()) {
             Ok(mut probe) => {
                 let version = probe.version().unwrap_or_else(|| "?".into());

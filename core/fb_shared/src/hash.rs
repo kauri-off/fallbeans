@@ -1,5 +1,45 @@
 //! FNV-1a over quantized numbers: fingerprints of simulation state that two runs or two builds compare.
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 pub struct Fnv(u64);
+
+/// How many things were hashed, and their hash: `n:hash` in hex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fingerprint {
+    pub n: u32,
+    pub h: u64,
+}
+
+impl fmt::Display for Fingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{:016x}", self.n, self.h)
+    }
+}
+
+/// A hash of a whole simulation state: 16 hex digits (and so in JSON).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StateHash(pub u64);
+
+impl fmt::Display for StateHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+impl Serialize for StateHash {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for StateHash {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        u64::from_str_radix(&s, 16).map(Self).map_err(serde::de::Error::custom)
+    }
+}
 
 impl Default for Fnv {
     fn default() -> Self {

@@ -6,6 +6,8 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::Face;
 use bevy::world_serialization::WorldAssetRoot;
+use fb_shared::Rgb;
+use fb_sim::looks::ResolvedLook;
 use fb_sim::scene::{Finish, Form, LookOut, Part, SceneItem, Tint};
 use lightyear::prelude::*;
 
@@ -13,8 +15,7 @@ use crate::game::Map;
 use crate::render::meshes::{soft_box, soft_cylinder};
 use crate::render::portal::PortalMaterial;
 use crate::render::surface::{Kind, Spec, SurfaceMaterial, Surfaces};
-use crate::view::{PALETTES, frame_tick, hex};
-use fb_sim::looks::ResolvedLook;
+use crate::view::{color, frame_tick};
 
 /// Tone and opacity are drawn in steps of 1/STEPS (one material per step).
 const STEPS: f32 = 16.0;
@@ -43,7 +44,7 @@ pub struct SpecialCache {
     /// By look, tone step, opacity step.
     mats: HashMap<(u32, i8, i8), PieceMat>,
     /// Tinted materials by the primitive's own material (identical primitives share it), colour, step.
-    tints: HashMap<(AssetId<SurfaceMaterial>, &'static str, i8), Handle<SurfaceMaterial>>,
+    tints: HashMap<(AssetId<SurfaceMaterial>, Rgb, i8), Handle<SurfaceMaterial>>,
     /// Nodes tinted the frame before: one the looks no longer tint gets its own material back.
     tinted: BTreeSet<u32>,
     out: LookOut,
@@ -126,11 +127,9 @@ fn step(v: f64) -> i8 {
 }
 
 fn part_material(part: &Part, look: &ResolvedLook, tone: i8, alpha: i8) -> StandardMaterial {
-    let [mut a, b] = part.colors.map(|c| LinearRgba::from(hex(c)));
-    if let Some(i) = part.pal.and_then(|p| PALETTES.iter().position(|q| *q == p))
-        && look.look.id != "classic"
-    {
-        a = LinearRgba::from(hex(&look.palette[i][0]));
+    let [mut a, b] = part.colors.map(|c| LinearRgba::from(color(c)));
+    if let Some([c, _]) = part.pal.and_then(|p| look.repaint(p)) {
+        a = LinearRgba::from(color(c));
     }
     let k = tone as f32 / STEPS;
     let mut c = if k >= 0.0 {
@@ -183,9 +182,9 @@ fn portal_disc(part: &Part, tone: i8, alpha: i8) -> Option<PortalMaterial> {
         Form::Rings(_) => true,
         _ => return None,
     };
-    let c = hex(part.colors[0]);
+    let c = color(part.colors[0]);
     let a = c.alpha() * alpha as f32 / STEPS;
-    let phase = part.colors[0].bytes().map(u32::from).sum::<u32>() % 7;
+    let phase = part.colors[0].bytes().into_iter().map(u32::from).sum::<u32>() % 7;
     Some(PortalMaterial::new(
         c,
         exit,
@@ -304,7 +303,7 @@ pub fn pose_specials(
                                     m.base_color = Color::WHITE.with_alpha(a);
                                 }
                                 if lit(part) {
-                                    let kind = Some(part.surface.and_then(Kind::of).unwrap_or(Kind::Plastic));
+                                    let kind = Some(part.surface.map_or(Kind::Plastic, Kind::from));
                                     PieceMat::Surface(surfaces.material_from(
                                         m,
                                         kind,
@@ -384,7 +383,7 @@ pub fn pose_specials(
                     .tints
                     .entry((prim.1.id(), tint.to, k))
                     .or_insert_with(|| {
-                        let to = LinearRgba::from(hex(tint.to));
+                        let to = LinearRgba::from(color(tint.to));
                         let f = k as f32 / STEPS;
                         let mut spec = prim.0.clone();
                         match &mut spec.paint {

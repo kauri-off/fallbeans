@@ -10,7 +10,7 @@ use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
 use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, Pid, Playlist};
 use fb_shared::COLORS;
-use fb_shared::outfit::{GLASSES, HATS, Hat, TINT_LIST, Tint};
+use fb_shared::outfit::{GLASSES, HATS, Hat, Tint};
 use lightyear::prelude::client::Client;
 use lightyear::prelude::*;
 
@@ -76,11 +76,9 @@ struct MenuSettings;
 #[derive(Component)]
 struct MenuDev;
 
-fn build_menu(mut commands: Commands, layers: Query<(Entity, &Layer)>, f: Res<Fonts>, me: Me) {
+fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me) {
     let f = &*f;
-    let Some((e, _)) = layers.iter().find(|(_, l)| **l == Layer::Menu) else {
-        return;
-    };
+    let e = layers[Layer::Menu];
     commands.entity(e).with_children(|l| {
         // A column beside the player panel, over the game in full view.
         l.spawn((
@@ -241,7 +239,7 @@ pub(super) fn menu_flow(
 
 /// A player without a name of their own keeps the one the room gave them.
 fn adopt_name(session: Res<Session>, mut player: ResMut<Player>, opts: Res<crate::opts::Opts>, mut commands: Commands) {
-    if !player.name.is_empty() || !opts.name.is_empty() || !session.is_changed() {
+    if !player.name.is_empty() || opts.name.is_some() || !session.is_changed() {
         return;
     }
     if let Some(p) = session.me.and_then(|me| session.player(me)) {
@@ -267,7 +265,7 @@ fn sync_names(
     last.0 = name.clone();
     let focused = focus.get();
     for (e, f, mut t) in &mut fields {
-        if matches!(f, Field::MenuName | Field::Name) && Some(e) != focused && t.value().to_string() != name {
+        if matches!(f, Field::MenuName | Field::Name) && Some(e) != focused && t.value() != name.as_str() {
             set_field_text(&mut t, &name);
         }
     }
@@ -424,7 +422,7 @@ fn top(
 struct BodyKey<'a> {
     lobby: Option<&'a Lobby>,
     me: Option<Pid>,
-    open: &'a std::collections::BTreeSet<&'static str>,
+    open: &'a std::collections::BTreeSet<Fold>,
     outfit: fb_proto::Outfit,
     arena: Option<(u32, ArenaKind, u32, u32)>,
     practice: bool,
@@ -654,7 +652,7 @@ fn outfit_picker(
             }
         });
     }
-    fold(p, f, ui, "outfit", text::OUTFIT, |c| {
+    fold(p, f, ui, Fold::Outfit, text::OUTFIT, |c| {
         let wear = |patch: &dyn Fn(&mut fb_proto::Outfit)| {
             let mut o = *outfit;
             patch(&mut o);
@@ -700,8 +698,8 @@ fn tints(
         row(c, true, |r| {
             // "As designed": the part's own colour.
             swatch(r, Color::srgb(0.85, 0.86, 0.89), now.is_none(), act(None), true, 1.375);
-            for t in TINT_LIST {
-                swatch(r, hex(t.hex()), now == Some(t), act(Some(t)), true, 1.375);
+            for t in Tint::ALL {
+                swatch(r, color(t.rgb()), now == Some(t), act(Some(t)), true, 1.375);
             }
         });
     });
@@ -829,7 +827,7 @@ fn dev(
             );
             button(r, f, "Выбыть", Look::Chip(false), d(DevCmd::Kill { id: None }));
         });
-        fold(p, f, &ui, "dev-maps", "Играть карту (3 бота)", |c| {
+        fold(p, f, &ui, Fold::DevMaps, text::PLAY_MAP, |c| {
             row(c, true, |r| {
                 for def in fb_maps::GAMES {
                     let m = def.meta();
@@ -864,7 +862,7 @@ fn menu_actions(
                 }
             }
             Action::Color(c) => {
-                player.color = i32::from(*c);
+                player.color = crate::settings::ColorSetting(Some(*c));
                 opts.color = None;
                 crate::settings::save_soon(&mut commands);
                 crate::session::send(&mut senders, ClientMsg::Color(*c));
@@ -879,13 +877,13 @@ fn menu_actions(
                     x ^= x << 17;
                     (x % n as u64) as usize
                 };
-                let tint = |i: usize| (i > 0).then(|| TINT_LIST[i - 1]);
+                let tint = |i: usize| (i > 0).then(|| Tint::ALL[i - 1]);
                 let o = fb_proto::Outfit {
                     hat: HATS[pick(HATS.len())],
-                    hat_color: tint(pick(TINT_LIST.len() + 1)),
+                    hat_color: tint(pick(Tint::ALL.len() + 1)),
                     glasses: GLASSES[pick(GLASSES.len())],
-                    belly: tint(pick(TINT_LIST.len() + 1)),
-                    shoes: tint(pick(TINT_LIST.len() + 1)),
+                    belly: tint(pick(Tint::ALL.len() + 1)),
+                    shoes: tint(pick(Tint::ALL.len() + 1)),
                 };
                 wear(&mut player, &mut senders, &mut commands, &o);
             }

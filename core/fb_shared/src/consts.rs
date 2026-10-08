@@ -1,9 +1,13 @@
 /// The simulation's fingerprint: FNV-1a of `fb_arena/tests/determinism.txt`, the recorded end states of full
 /// rounds on every map. A change to the physics, a map or the bots changes a hash there (`cargo xtask check`
 /// fails until it is re-blessed), and with it this. Line endings do not count (a CRLF checkout).
+use crate::{Rgb, rgb};
 pub const SIM_FINGERPRINT: u32 = fnv1a_lines(FNV_SEED, include_bytes!("../../fb_arena/tests/determinism.txt"));
 
 pub const FNV_SEED: u32 = 0x811c_9dc5;
+
+/// A time long before anything (s): «never» for a timer compared with the clock.
+pub const NEVER: f64 = -1e9;
 
 /// FNV-1a of a text file, `\r` skipped, continuing from `seed` (`FNV_SEED` to start).
 pub const fn fnv1a_lines(seed: u32, bytes: &[u8]) -> u32 {
@@ -48,12 +52,29 @@ pub const ROOM_PIN_DIGITS: usize = 4;
 pub const CHAT_MAX: usize = 160;
 pub const NAME_MAX: usize = 16;
 
-/// The suit colour that runs through the rainbow.
-pub const RAINBOW: &str = "rainbow";
-/// Bean colours (an index on the wire): hex, or RAINBOW. The first eight go to newcomers.
-pub const COLORS: [&str; 13] = [
-    "#ff5fa2", "#3fa9ff", "#ffd23f", "#4fdc6a", "#a66bff", "#ff8a3d", "#39e0d0", "#ffffff", "#ff3b3b", "#2b2b33",
-    "#9ea3b0", "#8b5a2b", RAINBOW,
+/// A bean's suit colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suit {
+    Color(Rgb),
+    /// Runs through the rainbow.
+    Rainbow,
+}
+
+/// Bean colours (an index on the wire). The first eight go to newcomers.
+pub const COLORS: [Suit; 13] = [
+    Suit::Color(rgb(0xff5fa2)),
+    Suit::Color(rgb(0x3fa9ff)),
+    Suit::Color(rgb(0xffd23f)),
+    Suit::Color(rgb(0x4fdc6a)),
+    Suit::Color(rgb(0xa66bff)),
+    Suit::Color(rgb(0xff8a3d)),
+    Suit::Color(rgb(0x39e0d0)),
+    Suit::Color(rgb(0xffffff)),
+    Suit::Color(rgb(0xff3b3b)),
+    Suit::Color(rgb(0x2b2b33)),
+    Suit::Color(rgb(0x9ea3b0)),
+    Suit::Color(rgb(0x8b5a2b)),
+    Suit::Rainbow,
 ];
 
 #[cfg(test)]

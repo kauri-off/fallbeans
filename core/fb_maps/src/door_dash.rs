@@ -5,6 +5,7 @@ use fb_sim::course::{
     CourseOpts, bumper_ramp, door_rows, moving_platforms, pick_sections, pistons, race_course, rotor_decks,
     timed_doors, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 
 pub struct DoorDash;
@@ -23,8 +24,8 @@ impl MapDef for DoorDash {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["castle", "meadow", "royal"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Castle, LookId::Meadow, LookId::Royal]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

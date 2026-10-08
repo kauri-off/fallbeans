@@ -9,11 +9,13 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, moving_platforms, pick_sections, portal_fork, race_course,
     sliding_gates, timed_doors, tipping_bridge, trampoline_gap, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, GloveOpts, arm_contact_eta, glove_puncher, rolling_balls, sweep_eta, y_on_ramp};
+use fb_sim::scene::Model;
 use fb_sim::scene::pal;
 
 use crate::util::{dynamic, freq, o, rot};
@@ -97,12 +99,12 @@ fn climb_fork(rise: f64) -> Segment {
         s.b.box_(0.0, y1 - 1.0, top + 5.0, 20.0, 2.0, 10.0, pal::PURPLE, o());
 
         let ramp = |lane: f64| {
-            let mut pts = vec![Waypoint::spread(-5.0, z0 + 0.5, 0.0)];
+            let mut pts = vec![Waypoint::exact(-5.0, z0 + 0.5)];
             for (i, &zb) in blocks.iter().enumerate() {
                 let lx = -5.0 + (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;
-                pts.push(Waypoint::spread(-5.0, zb - 2.3, 0.0));
+                pts.push(Waypoint::exact(-5.0, zb - 2.3));
                 let balls = balls.clone();
-                pts.push(Waypoint::spread(lx, zb - 0.8, 0.0).wait(move |bot| {
+                pts.push(Waypoint::exact(lx, zb - 0.8).wait(move |bot| {
                     !balls.danger(
                         (-5f64).at_most(lx) - 0.3,
                         (-5f64).at_least(lx) + 0.3,
@@ -112,14 +114,14 @@ fn climb_fork(rise: f64) -> Segment {
                         0.9,
                     )
                 }));
-                pts.push(Waypoint::spread(lx, zb + 0.9, 0.0));
-                pts.push(Waypoint::spread(-5.0, zb + 2.3, 0.0));
+                pts.push(Waypoint::exact(lx, zb + 0.9));
+                pts.push(Waypoint::exact(-5.0, zb + 2.3));
             }
             pts.push(Waypoint::spread(lane, top + 2.0, 0.3));
             pts.push(Waypoint::spread(0.0, top + 5.0, 1.0));
             pts
         };
-        let mut step_route = vec![Waypoint::spread(5.0, z0 - 0.8, 0.0)];
+        let mut step_route = vec![Waypoint::exact(5.0, z0 - 0.8)];
         let mut edge = z0;
         for &(z, _, w, ph) in &steps {
             step_route.push(
@@ -184,7 +186,7 @@ fn glove_launch(rise: f64) -> Segment {
             let gloves = gloves.clone();
             vec![
                 Waypoint::spread(x, z0 + 2.0, 0.5),
-                Waypoint::spread(x, pad_z, 0.0).wait(move |bot| {
+                Waypoint::exact(x, pad_z).wait(move |bot| {
                     [0.0, 0.25, 0.5, 0.75, 1.0]
                         .iter()
                         .all(|dt| gloves.iter().all(|g| g.x_at(bot.t + dt).abs() > 9.0 - 8.5 * 0.3))
@@ -236,7 +238,7 @@ fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     let crown_ang = move |t: f64| if t <= 0.0 { 0.0 } else { t * cw };
     b.hub(0.0, top_y, hub_z, 0.6);
     b.rotor(0.0, top_y + 0.6, hub_z, 5.0, 2, crown_ang, 0.45);
-    let crown = b.model("crown", ROOT);
+    let crown = b.model(Model::Crown, ROOT);
     let n = b.world.nodes.get_mut(crown);
     n.pos = V3::new(0.0, top_y + 2.6, cz - 1.0);
     n.scale = V3::splat(1.6);
@@ -267,8 +269,8 @@ impl MapDef for CrownPeak {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["royal", "snow", "castle"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Royal, LookId::Snow, LookId::Castle]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
@@ -286,7 +288,6 @@ impl MapDef for CrownPeak {
         let opts = CourseOpts {
             sections: with_rests(sections, 7.0),
             finish_with: Some(Box::new(summit)),
-            ..Default::default()
         };
         race_course(b, ctx, opts)
     }

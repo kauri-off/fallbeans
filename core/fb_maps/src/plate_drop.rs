@@ -2,10 +2,12 @@
 //! over it knock over whoever they catch and pass over them. The centre never drops.
 use std::sync::Arc;
 
+use fb_shared::rgb;
 use fb_shared::rng::shuffle;
 use fb_sim::bots::{ArenaOpts, arena_brain};
 use fb_sim::builder::Builder;
 use fb_sim::collider::ColId;
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
@@ -52,8 +54,8 @@ impl MapDef for PlateDrop {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["candy", "ocean", "circus"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Candy, LookId::Ocean, LookId::Circus]
     }
 
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
@@ -86,10 +88,10 @@ impl MapDef for PlateDrop {
         b.box_(0.0, -0.5, 0.0, PLATE, 1.0, PLATE, pal::YELLOW, o());
         b.hub(0.0, 0.0, 0.0, 0.9);
         let reach = (half + 0.5) * (PLATE + GAP);
-        let dir = if b.rng.next() < 0.5 { 1.0 } else { -1.0 };
-        let low = SpinUp::new(-0.22, 0.8 + b.rng.next() * 0.2, 0.004);
+        let dir = if b.rng.unit() < 0.5 { 1.0 } else { -1.0 };
+        let low = SpinUp::new(-0.22, 0.8 + b.rng.unit() * 0.2, 0.004);
         let low_angle = move |t: f64| dir * low.angle(t);
-        let high_at = 35.0 + b.rng.next() * 15.0;
+        let high_at = 35.0 + b.rng.unit() * 15.0;
         let high_angle = move |t: f64| {
             if t <= high_at {
                 return 0.0;
@@ -106,7 +108,7 @@ impl MapDef for PlateDrop {
         shuffle(&mut order, &mut b.rng);
         let mut k = 0;
         while k < order.len() {
-            let group = if b.rng.next() < 0.5 { 2 } else { 3 };
+            let group = if b.rng.unit() < 0.5 { 2 } else { 3 };
             let mut g = 0;
             while g < group && k < order.len() {
                 plates[order[k]].fall_at = at;
@@ -152,7 +154,7 @@ impl MapDef for PlateDrop {
                     let k = 0.8 * u * u * (3.0 - 2.0 * u);
                     out.tints.push(Tint {
                         node: p.node,
-                        to: "#ff4a3a",
+                        to: rgb(0xff4a3a),
                         k,
                     });
                 }
@@ -170,8 +172,11 @@ impl MapDef for PlateDrop {
             }
         };
         let plate_at2 = plate_at.clone();
-        let mut opts = ArenaOpts::new(reach - 1.0);
-        opts.retarget = Some(1.2);
+        let mut opts = ArenaOpts {
+            radius: reach - 1.0,
+            ..Default::default()
+        };
+        opts.retarget = 1.2;
         opts.ignore_nav = true;
         opts.floor = Some(Box::new(move |x, z, t| {
             if x.abs() < PLATE / 2.0 + 0.1 && z.abs() < PLATE / 2.0 + 0.1 {
@@ -205,7 +210,7 @@ impl MapDef for PlateDrop {
             } else {
                 9.0
             };
-            eta > 0.1 && eta < 0.15 + bot.mem.traits.react * 0.3 && high > 0.7
+            eta > 0.1 && eta < 0.15 + bot.mem.traits().react * 0.3 && high > 0.7
         }));
         MapSpec {
             spawns: b.ring_spawns(8, 8.0, 0.1, m::PI / 8.0),

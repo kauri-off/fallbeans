@@ -501,20 +501,14 @@ fn rooms(
 ) {
     let Ok((e, mut sec)) = q.single_mut() else { return };
     let gone = session.denied.as_ref().filter(|d| d.reason != DenyReason::Pin);
-    let server = conn.map(|c| {
-        if servers.last.is_empty() {
-            c.http.clone()
-        } else {
-            servers.last.clone()
-        }
-    });
+    let server = conn.map(|c| servers.last.clone().unwrap_or_else(|| c.http.clone()));
     if !sec.stale(key_of(&(&session.rooms, &session.mine, gone, &server))) {
         return;
     }
     let f = &*f;
     let list = session.rooms.clone();
     let mine = session.mine.clone();
-    let alert = gone.map(|d| d.msg.clone()).filter(|m| !m.is_empty());
+    let alert = gone.and_then(|d| d.msg.clone());
     rebuild(&mut commands, e, |p| {
         row(p, false, |r| {
             button(r, f, text::TO_SERVERS, Look::Tiny, Action::LeaveServer);
@@ -565,7 +559,7 @@ fn room_row(p: &mut ChildSpawnerCommands, f: &Fonts, r: &RoomInfo, mine: bool) {
         .with_children(|c| {
             let lock = if r.private { "🔒 " } else { "" };
             heading(c, f, &format!("{lock}{}", r.title));
-            muted(c, f, &text::room_line(&r.host, r.phase != Phase::Lobby, mine));
+            muted(c, f, &text::room_line(r.host.as_deref(), r.phase != Phase::Lobby, mine));
         });
         let bots = if r.bots > 0 {
             format!(" +{} 🤖", r.bots)
@@ -615,11 +609,10 @@ fn pin(
                 button(r, f, text::ENTER, Look::Primary, Action::SubmitPin(room.clone()));
                 button(r, f, text::CANCEL, Look::Plain, Action::CancelPin);
             });
-            if d.msg.is_empty() {
-                muted(g, f, text::PIN_ASK);
-            } else {
-                rich(g, f, &d.msg, 13.0, RED_INK);
-            }
+            match &d.msg {
+                None => muted(g, f, text::PIN_ASK),
+                Some(m) => rich(g, f, m, 13.0, RED_INK),
+            };
         });
     });
 }
@@ -668,7 +661,7 @@ fn create(
 
 /// One map against bots, alone.
 pub fn practice_list(p: &mut ChildSpawnerCommands, f: &Fonts, ui: &Ui) {
-    fold(p, f, ui, "practice", text::PRACTICE, |c| {
+    fold(p, f, ui, Fold::Practice, text::PRACTICE, |c| {
         row(c, true, |r| {
             for g in fb_maps::GAMES {
                 let m = g.meta();
@@ -686,7 +679,7 @@ fn practice(
     mut commands: Commands,
 ) {
     let Ok((e, mut sec)) = q.single_mut() else { return };
-    if !sec.stale(key_of(&ui.open.contains("practice"))) {
+    if !sec.stale(key_of(&ui.open.contains(&Fold::Practice))) {
         return;
     }
     let f = &*f;
@@ -927,7 +920,7 @@ fn home_actions(
                     continue;
                 }
                 player.name = n.clone();
-                opts.name.clear();
+                opts.name = None;
                 crate::settings::save_soon(&mut commands);
                 send(&mut senders, ClientMsg::Name(n));
             }
@@ -957,11 +950,7 @@ fn home_actions(
             Action::CreatePrivate => ui.create_private ^= true,
             Action::CreateRoom => {
                 let mut title = fb_shared::text::sanitize_title(&field_text(&fields, Field::RoomTitle));
-                let name = if opts.name.is_empty() {
-                    player.name.clone()
-                } else {
-                    opts.name.clone()
-                };
+                let name = opts.name.clone().unwrap_or_else(|| player.name.clone());
                 if title.is_empty() && !name.is_empty() {
                     title = text::room_title_placeholder(&name);
                 }
@@ -1039,7 +1028,7 @@ fn server_actions(
                     _ => crate::servers::candidates(addr).into_iter().next(),
                 };
                 let Some(base) = base else { continue };
-                servers.last = addr.clone();
+                servers.last = Some(addr.clone());
                 crate::settings::save_soon(&mut commands);
                 // (This server's own: one never sees the player's identity on another.)
                 let identity = opts.token.clone().or_else(|| ids.get(&base));

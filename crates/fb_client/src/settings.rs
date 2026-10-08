@@ -14,11 +14,15 @@ use bevy::settings::{ReflectSettingsGroup, SaveSettingsDeferred, SaveSettingsSyn
 use fb_proto::Outfit;
 use fb_shared::COLORS;
 use fb_shared::outfit::{Glasses, Hat, Tint};
-use serde::de::DeserializeOwned;
+use serde::de::IntoDeserializer;
+use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 
-use crate::keys::Bind;
+use crate::backend::BackendSetting;
+use crate::keys::{Bind, Keys};
 use crate::opts::Opts;
+use crate::render::quality::{Preset, Upscale};
+use crate::render::upscale::UpscalerSetting;
 use crate::servers::{Servers, Target};
 
 const APP: &str = "io.github.kauri-off.fallbeans";
@@ -30,7 +34,7 @@ pub const SENS_RANGE: (f32, f32) = (0.2, 3.0);
 pub const FOV_RANGE: (f32, f32) = (55.0, 100.0);
 pub const UI_SCALE_RANGE: (f32, f32) = (0.75, 1.5);
 
-#[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq)]
+#[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Default)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "player")]
 pub struct Player {
@@ -38,28 +42,66 @@ pub struct Player {
     /// the start (`migrate`), then empty.
     pub identity: String,
     pub name: String,
-    /// The suit colour picked last (index into `COLORS`, -1 none yet): rooms give it when it is free.
-    pub color: i32,
-    /// The outfit, its parts by name (`Cap`, `Shades`, `Pink`; empty for none).
-    pub hat: String,
-    pub hat_color: String,
-    pub glasses: String,
-    pub belly: String,
-    pub shoes: String,
+    /// The suit colour picked last (index into `COLORS`): rooms give it when it is free.
+    pub color: ColorSetting,
+    pub hat: HatSetting,
+    pub hat_color: TintSetting,
+    pub glasses: GlassesSetting,
+    pub belly: TintSetting,
+    pub shoes: TintSetting,
 }
 
-impl Default for Player {
-    fn default() -> Self {
-        Self {
-            identity: String::new(),
-            name: String::new(),
-            color: -1,
-            hat: String::new(),
-            hat_color: String::new(),
-            glasses: String::new(),
-            belly: String::new(),
-            shoes: String::new(),
+/// The suit colour in the file: -1 for none yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct ColorSetting(pub Option<u8>);
+
+impl Serialize for ColorSetting {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_i64(self.0.map_or(-1, i64::from))
+    }
+}
+
+impl<'de> Deserialize<'de> for ColorSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(u8::try_from(i64::deserialize(d)?).ok()))
+    }
+}
+
+/// The hat by name (`Cap`); one not known does not load: none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(transparent)]
+pub struct HatSetting(pub Hat);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(transparent)]
+pub struct GlassesSetting(pub Glasses);
+
+/// A part's tint by name (`Pink`); "" (and any name not known) for the part's own colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct TintSetting(pub Option<Tint>);
+
+impl Serialize for TintSetting {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Some(t) => t.serialize(s),
+            None => s.serialize_str(""),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for TintSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        let de: StrDeserializer<'_, D::Error> = name.as_str().into_deserializer();
+        Ok(Self(Tint::deserialize(de).ok()))
     }
 }
 
@@ -132,20 +174,17 @@ impl Default for Display {
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "graphics")]
 pub struct Graphics {
-    /// "high" or "low" (anything else, an old "auto" or "medium" among them, is brought back to "high").
-    pub preset: String,
+    /// Anything else in the file (an old "auto" or "medium") does not load: High.
+    pub preset: Preset,
     pub vsync: bool,
     /// Frames a second at most (0: no limit).
     pub fps_limit: u32,
-    /// "" (automatic), "vulkan" or "dx12" (Windows): takes effect on the next start. Other names (an old
-    /// "gl") are automatic (`backend.rs`).
-    pub backend: String,
-    /// "" (automatic: the best offered), "dlss", "fsr3" or "fsr1" (`render/upscale.rs`): switched in play; one this
-    /// machine does not offer is automatic.
-    pub upscaler: String,
-    /// The upscaling mode: "ultra", "quality" or "balanced" (`quality::UPSCALES`; anything else is "ultra"),
-    /// switched in play; the sweep tries "performance".
-    pub upscale: String,
+    /// Takes effect on the next start; one this system cannot run (an old "gl") is automatic (`backend.rs`).
+    pub backend: BackendSetting,
+    /// Switched in play; one this machine does not offer is automatic (`render/upscale.rs`).
+    pub upscaler: UpscalerSetting,
+    /// Switched in play; the sweep tries `Performance`, which the file does not keep.
+    pub upscale: Upscale,
     #[reflect(ignore)]
     pub shadows: bool,
     /// Anti-aliasing (SMAA on High, FXAA on Low).
@@ -162,12 +201,12 @@ pub struct Graphics {
 impl Default for Graphics {
     fn default() -> Self {
         Self {
-            preset: "high".into(),
+            preset: Preset::default(),
             vsync: true,
             fps_limit: 0,
-            backend: String::new(),
-            upscaler: String::new(),
-            upscale: crate::render::quality::UPSCALE.into(),
+            backend: BackendSetting::default(),
+            upscaler: UpscalerSetting::default(),
+            upscale: Upscale::default(),
             shadows: true,
             aa: true,
             grade: true,
@@ -176,26 +215,23 @@ impl Default for Graphics {
     }
 }
 
-/// An action without a key, in the settings file.
-const NO_KEY: &str = "none";
-
-/// Which keys do what (`keys.rs`): key names separated by spaces (`none`: no key).
-#[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq)]
+/// Which keys do what (`keys.rs`).
+#[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "keys")]
 pub struct Bindings {
-    pub forward: String,
-    pub back: String,
-    pub left: String,
-    pub right: String,
-    pub jump: String,
-    pub dive: String,
-    pub grab: String,
+    pub forward: Keys,
+    pub back: Keys,
+    pub left: Keys,
+    pub right: Keys,
+    pub jump: Keys,
+    pub dive: Keys,
+    pub grab: Keys,
 }
 
 impl Default for Bindings {
     fn default() -> Self {
-        let d = |b: Bind| b.defaults().to_string();
+        let d = |b: Bind| Keys(b.defaults().to_vec());
         Self {
             forward: d(Bind::Forward),
             back: d(Bind::Back),
@@ -209,22 +245,21 @@ impl Default for Bindings {
 }
 
 impl Bindings {
-    fn slot(&mut self, b: Bind) -> &mut String {
+    fn slot(&mut self, b: Bind) -> &mut Vec<KeyCode> {
         match b {
-            Bind::Forward => &mut self.forward,
-            Bind::Back => &mut self.back,
-            Bind::Left => &mut self.left,
-            Bind::Right => &mut self.right,
-            Bind::Jump => &mut self.jump,
-            Bind::Dive => &mut self.dive,
-            Bind::Grab => &mut self.grab,
+            Bind::Forward => &mut self.forward.0,
+            Bind::Back => &mut self.back.0,
+            Bind::Left => &mut self.left.0,
+            Bind::Right => &mut self.right.0,
+            Bind::Jump => &mut self.jump.0,
+            Bind::Dive => &mut self.dive.0,
+            Bind::Grab => &mut self.grab.0,
         }
     }
 
-    /// The keys of an action: none if it was left without one (`NO_KEY`), its defaults if the file names none
-    /// that can be bound.
-    pub fn keys(&self, b: Bind) -> Vec<KeyCode> {
-        let s = match b {
+    /// The keys of an action (none if it was left without one).
+    pub fn keys(&self, b: Bind) -> &[KeyCode] {
+        let k = match b {
             Bind::Forward => &self.forward,
             Bind::Back => &self.back,
             Bind::Left => &self.left,
@@ -233,27 +268,18 @@ impl Bindings {
             Bind::Dive => &self.dive,
             Bind::Grab => &self.grab,
         };
-        if s.trim() == NO_KEY {
-            return Vec::new();
-        }
-        let keys = crate::keys::parse(s);
-        if keys.is_empty() {
-            crate::keys::parse(b.defaults())
-        } else {
-            keys
-        }
+        &k.0
     }
 
     /// Binds one key to an action; another action that had it lets it go. One left without a key takes the one
-    /// this action had (the two swap), or none at all: an empty list would mean its defaults, and with them
-    /// the key just taken.
+    /// this action had (the two swap), or none at all.
     pub fn bind(&mut self, b: Bind, key: KeyCode) {
-        let old = self.keys(b);
+        let old = self.keys(b).to_vec();
         for other in crate::keys::BINDS {
             if other == b {
                 continue;
             }
-            let mut keys = self.keys(other);
+            let keys = self.slot(other);
             if !keys.contains(&key) {
                 continue;
             }
@@ -261,13 +287,8 @@ impl Bindings {
             if keys.is_empty() {
                 keys.extend(old.iter().copied().filter(|k| *k != key).take(1));
             }
-            *self.slot(other) = if keys.is_empty() {
-                NO_KEY.into()
-            } else {
-                crate::keys::names(&keys)
-            };
         }
-        *self.slot(b) = crate::keys::names(&[key]);
+        *self.slot(b) = vec![key];
     }
 
     pub fn is_default(&self) -> bool {
@@ -275,39 +296,27 @@ impl Bindings {
     }
 }
 
-fn to_name<T: Serialize>(v: &T) -> String {
-    match serde_json::to_value(v) {
-        Ok(serde_json::Value::String(s)) => s,
-        _ => String::new(),
-    }
-}
-
-fn from_name<T: DeserializeOwned>(s: &str) -> Option<T> {
-    serde_json::from_value(serde_json::Value::String(s.into())).ok()
-}
-
 impl Player {
     pub fn outfit(&self) -> Outfit {
         Outfit {
-            hat: from_name(&self.hat).unwrap_or(Hat::None),
-            hat_color: from_name::<Tint>(&self.hat_color),
-            glasses: from_name(&self.glasses).unwrap_or(Glasses::None),
-            belly: from_name::<Tint>(&self.belly),
-            shoes: from_name::<Tint>(&self.shoes),
+            hat: self.hat.0,
+            hat_color: self.hat_color.0,
+            glasses: self.glasses.0,
+            belly: self.belly.0,
+            shoes: self.shoes.0,
         }
     }
 
     pub fn set_outfit(&mut self, o: &Outfit) {
-        let tint = |t: &Option<Tint>| t.as_ref().map_or_else(String::new, to_name);
-        self.hat = to_name(&o.hat);
-        self.hat_color = tint(&o.hat_color);
-        self.glasses = to_name(&o.glasses);
-        self.belly = tint(&o.belly);
-        self.shoes = tint(&o.shoes);
+        self.hat = HatSetting(o.hat);
+        self.hat_color = TintSetting(o.hat_color);
+        self.glasses = GlassesSetting(o.glasses);
+        self.belly = TintSetting(o.belly);
+        self.shoes = TintSetting(o.shoes);
     }
 
     pub fn color(&self) -> Option<u8> {
-        u8::try_from(self.color).ok().filter(|c| (*c as usize) < COLORS.len())
+        self.color.0.filter(|c| usize::from(*c) < COLORS.len())
     }
 }
 
@@ -322,11 +331,7 @@ pub struct Me<'w> {
 
 impl Me<'_> {
     pub fn name(&self) -> String {
-        if self.opts.name.is_empty() {
-            self.player.name.clone()
-        } else {
-            self.opts.name.clone()
-        }
+        self.opts.name.clone().unwrap_or_else(|| self.player.name.clone())
     }
 
     /// The identity to send the server being played on (`Target`): `--token`, or the one that server gave.
@@ -509,8 +514,9 @@ fn migrate(world: &mut World, notes: &mut Vec<String>) {
         return;
     }
     let servers = world.resource::<Servers>();
-    let from = Some(servers.last.clone())
-        .filter(|s| !s.is_empty())
+    let from = servers
+        .last
+        .clone()
         .or_else(|| servers.list.first().cloned().filter(|_| servers.list.len() == 1));
     let base = from.and_then(|s| crate::servers::candidates(&s).into_iter().next());
     if let Some(base) = base {
@@ -562,12 +568,14 @@ fn sanitize(world: &mut World) {
     if fixed != d {
         *world.resource_mut::<Display>() = fixed;
     }
-    // (There is no "auto" or "medium" any more: every machine starts on High, the player may pick Low.)
-    if crate::render::quality::Preset::of(&world.resource::<Graphics>().preset).is_none() {
-        world.resource_mut::<Graphics>().preset = Graphics::default().preset;
+    // (Older files say "" for none.)
+    if let Some(mut s) = world.get_resource_mut::<Servers>()
+        && s.last.as_deref() == Some("")
+    {
+        s.last = None;
     }
-    if !crate::render::quality::UPSCALES.contains(&world.resource::<Graphics>().upscale.as_str()) {
-        world.resource_mut::<Graphics>().upscale = Graphics::default().upscale;
+    if !Upscale::PICKS.contains(&world.resource::<Graphics>().upscale) {
+        world.resource_mut::<Graphics>().upscale = Upscale::default();
     }
 }
 
@@ -747,7 +755,7 @@ mod tests {
             "old",
             Servers {
                 list: vec!["10.0.0.1:7000".into(), "10.0.0.2".into()],
-                last: "10.0.0.1:7000".into(),
+                last: Some("10.0.0.1:7000".into()),
             },
         );
         migrate(&mut w, &mut Vec::new());
@@ -761,7 +769,7 @@ mod tests {
             "old",
             Servers {
                 list: vec!["10.0.0.1".into(), "10.0.0.2".into()],
-                last: String::new(),
+                last: None,
             },
         );
         migrate(&mut w, &mut Vec::new());
@@ -784,9 +792,12 @@ mod tests {
             show_fps: true,
             fullscreen: false,
         });
-        // (A file from before the presets lost "auto".)
         w.insert_resource(Graphics {
-            preset: "auto".into(),
+            upscale: Upscale::Performance,
+            ..default()
+        });
+        w.insert_resource(Servers {
+            last: Some(String::new()),
             ..default()
         });
         sanitize(&mut w);
@@ -795,26 +806,53 @@ mod tests {
         assert_eq!(w.resource::<Sound>().volume, Sound::default().volume);
         let d = w.resource::<Display>();
         assert_eq!((d.fov, d.ui_scale, d.show_fps), (FOV_RANGE.0, 1.0, true));
-        assert_eq!(w.resource::<Graphics>().preset, "high");
-        // (And from before Medium went.)
+        assert_eq!(w.resource::<Graphics>().upscale, Upscale::Ultra);
+        assert_eq!(w.resource::<Servers>().last, None);
         w.insert_resource(Graphics {
-            preset: "medium".into(),
+            upscale: Upscale::Balanced,
             ..default()
         });
         sanitize(&mut w);
-        assert_eq!(w.resource::<Graphics>().preset, "high");
-        w.insert_resource(Graphics {
-            upscale: "performance".into(),
-            ..default()
-        });
-        sanitize(&mut w);
-        assert_eq!(w.resource::<Graphics>().upscale, "ultra");
-        w.insert_resource(Graphics {
-            upscale: "balanced".into(),
-            ..default()
-        });
-        sanitize(&mut w);
-        assert_eq!(w.resource::<Graphics>().upscale, "balanced");
+        assert_eq!(w.resource::<Graphics>().upscale, Upscale::Balanced);
+    }
+
+    /// Old files keep loading: a name no longer known fails alone, and bevy-settings keeps that field's default.
+    #[test]
+    fn old_graphics_names() {
+        let de = |s: &str| toml::Value::String(s.into());
+        assert_eq!(Preset::deserialize(de("low")).ok(), Some(Preset::Low));
+        assert!(Preset::deserialize(de("auto")).is_err());
+        assert!(Preset::deserialize(de("medium")).is_err());
+        assert_eq!(Upscale::deserialize(de("balanced")).ok(), Some(Upscale::Balanced));
+        assert_eq!(UpscalerSetting::deserialize(de("")).ok(), Some(UpscalerSetting(None)));
+        assert_eq!(BackendSetting::deserialize(de("gl")).ok(), Some(BackendSetting(None)));
+        assert_eq!(
+            BackendSetting::deserialize(de("vulkan")).ok(),
+            Some(BackendSetting(Some(crate::opts::Backend::Vulkan)))
+        );
+    }
+
+    #[test]
+    fn old_player_values() {
+        let de = |s: &str| toml::Value::String(s.into());
+        assert_eq!(TintSetting::deserialize(de("")).ok(), Some(TintSetting(None)));
+        assert_eq!(
+            TintSetting::deserialize(de("Pink")).ok(),
+            Some(TintSetting(Some(Tint::Pink)))
+        );
+        assert_eq!(HatSetting::deserialize(de("Cap")).ok(), Some(HatSetting(Hat::Cap)));
+        assert_eq!(
+            GlassesSetting::deserialize(de("None")).ok(),
+            Some(GlassesSetting(Glasses::None))
+        );
+        assert_eq!(
+            ColorSetting::deserialize(toml::Value::Integer(-1)).ok(),
+            Some(ColorSetting(None))
+        );
+        assert_eq!(
+            ColorSetting::deserialize(toml::Value::Integer(3)).ok(),
+            Some(ColorSetting(Some(3)))
+        );
     }
 
     /// The perf sweep's switches are never written to the file, and an old file's are not read.
@@ -824,8 +862,8 @@ mod tests {
         registry.register::<Graphics>();
         let g = Graphics {
             shadows: false,
-            upscale: "balanced".into(),
-            upscaler: "fsr3".into(),
+            upscale: Upscale::Balanced,
+            upscaler: UpscalerSetting(Some(crate::render::upscale::Upscaler::Fsr3)),
             ..default()
         };
         let ser = bevy::reflect::serde::TypedReflectSerializer::new(g.as_partial_reflect(), &registry);
@@ -852,7 +890,7 @@ mod tests {
         assert_eq!(b.keys(Bind::Forward), [KeyCode::ArrowUp]);
         assert_eq!(b.keys(Bind::Dive), [KeyCode::KeyW]);
         // Nothing to swap: none at all, not the defaults.
-        b.jump = NO_KEY.into();
+        b.jump = Keys::default();
         assert!(b.keys(Bind::Jump).is_empty());
         b.bind(Bind::Jump, KeyCode::Space);
         assert!(b.keys(Bind::Grab).is_empty(), "{:?}", b.keys(Bind::Grab));

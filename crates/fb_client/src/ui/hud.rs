@@ -1,8 +1,11 @@
 //! The HUD over the game: the players' panel, the feed, the intro and countdown,
 //! the timer and the map's line, the round's results, the game's summary, the status of a player out of
 //! play, the controls line and the prompt to click back in.
+use std::time::Duration;
+
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_real_timer;
 use fb_arena::{ArenaKind, client_hud};
 use fb_net::*;
 use fb_proto::Pid;
@@ -28,12 +31,30 @@ impl Plugin for HudPlugin {
             (
                 hud_state,
                 (
-                    panel, net_line, feed, intro, top, results, summary, status, keys, prompt, count,
+                    panel,
+                    net_line.run_if(on_real_timer(Duration::from_millis(250))),
+                    feed,
+                    intro,
+                    top,
+                    results,
+                    summary,
+                    status,
+                    keys,
+                    prompt,
+                    count,
                 ),
             )
                 .chain(),
         );
     }
+}
+
+/// A player in the round: how they are doing, and their finishing place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub id: Pid,
+    pub part: Part,
+    pub place: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -60,7 +81,7 @@ pub struct Hud {
     pub spectating: Option<String>,
     pub map_text: Option<String>,
     pub bonus: Option<String>,
-    pub roster: Vec<(Pid, Part, usize)>,
+    pub roster: Vec<Entry>,
     pub fps: f64,
 }
 
@@ -76,8 +97,11 @@ struct IntroBox;
 struct TopBox;
 #[derive(Component)]
 struct TimerText;
-#[derive(Component)]
-struct Pill(u8);
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Pill {
+    MapText,
+    Bonus,
+}
 #[derive(Component)]
 struct GoText;
 #[derive(Component)]
@@ -124,10 +148,8 @@ fn shadowed(size: f32, color: Color, font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-fn build_hud(mut commands: Commands, layers: Query<(Entity, &Layer)>, f: Res<Fonts>) {
-    let Some((e, _)) = layers.iter().find(|(_, l)| **l == Layer::Hud) else {
-        return;
-    };
+fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
+    let e = layers[Layer::Hud];
     commands.entity(e).with_children(|h| {
         h.spawn((
             Node {
@@ -191,9 +213,9 @@ fn build_hud(mut commands: Commands, layers: Query<(Entity, &Layer)>, f: Res<Fon
             };
             t.spawn((IntroBox, Section::default(), full()));
             t.spawn((TimerText, shadowed(34.0, Color::WHITE, &f.black)));
-            for i in 0..2 {
+            for pill in [Pill::MapText, Pill::Bonus] {
                 t.spawn((
-                    Pill(i),
+                    pill,
                     Section::default(),
                     Node {
                         padding: UiRect::axes(rem(1.0), rem(0.375)),
@@ -259,7 +281,11 @@ fn hud_state(
         } else {
             Part::Play
         };
-        roster.push((*id, st, place.map_or(0, |p| p + 1)));
+        roster.push(Entry {
+            id: *id,
+            part: st,
+            place: place.map(|p| p + 1),
+        });
     }
     let body = own.single().ok().map(|f| &f.body);
     let place = me
@@ -274,9 +300,9 @@ fn hud_state(
     } else {
         Part::Spectating
     };
-    let bonus = body.filter(|b| b.power != 0).and_then(|b| {
+    let bonus = body.and_then(|b| {
         let left = (b.power_until - timeline.tick().0 as f64 * DT + map.round.zero_tick as f64 * DT).ceil();
-        let (icon, title) = text::bonus(b.power);
+        let (icon, title) = text::bonus(b.power?);
         (left > 0.0).then(|| format!("{icon} {title} · {left:.0} с"))
     });
     let map_text = if kind == ArenaKind::Round && t >= 0.0 {
@@ -348,18 +374,6 @@ fn genre_pill(p: &mut ChildSpawnerCommands, f: &Fonts, g: Genre, s: &str) {
     });
 }
 
-/// The arena's points as whole numbers, for a section's key: formatted straight into the hash, without a list
-/// built every frame.
-struct Points<'a>(&'a std::collections::BTreeMap<Pid, f64>);
-
-impl core::fmt::Debug for Points<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_list()
-            .entries(self.0.iter().map(|(id, v)| (*id, *v as i64)))
-            .finish()
-    }
-}
-
 /// Top left: the round, the players with their status, score and ping.
 fn panel(
     mut q: Query<(Entity, &mut Section), With<PanelBox>>,
@@ -373,8 +387,14 @@ fn panel(
         return;
     };
     let round = info.kind == ArenaKind::Round;
-    let points = Points(&session.scores);
-    let key = key_of(&(&session.lobby, info.id, info.kind, &hud.roster, &points, session.me));
+    let key = key_of(&(
+        &session.lobby,
+        info.id,
+        info.kind,
+        &hud.roster,
+        &session.scores,
+        session.me,
+    ));
     if !sec.stale(key) {
         return;
     }
@@ -415,18 +435,22 @@ fn panel(
             }
         });
         for pl in &players {
-            let st = hud.roster.iter().find(|r| r.0 == pl.id);
+            let st = hud.roster.iter().find(|r| r.id == pl.id);
             let icon = if !round {
                 String::new()
             } else {
                 match st {
                     None => "👁".into(),
-                    Some((_, Part::Finished, place)) => format!("🏁{place}"),
-                    Some((_, Part::Out, _)) => "✖".into(),
+                    Some(Entry {
+                        part: Part::Finished,
+                        place,
+                        ..
+                    }) => format!("🏁{}", place.unwrap_or(0)),
+                    Some(Entry { part: Part::Out, .. }) => "✖".into(),
                     Some(_) => String::new(),
                 }
             };
-            let dim = st.is_some_and(|s| s.1 == Part::Out) || !pl.connected;
+            let dim = st.is_some_and(|s| s.part == Part::Out) || !pl.connected;
             p.spawn(Node {
                 column_gap: rem(0.375),
                 align_items: AlignItems::Center,
@@ -457,7 +481,7 @@ fn panel(
                 if info.kind == ArenaKind::Lobby && pl.crowns > 0 {
                     rich(r, f, &format!("👑{}", pl.crowns), 12.0, INK);
                 }
-                let bells = session.scores.get(&pl.id).map_or(0, |v| *v as i64);
+                let bells = session.scores.get(&pl.id).copied().unwrap_or(0);
                 if info.kind == ArenaKind::Lobby && bells > 0 {
                     rich(r, f, &format!("🔔{bells}"), 12.0, INK);
                 }
@@ -491,13 +515,11 @@ fn net_line(
     links: Query<&Link>,
     display: Res<crate::settings::Display>,
     time: Res<Time<Real>>,
-    mut every: Local<f32>,
 ) {
     let now = time.elapsed_secs();
-    if now - *every < 0.25 || !hud.on {
+    if !hud.on {
         return;
     }
-    *every = now;
     let Ok(mut t) = q.single_mut() else { return };
     let Some(conn) = conn else { return };
     let rtt = conn
@@ -566,14 +588,14 @@ fn feed(
                     out,
                     shortcut,
                 } => {
-                    let (icon, why) = text::cause(cause);
+                    let (icon, why) = text::cause(*cause);
                     if let Some(by) = by.filter(|b| b != victim) {
                         name_tag(r, f, &session, by, 13.0);
                     }
                     rich(r, f, icon, 15.0, INK);
                     name_tag(r, f, &session, *victim, 13.0);
                     let ink = if *out { RED_INK } else { MUTED };
-                    rich(r, f, &text::ko_line(&why, *out, *shortcut), 12.0, ink);
+                    rich(r, f, &text::ko_line(why, *out, *shortcut), 12.0, ink);
                 }
             });
         }
@@ -666,18 +688,16 @@ fn top(
     }
     let f = &*f;
     for (e, pill, mut sec, mut node) in &mut pills {
-        let s = if !on {
-            None
-        } else if pill.0 == 0 {
-            hud.map_text.clone()
-        } else {
-            hud.bonus.clone()
+        let s = match pill {
+            _ if !on => None,
+            Pill::MapText => hud.map_text.clone(),
+            Pill::Bonus => hud.bonus.clone(),
         };
         show(&mut node, s.is_some());
         if sec.stale(key_of(&s)) {
             rebuild(&mut commands, e, |p| {
                 if let Some(s) = s {
-                    rich_in(p, f, &s, 16.0, INK, pill.0 == 1);
+                    rich_in(p, f, &s, 16.0, INK, *pill == Pill::Bonus);
                 }
             });
         }
@@ -773,7 +793,7 @@ fn results(
                         ..default()
                     })
                     .with_children(|x| name_tag(x, f, &session, row_.id, 13.0));
-                    rich(t, f, &row_.note, 12.0, MUTED);
+                    rich(t, f, &text::round_note(row_.note), 12.0, MUTED);
                     cell(t, 2.0, |x| {
                         rich(x, f, &format!("+{}", row_.points), 13.0, GREEN_INK);
                     });
@@ -914,12 +934,13 @@ fn summary(
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.45)),
                 ))
                 .with_children(|r| {
-                    rich(r, f, &a.icon, 22.0, INK);
+                    let (icon, title, what) = text::award(a);
+                    rich(r, f, icon, 22.0, INK);
                     stack(r, |s| {
-                        heading(s, f, &a.title);
+                        heading(s, f, title);
                         row(s, true, |x| {
                             name_tag(x, f, &session, a.id, 12.0);
-                            muted(x, f, &a.text);
+                            muted(x, f, &what);
                         });
                     });
                 });

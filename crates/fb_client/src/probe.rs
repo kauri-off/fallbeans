@@ -1,13 +1,11 @@
 //! Whether UDP works again, asked while playing over WebSocket: a netcode connection of its own, in an app of
 //! its own (the game's world must not see a second client), that has to come up and hold.
 use core::time::Duration;
-use std::sync::mpsc::{Receiver, channel};
 use std::time::Instant;
-
-use fb_proto::SessionRequest;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
+use fb_proto::SessionRequest;
 use lightyear::connection::client::{Connect, Connected, Disconnect, Disconnected};
 use lightyear::netcode::NetcodeClient;
 use lightyear::netcode::auth::Authentication;
@@ -15,6 +13,7 @@ use lightyear::netcode::client_plugin::{NetcodeClientPlugin, NetcodeConfig};
 use lightyear::prelude::{Link, LinkConditionerConfig, RecvLinkConditioner, UdpIo};
 use lightyear_udp::UdpPlugin;
 
+use crate::job::Job;
 use crate::net::{UDP_TRY_S, local_addr_for, request, token_of};
 
 /// How long the probe's connection has to hold. Well under the server's hello timeout (5 s,
@@ -23,12 +22,12 @@ const HOLD_S: f32 = 3.0;
 
 /// On a thread: a UDP connect token from the HTTP API at `url`, then the connection; the answer is whether it
 /// came up and held.
-pub fn start(url: String, req: SessionRequest, conditioner: Option<LinkConditionerConfig>) -> Receiver<bool> {
-    let (tx, rx) = channel();
-    let _ = std::thread::Builder::new().name("fb-probe".into()).spawn(move || {
-        let _ = tx.send(run(&url, &req, conditioner));
-    });
-    rx
+pub fn start(
+    url: String,
+    req: SessionRequest,
+    conditioner: Option<LinkConditionerConfig>,
+) -> std::io::Result<Job<bool>> {
+    Job::spawn("probe", move || run(&url, &req, conditioner))
 }
 
 fn run(url: &str, req: &SessionRequest, conditioner: Option<LinkConditionerConfig>) -> bool {

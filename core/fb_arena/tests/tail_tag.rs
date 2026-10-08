@@ -25,8 +25,8 @@ fn a_leaving_holder_hands_the_tail_on() {
         for k in 1..=end {
             arena.step(k, |_| InputFrame::IDLE);
         }
-        let score = arena.scores.get(&4).copied().unwrap_or(0.0);
-        assert!(score >= 2.0, "seed {seed}: the last bean scored {score}");
+        let score = arena.scores.get(&4).copied().unwrap_or(0);
+        assert!(score >= 2, "seed {seed}: the last bean scored {score}");
     }
 }
 
@@ -67,7 +67,7 @@ fn a_tail_held_through_its_immunity_changes_hands_as_it_ends() {
     let mut k = 0;
     // Whoever scores holds the one tail.
     run(&mut arena, &mut k, i64::from(TICK_RATE) * 5 / 4, None);
-    let holder = if arena.scores.get(&1).copied().unwrap_or(0.0) > 0.0 {
+    let holder = if arena.scores.get(&1).copied().unwrap_or(0) > 0 {
         1
     } else {
         2

@@ -2,13 +2,18 @@
 //! yours. Whoever falls gives their tail to whoever knocked them off, or to the nearest bean.
 use std::collections::BTreeMap;
 
+use fb_shared::NEVER;
+use fb_shared::rgb;
 use fb_shared::rng::shuffle;
 use fb_sim::bots::{ArenaOpts, BOT_DT, HumanOpts, Note, arena_brain, humanize, init_bot, nav_to, unstick};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{BeanDeco, Cx, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapSfx, MapSpec};
+use fb_sim::math::{V3, dist_xz};
 use fb_sim::nodes::ROOT;
+use fb_sim::scene::Model;
+use fb_sim::scene::Surface;
 use fb_sim::scene::pal;
 use fb_sim::world::St;
 
@@ -17,7 +22,7 @@ use crate::util::{deco, dynamic, freq, o};
 pub struct TailTag;
 
 static META: GameMeta = GameMeta {
-    min_players: Some(2),
+    min_players: 2,
     grab: true,
     ..GameMeta::new(
         "tail-tag",
@@ -60,7 +65,7 @@ impl Tails {
 
 /// A grabber at `a` is close enough to take the tail of the bean at `v`.
 fn in_reach(a: V3, v: V3) -> bool {
-    m::hypot(a.x - v.x, a.z - v.z) <= STEAL_RANGE && (a.y - v.y).abs() <= 2.0
+    dist_xz(a, v) <= STEAL_RANGE && (a.y - v.y).abs() <= 2.0
 }
 
 /// The tail goes from `from` to `to`.
@@ -81,13 +86,7 @@ fn decorate_all(cx: &mut Cx, st: St<Tails>, participants: &[u32]) {
     }
     for &id in participants {
         let tail = cx.world.st(st).has(id);
-        cx.decorate(
-            id,
-            BeanDeco {
-                tail: Some(tail),
-                badge: None,
-            },
-        );
+        cx.decorate(id, DecoChange::Tail(tail));
     }
 }
 
@@ -96,8 +95,8 @@ impl MapDef for TailTag {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["jungle", "meadow", "candy"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Jungle, LookId::Meadow, LookId::Candy]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
@@ -136,17 +135,17 @@ impl MapDef for TailTag {
             b.trampoline(sx * 12.3, 0.0, 0.0, 1.5, 18.0);
             // A floating island beyond the rim (a refuge, until someone bounces after you).
             let grass = PrimOpts {
-                surface: Some("grass"),
+                surface: Some(Surface::Grass),
                 ..Default::default()
             };
             b.cyl(sx * 18.2, 3.2, 0.0, 3.0, 1.2, pal::GREEN, grass);
             let mush = PropOpts {
-                scale: Some(0.8),
+                scale: 0.8,
                 ..Default::default()
             };
-            b.prop("mushroom", sx * 19.0, 3.8, 1.2, mush);
+            b.prop(Model::Mushroom, sx * 19.0, 3.8, 1.2, mush);
         }
-        let flip = if b.rng.next() < 0.5 { 1.0 } else { -1.0 };
+        let flip = if b.rng.unit() < 0.5 { 1.0 } else { -1.0 };
         b.portal(
             PortalEnd {
                 x: 9.9 * flip,
@@ -160,15 +159,15 @@ impl MapDef for TailTag {
                 z: -9.9,
                 yaw: m::atan2(9.9 * flip, 9.9),
             },
-            "#ff8a3d",
+            rgb(0xff8a3d),
             PortalOpts::default(),
         );
         // Two platforms circling just outside the rim: hop on, ride round, hop off somewhere else.
-        let orbit = 0.22 + b.rng.next() * 0.08;
+        let orbit = 0.22 + b.rng.unit() * 0.08;
         for k in 0..2 {
             let p = if k == 1 { pal::ORANGE } else { pal::PINK };
             let node = b.box_(0.0, -0.5, 0.0, 3.2, 1.0, 3.2, p, dynamic()).node;
-            let ph = k as f64 * m::PI + b.rng.next();
+            let ph = k as f64 * m::PI + b.rng.unit();
             b.mover(move |t, ctx| {
                 let a = ph + t.at_least(0.0) * orbit;
                 let n = ctx.node(node);
@@ -192,7 +191,10 @@ impl MapDef for TailTag {
             held: Vec::new(),
             last_second: 0.0,
         });
-        let arena_wander = arena_brain(ArenaOpts::new(ARENA_R - 4.0));
+        let arena_wander = arena_brain(ArenaOpts {
+            radius: ARENA_R - 4.0,
+            ..Default::default()
+        });
         let participants = ctx.participants.to_vec();
         let participants2 = participants.clone();
 
@@ -217,7 +219,7 @@ impl MapDef for TailTag {
                             .ids()
                             .into_iter()
                             .filter(|&oid| !s.has(oid))
-                            .min_by(|&a, &b| cx.score(a).total_cmp(&cx.score(b)));
+                            .min_by_key(|&a| cx.score(a));
                         if let Some(to) = to {
                             pass(cx, st, gone, to);
                         }
@@ -237,7 +239,7 @@ impl MapDef for TailTag {
                         if a.slow_until <= t + 0.1 || !in_reach(a.pos, v.pos) {
                             continue;
                         }
-                        if s.immune.get(&target).copied().unwrap_or(-1.0) > t {
+                        if s.immune.get(&target).copied().unwrap_or(NEVER) > t {
                             keep.push((actor, target, since));
                         } else {
                             pass(cx, st, target, actor);
@@ -253,7 +255,7 @@ impl MapDef for TailTag {
                 let tails = cx.world.st(st).tails.clone();
                 for &id in &tails {
                     if cx.bodies.get(id).is_some() {
-                        let v = cx.score(id) + 1.0;
+                        let v = cx.score(id) + 1;
                         cx.set_score(id, v);
                     }
                 }
@@ -282,7 +284,7 @@ impl MapDef for TailTag {
                 if !in_reach(a.pos, v.pos) {
                     return;
                 }
-                if s.immune.get(&target).copied().unwrap_or(-1.0) > t {
+                if s.immune.get(&target).copied().unwrap_or(NEVER) > t {
                     // Just got it: the grabber has to hold on until the immunity is over (the tick).
                     let s = cx.world.st_mut(st);
                     s.held.retain(|h| h.0 != actor);
@@ -308,7 +310,7 @@ impl MapDef for TailTag {
                             continue;
                         }
                         let Some(o) = cx.bodies.get(oid) else { continue };
-                        let d = m::hypot(o.pos.x - from.x, o.pos.z - from.z);
+                        let d = dist_xz(o.pos, from);
                         if d < nd {
                             nd = d;
                             to = Some(oid);
@@ -337,11 +339,11 @@ impl MapDef for TailTag {
                 let after = s.mine(me);
                 decorate_all(cx, st, &participants);
                 if before != after {
-                    cx.sfx("steal");
+                    cx.sfx(MapSfx::Steal);
                 }
             })),
             hud: Some(Box::new(move |cx| {
-                let pts = cx.me.map_or(0.0, |me| cx.score(me));
+                let pts = cx.me.map_or(0, |me| cx.score(me));
                 Some(if cx.world.st(st).mine(cx.me) {
                     format!("У вас хвост — убегайте! Очки: {pts}")
                 } else {
@@ -359,7 +361,7 @@ impl MapDef for TailTag {
                     if s.has(o.id) == mine {
                         continue;
                     }
-                    let d = m::hypot(o.pos.x - p.x, o.pos.z - p.z);
+                    let d = dist_xz(o.pos, p);
                     if d < nd {
                         nd = d;
                         near = Some(*o);
@@ -376,14 +378,14 @@ impl MapDef for TailTag {
                     let fz = bot.mem.get(flee_z).unwrap_or(p.z) - p.z;
                     let towards = fx * (near.pos.x - p.x) + fz * (near.pos.z - p.z) > 0.0;
                     let t = bot.t;
-                    if t > bot.mem.get(flee_at).unwrap_or(-1.0)
-                        || (nd < 3.0 && towards && t > bot.mem.get(fled_at).unwrap_or(-1.0) + 0.3)
+                    if t > bot.mem.get(flee_at).unwrap_or(NEVER)
+                        || (nd < 3.0 && towards && t > bot.mem.get(fled_at).unwrap_or(NEVER) + 0.3)
                     {
                         bot.mem.set(fled_at, t);
                         let mut best = f64::NEG_INFINITY;
                         for _ in 0..8 {
-                            let a = bot.rng.next() * m::PI * 2.0;
-                            let r = 3.0 + bot.rng.next() * (ARENA_R - 6.0);
+                            let a = bot.rng.unit() * m::PI * 2.0;
+                            let r = 3.0 + bot.rng.unit() * (ARENA_R - 6.0);
                             let x = m::cos(a) * r;
                             let z = m::sin(a) * r;
                             let mut score =
@@ -397,13 +399,13 @@ impl MapDef for TailTag {
                                 bot.mem.set(flee_z, z);
                             }
                         }
-                        let flee = t + 0.8 + bot.rng.next() * 0.8;
+                        let flee = t + 0.8 + bot.rng.unit() * 0.8;
                         bot.mem.set(flee_at, flee);
                     }
                     let (fx, fz) = (bot.mem.get(flee_x).unwrap_or(0.0), bot.mem.get(flee_z).unwrap_or(0.0));
                     nav_to(bot, fx, fz, out, if nd < 8.0 { 1.0 } else { 0.7 }, 0.8);
                     // A chaser right behind: a hop or a dive to get away.
-                    if nd < 2.2 && bot.body.grounded && bot.rng.next() < 0.25 {
+                    if nd < 2.2 && bot.body.grounded && bot.rng.unit() < 0.25 {
                         out.jump = true;
                     }
                 } else {
@@ -411,13 +413,13 @@ impl MapDef for TailTag {
                     let lead = 0.6f64.at_most(nd / 12.0);
                     let tx = near.pos.x + near.vel.x * lead;
                     let tz = near.pos.z + near.vel.z * lead;
-                    nav_to(bot, tx, tz, out, bot.mem.traits.spd, 1.0);
+                    nav_to(bot, tx, tz, out, bot.mem.traits().spd, 1.0);
                     out.grab = nd < 1.9;
                     let ahead = m::hypot(tx - p.x, tz - p.z);
                     if ahead < 4.5
                         && ahead > 2.6
                         && bot.body.grounded
-                        && bot.rng.next() < (0.3 + bot.mem.traits.aggro) * BOT_DT * 2.0
+                        && bot.rng.unit() < (0.3 + bot.mem.traits().aggro) * BOT_DT * 2.0
                     {
                         out.dive = true;
                     }

@@ -2,17 +2,21 @@
 //! another slope, then flying shuttles over the clouds to the finish.
 use std::sync::Arc;
 
+use fb_shared::NEVER;
+use fb_shared::rgb;
 use fb_sim::bots::{BotInput, BotView, Note, SharedTest, Waypoint, follow, steer};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, moving_platforms, pick_sections, race_course, seesaws, with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::physics::BodyState;
 use fb_sim::props::arm_contact_eta;
+use fb_sim::scene::Surface;
 use fb_sim::scene::{Palette, pal};
 
 use crate::util::{deco, dynamic, o, rot};
@@ -28,7 +32,7 @@ static META: GameMeta = GameMeta::new(
     150.0,
 );
 
-const ICE_PAL: Palette = ["#bfe9ff", "#e4f6ff"];
+const ICE_PAL: Palette = [rgb(0xbfe9ff), rgb(0xe4f6ff)];
 
 fn ice(slip: f64) -> PrimOpts {
     PrimOpts {
@@ -36,7 +40,7 @@ fn ice(slip: f64) -> PrimOpts {
             slip,
             ..Default::default()
         },
-        surface: Some("ice"),
+        surface: Some(Surface::Ice),
         ..Default::default()
     }
 }
@@ -107,7 +111,7 @@ fn dive_gaps(n: u32, gap: f64) -> Segment {
             let next = edge + gap;
             route.push(Waypoint::spread(0.0, edge - 2.0, 0.5));
             route.push(
-                Waypoint::spread(0.0, next + 2.0, 0.0)
+                Waypoint::exact(0.0, next + 2.0)
                     .jump_when(edge_jump(edge, 0.9))
                     // In the air past the edge, on the way down: dive for the far side.
                     .drive(move |bot, out| {
@@ -156,7 +160,7 @@ fn dive_bars(n: u32) -> Segment {
                 s.b.box_(0.0, y + 0.01, bz - dz, w, 0.02, 0.4, pal::YELLOW, deco());
             }
             let key: Note<f64> = s.b.note();
-            route.push(Waypoint::spread(0.0, bz + 2.5, 0.0).drive(move |bot, out| {
+            route.push(Waypoint::exact(0.0, bz + 2.5).drive(move |bot, out| {
                 let body = bot.body;
                 let p = body.pos;
                 if p.z > bz + 0.6 {
@@ -168,7 +172,7 @@ fn dive_bars(n: u32) -> Segment {
                     return true;
                 }
                 // Stopped at the bar: back off for another run.
-                if bot.mem.get(key).unwrap_or(-1.0) > bot.t {
+                if bot.mem.get(key).unwrap_or(NEVER) > bot.t {
                     follow(bot, 0.0, bz - 9.0, out);
                     return true;
                 }
@@ -403,11 +407,11 @@ fn sky_shuttles() -> Segment {
                     let pod = PrimOpts {
                         parent: Some(node),
                         no_collide: true,
-                        surface: Some("metal"),
-                        seg: Some(20),
+                        surface: Some(Surface::Metal),
+                        seg: 20,
                         ..Default::default()
                     };
-                    s.b.cyl(0.0, -0.8, 0.0, 1.1, 0.7, pal::hex("#39406b"), pod);
+                    s.b.cyl(0.0, -0.8, 0.0, 1.1, 0.7, pal::solid(rgb(0x39406b)), pod);
                     s.b.mover(move |t, ctx| ctx.node(node).pos = sh.pos(t));
                     sh
                 })
@@ -435,8 +439,8 @@ impl MapDef for FrostSky {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["snow", "starlight", "ocean"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Snow, LookId::Starlight, LookId::Ocean]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

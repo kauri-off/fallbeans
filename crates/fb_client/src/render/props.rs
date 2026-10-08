@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use fb_shared::Rgb;
+use fb_sim::scene::Model;
 
 use super::cloth::{ClothMaterial, Cloths, Cut, WIND, gust, pennant_bounds};
 use super::lod::{ModelLods, add_levels};
@@ -19,11 +21,11 @@ use crate::view::{MainCamera, frame_tick};
 /// A map model: what it is, its tint, and the phase of its motion (from where it stands).
 #[derive(Component)]
 pub struct Prop {
-    pub name: &'static str,
-    pub tint: Option<&'static str>,
+    pub name: Model,
+    pub tint: Option<Rgb>,
     pub phase: f32,
     /// Materials repainted by name: colour, and how much of it glows (clouds of a tinted sky).
-    pub paint: Vec<(&'static str, String, f32)>,
+    pub paint: Vec<(&'static str, Rgb, f32)>,
     /// A special's piece: its special moves it, and it gets no level-of-detail copies.
     pub special: bool,
     /// Scenery or a special's piece: its own transform is left alone (stars and mushrooms of the map
@@ -32,9 +34,9 @@ pub struct Prop {
 }
 
 impl Prop {
-    pub fn new(name: &'static str, tint: Option<&'static str>, x: f64, z: f64) -> Self {
+    pub fn new(name: Model, tint: Option<Rgb>, x: f64, z: f64) -> Self {
         // (x and z of the placement: the node's own position.)
-        let phase = if name == "mushroom" {
+        let phase = if name == Model::Mushroom {
             ((x * 3.1 + z * 1.3) % core::f64::consts::TAU) as f32
         } else {
             ((x * 12.9898 + z * 78.233) % core::f64::consts::TAU) as f32
@@ -49,7 +51,7 @@ impl Prop {
         }
     }
 
-    pub fn special(name: &'static str) -> Self {
+    pub fn special(name: Model) -> Self {
         Self {
             special: true,
             ..Self::painted(name, Vec::new())
@@ -57,7 +59,7 @@ impl Prop {
     }
 
     /// A model of the scenery: no motion of its own, materials repainted by name.
-    pub fn painted(name: &'static str, paint: Vec<(&'static str, String, f32)>) -> Self {
+    pub fn painted(name: Model, paint: Vec<(&'static str, Rgb, f32)>) -> Self {
         Self {
             name,
             tint: None,
@@ -183,11 +185,11 @@ fn dress(
                     None => Kind::of_model(mat_name),
                 };
                 if let Some(t) = tint {
-                    base.base_color = crate::view::hex(t);
+                    base.base_color = crate::view::color(t);
                     base.base_color_texture = None;
                 }
                 if let Some((_, c, glow)) = paint {
-                    let c = crate::view::hex(c);
+                    let c = crate::view::color(*c);
                     base.base_color = c;
                     base.base_color_texture = None;
                     if *glow > 0.0 {
@@ -279,8 +281,8 @@ fn find_moving(
 ) {
     for (e, p, tf) in &trees {
         let amount = match p.name {
-            "tree" => 0.03,
-            "pine" => 0.022,
+            Model::Tree => 0.03,
+            Model::Pine => 0.022,
             _ => continue,
         };
         // (The map's props stand at the origin of their piece and have a phase; the scenery's are placed.)
@@ -319,11 +321,11 @@ fn animate(
         }
         let ph = p.phase;
         match p.name {
-            "star" => {
+            Model::Star => {
                 tf.rotation = Quat::from_rotation_y(t * 1.4 + ph);
                 tf.translation.y = (t * 1.8 + ph).sin() * 0.2;
             }
-            "mushroom" => {
+            Model::Mushroom => {
                 let k = (t * 5.0 + ph).sin().max(0.0).powi(6);
                 tf.scale = Vec3::new(1.0 + k * 0.05, 1.0 - k * 0.06, 1.0 + k * 0.05);
             }
@@ -393,7 +395,7 @@ fn sway(
 fn twinkle_stars(mut commands: Commands, stars: Query<(Entity, &Prop), Added<Prop>>, pool: Option<Res<Pool>>) {
     let Some(pool) = pool else { return };
     for (e, p) in &stars {
-        if p.name == "star" && !p.still {
+        if p.name == Model::Star && !p.still {
             commands.entity(e).with_child(pool.twinkle());
         }
     }
@@ -416,7 +418,7 @@ fn bumpers(
     let now = time.elapsed_secs();
     hits.retain(|e, _| props.contains(*e));
     for (e, p, at, mut tf) in &mut props {
-        if p.name != "bumper" || p.still {
+        if p.name != Model::Bumper || p.still {
             continue;
         }
         // (Its collider: 0.9 of its scale round and 1.9 high, from its foot.)

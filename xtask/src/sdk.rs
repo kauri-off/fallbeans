@@ -7,39 +7,82 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use anyhow::{Context, Result, anyhow, ensure};
 use clap::Args;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::{root, run, target_dir};
+use crate::{report, reported, root, run, target_dir};
 
 const MANIFEST: &str = include_str!("../../toolchain/deps.toml");
 
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Os {
+    Windows,
+    Linux,
+}
+
+impl Os {
+    fn this() -> Os {
+        if cfg!(windows) { Os::Windows } else { Os::Linux }
+    }
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Group {
+    /// Plain `setup`.
+    Upscalers,
+    /// `setup --dist`.
+    Dist,
+}
+
+/// Where an entry comes from and how it is installed.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum Source {
+    Git {
+        repo: String,
+        tag: String,
+        commit: String,
+        #[serde(default)]
+        paths: Vec<String>,
+    },
+    Zip {
+        url: String,
+        sha256: String,
+        #[serde(default)]
+        extract: Vec<String>,
+    },
+    File {
+        url: String,
+        sha256: String,
+        name: String,
+    },
+    Cargo {
+        #[serde(default)]
+        features: Vec<String>,
+    },
+}
+
 #[derive(Deserialize)]
 pub struct Dep {
-    os: Option<String>,
-    group: String,
+    os: Option<Os>,
+    group: Group,
     pub env: Option<String>,
     pub version: String,
-    kind: String,
-    repo: Option<String>,
-    tag: Option<String>,
-    commit: Option<String>,
-    #[serde(default)]
-    paths: Vec<String>,
-    url: Option<String>,
-    sha256: Option<String>,
-    #[serde(default)]
-    extract: Vec<String>,
-    name: Option<String>,
     points_to: Option<String>,
     file_sha256: Option<String>,
-    #[serde(default)]
-    features: Vec<String>,
+    #[serde(flatten)]
+    source: Source,
 }
 
 pub fn this_os() -> &'static str {
-    if cfg!(windows) { "windows" } else { "linux" }
+    match Os::this() {
+        Os::Windows => "windows",
+        Os::Linux => "linux",
+    }
 }
 
 /// This OS's entries, by name.
@@ -48,7 +91,7 @@ pub fn deps() -> &'static BTreeMap<String, Dep> {
     DEPS.get_or_init(|| {
         let all: BTreeMap<String, Dep> = toml::from_str(MANIFEST).expect("toolchain/deps.toml");
         all.into_iter()
-            .filter(|(_, d)| d.os.as_deref().is_none_or(|os| os == this_os()))
+            .filter(|(_, d)| d.os.is_none_or(|os| os == Os::this()))
             .collect()
     })
 }
@@ -69,14 +112,36 @@ impl Dep {
 
     /// What `env` names: a file inside the entry, or the entry's directory.
     fn target(&self, dir: &Path) -> PathBuf {
-        match self.points_to.as_ref().or(self.name.as_ref()) {
+        let file = match &self.source {
+            Source::File { name, .. } => Some(name),
+            _ => None,
+        };
+        match self.points_to.as_ref().or(file) {
             Some(p) => dir.join(p),
             None => dir.to_path_buf(),
         }
     }
 
     pub fn is_dist(&self) -> bool {
-        self.group == "dist"
+        self.group == Group::Dist
+    }
+
+    fn install(&self, name: &str, to: &Path) -> Result<()> {
+        match &self.source {
+            Source::Git {
+                repo,
+                tag,
+                commit,
+                paths,
+            } => git(repo, tag, commit, paths, to),
+            Source::Zip { url, sha256, extract } => zip(name, &self.version, url, sha256, extract, to),
+            Source::File { url, sha256, name } => file(url, sha256, &to.join(name)),
+            Source::Cargo { features } => cargo_install(name, &self.version, features, to),
+        }?;
+        match &self.file_sha256 {
+            Some(sum) => checked(&self.target(to), sum),
+            None => Ok(()),
+        }
     }
 }
 
@@ -115,7 +180,7 @@ pub fn apply(c: &mut Command) {
         {
             c.env(v, d.target(&dir));
         }
-        if d.kind == "cargo" {
+        if matches!(d.source, Source::Cargo { .. }) {
             bins.push(dir.join("bin"));
         }
     }
@@ -144,7 +209,7 @@ pub struct SetupArgs {
     force: bool,
 }
 
-pub fn setup(a: &SetupArgs) -> bool {
+pub fn setup(a: &SetupArgs) -> Result<()> {
     let mut ok = true;
     for (name, d) in deps().iter().filter(|(_, d)| a.dist || !d.is_dist()) {
         let dir = d.dir(name);
@@ -161,24 +226,12 @@ pub fn setup(a: &SetupArgs) -> bool {
         eprintln!("{name} {}: installing", d.version);
         let part = sdk_dir().join(format!("{name}-{}.part", d.version));
         let _ = fs::remove_dir_all(&part);
-        if let Err(e) = fs::create_dir_all(&part) {
-            eprintln!("{}: {e}", part.display());
-            return false;
-        }
-        let done = match d.kind.as_str() {
-            "git" => git(d, &part),
-            "zip" => zip(name, d, &part),
-            "file" => file(d, &part),
-            "cargo" => cargo_install(name, d, &part),
-            k => {
-                eprintln!("{name}: unknown kind {k}");
-                false
-            }
-        } && d.file_sha256.as_ref().is_none_or(|sum| checked(&d.target(&part), sum));
-        if done {
+        fs::create_dir_all(&part).with_context(|| part.display().to_string())?;
+        let done = d.install(name, &part).and_then(|()| {
             let _ = fs::remove_dir_all(&dir);
-        }
-        if done && fs::rename(&part, &dir).is_ok() {
+            fs::rename(&part, &dir).with_context(|| format!("{} → {}", part.display(), dir.display()))
+        });
+        if report(done) {
             eprintln!("{name} {}: ok", d.version);
         } else {
             eprintln!("{name} {}: FAILED", d.version);
@@ -186,19 +239,18 @@ pub fn setup(a: &SetupArgs) -> bool {
         }
     }
     if a.dist && !cfg!(windows) {
-        ok &= run(Command::new("rustup")
-            .current_dir(root())
-            .args(["target", "add", "x86_64-unknown-linux-musl"]));
+        ok &= report(run(Command::new("rustup").current_dir(root()).args([
+            "target",
+            "add",
+            "x86_64-unknown-linux-musl",
+        ])));
     }
-    ok
+    reported(ok)
 }
 
-fn git(d: &Dep, to: &Path) -> bool {
-    let (Some(repo), Some(tag)) = (&d.repo, &d.tag) else {
-        return false;
-    };
+fn git(repo: &str, tag: &str, commit: &str, paths: &[String], to: &Path) -> Result<()> {
     let git = |args: &[&str]| run(Command::new("git").arg("-C").arg(to).args(args));
-    let cloned = run(Command::new("git")
+    run(Command::new("git")
         .args([
             "clone",
             "--quiet",
@@ -207,20 +259,16 @@ fn git(d: &Dep, to: &Path) -> bool {
             "--depth",
             "1",
             "--branch",
+            tag,
+            repo,
         ])
-        .args([tag, repo])
-        .arg(to));
-    let sparse = d.paths.is_empty() || {
+        .arg(to))?;
+    if !paths.is_empty() {
         let mut args = vec!["sparse-checkout", "set", "--no-cone"];
-        args.extend(d.paths.iter().map(String::as_str));
-        git(&args)
-    };
-    if !(cloned && sparse && git(&["checkout", "--quiet"])) {
-        return false;
+        args.extend(paths.iter().map(String::as_str));
+        git(&args)?;
     }
-    let Some(want) = &d.commit else {
-        return true;
-    };
+    git(&["checkout", "--quiet"])?;
     let head = Command::new("git")
         .arg("-C")
         .arg(to)
@@ -228,104 +276,82 @@ fn git(d: &Dep, to: &Path) -> bool {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    if &head != want {
-        eprintln!("{tag} is at {head}, not at the pinned {want}");
-    }
-    &head == want
+    ensure!(head == commit, "{tag} is at {head}, not at the pinned {commit}");
+    Ok(())
 }
 
-fn download(url: &str, to: &Path, sha256: &str) -> bool {
+fn download(url: &str, to: &Path, sha256: &str) -> Result<()> {
     run(Command::new("curl")
         .args(["-fsSL", "--retry", "3", "-o"])
         .arg(to)
-        .arg(url))
-        && checked(to, sha256)
+        .arg(url))?;
+    checked(to, sha256)
 }
 
-fn checked(path: &Path, want: &str) -> bool {
+fn checked(path: &Path, want: &str) -> Result<()> {
     let got = sha256_of(path).unwrap_or_default();
-    if got != want {
-        eprintln!("{}: sha256 {got}, expected {want}", path.display());
-    }
-    got == want
+    ensure!(got == want, "{}: sha256 {got}, expected {want}", path.display());
+    Ok(())
 }
 
-fn sha256_of(path: &Path) -> Option<String> {
-    let mut f = fs::File::open(path).ok()?;
+fn sha256_of(path: &Path) -> std::io::Result<String> {
+    let mut f = fs::File::open(path)?;
     let mut h = Sha256::new();
     let mut buf = vec![0; 1 << 16];
     loop {
-        let n = f.read(&mut buf).ok()?;
+        let n = f.read(&mut buf)?;
         if n == 0 {
             break;
         }
         h.update(&buf[..n]);
     }
-    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn zip(name: &str, d: &Dep, to: &Path) -> bool {
-    let (Some(url), Some(sum)) = (&d.url, &d.sha256) else {
-        return false;
-    };
-    let archive = sdk_dir().join(format!("{name}-{}.zip", d.version));
-    if !download(url, &archive, sum) {
-        return false;
-    }
+fn zip(name: &str, version: &str, url: &str, sum: &str, extract: &[String], to: &Path) -> Result<()> {
+    let archive = sdk_dir().join(format!("{name}-{version}.zip"));
+    download(url, &archive, sum)?;
     // Windows has bsdtar as tar (it reads zip); Linux has unzip (1: warnings only, e.g. backslashes).
-    let ok = if cfg!(windows) {
+    let unpacked = if cfg!(windows) {
         let mut c = Command::new("tar");
         c.arg("-xf").arg(&archive).arg("-C").arg(to);
-        c.args(d.extract.iter().map(|e| e.trim_end_matches('/')));
+        c.args(extract.iter().map(|e| e.trim_end_matches('/')));
         run(&mut c)
     } else {
         let mut c = Command::new("unzip");
         c.arg("-q").arg(&archive);
         c.args(
-            d.extract
+            extract
                 .iter()
                 .map(|e| if e.ends_with('/') { format!("{e}*") } else { e.clone() }),
         );
         c.arg("-d").arg(to);
         eprintln!("$ {c:?}");
-        c.status().is_ok_and(|s| matches!(s.code(), Some(0 | 1)))
+        match c.status() {
+            Ok(s) => reported(matches!(s.code(), Some(0 | 1))),
+            Err(e) => Err(anyhow!("cannot start unzip: {e}")),
+        }
     };
     let _ = fs::remove_file(&archive);
-    ok
+    unpacked
 }
 
-fn file(d: &Dep, to: &Path) -> bool {
-    let (Some(url), Some(sum), Some(name)) = (&d.url, &d.sha256, &d.name) else {
-        return false;
-    };
-    let path = to.join(name);
-    if !download(url, &path, sum) {
-        return false;
-    }
+fn file(url: &str, sum: &str, path: &Path) -> Result<()> {
+    download(url, path, sum)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).is_err() {
-            return false;
-        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).with_context(|| path.display().to_string())?;
     }
-    true
+    Ok(())
 }
 
-fn cargo_install(name: &str, d: &Dep, to: &Path) -> bool {
+fn cargo_install(name: &str, version: &str, features: &[String], to: &Path) -> Result<()> {
     let mut c = crate::cargo();
-    c.args([
-        "install",
-        "--locked",
-        "--quiet",
-        name,
-        "--version",
-        &d.version,
-        "--root",
-    ])
-    .arg(to);
-    if !d.features.is_empty() {
-        c.args(["--features", &d.features.join(",")]);
+    c.args(["install", "--locked", "--quiet", name, "--version", version, "--root"])
+        .arg(to);
+    if !features.is_empty() {
+        c.args(["--features", &features.join(",")]);
     }
     run(&mut c)
 }
@@ -335,19 +361,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_manifest_reads_and_each_kind_has_its_fields() {
-        let all: BTreeMap<String, Dep> = toml::from_str(MANIFEST).unwrap();
-        for (n, d) in &all {
-            let ok = match d.kind.as_str() {
-                "git" => d.repo.is_some() && d.tag.is_some() && d.commit.is_some(),
-                "zip" => d.url.is_some() && d.sha256.is_some(),
-                "file" => d.url.is_some() && d.sha256.is_some() && d.name.is_some(),
-                "cargo" => d.env.is_none(),
-                _ => false,
-            };
-            assert!(ok, "{n}");
-            assert!(matches!(d.group.as_str(), "upscalers" | "dist"), "{n}");
-            assert!(d.os.as_deref().is_none_or(|os| os == "windows" || os == "linux"), "{n}");
-        }
+    fn the_manifest_reads() {
+        toml::from_str::<BTreeMap<String, Dep>>(MANIFEST).unwrap();
     }
 }

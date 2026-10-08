@@ -73,7 +73,7 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
     // (A fall in a survival round is an elimination, not a fall: always 0 there.)
     if meta.genre != Genre::Survival {
         put(
-            "fallsPerBotMin",
+            "falls_per_bot_min",
             runs.iter()
                 .map(|r| r.falls.len() as f64 / r.bot_seconds * 60.0)
                 .collect(),
@@ -84,13 +84,13 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
     match meta.genre {
         Genre::Race => {
             put(
-                "finishRate",
+                "finish_rate",
                 runs.iter().map(|r| r.finish_times.len() as f64 / BEANS).collect(),
                 0.0,
                 0.05,
             );
             put(
-                "finishP50",
+                "finish_p50",
                 runs.iter()
                     .filter(|r| !r.finish_times.is_empty())
                     .map(|r| median(&r.finish_times))
@@ -101,7 +101,7 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
         }
         Genre::Survival => {
             put(
-                "firstOut",
+                "first_out",
                 runs.iter()
                     .map(|r| r.out_times.iter().copied().fold(meta.duration, m::min))
                     .collect(),
@@ -109,14 +109,14 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
                 1.0,
             );
             put(
-                "survivorsAtEnd",
+                "survivors_at_end",
                 runs.iter().map(|r| r.survivors as f64).collect(),
                 0.0,
                 0.5,
             );
         }
         Genre::Points => {
-            put("topScore", runs.iter().map(|r| r.top_score).collect(), 0.1, 1.0);
+            put("top_score", runs.iter().map(|r| r.top_score).collect(), 0.1, 1.0);
         }
     }
 }

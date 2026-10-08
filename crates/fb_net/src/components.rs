@@ -3,7 +3,7 @@ use bevy::math::Curve;
 use bevy::prelude::*;
 use fb_shared::game::{ArenaKind, FallBehaviour};
 use fb_sim::math::V3;
-use fb_sim::physics::{Body, BodyState};
+use fb_sim::physics::{Body, BodyState, Power};
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -160,7 +160,7 @@ pub struct RemotePose {
     pub tilt: f32,
     pub tilt_dir: f32,
     pub anim: Anim,
-    pub power: u8,
+    pub power: Option<Power>,
     pub size: f32,
     pub vel: Vec2,
     pub teleports: u32,

@@ -1,6 +1,7 @@
 //! `--check-assets`: loads every model through Bevy's glTF loader, reports and quits.
 use bevy::asset::LoadState;
 use bevy::prelude::*;
+use fb_sim::scene::Model;
 
 pub struct CheckAssetsPlugin;
 
@@ -12,12 +13,12 @@ impl Plugin for CheckAssetsPlugin {
 }
 
 #[derive(Resource)]
-struct Models(Vec<(&'static str, Handle<Gltf>)>);
+struct Models(Vec<(Model, Handle<Gltf>)>);
 
 fn load_models(mut commands: Commands, assets: Res<AssetServer>) {
-    let list = fb_sim::builder::MODEL_NAMES
-        .iter()
-        .map(|n| (*n, assets.load(format!("models/{n}.glb"))))
+    let list = Model::ALL
+        .into_iter()
+        .map(|n| (n, assets.load(format!("models/{n}.glb"))))
         .collect();
     commands.insert_resource(Models(list));
 }

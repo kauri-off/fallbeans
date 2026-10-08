@@ -1,6 +1,9 @@
 //! What the client draws for a map: filled by the same build code that makes the colliders.
 use std::sync::Arc;
 
+use fb_shared::{Rgb, rgb};
+
+use crate::looks::Pattern;
 use crate::math::V3;
 use crate::nodes::NodeId;
 use crate::world::World;
@@ -12,24 +15,127 @@ pub enum PrimKind {
     Sphere,
 }
 
+/// A model of the asset pack (`assets/models/<name>.glb`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Model {
+    Bean,
+    Crown,
+    Hub,
+    Arm,
+    Hammer,
+    Hex,
+    Door,
+    Finish,
+    Bumper,
+    Cloud,
+    Tree,
+    Pine,
+    Flag,
+    Cone,
+    Star,
+    Island,
+    Mushroom,
+    Glove,
+    Fan,
+}
+
+impl Model {
+    pub const ALL: [Model; 19] = [
+        Model::Bean,
+        Model::Crown,
+        Model::Hub,
+        Model::Arm,
+        Model::Hammer,
+        Model::Hex,
+        Model::Door,
+        Model::Finish,
+        Model::Bumper,
+        Model::Cloud,
+        Model::Tree,
+        Model::Pine,
+        Model::Flag,
+        Model::Cone,
+        Model::Star,
+        Model::Island,
+        Model::Mushroom,
+        Model::Glove,
+        Model::Fan,
+    ];
+
+    /// Its file name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Model::Bean => "bean",
+            Model::Crown => "crown",
+            Model::Hub => "hub",
+            Model::Arm => "arm",
+            Model::Hammer => "hammer",
+            Model::Hex => "hex",
+            Model::Door => "door",
+            Model::Finish => "finish",
+            Model::Bumper => "bumper",
+            Model::Cloud => "cloud",
+            Model::Tree => "tree",
+            Model::Pine => "pine",
+            Model::Flag => "flag",
+            Model::Cone => "cone",
+            Model::Star => "star",
+            Model::Island => "island",
+            Model::Mushroom => "mushroom",
+            Model::Glove => "glove",
+            Model::Fan => "fan",
+        }
+    }
+}
+
+impl core::fmt::Display for Model {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// What a surface is made of, as the client draws it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Surface {
+    Plastic,
+    Padded,
+    Rubber,
+    Metal,
+    Fabric,
+    Ice,
+    Cloud,
+    Gold,
+    Wood,
+    Glossy,
+    Tile,
+    Leaf,
+    Grass,
+    Rock,
+    Cloth,
+    Glass,
+    Carpet,
+}
+
 /// Two-colour palette (base, accent).
-pub type Palette = [&'static str; 2];
+pub type Palette = [Rgb; 2];
 
 pub mod pal {
+    use fb_shared::{Rgb, rgb};
+
     use super::Palette;
     /// One colour for both tones.
-    pub const fn hex(c: &'static str) -> Palette {
+    pub const fn solid(c: Rgb) -> Palette {
         [c, c]
     }
-    pub const BLUE: Palette = ["#7ccfff", "#9bdcff"];
-    pub const PURPLE: Palette = ["#a98bff", "#bca4ff"];
-    pub const PINK: Palette = ["#ff8cc8", "#ffa6d6"];
-    pub const YELLOW: Palette = ["#ffd84a", "#ffe47a"];
-    pub const GREEN: Palette = ["#6fe08a", "#8ceaa2"];
-    pub const WHITE: Palette = ["#f4f1ff", "#ffffff"];
-    pub const ORANGE: Palette = ["#ff9f4a", "#ffb673"];
-    pub const RED: Palette = ["#ff6070", "#ff8490"];
-    pub const TEAL: Palette = ["#39e0d0", "#6ff0e4"];
+    pub const BLUE: Palette = [rgb(0x7ccfff), rgb(0x9bdcff)];
+    pub const PURPLE: Palette = [rgb(0xa98bff), rgb(0xbca4ff)];
+    pub const PINK: Palette = [rgb(0xff8cc8), rgb(0xffa6d6)];
+    pub const YELLOW: Palette = [rgb(0xffd84a), rgb(0xffe47a)];
+    pub const GREEN: Palette = [rgb(0x6fe08a), rgb(0x8ceaa2)];
+    pub const WHITE: Palette = [rgb(0xf4f1ff), rgb(0xffffff)];
+    pub const ORANGE: Palette = [rgb(0xff9f4a), rgb(0xffb673)];
+    pub const RED: Palette = [rgb(0xff6070), rgb(0xff8490)];
+    pub const TEAL: Palette = [rgb(0x39e0d0), rgb(0x6ff0e4)];
 }
 
 #[derive(Clone, Debug)]
@@ -43,14 +149,14 @@ pub enum SceneItem {
         /// Pattern frequency (None: the default, 0.25 per metre).
         freq: Option<f64>,
         /// Surface finish and pattern (None: the default for the shape and the map's style).
-        surface: Option<&'static str>,
-        pattern: Option<&'static str>,
+        surface: Option<Surface>,
+        pattern: Option<Pattern>,
     },
     Model {
         node: NodeId,
-        name: &'static str,
+        name: Model,
         /// Colour of the part a prop has for it (a flag's pennant, a mushroom's cap).
-        tint: Option<&'static str>,
+        tint: Option<Rgb>,
     },
     /// Something only the client draws (portal rings, glass panes…): pieces of its parts, placed in the
     /// node's frame; with a look, they follow the map's state.
@@ -85,7 +191,7 @@ pub enum Form {
     Plane(f64, f64),
     /// A board with a text (an emoji) on its colour: w, h, text.
     Label(f64, f64, &'static str),
-    Model(&'static str),
+    Model(Model),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -106,16 +212,16 @@ pub enum Finish {
 pub struct Part {
     pub form: Form,
     /// The colours at tone 0 and tone 1 (`#rrggbb` or `#rrggbbaa`).
-    pub colors: [&'static str; 2],
+    pub colors: [Rgb; 2],
     pub finish: Finish,
     /// Surface of a lit finish (None: plastic), as a primitive's.
-    pub surface: Option<&'static str>,
+    pub surface: Option<Surface>,
     /// The palette whose first tone is the first colour, repainted by the round's look.
     pub pal: Option<Palette>,
 }
 
 impl Part {
-    pub const fn new(form: Form, color: &'static str, finish: Finish) -> Self {
+    pub const fn new(form: Form, color: Rgb, finish: Finish) -> Self {
         Self {
             form,
             colors: [color, color],
@@ -125,7 +231,7 @@ impl Part {
         }
     }
 
-    pub const fn toned(form: Form, from: &'static str, to: &'static str, finish: Finish) -> Self {
+    pub const fn toned(form: Form, from: Rgb, to: Rgb, finish: Finish) -> Self {
         Self {
             form,
             colors: [from, to],
@@ -135,7 +241,7 @@ impl Part {
         }
     }
 
-    pub const fn on(self, surface: &'static str) -> Self {
+    pub const fn on(self, surface: Surface) -> Self {
         Self {
             surface: Some(surface),
             ..self
@@ -154,7 +260,7 @@ impl Part {
 
 /// A lamp over a gate or a portal: red while shut, green (tone 1) while open.
 pub const fn lamp_part(r: f64) -> Part {
-    Part::toned(Form::Sphere(r), "#ff6070", "#4fdc6a", Finish::Glow)
+    Part::toned(Form::Sphere(r), rgb(0xff6070), rgb(0x4fdc6a), Finish::Glow)
 }
 
 /// One drawn piece of a part at a moment.
@@ -218,7 +324,7 @@ impl Piece {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tint {
     pub node: NodeId,
-    pub to: &'static str,
+    pub to: Rgb,
     pub k: f64,
 }
 

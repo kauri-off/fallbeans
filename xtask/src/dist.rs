@@ -3,9 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 
-use crate::{cargo, root, run, target_dir};
+use crate::{cargo, report, reported, root, run, target_dir};
 
 pub const APP_ID: &str = "io.github.kauri_off.fallbeans";
 const MUSL: &str = "x86_64-unknown-linux-musl";
@@ -50,36 +51,43 @@ fn stamped(mut c: Command) -> Command {
     c
 }
 
-fn out_dir() -> PathBuf {
-    let d = root().join("dist");
-    fs::create_dir_all(&d).expect("dist/");
-    d
+fn create_dir(d: &Path) -> Result<()> {
+    fs::create_dir_all(d).with_context(|| d.display().to_string())
 }
 
-fn stage(name: &str) -> PathBuf {
+fn out_dir() -> Result<PathBuf> {
+    let d = root().join("dist");
+    create_dir(&d)?;
+    Ok(d)
+}
+
+fn stage(name: &str) -> Result<PathBuf> {
     let d = target_dir().join("pkg").join(name);
     let _ = fs::remove_dir_all(&d);
-    fs::create_dir_all(&d).expect("stage");
-    d
+    create_dir(&d)?;
+    Ok(d)
 }
 
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap_or_else(|e| panic!("{}: {e}", to.display()));
-    for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("{}: {e}", from.display())) {
-        let entry = entry.expect("dir entry");
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    create_dir(to)?;
+    for entry in fs::read_dir(from).with_context(|| from.display().to_string())? {
+        let entry = entry.with_context(|| from.display().to_string())?;
         let path = entry.path();
         let dest = to.join(entry.file_name());
         if path.is_dir() {
-            copy_dir(&path, &dest);
+            copy_dir(&path, &dest)?;
         } else {
-            fs::copy(&path, &dest).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            fs::copy(&path, &dest).with_context(|| path.display().to_string())?;
         }
     }
+    Ok(())
 }
 
-fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) {
+/// `from` (relative to the root, or absolute) to `to`.
+fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     let (from, to) = (root().join(from), to.as_ref());
-    fs::copy(&from, to).unwrap_or_else(|e| panic!("{} → {}: {e}", from.display(), to.display()));
+    fs::copy(&from, to).with_context(|| format!("{} → {}", from.display(), to.display()))?;
+    Ok(())
 }
 
 /// The client's features in the packages: no BRP probe, the profiler of F4, and DLSS when its SDK is there (the
@@ -91,17 +99,16 @@ fn client_features() -> [&'static str; 3] {
 
 /// The licenses of every crate built into `package` (cargo-about, `packaging/about.toml`) as `out`; fails on a
 /// license that `about.toml` does not accept.
-fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
+fn third_party(package: &str, features: &[&str], out: &Path) -> Result<()> {
     let found = cargo()
         .args(["about", "--version"])
         .output()
         .is_ok_and(|o| o.status.success());
     if !found {
-        eprintln!("cargo-about is missing: cargo xtask setup --dist");
-        return false;
+        bail!("cargo-about is missing: cargo xtask setup --dist");
     }
     if let Some(dir) = out.parent() {
-        fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+        create_dir(dir)?;
     }
     run(cargo()
         .args(["about", "generate", "--locked", "-c", "packaging/about.toml", "-m"])
@@ -114,26 +121,27 @@ fn third_party(package: &str, features: &[&str], out: &Path) -> bool {
 
 /// DirectX's shader compiler for the Windows package (`backend.rs`: DX12 compiles with it instead of FXC), from
 /// an unpacked DXC release in `FB_DXC_DIR` (`setup` puts it in target/sdk); without it the game falls back to FXC.
-fn dxc_into(dir: &Path) {
+fn dxc_into(dir: &Path) -> Result<()> {
     if !cfg!(windows) {
-        return;
+        return Ok(());
     }
     let Some(src) = env_path("FB_DXC_DIR") else {
         eprintln!("FB_DXC_DIR is not set: the package compiles DX12 shaders with FXC (slow)");
-        return;
+        return Ok(());
     };
     for f in ["dxcompiler.dll", "dxil.dll"] {
-        copy(src.join("bin").join("x64").join(f), dir.join(f));
+        copy(src.join("bin").join("x64").join(f), dir.join(f))?;
     }
     let licenses = dir.join("dxc-licenses");
-    fs::create_dir_all(&licenses).unwrap_or_else(|e| panic!("{}: {e}", licenses.display()));
+    create_dir(&licenses)?;
     for f in ["LICENCE-MIT.txt", "LICENSE-LLVM.txt", "LICENSE-MS.txt"] {
-        copy(src.join(f), licenses.join(f));
+        copy(src.join(f), licenses.join(f))?;
     }
+    Ok(())
 }
 
 /// The packages' client, built into target/dist (`cargo xtask play --dist` runs it from there).
-pub fn build_client() -> Option<PathBuf> {
+pub fn build_client() -> Result<PathBuf> {
     let mut c = stamped(cargo());
     c.args(["build", "--locked", "--profile", "dist", "-p", "fb_client"])
         .args(client_features());
@@ -145,15 +153,14 @@ pub fn build_client() -> Option<PathBuf> {
             "-C target-feature=+crt-static",
         );
     }
-    run(&mut c).then(|| {
-        target_dir()
-            .join("dist")
-            .join(format!("fb_client{}", std::env::consts::EXE_SUFFIX))
-    })
+    run(&mut c)?;
+    Ok(target_dir()
+        .join("dist")
+        .join(format!("fb_client{}", std::env::consts::EXE_SUFFIX)))
 }
 
 /// The client packages ship every upscaler: a missing one fails the package instead of a quiet build without it.
-fn upscalers_ready() -> bool {
+fn upscalers_ready() -> Result<()> {
     let mut missing = Vec::new();
     if !crate::dlss() {
         missing.push("DLSS SDK (DLSS_SDK)");
@@ -168,29 +175,24 @@ fn upscalers_ready() -> bool {
         missing.push("DXC (FB_DXC_DIR)");
     }
     if !missing.is_empty() {
-        eprintln!(
+        bail!(
             "the client packages need {}: cargo xtask setup (cargo xtask doctor lists the rest)",
             missing.join(", ")
         );
     }
-    missing.is_empty()
+    Ok(())
 }
 
 /// The release client, staged with its assets and licenses into `dir`.
-fn client_into(dir: &Path) -> bool {
-    if !upscalers_ready() {
-        return false;
-    }
-    let Some(exe) = build_client() else {
-        return false;
-    };
-    if !third_party("fb_client", &client_features(), &dir.join(THIRD_PARTY)) {
-        return false;
-    }
-    copy(&exe, dir.join(exe.file_name().expect("exe name")));
-    copy_dir(&root().join("assets"), &dir.join("assets"));
-    copy("LICENSE", dir.join("LICENSE"));
-    dxc_into(dir);
+fn client_into(dir: &Path) -> Result<()> {
+    upscalers_ready()?;
+    let exe = build_client()?;
+    third_party("fb_client", &client_features(), &dir.join(THIRD_PARTY))?;
+    let name = exe.file_name().context("the client has no file name")?;
+    copy(&exe, dir.join(name))?;
+    copy_dir(&root().join("assets"), &dir.join("assets"))?;
+    copy("LICENSE", dir.join("LICENSE"))?;
+    dxc_into(dir)?;
     upscalers_into(dir, Some(&dir.join(UPSCALER_LICENSES)))
 }
 
@@ -223,25 +225,21 @@ fn dlss_runtime() -> Option<PathBuf> {
 
 /// AMD's FidelityFX library for FSR 3.1: the signed DLL of the SDK in `FFX_SDK` on Windows, on Linux (AMD ships
 /// none) built from the same SDK's sources with `packaging/fidelityfx-linux`.
-fn fidelityfx() -> Option<PathBuf> {
-    let Some(sdk) = env_path("FFX_SDK") else {
-        eprintln!("FFX_SDK is not set: no AMD FSR 3.1");
-        return None;
-    };
+fn fidelityfx() -> Result<PathBuf> {
+    let sdk = env_path("FFX_SDK").ok_or_else(|| anyhow!("FFX_SDK is not set"))?;
     if cfg!(windows) {
         let dll = sdk.join("PrebuiltSignedDLL/amd_fidelityfx_vk.dll");
         if !dll.is_file() {
-            eprintln!("FFX_SDK has no {}: no AMD FSR 3.1", dll.display());
-            return None;
+            bail!("FFX_SDK has no {}", dll.display());
         }
-        return Some(dll);
+        return Ok(dll);
     }
     fidelityfx_linux(&sdk)
 }
 
 /// `libamd_fidelityfx_vk.so` under target/fidelityfx-linux: the SDK's sources copied and patched once per
 /// SDK and patch, then CMake (cmake, a C++17 compiler, the Vulkan headers and loader, glslangValidator).
-fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
+fn fidelityfx_linux(sdk: &Path) -> Result<PathBuf> {
     const SOURCES: [&str; 7] = [
         "ffx-api/include",
         "ffx-api/src",
@@ -253,8 +251,7 @@ fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
     ];
     const PROCESS: &str = "sdk/tools/ffx_shader_compiler/libs/tiny-process-library";
     if let Some(missing) = SOURCES.iter().chain([&PROCESS]).find(|d| !sdk.join(d).is_dir()) {
-        eprintln!("FFX_SDK has no {missing}/ (the whole SDK unpacked, not only PrebuiltSignedDLL): no AMD FSR 3.1");
-        return None;
+        bail!("FFX_SDK has no {missing}/ (the whole SDK unpacked, not only PrebuiltSignedDLL)");
     }
     let recipe = root().join("packaging/fidelityfx-linux");
     let patch = recipe.join("fidelityfx-sdk-v1.1.4.patch");
@@ -264,23 +261,22 @@ fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
     let want = format!(
         "{}\n{}",
         sdk.display(),
-        fs::read_to_string(&patch).expect("the FidelityFX patch")
+        fs::read_to_string(&patch).with_context(|| patch.display().to_string())?
     );
     if fs::read_to_string(&stamp).ok().as_deref() != Some(want.as_str()) {
         let _ = fs::remove_dir_all(&src);
         for d in SOURCES.iter().chain([&PROCESS]) {
-            copy_dir(&sdk.join(d), &src.join(d));
+            copy_dir(&sdk.join(d), &src.join(d))?;
         }
         let patched = run(Command::new("patch")
             .args(["-p1", "--forward", "--batch", "-d"])
             .arg(&src)
             .arg("-i")
             .arg(&patch));
-        if !patched {
-            eprintln!("the FidelityFX patch does not apply to FFX_SDK (v1.1.4 expected): no AMD FSR 3.1");
-            return None;
+        if patched.is_err() {
+            bail!("the FidelityFX patch does not apply to FFX_SDK (v1.1.4 expected)");
         }
-        fs::write(&stamp, &want).expect("stamp");
+        fs::write(&stamp, &want).with_context(|| stamp.display().to_string())?;
     }
     let build = work.join("build");
     let mut configure = Command::new("cmake");
@@ -291,84 +287,81 @@ fn fidelityfx_linux(sdk: &Path) -> Option<PathBuf> {
         .arg(&build)
         .arg("-DCMAKE_BUILD_TYPE=Release")
         .arg(format!("-DFFX_SRC={}", src.display()));
-    let built = run(&mut configure) && run(Command::new("cmake").arg("--build").arg(&build).arg("--parallel"));
+    let built =
+        run(&mut configure).and_then(|()| run(Command::new("cmake").arg("--build").arg(&build).arg("--parallel")));
     let lib = build.join("libamd_fidelityfx_vk.so");
-    if !built || !lib.is_file() {
-        eprintln!("FidelityFX did not build for Linux: no AMD FSR 3.1");
-        return None;
+    if built.is_err() || !lib.is_file() {
+        bail!("FidelityFX did not build for Linux");
     }
-    Some(lib)
+    Ok(lib)
 }
 
 /// The upscalers' libraries beside the client (the game falls back to FSR 1 without them): NVIDIA's DLSS
 /// (`dlss_runtime`) when the client is built with it, AMD's FidelityFX for FSR 3.1 (`fidelityfx`). With
 /// `licenses` (a package), AMD's license goes there, and a missing library fails the package.
-pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> bool {
+/// Each failure is printed as it comes (the others are still tried): the result only says whether one was fatal.
+pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> Result<()> {
+    let package = licenses.is_some();
     let mut ok = true;
     if crate::dlss() {
         match dlss_runtime() {
             Some(lib) => {
-                let name = if cfg!(windows) {
-                    "nvngx_dlss.dll".into()
-                } else {
-                    lib.file_name().expect("a file").to_owned()
+                let name = match lib.file_name() {
+                    Some(n) if !cfg!(windows) => n.to_owned(),
+                    _ => "nvngx_dlss.dll".into(),
                 };
-                ok &= put(&lib, &dir.join(name));
+                ok &= report(put(&lib, &dir.join(name)));
             }
             None => {
                 eprintln!("no DLSS library (DLSS_DLL or DLSS_SDK): the client cannot use DLSS");
-                ok &= licenses.is_none();
+                ok &= !package;
             }
         }
     }
-    let Some(lib) = fidelityfx() else {
-        return ok && licenses.is_none();
+    let lib = match fidelityfx() {
+        Ok(lib) => lib,
+        Err(e) => {
+            eprintln!("{e:#}: no AMD FSR 3.1");
+            return reported(ok && !package);
+        }
     };
     let name = if cfg!(windows) {
         "amd_fidelityfx_vk.dll"
     } else {
         "libamd_fidelityfx_vk.so"
     };
-    ok &= put(&lib, &dir.join(name));
+    ok &= report(put(&lib, &dir.join(name)));
     if let Some(l) = licenses {
         let license = env_path("FFX_SDK").unwrap_or_default().join("docs/license.md");
         if license.is_file() {
-            fs::create_dir_all(l).unwrap_or_else(|e| panic!("{}: {e}", l.display()));
-            copy(&license, l.join("AMD-FidelityFX-SDK-license.md"));
+            ok &= report(create_dir(l).and_then(|()| copy(&license, l.join("AMD-FidelityFX-SDK-license.md"))));
         } else {
             eprintln!("FFX_SDK has no docs/license.md: AMD's library is not packaged without its license");
             ok = false;
         }
     }
-    ok
+    reported(ok)
 }
 
 /// A library copied beside the client, unless the same one is there (a running client holds its libraries).
-fn put(src: &Path, to: &Path) -> bool {
+fn put(src: &Path, to: &Path) -> Result<()> {
     let len = |p: &Path| fs::metadata(p).ok().map(|m| m.len());
     if to.is_file() && len(to) == len(src) {
-        return true;
+        return Ok(());
     }
-    match fs::copy(src, to) {
-        Ok(_) => true,
-        Err(e) => {
-            eprintln!("{} → {}: {e}", src.display(), to.display());
-            false
-        }
-    }
+    fs::copy(src, to).with_context(|| format!("{} → {}", src.display(), to.display()))?;
+    Ok(())
 }
 
 fn tool(var: &str, name: &str) -> Command {
     Command::new(env_path(var).unwrap_or_else(|| name.into()))
 }
 
-fn nsis() -> bool {
-    let s = stage("nsis");
-    if !client_into(&s) {
-        return false;
-    }
-    copy("packaging/icons/fallbeans.ico", s.join("fallbeans.ico"));
-    let out = out_dir().join(format!("FallBeans-{}-setup.exe", version()));
+fn nsis() -> Result<()> {
+    let s = stage("nsis")?;
+    client_into(&s)?;
+    copy("packaging/icons/fallbeans.ico", s.join("fallbeans.ico"))?;
+    let out = out_dir()?.join(format!("FallBeans-{}-setup.exe", version()));
     let default = if cfg!(windows) && Path::new(r"C:\Program Files (x86)\NSIS\makensis.exe").exists() {
         r"C:\Program Files (x86)\NSIS\makensis.exe"
     } else {
@@ -385,42 +378,41 @@ fn nsis() -> bool {
         .arg(root().join("packaging/windows/installer.nsi")))
 }
 
-fn appimage() -> bool {
-    let app = stage("AppDir");
+fn appimage() -> Result<()> {
+    let app = stage("AppDir")?;
     let bin = app.join("usr/bin");
-    fs::create_dir_all(&bin).expect("AppDir");
-    if !client_into(&bin) {
-        return false;
-    }
+    create_dir(&bin)?;
+    client_into(&bin)?;
     let desktop = format!("{APP_ID}.desktop");
-    copy(Path::new("packaging/linux").join(&desktop), app.join(&desktop));
-    copy("packaging/icons/fallbeans-256.png", app.join(format!("{APP_ID}.png")));
-    copy("packaging/icons/fallbeans-256.png", app.join(".DirIcon"));
+    copy(Path::new("packaging/linux").join(&desktop), app.join(&desktop))?;
+    copy("packaging/icons/fallbeans-256.png", app.join(format!("{APP_ID}.png")))?;
+    copy("packaging/icons/fallbeans-256.png", app.join(".DirIcon"))?;
     let apps = app.join("usr/share/applications");
     let icons = app.join("usr/share/icons/hicolor/256x256/apps");
     let meta = app.join("usr/share/metainfo");
     for d in [&apps, &icons, &meta] {
-        fs::create_dir_all(d).expect("AppDir");
+        create_dir(d)?;
     }
-    copy(Path::new("packaging/linux").join(&desktop), apps.join(&desktop));
-    copy("packaging/icons/fallbeans-256.png", icons.join(format!("{APP_ID}.png")));
+    copy(Path::new("packaging/linux").join(&desktop), apps.join(&desktop))?;
+    copy("packaging/icons/fallbeans-256.png", icons.join(format!("{APP_ID}.png")))?;
     let metainfo = format!("{APP_ID}.metainfo.xml");
     copy(
         Path::new("packaging/linux").join(&metainfo),
         meta.join(format!("{APP_ID}.appdata.xml")),
-    );
+    )?;
     let apprun = app.join("AppRun");
     fs::write(
         &apprun,
         "#!/bin/sh\nHERE=\"$(dirname \"$(readlink -f \"$0\")\")\"\nexec \"$HERE/usr/bin/fb_client\" \"$@\"\n",
     )
-    .expect("AppRun");
+    .with_context(|| apprun.display().to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755)).expect("AppRun");
+        fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755))
+            .with_context(|| apprun.display().to_string())?;
     }
-    let out = out_dir().join(format!("FallBeans-{}-x86_64.AppImage", version()));
+    let out = out_dir()?.join(format!("FallBeans-{}-x86_64.AppImage", version()));
     let mut c = tool("APPIMAGETOOL", "appimagetool");
     c.env("ARCH", "x86_64").env("APPIMAGE_EXTRACT_AND_RUN", "1");
     // A runtime of a known release (the workflow checks its sum); else appimagetool downloads the latest one.
@@ -430,31 +422,30 @@ fn appimage() -> bool {
     run(c.arg(&app).arg(&out))
 }
 
-fn flatpak() -> bool {
-    let dir = stage("flatpak");
+fn flatpak() -> Result<()> {
+    let dir = stage("flatpak")?;
     let s = dir.join("stage");
-    fs::create_dir_all(&s).expect("stage");
-    if !client_into(&s) {
-        return false;
-    }
+    create_dir(&s)?;
+    client_into(&s)?;
     // (client_into staged LICENSE and THIRD_PARTY too: the manifest installs them.)
     for f in [format!("{APP_ID}.desktop"), format!("{APP_ID}.metainfo.xml")] {
-        copy(Path::new("packaging/linux").join(&f), s.join(&f));
+        copy(Path::new("packaging/linux").join(&f), s.join(&f))?;
     }
     for f in ["fallbeans-256.png", "fallbeans-512.png"] {
-        copy(Path::new("packaging/icons").join(f), s.join(f));
+        copy(Path::new("packaging/icons").join(f), s.join(f))?;
     }
     let manifest = dir.join(format!("{APP_ID}.yml"));
-    copy(Path::new("packaging/flatpak").join(format!("{APP_ID}.yml")), &manifest);
+    copy(Path::new("packaging/flatpak").join(format!("{APP_ID}.yml")), &manifest)?;
     let repo = dir.join("repo");
-    let out = out_dir().join(format!("FallBeans-{}-x86_64.flatpak", version()));
+    let out = out_dir()?.join(format!("FallBeans-{}-x86_64.flatpak", version()));
     run(Command::new("flatpak").args([
         "remote-add",
         "--user",
         "--if-not-exists",
         "flathub",
         "https://dl.flathub.org/repo/flathub.flatpakrepo",
-    ])) && run(Command::new("flatpak-builder")
+    ]))?;
+    run(Command::new("flatpak-builder")
         .args([
             "--user",
             "--install-deps-from=flathub",
@@ -468,15 +459,15 @@ fn flatpak() -> bool {
         ))
         .arg(format!("--repo={}", repo.display()))
         .arg(dir.join("build"))
-        .arg(&manifest))
-        && run(Command::new("flatpak")
-            .args([
-                "build-bundle",
-                "--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo",
-            ])
-            .arg(&repo)
-            .arg(&out)
-            .arg(APP_ID))
+        .arg(&manifest))?;
+    run(Command::new("flatpak")
+        .args([
+            "build-bundle",
+            "--runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo",
+        ])
+        .arg(&repo)
+        .arg(&out)
+        .arg(APP_ID))
 }
 
 /// Debian versions sort `~` before anything: 0.1.0~alpha < 0.1.0. RPM does the same.
@@ -485,7 +476,7 @@ fn package_version() -> String {
 }
 
 /// The server's third-party licenses, where its package metadata takes them from (`fb_server/Cargo.toml`).
-fn server_licenses() -> bool {
+fn server_licenses() -> Result<()> {
     third_party(
         "fb_server",
         &[],
@@ -493,28 +484,22 @@ fn server_licenses() -> bool {
     )
 }
 
-fn deb() -> bool {
-    if !server_licenses() {
-        return false;
-    }
+fn deb() -> Result<()> {
+    server_licenses()?;
     // `--no-strip`: the binary keeps the `dist` profile's line tables, as in the rpm.
     let mut c = stamped(cargo());
     c.args(["deb", "--locked", "--profile", "dist", "--no-strip", "-p", "fb_server"])
         .args(["--target", MUSL, "--deb-version"])
         .arg(package_version())
         .arg("-o")
-        .arg(out_dir());
-    let ok = run(&mut c);
-    if !ok {
-        eprintln!("(needs `cargo install cargo-deb`, `rustup target add {MUSL}`, musl-tools and cmake)");
-    }
-    ok
+        .arg(out_dir()?);
+    run(&mut c).inspect_err(|_| {
+        eprintln!("(needs `cargo install cargo-deb`, `rustup target add {MUSL}`, musl-tools and cmake)")
+    })
 }
 
-fn rpm() -> bool {
-    if !server_licenses() {
-        return false;
-    }
+fn rpm() -> Result<()> {
+    server_licenses()?;
     let mut b = stamped(cargo());
     b.args([
         "build",
@@ -539,15 +524,13 @@ fn rpm() -> bool {
     ])
     .arg(format!("version = \"{}\"", package_version()))
     .arg("-o")
-    .arg(out_dir());
-    let ok = run(&mut b) && run(&mut c);
-    if !ok {
-        eprintln!("(needs `cargo install cargo-generate-rpm`, `rustup target add {MUSL}`, musl-tools and cmake)");
-    }
-    ok
+    .arg(out_dir()?);
+    run(&mut b).and_then(|()| run(&mut c)).inspect_err(|_| {
+        eprintln!("(needs `cargo install cargo-generate-rpm`, `rustup target add {MUSL}`, musl-tools and cmake)")
+    })
 }
 
-pub fn dist(a: &DistArgs) -> bool {
+pub fn dist(a: &DistArgs) -> Result<()> {
     match a.kind {
         Kind::Nsis => nsis(),
         Kind::Appimage => appimage(),

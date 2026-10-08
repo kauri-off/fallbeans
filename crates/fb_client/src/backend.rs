@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use bevy::render::settings::{Backends, Dx12Compiler, InstanceFlags, WgpuSettings};
 use bevy::tasks::block_on;
+use serde::{Deserialize, Serialize};
 
 use crate::opts::{Backend, Opts};
 use crate::settings::Graphics;
@@ -25,11 +26,8 @@ impl Backend {
         }
     }
 
-    /// A saved choice: "" and the names this system cannot run (an old "gl", "dx12" off Windows) are "auto".
-    pub fn from_setting(s: &str) -> Option<Backend> {
-        [Backend::Vulkan, Backend::Dx12]
-            .into_iter()
-            .find(|b| b.setting() == s && b.available())
+    fn from_setting(s: &str) -> Option<Backend> {
+        [Backend::Vulkan, Backend::Dx12].into_iter().find(|b| b.setting() == s)
     }
 
     pub fn available(self) -> bool {
@@ -48,6 +46,31 @@ impl Backend {
             Backend::Vulkan => Backends::VULKAN,
             Backend::Dx12 => Backends::DX12,
         }
+    }
+}
+
+/// The saved choice, by name: "" (and any other name, an old "gl") is `None`, automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[reflect(opaque)]
+#[reflect(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct BackendSetting(pub Option<Backend>);
+
+impl BackendSetting {
+    /// What this system can run of it ("dx12" off Windows is automatic).
+    pub fn runnable(self) -> Option<Backend> {
+        self.0.filter(|b| b.available())
+    }
+}
+
+impl Serialize for BackendSetting {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0.map_or("", Backend::setting))
+    }
+}
+
+impl<'de> Deserialize<'de> for BackendSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(Backend::from_setting(&String::deserialize(d)?)))
     }
 }
 
@@ -166,12 +189,13 @@ struct Wish {
 
 /// The flag, else the saved choice unless this system cannot run it or its last start drew no frame (`failed`:
 /// the backend that start tried).
-fn wish(flag: Option<Backend>, saved: &str, failed: Option<&str>, notes: &mut Vec<Note>) -> Wish {
-    let mut kept = Backend::from_setting(saved);
+fn wish(flag: Option<Backend>, saved: BackendSetting, failed: Option<&str>, notes: &mut Vec<Note>) -> Wish {
+    let mut kept = saved.runnable();
     let mut reset = false;
-    if kept.is_none() && !saved.is_empty() {
+    if let Some(b) = saved.0.filter(|_| kept.is_none()) {
         notes.push(Note::Warn(format!(
-            "the saved graphics API {saved:?} is not available here: automatic choice"
+            "the saved graphics API {:?} is not available here: automatic choice",
+            b.setting()
         )));
         reset = true;
     }
@@ -219,8 +243,8 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
     let failed = trial.as_deref().and_then(take_trial);
     // (The log is not up yet: what to say waits for `report`.)
     let mut notes = Vec::new();
-    let saved = app.world().resource::<Graphics>().backend.clone();
-    let wish = wish(opts.backend, &saved, failed.as_deref(), &mut notes);
+    let saved = app.world().resource::<Graphics>().backend;
+    let wish = wish(opts.backend, saved, failed.as_deref(), &mut notes);
     let mut surveyed: Vec<(Backend, Vec<Found>)> = Vec::new();
     let mut look = |b: Backend| {
         if let Some((_, f)) = surveyed.iter().find(|(x, _)| *x == b) {
@@ -316,7 +340,7 @@ fn report(mut chosen: ResMut<Chosen>, mut gfx: ResMut<Graphics>, mut commands: C
         }
     }
     if chosen.reset {
-        gfx.backend.clear();
+        gfx.backend = BackendSetting::default();
         crate::settings::save_soon(&mut commands);
     }
 }
@@ -431,25 +455,29 @@ mod tests {
             let w = wish(flag, saved, failed, notes);
             (w.backend, w.saved, w.reset)
         };
-        assert_eq!(w(None, "", None, &mut notes), (None, false, false));
-        assert!(notes.is_empty());
-        assert_eq!(w(None, "gl", None, &mut notes), (None, false, true));
-        assert_eq!(notes.len(), 1);
-        assert_eq!(
-            w(None, "vulkan", None, &mut notes),
-            (Some(Backend::Vulkan), true, false)
+        let (auto, vulkan, dx12) = (
+            BackendSetting(None),
+            BackendSetting(Some(Backend::Vulkan)),
+            BackendSetting(Some(Backend::Dx12)),
         );
-        assert_eq!(w(None, "vulkan", Some("vulkan"), &mut notes), (None, false, true));
+        assert_eq!(w(None, auto, None, &mut notes), (None, false, false));
+        assert!(notes.is_empty());
+        if !cfg!(target_os = "windows") {
+            assert_eq!(w(None, dx12, None, &mut notes), (None, false, true));
+            assert_eq!(notes.len(), 1);
+        }
+        assert_eq!(w(None, vulkan, None, &mut notes), (Some(Backend::Vulkan), true, false));
+        assert_eq!(w(None, vulkan, Some("vulkan"), &mut notes), (None, false, true));
         assert_eq!(
-            w(Some(Backend::Vulkan), "", None, &mut notes),
+            w(Some(Backend::Vulkan), auto, None, &mut notes),
             (Some(Backend::Vulkan), false, false)
         );
         assert_eq!(
-            w(Some(Backend::Vulkan), "vulkan", Some("vulkan"), &mut notes),
+            w(Some(Backend::Vulkan), vulkan, Some("vulkan"), &mut notes),
             (Some(Backend::Vulkan), false, true)
         );
-        assert_eq!(Backend::from_setting("dx12").is_some(), cfg!(target_os = "windows"));
-        assert_eq!(Backend::from_setting("vulkan"), Some(Backend::Vulkan));
+        assert_eq!(dx12.runnable().is_some(), cfg!(target_os = "windows"));
+        assert_eq!(Backend::from_setting("gl"), None);
     }
 
     #[test]

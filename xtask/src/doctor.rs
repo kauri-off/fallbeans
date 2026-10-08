@@ -2,7 +2,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::{cargo, root, sdk};
+use anyhow::Result;
+
+use crate::{cargo, reported, root, sdk};
 
 type Check = Result<String, String>;
 
@@ -80,14 +82,8 @@ fn pkg(arch: &str, debian: &str, fedora: &str) -> String {
     }
 }
 
-fn present(path: Option<PathBuf>, inside: &str) -> Option<PathBuf> {
-    path.filter(|p| {
-        if inside.is_empty() {
-            p.exists()
-        } else {
-            p.join(inside).exists()
-        }
-    })
+fn present(path: Option<PathBuf>, inside: Option<&str>) -> Option<PathBuf> {
+    path.filter(|p| inside.map_or_else(|| p.exists(), |i| p.join(i).exists()))
 }
 
 fn shown(p: &Path) -> String {
@@ -95,7 +91,7 @@ fn shown(p: &Path) -> String {
 }
 
 /// A pinned dependency: where its path comes from and its version, else how to get it.
-fn pinned(name: &str, var: &str, inside: &str, setup: &str) -> Check {
+fn pinned(name: &str, var: &str, inside: Option<&str>, setup: &str) -> Check {
     let from_env = std::env::var_os(var).is_some();
     match present(sdk::var(var), inside) {
         Some(p) if from_env => Ok(format!("{} (from {var})", shown(&p))),
@@ -104,7 +100,7 @@ fn pinned(name: &str, var: &str, inside: &str, setup: &str) -> Check {
             sdk::dep(name).map_or("", |d| d.version.as_str()),
             shown(&p)
         )),
-        None if from_env => Err(format!("{var} has no {inside}")),
+        None if from_env => Err(format!("{var} has no {}", inside.unwrap_or_default())),
         None => Err(setup.to_string()),
     }
 }
@@ -113,7 +109,7 @@ fn on_path(name: &str, args: &[&str], hint: String) -> Check {
     tool(name, args).ok_or(hint)
 }
 
-pub fn doctor() -> bool {
+pub fn doctor() -> Result<()> {
     let mut r = Report::default();
     let windows = cfg!(windows);
 
@@ -156,19 +152,19 @@ pub fn doctor() -> bool {
         pinned(
             &format!("dlss-sdk-{}", sdk::this_os()),
             "DLSS_SDK",
-            "include/nvsdk_ngx.h",
+            Some("include/nvsdk_ngx.h"),
             setup,
         ),
     );
     r.item(
         "DLSS library",
         false,
-        pinned(&format!("dlss-runtime-{}", sdk::this_os()), "DLSS_DLL", "", setup),
+        pinned(&format!("dlss-runtime-{}", sdk::this_os()), "DLSS_DLL", None, setup),
     );
     r.item(
         "Vulkan headers",
         false,
-        pinned("vulkan-headers", "VULKAN_SDK", "include/vulkan/vulkan.h", setup),
+        pinned("vulkan-headers", "VULKAN_SDK", Some("include/vulkan/vulkan.h"), setup),
     );
     r.item("libclang (DLSS bindings)", false, libclang());
     let ffx_inside = if windows {
@@ -179,13 +175,18 @@ pub fn doctor() -> bool {
     r.item(
         "FidelityFX SDK",
         false,
-        pinned(&format!("fidelityfx-{}", sdk::this_os()), "FFX_SDK", ffx_inside, setup),
+        pinned(
+            &format!("fidelityfx-{}", sdk::this_os()),
+            "FFX_SDK",
+            Some(ffx_inside),
+            setup,
+        ),
     );
     if windows {
         r.item(
             "DXC",
             false,
-            pinned("dxc", "FB_DXC_DIR", "bin/x64/dxcompiler.dll", setup),
+            pinned("dxc", "FB_DXC_DIR", Some("bin/x64/dxcompiler.dll"), setup),
         );
     } else {
         // FSR 3.1 on Linux: `dist` builds AMD's library from the SDK's sources.
@@ -263,7 +264,7 @@ pub fn doctor() -> bool {
     }
 
     r.group("assets --export");
-    let blender = std::env::var("BLENDER").unwrap_or_else(|_| "blender".into());
+    let blender = std::env::var_os("BLENDER").unwrap_or_else(|| "blender".into());
     r.item(
         "blender",
         false,
@@ -276,7 +277,7 @@ pub fn doctor() -> bool {
     } else {
         eprintln!("doctor: the build has what it needs; `--` marks what only some tasks need");
     }
-    !r.required_missing
+    reported(!r.required_missing)
 }
 
 fn linux_libs() -> Check {
@@ -363,9 +364,9 @@ fn cargo_tool(sub: &str, hint: &str) -> Check {
 }
 
 fn makensis() -> Check {
-    let default = r"C:\Program Files (x86)\NSIS\makensis.exe";
-    let cmd = std::env::var("MAKENSIS").unwrap_or_else(|_| {
-        if Path::new(default).exists() {
+    let default = Path::new(r"C:\Program Files (x86)\NSIS\makensis.exe");
+    let cmd = std::env::var_os("MAKENSIS").unwrap_or_else(|| {
+        if default.exists() {
             default.into()
         } else {
             "makensis".into()
@@ -377,7 +378,7 @@ fn makensis() -> Check {
 /// The AppImage needs at least the glibc it is built against: releases build it on Ubuntu 22.04 (2.35).
 fn glibc() -> Check {
     let line = tool("ldd", &["--version"]).unwrap_or_default();
-    let version = line.rsplit(' ').next().unwrap_or("").to_string();
+    let version = line.rsplit(' ').next().unwrap_or_default().to_string();
     let newer = version
         .split_once('.')
         .and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?)))

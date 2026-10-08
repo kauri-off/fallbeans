@@ -20,3 +20,9 @@ pub fn euler_xyz(r: V3) -> DQuat {
 pub fn compose(p: V3, rot: V3, s: V3) -> Affine {
     Affine::from_scale_rotation_translation(s, euler_xyz(rot), p)
 }
+
+/// Horizontal distance between `a` and `b`.
+#[inline]
+pub fn dist_xz(a: V3, b: V3) -> f64 {
+    m::hypot(a.x - b.x, a.z - b.z)
+}

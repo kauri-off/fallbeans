@@ -2,6 +2,7 @@
 //! and blocks slide across your way; then challenges drawn from the seed, and gates with sliding gaps.
 use std::sync::Arc;
 
+use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
@@ -9,11 +10,13 @@ use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, pick_sections, pistons, race_course, sliding_gates, tipping_bridge,
     with_rests,
 };
+use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, rolling_balls, y_on_ramp};
+use fb_sim::scene::Surface;
 use fb_sim::scene::pal;
 
 use crate::util::{o, rot};
@@ -45,7 +48,7 @@ fn ice_slope() -> Segment {
                 slip: 1.0,
                 ..Default::default()
             },
-            surface: Some("ice"),
+            surface: Some(Surface::Ice),
             ..Default::default()
         };
         s.b.ramp(0.0, a0z, a0y, a1z, a1y, w, pal::BLUE, 1.0, ice);
@@ -85,7 +88,7 @@ fn ice_slope() -> Segment {
             let opts = PrimOpts {
                 rot: Some(V3::new(-ang, yaw, 0.0)),
                 freq: Some(0.8),
-                surface: Some("carpet"),
+                surface: Some(Surface::Carpet),
                 ..Default::default()
             };
             s.b.box_((x0 + x1) / 2.0, ya(cz) + 0.1 / cos_a, cz, cw, 0.2, len, p, opts);
@@ -125,7 +128,7 @@ fn ice_slope() -> Segment {
                 dynamic: true,
                 col: ColliderOpts {
                     hit: 0.6,
-                    tag: Some("block"),
+                    tag: Some(Hazard::Block),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -239,12 +242,12 @@ fn ball_ramp(rise: f64) -> Segment {
             s.b.box_(0.0, yr(zb) + 0.6, zb, 1.8, 1.8, 1.4, p, rot(-ang, 0.0, 0.0));
         }
         s.b.box_(0.0, y + rise - 1.0, z1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, o());
-        let mut pts = vec![Waypoint::spread(0.0, z0 + 0.5, 0.0)];
+        let mut pts = vec![Waypoint::exact(0.0, z0 + 0.5)];
         for (i, &zb) in blocks.iter().enumerate() {
             let lx = (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;
-            pts.push(Waypoint::spread(0.0, zb - 2.3, 0.0));
+            pts.push(Waypoint::exact(0.0, zb - 2.3));
             let balls = balls.clone();
-            pts.push(Waypoint::spread(lx, zb - 0.8, 0.0).wait(move |bot| {
+            pts.push(Waypoint::exact(lx, zb - 0.8).wait(move |bot| {
                 !balls.danger(
                     lx.at_most(0.0) - 0.3,
                     lx.at_least(0.0) + 0.3,
@@ -254,8 +257,8 @@ fn ball_ramp(rise: f64) -> Segment {
                     0.9,
                 )
             }));
-            pts.push(Waypoint::spread(lx, zb + 0.9, 0.0));
-            pts.push(Waypoint::spread(0.0, zb + 2.3, 0.0));
+            pts.push(Waypoint::exact(lx, zb + 0.9));
+            pts.push(Waypoint::exact(0.0, zb + 2.3));
         }
         pts.push(Waypoint::spread(0.0, z1 + 3.0, 1.0));
         SegOut {
@@ -273,8 +276,8 @@ impl MapDef for BallHill {
         &META
     }
 
-    fn looks(&self) -> &'static [&'static str] {
-        &["snow", "meadow", "candy"]
+    fn looks(&self) -> &'static [LookId] {
+        &[LookId::Snow, LookId::Meadow, LookId::Candy]
     }
 
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {

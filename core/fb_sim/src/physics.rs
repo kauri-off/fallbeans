@@ -1,4 +1,6 @@
 //! The bean: a kinematic character of two spheres with a small state machine.
+use fb_shared::NEVER;
+use fb_shared::cause::Hazard;
 use serde::{Deserialize, Serialize};
 
 use crate::collider::{ColId, Collider, Contact};
@@ -14,13 +16,26 @@ pub const RUN_SPEED: f64 = 8.5;
 pub const JUMP_V: f64 = 10.5;
 pub const DIVE_SPEED: f64 = 12.5;
 
-pub mod power {
-    pub const NONE: u8 = 0;
-    pub const GIANT: u8 = 1;
-    pub const JUMP: u8 = 2;
-    pub const SPEED: u8 = 3;
+/// A bonus's power (`bonus.rs`), for a while.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Power {
+    Giant = 1,
+    Jump = 2,
+    Speed = 3,
 }
-pub const POWER_TIME: [f64; 4] = [0.0, 9.0, 10.0, 8.0];
+
+impl Power {
+    pub const ALL: [Power; 3] = [Power::Giant, Power::Jump, Power::Speed];
+
+    /// How long it lasts (s).
+    pub fn duration(self) -> f64 {
+        match self {
+            Power::Giant => 9.0,
+            Power::Jump => 10.0,
+            Power::Speed => 8.0,
+        }
+    }
+}
 pub const GIANT_SIZE: f64 = 1.8;
 pub const GIANT_MASS: f64 = 4.0;
 const MEGA_JUMP: f64 = 1.5;
@@ -114,7 +129,7 @@ pub struct StepEvents {
     pub stunned: bool,
     pub knocked: bool,
     pub bumped: f64,
-    pub hazard: Option<&'static str>,
+    pub hazard: Option<Hazard>,
     pub portal_in: bool,
     pub portal_out: bool,
 }
@@ -150,8 +165,8 @@ pub struct Body {
     pub vel: V3,
     pub yaw: f64,
     pub grounded: bool,
-    /// Index of the collider underfoot, −1 for none.
-    pub ground_col: i32,
+    /// The collider underfoot.
+    pub ground_col: Option<ColId>,
     pub state: BodyState,
     pub state_t: f64,
     pub coyote: f64,
@@ -161,7 +176,7 @@ pub struct Body {
     pub land_impact: f64,
     pub tilt: f64,
     pub tilt_dir: f64,
-    pub power: u8,
+    pub power: Option<Power>,
     pub power_until: f64,
     pub size: f64,
     pub climb_to: V3,
@@ -197,7 +212,7 @@ pub fn push_out(world: &World, mut pos: V3, tilt: f64, tilt_dir: f64, size: f64)
         let mut any = false;
         for &ci in &cols {
             let col = world.col(ci);
-            if !col.enabled || col.trigger {
+            if !col.enabled || col.opts.trigger {
                 continue;
             }
             for si in 0..2 {
@@ -218,27 +233,32 @@ pub fn push_out(world: &World, mut pos: V3, tilt: f64, tilt_dir: f64, size: f64)
 /// Solid ground a hand can hold on to: no hazards, pads, bumpers, ice or triggers.
 fn holdable(c: &Collider) -> bool {
     c.enabled
-        && c.is_static
-        && !c.trigger
-        && c.hit == 0.0
-        && c.tag.is_none()
-        && !c.sweep
-        && c.bounce == 0.0
-        && c.pad == 0.0
-        && c.slip < 0.5
-        && !c.no_grab
+        && c.opts.is_static
+        && !c.opts.trigger
+        && c.opts.hit == 0.0
+        && c.opts.tag.is_none()
+        && !c.opts.sweep
+        && c.opts.bounce == 0.0
+        && c.opts.pad == 0.0
+        && c.opts.slip < 0.5
+        && !c.opts.no_grab
 }
 
 /// A moving platform the body rides on; not a hazard like a rotor arm or a hammer.
 fn rides(c: Option<&Collider>) -> bool {
-    c.is_some_and(|c| !c.is_static && c.enabled && c.hit == 0.0 && c.tag.is_none())
+    c.is_some_and(|c| !c.opts.is_static && c.enabled && c.opts.hit == 0.0 && c.opts.tag.is_none())
 }
 
 /// Ground the feet stay on as it falls away under them (a slope, a crest): any solid, harmless ground but
 /// a pad or a bumper, which throw the body off it.
 fn keeps_feet(c: Option<&Collider>) -> bool {
     let Some(c) = c else { return false };
-    c.enabled && !c.trigger && c.hit == 0.0 && c.tag.is_none() && c.bounce == 0.0 && c.pad == 0.0
+    c.enabled
+        && !c.opts.trigger
+        && c.opts.hit == 0.0
+        && c.opts.tag.is_none()
+        && c.opts.bounce == 0.0
+        && c.opts.pad == 0.0
 }
 
 impl Body {
@@ -249,18 +269,18 @@ impl Body {
             vel: V3::ZERO,
             yaw: 0.0,
             grounded: false,
-            ground_col: -1,
+            ground_col: None,
             state: BodyState::Normal,
             state_t: 0.0,
             coyote: 0.0,
             jump_buf: 0.0,
-            slow_until: -1e9,
+            slow_until: NEVER,
             slow_k: 1.0,
             land_impact: 0.0,
             tilt: 0.0,
             tilt_dir: 0.0,
-            power: power::NONE,
-            power_until: -1e9,
+            power: None,
+            power_until: NEVER,
             size: 1.0,
             climb_to: V3::ZERO,
         }
@@ -291,12 +311,12 @@ impl Body {
     }
 
     fn ground<'w>(&self, world: &'w World) -> Option<&'w Collider> {
-        (self.ground_col >= 0).then(|| world.col(self.ground_col as ColId))
+        self.ground_col.map(|c| world.col(c))
     }
 
-    pub fn give_power(&mut self, kind: u8, t: f64) {
-        self.power = kind;
-        self.power_until = t + POWER_TIME.get(kind as usize).copied().unwrap_or(0.0);
+    pub fn give_power(&mut self, kind: Power, t: f64) {
+        self.power = Some(kind);
+        self.power_until = t + kind.duration();
     }
 
     pub fn stun(&mut self, t: f64) {
@@ -367,7 +387,7 @@ impl Body {
         self.state_t = PORTAL_T;
         self.tilt = 0.0;
         self.grounded = false;
-        self.ground_col = -1;
+        self.ground_col = None;
         ev.portal_in = true;
     }
 
@@ -388,9 +408,9 @@ impl Body {
         if let Some(g) = self.ground(world)
             && self.grounded
             && g.enabled
-            && !g.sweep
+            && !g.opts.sweep
             // (Static ground does not move: the round trip through its matrices would only add drift.)
-            && !g.is_static
+            && !g.opts.is_static
         {
             return Carry {
                 col: Some(g.index),
@@ -460,18 +480,18 @@ impl Body {
         if self.state == BodyState::Portal {
             return self.portal_step(ev, dt);
         }
-        if self.power != power::NONE && t >= self.power_until {
-            self.power = power::NONE;
+        if self.power.is_some() && t >= self.power_until {
+            self.power = None;
         }
         let pw = self.power;
-        self.size = if pw == power::GIANT { GIANT_SIZE } else { 1.0 };
+        self.size = if pw == Some(Power::Giant) { GIANT_SIZE } else { 1.0 };
         let size = self.size;
         let r = R * size;
-        let slow =
-            (if t < self.slow_until { self.slow_k } else { 1.0 }) * (if pw == power::SPEED { SPEED_UP } else { 1.0 });
+        let slow = (if t < self.slow_until { self.slow_k } else { 1.0 })
+            * (if pw == Some(Power::Speed) { SPEED_UP } else { 1.0 });
         let g = self.grounded;
         let slip = if g {
-            self.ground(world).map_or(0.0, |c| c.slip)
+            self.ground(world).map_or(0.0, |c| c.opts.slip)
         } else {
             0.0
         };
@@ -550,7 +570,7 @@ impl Body {
                 if self.jump_buf > 0.0 && self.coyote > 0.0 {
                     self.vel.y = JUMP_V
                         * (if slow < 1.0 { 0.8 } else { 1.0 })
-                        * (if pw == power::JUMP { MEGA_JUMP } else { 1.0 });
+                        * (if pw == Some(Power::Jump) { MEGA_JUMP } else { 1.0 });
                     self.coyote = 0.0;
                     self.jump_buf = 0.0;
                     self.grounded = false;
@@ -638,7 +658,8 @@ impl Body {
                     if !col.enabled {
                         continue;
                     }
-                    if climbing && col.hit == 0.0 && !col.sweep && col.bounce == 0.0 && !col.trigger {
+                    if climbing && col.opts.hit == 0.0 && !col.opts.sweep && col.opts.bounce == 0.0 && !col.opts.trigger
+                    {
                         continue;
                     }
                     for si in 0..SPHERES.len() {
@@ -649,12 +670,12 @@ impl Body {
                         if !col.contact(c, r, &mut hit) {
                             continue;
                         }
-                        if col.trigger {
+                        if col.opts.trigger {
                             if !hit_done.contains(&ci) {
                                 hit_done.push(ci);
-                                if col.ladder {
+                                if col.opts.ladder {
                                     ladder = Some(ci);
-                                } else if col.on_touch {
+                                } else if col.opts.on_touch {
                                     let normal = Some(hit.normal);
                                     touch(world, self, ev, Touch { col: ci, normal });
                                     if self.in_portal() {
@@ -668,9 +689,9 @@ impl Body {
                         let n = hit.normal;
                         self.pos += n * hit.depth;
                         let vn = self.vel.dot(n);
-                        if col.bounce != 0.0 && !hit_done.contains(&ci) {
+                        if col.opts.bounce != 0.0 && !hit_done.contains(&ci) {
                             hit_done.push(ci);
-                            let push = col.bounce.at_least(-vn * 0.8);
+                            let push = col.opts.bounce.at_least(-vn * 0.8);
                             self.vel += n * (push - vn);
                             self.vel.y = self.vel.y.at_least(4.0);
                             if n.y < 0.5 {
@@ -691,7 +712,7 @@ impl Body {
                         }
                         let fresh =
                             self.state != BodyState::Tumble && !(self.state == BodyState::Stun && self.state_t > 0.2);
-                        if col.sweep && n.y < 0.55 && !hit_done.contains(&ci) {
+                        if col.opts.sweep && n.y < 0.55 && !hit_done.contains(&ci) {
                             hit_done.push(ci);
                             let sv = col.surface_velocity(hit.local, dt);
                             let sp = m::hypot(sv.x, sv.z);
@@ -703,7 +724,7 @@ impl Body {
                                 }
                                 self.state_t = self.state_t.at_least(0.6);
                             } else if !behind && sp > 1.0 {
-                                let k = (11.0 / sp).at_most(1.0) * 1.5 * col.hit;
+                                let k = (11.0 / sp).at_most(1.0) * 1.5 * col.opts.hit;
                                 self.knock(
                                     ev,
                                     sv.x * k + n.x * 1.5,
@@ -714,12 +735,12 @@ impl Body {
                                 );
                                 ev.hit_something = true;
                             }
-                        } else if col.hit != 0.0 && !col.sweep && !hit_done.contains(&ci) && fresh {
+                        } else if col.opts.hit != 0.0 && !col.opts.sweep && !hit_done.contains(&ci) && fresh {
                             hit_done.push(ci);
                             let sv = col.surface_velocity(hit.local, dt);
                             let sp = sv.dot(n).at_least(0.0) * 0.6 + sv.length() * 0.4;
                             if sp > 2.2 {
-                                let k = col.hit;
+                                let k = col.opts.hit;
                                 let away = (sp * 0.2).at_most(2.5);
                                 if sp * k > 4.2 {
                                     self.knock(
@@ -745,12 +766,12 @@ impl Body {
                             if n.y > ground_n.y {
                                 ground_n = n;
                             }
-                        } else if let Some(tag) = col.tag {
+                        } else if let Some(tag) = col.opts.tag {
                             ev.hazard = Some(tag);
                         } else if n.y.abs() < 0.35 && holdable(col) {
                             wall_n = n;
                         }
-                        if col.on_touch {
+                        if col.opts.on_touch {
                             touch(
                                 world,
                                 self,
@@ -774,7 +795,7 @@ impl Body {
         if self.in_portal() {
             // Nothing else this step: no ground, no platform's speed, no push from the others.
             self.grounded = false;
-            self.ground_col = -1;
+            self.ground_col = None;
             return;
         }
         // Feet kept on the ground over a crest or down a slope, static or moving: without it a body going
@@ -868,7 +889,7 @@ impl Body {
         }
 
         let old_ground = self.ground_col;
-        self.ground_col = new_ground.map_or(-1, |c| c as i32);
+        self.ground_col = new_ground;
         let rel_old = g && !ev.jumped && self.state != BodyState::Dive;
         if rel_old && !self.grounded {
             self.vel.x += plat_v.x;
@@ -882,7 +903,7 @@ impl Body {
         if self.grounded {
             self.vel.y = self.vel.y.at_least(0.0);
             let ng = new_ground.map(|c| world.col(c));
-            if let Some(cv) = ng.and_then(|c| c.conveyor) {
+            if let Some(cv) = ng.and_then(|c| c.opts.conveyor) {
                 self.pos += cv * dt;
             }
             if rides(ng) && ground_n.y < STEEP_FROM && ground_n.y > 0.0 {
@@ -893,32 +914,35 @@ impl Body {
                 self.pos.y += (ground_n.y * ground_n.y - 1.0) * d;
                 self.pos.z += ground_n.z * ground_n.y * d;
             }
-            let slide =
-                (ng.map_or(0.0, |c| c.slip) * 1.3).at_least(if self.state == BodyState::Tumble { 0.6 } else { 0.0 });
+            let slide = (ng.map_or(0.0, |c| c.opts.slip) * 1.3).at_least(if self.state == BodyState::Tumble {
+                0.6
+            } else {
+                0.0
+            });
             if slide > 0.0 && ground_n.y > 0.0 {
                 self.vel.x += GRAVITY * ground_n.x * ground_n.y * slide * dt;
                 self.vel.z += GRAVITY * ground_n.z * ground_n.y * slide * dt;
             }
             if let Some(ci) = new_ground
-                && world.col(ci).on_ground
+                && world.col(ci).opts.on_ground
             {
                 touch(world, self, ev, Touch { col: ci, normal: None });
                 if self.in_portal() {
                     self.grounded = false;
-                    self.ground_col = -1;
+                    self.ground_col = None;
                     return;
                 }
             }
             if let Some(c) = new_ground.map(|c| world.col(c))
-                && c.pad != 0.0
+                && c.opts.pad != 0.0
             {
-                self.vel.y = c.pad;
-                if let Some(l) = c.launch {
+                self.vel.y = c.opts.pad;
+                if let Some(l) = c.opts.launch {
                     self.vel.x = l.x;
                     self.vel.z = l.z;
                 }
                 self.grounded = false;
-                self.ground_col = -1;
+                self.ground_col = None;
                 ev.bounced = true;
             } else if !g {
                 self.land_impact = (-vy_before / 20.0).at_most(1.0);
@@ -951,7 +975,7 @@ impl Body {
         world.query(self.pos.x, self.pos.z, r + 0.5, probe);
         for &ci in probe.iter() {
             let col = world.col(ci);
-            if !col.enabled || col.trigger || col.bounce != 0.0 || col.pad != 0.0 {
+            if !col.enabled || col.opts.trigger || col.opts.bounce != 0.0 || col.opts.pad != 0.0 {
                 continue;
             }
             if !col.contact(c, r, &mut hit) || hit.normal.y <= 0.55 {
@@ -982,7 +1006,7 @@ impl Body {
             let c = V3::new(x, y + s * k, z);
             for &ci in &cols {
                 let col = world.col(ci);
-                if !col.enabled || col.trigger {
+                if !col.enabled || col.opts.trigger {
                     continue;
                 }
                 if col.contact(c, R * k, &mut hit) && hit.depth > 0.03 {
@@ -1014,15 +1038,16 @@ impl Body {
         world.query(px, pz, 0.1, &mut probe);
         for &ci in &probe {
             let col = world.col(ci);
-            if !col.enabled || col.trigger {
+            if !col.enabled || col.opts.trigger {
                 continue;
             }
             if col.contact(p, 0.05, &mut hit) {
                 return best_col.map(|_| ground_n);
             }
-            let mut rn = V3::ZERO;
-            let t = col.raycast(p, DOWN, span, &mut rn);
-            if t < 0.0 || (best >= 0.0 && t >= best) {
+            let Some((t, rn)) = col.raycast(p, DOWN, span) else {
+                continue;
+            };
+            if best >= 0.0 && t >= best {
                 continue;
             }
             best = t;

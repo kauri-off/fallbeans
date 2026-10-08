@@ -7,7 +7,7 @@ use fb_shared::game::Genre;
 use fb_shared::input::{BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
 use fb_shared::rng::{Rng, shuffle};
-use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS, score_round};
+use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS};
 use fb_shared::{DT, MAX_PLAYERS, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
@@ -195,7 +195,7 @@ pub(crate) fn physics(_: &Ctx, out: &mut Out) {
     // Ice: run onto it at full speed, let go, and see how much speed is left half a second later.
     let mut b = fresh(w, 100.0, -34.0);
     run(w, &mut b, 360, fwd, |_, b, w| {
-        b.pos.z > -15.0 && b.ground_col >= 0 && w.col(b.ground_col as u32).slip == 1.0
+        b.pos.z > -15.0 && b.ground_col.is_some_and(|c| w.col(c).opts.slip == 1.0)
     });
     let ice_v0 = speed(&b);
     run(w, &mut b, 60, idle, never);
@@ -206,14 +206,14 @@ pub(crate) fn physics(_: &Ctx, out: &mut Out) {
         ("accel", r3(accel), 0.05, 0.3),
         ("stop", r3(stop), 0.02, 0.3),
         ("turn", r3(turn), 0.05, 0.45),
-        ("jumpApex", r3(apex), 1.4, 2.6),
-        ("airTime", r3(air), 0.55, 1.0),
-        ("jumpDist", r3(jump_dist), 4.0, 9.0),
-        ("diveDist", r3(dive_dist), 3.0, 9.0),
-        ("diveRecover", r3(dive_time), 0.3, 1.6),
-        ("stepWalk", walk, 0.2, 0.65),
-        ("stepJump", jump_up, 1.0, 2.4),
-        ("iceKeep", r3(ice_keep), 0.3, 1.0),
+        ("jump_apex", r3(apex), 1.4, 2.6),
+        ("air_time", r3(air), 0.55, 1.0),
+        ("jump_dist", r3(jump_dist), 4.0, 9.0),
+        ("dive_dist", r3(dive_dist), 3.0, 9.0),
+        ("dive_recover", r3(dive_time), 0.3, 1.6),
+        ("step_walk", walk, 0.2, 0.65),
+        ("step_jump", jump_up, 1.0, 2.4),
+        ("ice_keep", r3(ice_keep), 0.3, 1.0),
     ];
     for (k, v, _, _) in measured {
         out.metric(k, v);
@@ -235,9 +235,9 @@ fn input(ctx: &Ctx, out: &mut Out) {
     let mut bad = 0;
     for _ in 0..n {
         let f = InputFrame {
-            mx: (rng.next() * 256.0 - 128.0).floor() as i8,
-            mz: (rng.next() * 256.0 - 128.0).floor() as i8,
-            buttons: (rng.next() * 256.0).floor() as u8,
+            mx: (rng.unit() * 256.0 - 128.0).floor() as i8,
+            mz: (rng.unit() * 256.0 - 128.0).floor() as i8,
+            buttons: (rng.unit() * 256.0).floor() as u8,
         };
         let c = f.clamped();
         let l2 = i32::from(c.mx).pow(2) + i32::from(c.mz).pow(2);
@@ -270,7 +270,7 @@ fn input(ctx: &Ctx, out: &mut Out) {
     if !a.pawn(1).is_some_and(|p| p.body.vel.y > 0.0) {
         out.error("a jump pressed for tick k did not start in tick k");
     }
-    out.metric("fuzzFrames", n);
+    out.metric("fuzz_frames", n);
 }
 
 // ------------------------------------------------------------------ game rules and planning
@@ -301,7 +301,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                             out.error(format!("planned an unknown game {id}"));
                         }
                         Some(g) => {
-                            let need = g.min_players.unwrap_or(1);
+                            let need = g.min_players;
                             if need > players {
                                 out.error(format!("planned {id} for {players} players (needs {need})"));
                             }
@@ -327,13 +327,13 @@ fn rules(ctx: &Ctx, out: &mut Out) {
     let genres = [Genre::Race, Genre::Survival, Genre::Points];
     let total = if ctx.quick { 300 } else { 3000 };
     for i in 0..total {
-        let n = 1 + (rng.next() * 8.0).floor() as u32;
+        let n = 1 + (rng.unit() * 8.0).floor() as u32;
         let ids: Vec<u32> = (1..=n).collect();
         let genre = genres[i % 3];
         let mut shuffled = ids.clone();
         shuffle(&mut shuffled, &mut rng);
-        let cut = (rng.next() * (n + 1) as f64).floor() as usize;
-        let scores: BTreeMap<u32, f64> = ids.iter().map(|&id| (id, (rng.next() * 5.0).floor())).collect();
+        let cut = rng.index(n as usize + 1);
+        let scores: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.unit() * 5.0).floor() as i64)).collect();
         let finished = if genre == Genre::Race { &shuffled[..cut] } else { &[] };
         let outs = if genre == Genre::Survival {
             &shuffled[..cut]
@@ -349,14 +349,13 @@ fn rules(ctx: &Ctx, out: &mut Out) {
             scores: &scores,
             progress: &|id| id as f64 * 3.0,
             time_up: true,
-            solo: n == 1,
             bots: None,
         };
         let stats: BTreeMap<u32, RoundStats> = ids
             .iter()
             .map(|&id| {
-                let falls = (rng.next() * 6.0).floor() as u32;
-                let shortcuts = (rng.next() * 2.0).floor() as u32;
+                let falls = (rng.unit() * 6.0).floor() as u32;
+                let shortcuts = (rng.unit() * 2.0).floor() as u32;
                 (
                     id,
                     RoundStats {
@@ -367,8 +366,8 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                 )
             })
             .collect();
-        let totals: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.next() * 30.0).floor() as i64)).collect();
-        let rows = score_round(&view, &stats, &totals, None);
+        let totals: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.unit() * 30.0).floor() as i64)).collect();
+        let rows = view.score_round(&stats, &totals, None);
         for r in &rows {
             if r.points < 0 || r.points > TOP_POINTS {
                 out.error(format!("round scored {} placement points", r.points));
@@ -389,5 +388,5 @@ fn rules(ctx: &Ctx, out: &mut Out) {
             ));
         }
     }
-    out.metric("scoredRounds", total);
+    out.metric("scored_rounds", total);
 }

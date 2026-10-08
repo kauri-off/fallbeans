@@ -3,12 +3,13 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
-use fb_proto::{DenyReason, DevCmd, Goto, MapEvent, MapEventKind, Mode, Phase, RejectReason};
+use fb_proto::{AwardKind, Cause, DenyReason, DevCmd, Goto, Hazard, MapEvent, MapEventKind, Mode, Phase, RejectReason};
 use fb_shared::TICK_RATE;
 use fb_shared::game::{ArenaKind, FallBehaviour};
 use fb_shared::outfit::{Glasses, Hat, Tint};
+use fb_shared::rules::RoundNote;
 use fb_sim::map::SegEvent;
-use fb_sim::physics::BodyState;
+use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::server::ServerPlugins;
 use lightyear::prelude::{ChannelRegistry, ComponentRegistry, MessageRegistry};
 use serde::de::DeserializeOwned;
@@ -138,7 +139,10 @@ fn types() -> Vec<String> {
     // Enums inside them: `registry()` names the ones missing here.
     trace::<Anim>(&mut tracer);
     trace::<ArenaKind>(&mut tracer);
+    trace::<AwardKind>(&mut tracer);
     trace::<BodyState>(&mut tracer);
+    trace::<Cause>(&mut tracer);
+    trace::<Hazard>(&mut tracer);
     trace::<DenyReason>(&mut tracer);
     trace::<DevCmd>(&mut tracer);
     trace::<FallBehaviour>(&mut tracer);
@@ -149,7 +153,10 @@ fn types() -> Vec<String> {
     trace::<MapEventKind>(&mut tracer);
     trace::<Mode>(&mut tracer);
     trace::<Phase>(&mut tracer);
+    trace::<Power>(&mut tracer);
     trace::<RejectReason>(&mut tracer);
+    trace::<Result<String, String>>(&mut tracer);
+    trace::<RoundNote>(&mut tracer);
     trace::<SegEvent>(&mut tracer);
     trace::<Tint>(&mut tracer);
     let registry = tracer

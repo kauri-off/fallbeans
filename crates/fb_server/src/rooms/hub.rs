@@ -3,16 +3,16 @@
 //! a time; a private room asks newcomers for its PIN. Rooms close when everybody has left. Practice rooms
 //! are separate: one player, not listed.
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 
 use bevy::log::{error, info, warn};
-use fb_maps::director;
 use fb_proto::*;
 use fb_shared::text::{sanitize_person_name, sanitize_title};
 use fb_shared::*;
 
-use super::room::{Practice, Room, RoomOptions, Who, make_pin};
-use super::{ConnId, Inputs, Out, random_u32, ticks};
-use crate::auth::{GUESSES_PER_TARGET, Limiter, address_key, same_key};
+use super::room::{Game, Practice, Room, RoomOptions, Who, make_pin};
+use super::{Backoff, ConnId, Inputs, Out, RateWindow, Uid, secs, ticks};
+use crate::auth::{AddrKey, GUESSES_PER_TARGET, Limiter, address_key, random_bytes, same_key};
 
 /// A connection that sent no hello within this long is closed (s).
 const HELLO_TIMEOUT_S: f64 = 5.0;
@@ -36,36 +36,122 @@ const LIST_EVERY_S: f64 = 0.5;
 /// MAX_PRACTICE_ROOMS on the server.
 const PRACTICE_IDLE_S: f64 = 300.0;
 
-/// A player behind a connection: at the room list (`room` None) or in a room.
+/// A player behind a connection, as they travel from room to room.
 #[derive(Clone, Debug)]
 pub struct Member {
     /// Identity: the same person on every connection they make.
-    pub uid: String,
+    pub uid: Uid,
     pub name: String,
-    /// Suit colour asked for (a room gives it if it is free) and the outfit: they travel from room to room.
+    /// Suit colour asked for (a room gives it if it is free) and the outfit.
     pub color: Option<u8>,
     pub outfit: Outfit,
-    /// Key of the room the player is in.
-    pub room: Option<u32>,
-    /// Player id in `room`.
-    pub id: Pid,
-    /// The connection no longer stands for the player: closed, or replaced by a newer one.
-    pub gone: bool,
+}
+
+impl From<&Member> for Who {
+    fn from(m: &Member) -> Self {
+        Who {
+            uid: m.uid.clone(),
+            name: m.name.clone(),
+            color: m.color,
+            outfit: Some(m.outfit),
+        }
+    }
+}
+
+/// Where a connection is.
+#[derive(Clone, Debug)]
+pub enum Stand {
+    /// No hello yet.
+    Waiting,
+    Listing(Member),
+    /// In the room of key `room` as player `id`.
+    InRoom {
+        member: Member,
+        room: u32,
+        id: Pid,
+    },
+    /// Stands for nobody any more (no hello in time, or a newer connection of the player took over): what
+    /// it sends is ignored until it closes.
+    Gone,
+}
+
+impl Stand {
+    pub fn member(&self) -> Option<&Member> {
+        match self {
+            Stand::Listing(m) | Stand::InRoom { member: m, .. } => Some(m),
+            Stand::Waiting | Stand::Gone => None,
+        }
+    }
+
+    /// The room's key and the player's id in it.
+    pub fn seat(&self) -> Option<(u32, Pid)> {
+        match self {
+            Stand::InRoom { room, id, .. } => Some((*room, *id)),
+            _ => None,
+        }
+    }
 }
 
 /// An open connection.
 #[derive(Clone, Debug)]
 pub struct Session {
-    pub ip: String,
+    pub ip: Option<IpAddr>,
+    /// `ip` as limits per address count it (`auth::address_key`).
+    key: Option<AddrKey>,
     /// The player's id, from the connect token (`/api/session` checked their identity).
-    pub uid: String,
+    pub uid: Uid,
     opened: u64,
-    pub member: Option<Member>,
-    window: u64,
-    count: u32,
-    timed_out: bool,
-    /// Server tick of the last "bad message" warning (one a second at most: a flood would fill the log).
-    warned: Option<u64>,
+    pub stand: Stand,
+    /// Messages at the room list in the current second.
+    list_rate: RateWindow,
+    /// The "bad message" warning (a flood would fill the log).
+    warned: Backoff,
+}
+
+/// Why a player cannot enter a room: they are told, and stay where they are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Denial {
+    room: Option<String>,
+    reason: DenyReason,
+    msg: Option<&'static str>,
+}
+
+impl Denial {
+    fn of(room: &str, reason: DenyReason, msg: &'static str) -> Self {
+        Self {
+            room: Some(room.into()),
+            reason,
+            msg: Some(msg),
+        }
+    }
+
+    /// The room asks for its PIN.
+    fn pin(room: &str) -> Self {
+        Self {
+            room: Some(room.into()),
+            reason: DenyReason::Pin,
+            msg: None,
+        }
+    }
+
+    /// No room can be opened.
+    fn limit(msg: &'static str) -> Self {
+        Self {
+            room: None,
+            reason: DenyReason::Limit,
+            msg: Some(msg),
+        }
+    }
+}
+
+impl From<Denial> for ServerMsg {
+    fn from(d: Denial) -> Self {
+        ServerMsg::Denied {
+            room: d.room,
+            reason: d.reason,
+            msg: d.msg.map(Into::into),
+        }
+    }
 }
 
 pub struct Hub {
@@ -76,11 +162,9 @@ pub struct Hub {
     next_key: u32,
     pub sessions: BTreeMap<ConnId, Session>,
     /// The live connection of each player (at the room list or in a room; practice is not counted).
-    live: BTreeMap<String, ConnId>,
-    /// Rooms nobody is in, and since when (they close after ROOM_EMPTY_S).
-    empty_since: BTreeMap<u32, u64>,
-    /// The room list as last sent, to skip changes that do not show in it.
-    sent: String,
+    live: BTreeMap<Uid, ConnId>,
+    /// The room list as last sent (and the ids of every listed room), to skip changes that do not show in it.
+    sent: Option<(Vec<RoomInfo>, Vec<String>)>,
     /// The room list may have changed since it last went out (at real tick `list_sent`).
     list_due: bool,
     list_sent: u64,
@@ -101,8 +185,7 @@ impl Hub {
             next_key: 1,
             sessions: BTreeMap::new(),
             live: BTreeMap::new(),
-            empty_since: BTreeMap::new(),
-            sent: String::new(),
+            sent: None,
             list_due: false,
             list_sent: 0,
             max_rooms: DEFAULT_MAX_ROOMS,
@@ -136,11 +219,40 @@ impl Hub {
     }
 
     pub fn member(&self, conn: ConnId) -> Option<&Member> {
-        self.sessions.get(&conn)?.member.as_ref()
+        self.sessions.get(&conn)?.stand.member()
     }
 
-    fn member_mut(&mut self, conn: ConnId) -> Option<&mut Member> {
-        self.sessions.get_mut(&conn)?.member.as_mut()
+    /// The room key and player id of a connection in a room.
+    pub fn seat(&self, conn: ConnId) -> Option<(u32, Pid)> {
+        self.sessions.get(&conn)?.stand.seat()
+    }
+
+    /// Every connection in a room, and the room's key.
+    pub fn seated(&self) -> impl Iterator<Item = (ConnId, u32)> {
+        self.sessions.iter().filter_map(|(c, s)| Some((*c, s.stand.seat()?.0)))
+    }
+
+    fn set_stand(&mut self, conn: ConnId, stand: Stand) {
+        if let Some(s) = self.sessions.get_mut(&conn) {
+            s.stand = stand;
+        }
+    }
+
+    /// Out of its room: back at the room list (or `Gone`), and where it was.
+    fn unseat(&mut self, conn: ConnId, gone: bool) -> Option<(u32, Pid)> {
+        let s = self.sessions.get_mut(&conn)?;
+        let seat = s.stand.seat();
+        s.stand = match core::mem::replace(&mut s.stand, Stand::Gone) {
+            _ if gone => Stand::Gone,
+            Stand::InRoom { member, .. } => Stand::Listing(member),
+            other => other,
+        };
+        seat
+    }
+
+    /// Connections in the room of key `key`.
+    fn seated_in(&self, key: u32) -> Vec<ConnId> {
+        self.seated().filter(|&(_, k)| k == key).map(|(c, _)| c).collect()
     }
 
     fn real_ms(&self) -> u64 {
@@ -172,22 +284,14 @@ impl Hub {
         error!(
             room = room.id,
             arena = room.arena.map.meta().id,
-            phase = ?room.phase,
+            phase = ?room.phase(),
             tick = room.arena.tick,
             players = ?room.players.iter().map(|p| p.id).collect::<Vec<_>>(),
             "room crashed: closed"
         );
-        self.empty_since.remove(&key);
-        let members: Vec<(ConnId, bool)> = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| s.member.as_ref().is_some_and(|m| m.room == Some(key)))
-            .map(|(c, _)| (*c, room.practice()))
-            .collect();
-        for (c, practice) in members {
-            if let Some(m) = self.member_mut(c) {
-                m.room = None;
-            }
+        let practice = room.practice();
+        for c in self.seated_in(key) {
+            self.unseat(c, practice);
             if practice {
                 self.refuse(c, RejectReason::Busy, "Тренировка прервалась из-за ошибки сервера");
                 continue;
@@ -195,7 +299,7 @@ impl Hub {
             self.send(
                 c,
                 ServerMsg::Home {
-                    msg: "Комната закрылась из-за ошибки сервера".into(),
+                    msg: Some("Комната закрылась из-за ошибки сервера".into()),
                 },
             );
             self.send_directory(c, None);
@@ -205,77 +309,71 @@ impl Hub {
 
     // ------------------------------------------------------------------ connections
 
-    /// A connection of player `uid` (empty: the token had no identity, the connection is refused).
-    pub fn open(&mut self, conn: ConnId, ip: String, uid: String) {
-        if uid.is_empty() {
-            warn!(ip, "connection without an identity");
-            self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
-            return;
-        }
-        if let Some(key) = address_key(&ip)
-            && self.connections_from(&key) >= SESSIONS_PER_ADDRESS
+    /// A connection of player `uid` (None: the token had no identity, the connection is refused) from `ip`.
+    pub fn open(&mut self, conn: ConnId, ip: Option<IpAddr>, uid: Option<Uid>) {
+        let Some(uid) = uid else {
+            warn!(ip = ip.map(display), "connection without an identity");
+            return self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
+        };
+        let key = ip.and_then(address_key);
+        if let Some(key) = key
+            && self.connections_from(key) >= SESSIONS_PER_ADDRESS
         {
-            warn!(ip, "too many connections from one address");
-            self.refuse(conn, RejectReason::Busy, "С этого адреса уже слишком много подключений");
-            return;
+            warn!(ip = ip.map(display), "too many connections from one address");
+            return self.refuse(conn, RejectReason::Busy, "С этого адреса уже слишком много подключений");
         }
         self.sessions.insert(
             conn,
             Session {
                 ip,
+                key,
                 uid,
                 opened: self.real,
-                member: None,
-                window: 0,
-                count: 0,
-                timed_out: false,
-                warned: None,
+                stand: Stand::Waiting,
+                list_rate: RateWindow::default(),
+                warned: Backoff::default(),
             },
         );
     }
 
     /// The connection closed.
     pub fn close(&mut self, conn: ConnId) {
-        if self.sessions.get(&conn).is_some_and(|s| s.member.is_some()) {
-            self.drop_member(conn);
-        }
+        self.drop_member(conn);
         self.sessions.remove(&conn);
     }
 
     pub fn message(&mut self, conn: ConnId, m: ClientMsg) {
-        let real = self.real;
+        let now = secs(self.real);
         let Some(s) = self.sessions.get_mut(&conn) else { return };
         if let Err(what) = m.check() {
-            if s.warned.is_none_or(|at| real.saturating_sub(at) >= ticks(1.0)) {
-                s.warned = Some(real);
-                warn!(ip = s.ip, id = s.member.as_ref().map(|m| m.id), what, "bad message");
+            if let Some(hushed) = s.warned.hit(now) {
+                let id = s.stand.seat().map(|(_, id)| id);
+                warn!(ip = s.ip.map(display), id, what, hushed, "bad message");
             }
             return;
         }
-        let Some(member) = &s.member else {
-            if let ClientMsg::Hello(h) = m {
-                self.hello(conn, h);
-            }
-            return;
-        };
-        if member.gone {
-            return;
-        }
-        let (room, id) = (member.room, member.id);
-        let Some(member) = self.member_mut(conn) else { return };
-        // (The name, colour and outfit travel with the player from room to room.)
-        match &m {
-            ClientMsg::Name(name) => {
-                let name = sanitize_person_name(name);
-                if !name.is_empty() {
-                    member.name = name;
+        match &mut s.stand {
+            Stand::Gone => return,
+            Stand::Waiting => {
+                if let ClientMsg::Hello(h) = m {
+                    self.hello(conn, h);
                 }
+                return;
             }
-            ClientMsg::Color(c) => member.color = Some(*c),
-            ClientMsg::Outfit(o) => member.outfit = *o,
-            _ => {}
+            // (The name, colour and outfit travel with the player from room to room.)
+            Stand::Listing(member) | Stand::InRoom { member, .. } => match &m {
+                ClientMsg::Name(name) => {
+                    let name = sanitize_person_name(name);
+                    if !name.is_empty() {
+                        member.name = name;
+                    }
+                }
+                ClientMsg::Color(c) => member.color = Some(*c),
+                ClientMsg::Outfit(o) => member.outfit = *o,
+                _ => {}
+            },
         }
-        if let Some(key) = room {
+        if let Some((key, id)) = s.stand.seat() {
             if m == ClientMsg::Leave {
                 // Counted with the room list's messages: leaving and joining again over and over is a lobby
                 // and a welcome to everybody each time.
@@ -291,28 +389,24 @@ impl Hub {
         if !self.allow(conn) {
             return;
         }
-        match m {
-            ClientMsg::Create { title, private } => {
-                self.create(conn, &title, private);
-            }
-            ClientMsg::Join { room, pin } => {
-                self.join(conn, &room, pin.as_deref());
-            }
-            _ => {}
+        let Some(member) = self.member(conn).cloned() else {
+            return;
+        };
+        let entered = match m {
+            ClientMsg::Create { title, private } => self.create(conn, &member, &title, private),
+            ClientMsg::Join { room, pin } => self.join(conn, &member, &room, pin.as_deref()),
+            _ => Ok(()),
+        };
+        if let Err(d) = entered {
+            self.send(conn, d.into());
         }
     }
 
     fn allow(&mut self, conn: ConnId) -> bool {
         let real = self.real;
-        let Some(s) = self.sessions.get_mut(&conn) else {
-            return false;
-        };
-        if real.saturating_sub(s.window) > ticks(1.0) {
-            s.window = real;
-            s.count = 0;
-        }
-        s.count += 1;
-        s.count <= LIST_RATE
+        self.sessions
+            .get_mut(&conn)
+            .is_some_and(|s| s.list_rate.hit(real) <= LIST_RATE)
     }
 
     /// An accepted hello: the connection goes where the hello says, as the player of its token.
@@ -327,25 +421,20 @@ impl Hub {
 
     /// The connection takes the place of any earlier connection of the same player, then goes where the
     /// hello says: a practice round, a room (asked for, or the one the player is still in), or the room list.
-    fn enter(&mut self, conn: ConnId, uid: String, h: Hello) {
+    fn enter(&mut self, conn: ConnId, uid: Uid, h: Hello) {
         let m = Member {
             uid: uid.clone(),
             name: sanitize_person_name(&h.name),
             color: h.color,
             outfit: h.outfit.unwrap_or_default(),
-            room: None,
-            id: 0,
-            gone: false,
         };
         if let Some(game) = &h.practice {
-            self.enter_practice(conn, m, game);
-            return;
+            return self.enter_practice(conn, m, game);
         }
         let old = self.live.get(&uid).copied().filter(|&c| c != conn);
         let old_room = old
-            .and_then(|c| self.member(c))
-            .and_then(|m| m.room)
-            .and_then(|k| self.rooms.get(&k))
+            .and_then(|c| self.seat(c))
+            .and_then(|(k, _)| self.rooms.get(&k))
             .map(|r| r.id.clone());
         let target = h
             .room
@@ -356,27 +445,31 @@ impl Hub {
             self.evict(old, target.as_deref());
         }
         self.live.insert(uid, conn);
-        if let Some(s) = self.sessions.get_mut(&conn) {
-            s.member = Some(m);
-        }
-        if !target.is_some_and(|t| self.join(conn, &t, h.pin.as_deref())) {
-            self.send_directory(conn, None);
+        self.set_stand(conn, Stand::Listing(m.clone()));
+        let entered = match target {
+            Some(t) => self.join(conn, &m, &t, h.pin.as_deref()),
+            None => Err(Denial::of("", DenyReason::Gone, "")),
+        };
+        match entered {
+            Ok(()) => {}
+            Err(d) if d.room.as_deref() == Some("") => self.send_directory(conn, None),
+            Err(d) => {
+                self.send(conn, d.into());
+                self.send_directory(conn, None);
+            }
         }
     }
 
     /// The connection is gone.
     fn drop_member(&mut self, conn: ConnId) {
-        let Some(m) = self.member_mut(conn) else { return };
-        if m.gone {
+        let Some(uid) = self.member(conn).map(|m| m.uid.clone()) else {
             return;
-        }
-        m.gone = true;
-        let (uid, id) = (m.uid.clone(), m.id);
-        let room = m.room.take();
+        };
+        let seat = self.unseat(conn, true);
         if self.live.get(&uid) == Some(&conn) {
             self.live.remove(&uid);
         }
-        let Some(key) = room else { return };
+        let Some((key, id)) = seat else { return };
         self.with_room(key, |r| r.leave(id, conn));
         // A practice room lives only while its player is connected.
         if self.rooms.get(&key).is_some_and(Room::practice) {
@@ -389,56 +482,44 @@ impl Hub {
     // ------------------------------------------------------------------ rooms
 
     /// Opens the player's own room and enters it; if they already have one, they return to it.
-    pub fn create(&mut self, conn: ConnId, title: &str, private: bool) -> bool {
-        let Some(m) = self.member(conn).filter(|m| m.room.is_none() && !m.gone) else {
-            return false;
-        };
-        let (uid, name) = (m.uid.clone(), m.name.clone());
-        if let Some(mine) = self.owned(&uid) {
+    fn create(&mut self, conn: ConnId, m: &Member, title: &str, private: bool) -> Result<(), Denial> {
+        if let Some(mine) = self.owned(&m.uid) {
             let id = self.rooms[&mine].id.clone();
-            return self.join(conn, &id, None);
+            return self.join(conn, m, &id, None);
         }
-        let creator = self.sessions.get(&conn).and_then(|s| address_key(&s.ip));
-        if let Some(c) = creator.as_deref()
+        let creator = self.sessions.get(&conn).and_then(|s| s.key);
+        if let Some(c) = creator
             && self.listed().filter(|(_, r)| r.creator() == Some(c)).count() >= ROOMS_PER_ADDRESS
         {
-            return self.deny(
-                conn,
-                None,
-                DenyReason::Limit,
+            return Err(Denial::limit(
                 "С этого адреса открыто слишком много комнат — зайдите в одну из них",
-            );
+            ));
         }
         if self.listed().count() >= self.max_rooms.min(MAX_ROOMS) {
-            return self.deny(
-                conn,
-                None,
-                DenyReason::Limit,
+            return Err(Denial::limit(
                 "Сейчас открыто слишком много комнат — зайдите в одну из них или попробуйте позже",
-            );
+            ));
         }
         let id = self.new_id();
         let title = Some(sanitize_title(title))
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| {
-                if name.is_empty() {
+                if m.name.is_empty() {
                     format!("Комната {}", id.to_uppercase())
                 } else {
-                    format!("Комната {name}")
+                    format!("Комната {}", m.name)
                 }
             });
-        self.open_room(id.clone(), title, Some(uid), private.then(make_pin), false, creator);
+        let pin = private.then(make_pin);
+        self.open_room(id.clone(), title, Some(m.uid.clone()), pin, false, creator);
         info!(room = id, private, rooms = self.listed().count(), "room opened");
-        self.join(conn, &id, None)
+        self.join(conn, m, &id, None)
     }
 
-    /// Enters a room from the room list. On failure the player is told why and stays where they are.
-    pub fn join(&mut self, conn: ConnId, id: &str, pin: Option<&str>) -> bool {
-        let Some(m) = self.member(conn).filter(|m| m.room.is_none() && !m.gone).cloned() else {
-            return false;
-        };
+    /// Enters a room from the room list.
+    fn join(&mut self, conn: ConnId, m: &Member, id: &str, pin: Option<&str>) -> Result<(), Denial> {
         let Some(key) = self.listed().find(|(_, r)| r.id == id).map(|(k, _)| *k) else {
-            return self.deny(conn, Some(id), DenyReason::Gone, "Этой комнаты больше нет");
+            return Err(Denial::of(id, DenyReason::Gone, "Этой комнаты больше нет"));
         };
         let room = &self.rooms[&key];
         // The owner and those the room let in before come back without the PIN.
@@ -448,50 +529,45 @@ impl Hub {
             && !known
         {
             let Some(pin) = pin else {
-                return self.deny(conn, Some(id), DenyReason::Pin, "");
+                return Err(Denial::pin(id));
             };
-            let ip = self.sessions[&conn].ip.clone();
+            let ip = self.sessions.get(&conn).and_then(|s| s.ip);
             let now = self.real_ms();
-            if !self.guesses.allow(&ip, id, now) {
-                return self.deny(
-                    conn,
-                    Some(id),
+            if !self.guesses.allow(ip, id, now) {
+                return Err(Denial::of(
+                    id,
                     DenyReason::Limit,
                     "Слишком много попыток — подождите минуту",
-                );
+                ));
             }
             if !same_key(pin, &want) {
-                self.guesses.failed(&ip, id, now);
-                warn!(room = id, ip, "wrong room pin");
+                self.guesses.failed(ip, id, now);
+                warn!(room = id, ip = ip.map(display), "wrong room pin");
                 // Somebody is going through the PINs (from many addresses: each one is limited): the room
                 // takes a new one, and what they ruled out no longer helps.
                 if self.guesses.misses_at(id, now) >= GUESSES_PER_TARGET {
                     self.guesses.forget_target(id);
                     self.with_room(key, Room::new_pin);
                 }
-                return self.deny(conn, Some(id), DenyReason::Pin, "Неверный PIN-код");
+                return Err(Denial::of(id, DenyReason::Pin, "Неверный PIN-код"));
             }
         }
-        // (Set first: the room's own messages must not be followed by a room list for this player.)
-        if let Some(mm) = self.member_mut(conn) {
-            mm.room = Some(key);
-        }
-        let who = Who {
-            uid: m.uid.clone(),
-            name: m.name.clone(),
-            color: m.color,
-            outfit: Some(m.outfit),
+        let pid = match self.with_room(key, |r| r.join(conn, m.into())) {
+            Some(Some(pid)) => pid,
+            Some(None) => return Err(Denial::of(id, DenyReason::Full, "В комнате нет свободных мест")),
+            None => return Err(Denial::of(id, DenyReason::Gone, "Этой комнаты больше нет")),
         };
-        let Some(pid) = self.with_room(key, |r| r.join(conn, who)).flatten() else {
-            if let Some(mm) = self.member_mut(conn) {
-                mm.room = None;
-            }
-            return self.deny(conn, Some(id), DenyReason::Full, "В комнате нет свободных мест");
-        };
-        if let Some(mm) = self.member_mut(conn) {
-            mm.id = pid;
+        self.set_stand(
+            conn,
+            Stand::InRoom {
+                member: m.clone(),
+                room: key,
+                id: pid,
+            },
+        );
+        if let Some(r) = self.rooms.get_mut(&key) {
+            r.empty_since = None;
         }
-        self.empty_since.remove(&key);
         // One room at a time: a room still keeping this player's place (a game they dropped out of) lets go.
         let others: Vec<(u32, Pid)> = self
             .listed()
@@ -503,23 +579,18 @@ impl Hub {
             self.vacated(k, true);
         }
         self.changed();
-        true
+        Ok(())
     }
 
     /// Back to the room list.
     pub fn leave(&mut self, conn: ConnId) {
-        let Some(m) = self.member(conn).filter(|m| !m.gone) else {
-            return;
-        };
-        let (Some(key), id) = (m.room, m.id) else { return };
+        let Some((key, id)) = self.seat(conn) else { return };
         if self.rooms.get(&key).is_none_or(Room::practice) {
             return;
         }
         self.with_room(key, |r| r.quit(id));
-        if let Some(m) = self.member_mut(conn) {
-            m.room = None;
-        }
-        self.send(conn, ServerMsg::Home { msg: String::new() });
+        self.unseat(conn, false);
+        self.send(conn, ServerMsg::Home { msg: None });
         self.vacated(key, true);
         self.send_directory(conn, None);
     }
@@ -531,11 +602,11 @@ impl Hub {
             .sessions
             .iter_mut()
             .filter(|(_, s)| {
-                s.member.is_none() && !s.timed_out && real.saturating_sub(s.opened) > ticks(HELLO_TIMEOUT_S)
+                matches!(s.stand, Stand::Waiting) && real.saturating_sub(s.opened) > ticks(HELLO_TIMEOUT_S)
             })
             .map(|(c, s)| {
-                s.timed_out = true;
-                warn!(ip = s.ip, "no hello");
+                s.stand = Stand::Gone;
+                warn!(ip = s.ip.map(display), "no hello");
                 *c
             })
             .collect();
@@ -569,16 +640,8 @@ impl Hub {
         for key in idle {
             self.rooms.remove(&key);
             info!("practice closed: nobody played in it");
-            let members: Vec<ConnId> = self
-                .sessions
-                .iter()
-                .filter(|(_, s)| s.member.as_ref().is_some_and(|m| m.room == Some(key)))
-                .map(|(c, _)| *c)
-                .collect();
-            for c in members {
-                if let Some(m) = self.member_mut(c) {
-                    m.room = None;
-                }
+            for c in self.seated_in(key) {
+                self.unseat(c, true);
                 self.refuse(
                     c,
                     RejectReason::Busy,
@@ -594,34 +657,31 @@ impl Hub {
         let conns: Vec<ConnId> = self
             .sessions
             .iter()
-            .filter(|(_, s)| s.member.as_ref().is_some_and(|m| !m.gone))
+            .filter(|(_, s)| s.stand.member().is_some())
             .map(|(c, _)| *c)
             .collect();
         for c in conns {
-            self.send(c, ServerMsg::Home { msg: msg.into() });
+            self.send(c, ServerMsg::Home { msg: Some(msg.into()) });
         }
     }
 
     /// Closes rooms that have stood empty for a while.
     pub fn sweep(&mut self) {
         let real = self.real;
-        let keys: Vec<(u32, bool)> = self
-            .listed()
-            .filter(|(_, r)| !r.permanent())
-            .map(|(k, r)| (*k, r.empty()))
-            .collect();
-        for (key, empty) in keys {
-            if !empty {
-                self.empty_since.remove(&key);
+        let mut expired = Vec::new();
+        for (key, room) in self.rooms.iter_mut().filter(|(_, r)| !r.practice() && !r.permanent()) {
+            if !room.empty() {
+                room.empty_since = None;
                 continue;
             }
-            match self.empty_since.get(&key) {
-                None => {
-                    self.empty_since.insert(key, real);
-                }
-                Some(&since) if real.saturating_sub(since) >= ticks(ROOM_EMPTY_S) => self.close_room(key),
-                _ => {}
+            match room.empty_since {
+                None => room.empty_since = Some(real),
+                Some(since) if real.saturating_sub(since) >= ticks(ROOM_EMPTY_S) => expired.push(*key),
+                Some(_) => {}
             }
+        }
+        for key in expired {
+            self.close_room(key);
         }
     }
 
@@ -631,16 +691,23 @@ impl Hub {
 
     // ------------------------------------------------------------------ internals
 
+    fn insert_room(&mut self, opts: RoomOptions) -> u32 {
+        let key = self.next_key;
+        self.next_key += 1;
+        self.rooms.insert(key, Room::new(opts, self.real));
+        key
+    }
+
     fn open_room(
         &mut self,
         id: String,
         title: String,
-        owner: Option<String>,
+        owner: Option<Uid>,
         pin: Option<String>,
         permanent: bool,
-        creator: Option<String>,
+        creator: Option<AddrKey>,
     ) -> u32 {
-        let opts = RoomOptions {
+        self.insert_room(RoomOptions {
             id,
             title,
             owner,
@@ -648,30 +715,26 @@ impl Hub {
             permanent,
             creator,
             ..self.base.clone()
-        };
-        let key = self.next_key;
-        self.next_key += 1;
-        self.rooms.insert(key, Room::new(opts, self.real));
-        key
+        })
     }
 
     fn close_room(&mut self, key: u32) {
         let Some(room) = self.rooms.remove(&key) else { return };
-        self.empty_since.remove(&key);
         info!(room = room.id, rooms = self.listed().count(), "room closed");
         self.changed();
     }
 
     /// Someone left a room: if it is empty now it closes, at once or (a lost connection) after a while.
     fn vacated(&mut self, key: u32, now: bool) {
-        let Some(room) = self.rooms.get(&key) else { return };
+        let real = self.real;
+        let Some(room) = self.rooms.get_mut(&key) else { return };
         if room.permanent() || !room.empty() {
             return;
         }
         if now {
             self.close_room(key);
         } else {
-            self.empty_since.entry(key).or_insert(self.real);
+            room.empty_since.get_or_insert(real);
         }
     }
 
@@ -686,12 +749,12 @@ impl Hub {
         self.out.push(Out::Close(conn));
     }
 
-    fn enter_practice(&mut self, conn: ConnId, mut m: Member, game: &str) {
-        let Some(game) = director::game(game) else {
+    fn enter_practice(&mut self, conn: ConnId, m: Member, game: &str) {
+        let Some(game) = Game::by_id(game) else {
             return self.refuse(conn, RejectReason::Bad, "Нет такой карты");
         };
-        let creator = self.sessions.get(&conn).and_then(|s| address_key(&s.ip));
-        if let Some(c) = creator.as_deref()
+        let creator = self.sessions.get(&conn).and_then(|s| s.key);
+        if let Some(c) = creator
             && self
                 .rooms
                 .values()
@@ -708,40 +771,35 @@ impl Hub {
                 "Сейчас слишком много тренировок — попробуйте позже",
             );
         }
-        let opts = RoomOptions {
+        let key = self.insert_room(RoomOptions {
             min_players: 1,
-            practice: Some(Practice {
-                game: game.id.into(),
-                bots: 3,
-            }),
+            practice: Some(Practice { game, bots: 3 }),
             permanent: false,
             creator,
             ..self.base.clone()
-        };
-        let key = self.next_key;
-        self.next_key += 1;
-        self.rooms.insert(key, Room::new(opts, self.real));
-        m.room = Some(key);
-        let who = Who {
-            uid: m.uid.clone(),
-            name: m.name.clone(),
-            color: m.color,
-            outfit: Some(m.outfit),
-        };
-        if let Some(s) = self.sessions.get_mut(&conn) {
-            s.member = Some(m);
-        }
-        let id = self.with_room(key, |r| r.join(conn, who)).flatten().unwrap_or(0);
-        if let Some(m) = self.member_mut(conn) {
-            m.id = id;
+        });
+        match self.with_room(key, |r| r.join(conn, (&m).into())).flatten() {
+            Some(id) => self.set_stand(
+                conn,
+                Stand::InRoom {
+                    member: m,
+                    room: key,
+                    id,
+                },
+            ),
+            None => {
+                self.rooms.remove(&key);
+                self.refuse(conn, RejectReason::Busy, "Тренировка прервалась из-за ошибки сервера");
+            }
         }
     }
 
     /// A newer connection of the same player takes over: this one is told and closed.
     fn evict(&mut self, old: ConnId, stay_in: Option<&str>) {
-        let Some(m) = self.member_mut(old) else { return };
-        m.gone = true;
-        let (room, id) = (m.room.take(), m.id);
+        if self.member(old).is_none() {
+            return;
+        }
+        let seat = self.unseat(old, true);
         self.send(
             old,
             ServerMsg::Reject {
@@ -750,7 +808,7 @@ impl Hub {
             },
         );
         // Going elsewhere: out of the room. Staying: Room::join moves the player to the new connection.
-        if let Some(key) = room
+        if let Some((key, id)) = seat
             && self.rooms.get(&key).is_some_and(|r| Some(r.id.as_str()) != stay_in)
         {
             self.with_room(key, |r| r.quit(id));
@@ -760,28 +818,26 @@ impl Hub {
     }
 
     /// The room keeping a place for this player (they are in it, or dropped out of its game).
-    fn room_of(&self, uid: &str) -> Option<u32> {
+    fn room_of(&self, uid: &Uid) -> Option<u32> {
         self.listed().find(|(_, r)| r.player_of(uid).is_some()).map(|(k, _)| *k)
     }
 
     /// Open connections from the address `key` (`auth::address_key`).
-    fn connections_from(&self, key: &str) -> usize {
-        self.sessions
-            .values()
-            .filter(|s| address_key(&s.ip).as_deref() == Some(key))
-            .count()
+    fn connections_from(&self, key: AddrKey) -> usize {
+        self.sessions.values().filter(|s| s.key == Some(key)).count()
     }
 
-    fn owned(&self, uid: &str) -> Option<u32> {
+    fn owned(&self, uid: &Uid) -> Option<u32> {
         self.listed()
-            .find(|(_, r)| r.owner.as_deref() == Some(uid))
+            .find(|(_, r)| r.owner.as_ref() == Some(uid))
             .map(|(k, _)| *k)
     }
 
     fn new_id(&self) -> String {
         loop {
-            let id: String = (0..ID_LENGTH)
-                .map(|_| ID_CHARS[random_u32() as usize % ID_CHARS.len()] as char)
+            let id: String = random_bytes::<ID_LENGTH>()
+                .iter()
+                .map(|&b| ID_CHARS[b as usize % ID_CHARS.len()] as char)
                 .collect();
             if id != DEV_ROOM_ID && !self.listed().any(|(_, r)| r.id == id) {
                 return id;
@@ -814,32 +870,23 @@ impl Hub {
     /// Tells everyone at the room list when it changed.
     fn send_list(&mut self) {
         let rooms = self.directory();
-        let ids: Vec<&str> = self.listed().map(|(_, r)| r.id.as_str()).collect();
-        let key = format!("{rooms:?}{ids:?}");
-        if key == self.sent {
+        let ids: Vec<String> = self.listed().map(|(_, r)| r.id.clone()).collect();
+        if self.sent.as_ref().is_some_and(|(r, i)| *r == rooms && *i == ids) {
             return;
         }
-        self.sent = key;
+        self.sent = Some((rooms.clone(), ids));
         let at_list: Vec<ConnId> = self
             .live
             .values()
             .copied()
-            .filter(|c| self.member(*c).is_some_and(|m| m.room.is_none() && !m.gone))
+            .filter(|c| {
+                self.sessions
+                    .get(c)
+                    .is_some_and(|s| matches!(s.stand, Stand::Listing(_)))
+            })
             .collect();
         for c in at_list {
             self.send_directory(c, Some(rooms.clone()));
         }
-    }
-
-    fn deny(&mut self, conn: ConnId, room: Option<&str>, reason: DenyReason, msg: &str) -> bool {
-        self.send(
-            conn,
-            ServerMsg::Denied {
-                room: room.map(String::from),
-                reason,
-                msg: msg.into(),
-            },
-        );
-        false
     }
 }

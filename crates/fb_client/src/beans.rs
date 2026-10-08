@@ -11,15 +11,15 @@ use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_shared::outfit::Outfit;
-use fb_shared::{COLORS, RAINBOW};
-use fb_sim::physics::BodyState;
+use fb_shared::{COLORS, Suit};
+use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
 use crate::game::{Cue, Map, PrevPos};
 use crate::outfit::{Base, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
 use crate::session::Session;
-use crate::view::hex;
+use crate::view::{color, power_color};
 
 #[derive(Component)]
 pub struct BeanView;
@@ -29,7 +29,18 @@ pub struct BeanView;
 struct BeanModel(Entity);
 
 const CROWN_SCALE: f32 = 0.62;
-const AURA_COLORS: [&str; 4] = ["#ffffff", "#ff6f91", "#58d68d", "#ffd23f"];
+/// The aura's colour without a power (never shown), then each power's.
+const AURA_COLORS: [Color; 4] = [
+    Color::WHITE,
+    power_color(Power::Giant),
+    power_color(Power::Jump),
+    power_color(Power::Speed),
+];
+/// The rainbow suit until its colour first runs.
+const RAINBOW_BASE: Color = Color::srgb_u8(0xff, 0x5f, 0x5f);
+const TEAR: Color = Color::srgb_u8(0x9f, 0xdc, 0xff);
+const FUR: Color = Color::srgb_u8(0xff, 0x9f, 0x1c);
+const FUR_TIP: Color = Color::srgb_u8(0xff, 0xf4, 0xd6);
 
 /// Nodes of the model the animation moves, and the meshes painted per player.
 struct Parts {
@@ -97,10 +108,25 @@ pub struct Dress {
     tail: Vec<Entity>,
 }
 
+/// A player material, shared by all beans painted alike.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum PaintKey {
+    /// The suit, by its index into `COLORS`.
+    Body(u8),
+    /// A belly of its own tint (`Tint as u8`).
+    Belly(u8),
+    /// The belly of a suit, washed towards white.
+    BellyWashed(u8),
+    /// Shoes of a tint, or the model's own.
+    Shoe(Option<u8>),
+    Tail,
+    TailTip,
+}
+
 /// Player materials, shared by colour.
 #[derive(Resource, Default)]
 pub struct Paints {
-    mats: HashMap<String, Handle<StandardMaterial>>,
+    mats: HashMap<PaintKey, Handle<StandardMaterial>>,
     /// The rainbow suit's materials (body, belly), recoloured every frame.
     rainbow: Vec<(Handle<StandardMaterial>, bool)>,
     aura: Vec<Handle<StandardMaterial>>,
@@ -119,12 +145,17 @@ impl Plugin for BeansPlugin {
     }
 }
 
-fn suit_base(color: &str) -> Color {
-    if color == RAINBOW { hex("#ff5f5f") } else { hex(color) }
+fn suit_base(suit: Suit) -> Color {
+    match suit {
+        Suit::Color(c) => color(c),
+        Suit::Rainbow => RAINBOW_BASE,
+    }
 }
 
-fn tint_of(color: u8) -> &'static str {
-    COLORS[color as usize % COLORS.len()]
+/// The suit's index into `COLORS`, and its colour there.
+fn suit_of(color: u8) -> (u8, Suit) {
+    let i = color as usize % COLORS.len();
+    (i as u8, COLORS[i])
 }
 
 /// A painted part of the bean (suit with arms, hands and legs; belly; shoes) as plain colour on the model's own
@@ -187,7 +218,7 @@ pub fn spawn_beans(
             paints.aura = AURA_COLORS
                 .map(|c| {
                     materials.add(StandardMaterial {
-                        base_color: hex(c).with_alpha(0.7),
+                        base_color: c.with_alpha(0.7),
                         unlit: true,
                         // Light added (additive, not tone mapped against the scene).
                         alpha_mode: AlphaMode::Add,
@@ -214,7 +245,7 @@ pub fn spawn_beans(
                 (
                     meshes.add(Sphere::new(0.022).mesh().uv(10, 8).scaled_by(Vec3::new(1.0, 1.4, 0.7))),
                     materials.add(StandardMaterial {
-                        base_color: hex("#9fdcff").with_alpha(0.85),
+                        base_color: TEAR.with_alpha(0.85),
                         perceptual_roughness: 0.05,
                         alpha_mode: AlphaMode::Blend,
                         ..default()
@@ -337,11 +368,17 @@ fn rig_bean(
 impl Paints {
     fn get(
         &mut self,
-        key: String,
+        key: PaintKey,
         materials: &mut Assets<StandardMaterial>,
-        make: impl FnOnce() -> StandardMaterial,
+        make: impl FnOnce(&Assets<StandardMaterial>) -> StandardMaterial,
     ) -> Handle<StandardMaterial> {
-        self.mats.entry(key).or_insert_with(|| materials.add(make())).clone()
+        self.mats
+            .entry(key)
+            .or_insert_with(|| {
+                let m = make(materials);
+                materials.add(m)
+            })
+            .clone()
     }
 }
 
@@ -363,7 +400,7 @@ pub fn dress_beans(
     let coat = quality.is_none_or(|q| q.preset != crate::render::quality::Preset::Low);
     if coated.replace(coat).is_some_and(|was| was != coat) {
         for (key, h) in &paints.mats {
-            if key.starts_with("body ")
+            if matches!(key, PaintKey::Body(_))
                 && let Some(mut m) = materials.get_mut(h)
             {
                 m.clearcoat = if coat { 0.3 } else { 0.0 };
@@ -378,10 +415,7 @@ pub fn dress_beans(
             .and_then(|l| l.players.iter().find(|p| p.id == id.0));
         let outfit = player.map(|p| p.outfit).unwrap_or_default();
         let crown = player.is_some_and(|p| p.crowns > 0);
-        let tail = map
-            .as_ref()
-            .and_then(|m| m.deco.get(&id.0))
-            .is_some_and(|d| d.tail == Some(true));
+        let tail = map.as_ref().and_then(|m| m.deco.get(&id.0)).is_some_and(|d| d.tail);
         let worn = (color.0, outfit, crown, tail);
         if dress.worn == Some(worn) {
             continue;
@@ -393,18 +427,20 @@ pub fn dress_beans(
         dress.wiggles.clear();
         dress.tail.clear();
 
-        let suit = tint_of(color.0);
+        let (suit_i, suit) = suit_of(color.0);
         // Soft plastic with a faint clearcoat.
-        let made = plain_part(materials.get(&parts.body_mat), suit_base(suit), 0.5, coat);
-        let body = paints.get(format!("body {suit}"), &mut materials, || made);
+        let body = paints.get(PaintKey::Body(suit_i), &mut materials, |m| {
+            plain_part(m.get(&parts.body_mat), suit_base(suit), 0.5, coat)
+        });
         // The belly patch: the suit colour washed towards white, or a colour of its own.
         let (belly_key, belly_color) = match outfit.belly {
-            Some(t) => (format!("belly {}", t.hex()), hex(t.hex())),
-            None => (format!("belly washed {suit}"), suit_base(suit).mix(&Color::WHITE, 0.62)),
+            Some(t) => (PaintKey::Belly(t as u8), crate::view::color(t.rgb())),
+            None => (PaintKey::BellyWashed(suit_i), suit_base(suit).mix(&Color::WHITE, 0.62)),
         };
-        let made = plain_part(materials.get(&parts.belly_mat), belly_color, 0.55, false);
-        let belly = paints.get(belly_key, &mut materials, || made);
-        if suit == RAINBOW {
+        let belly = paints.get(belly_key, &mut materials, |m| {
+            plain_part(m.get(&parts.belly_mat), belly_color, 0.55, false)
+        });
+        if suit == Suit::Rainbow {
             for (h, is_belly) in [(&body, false), (&belly, true)] {
                 if (outfit.belly.is_none() || !is_belly) && !paints.rainbow.iter().any(|(r, _)| r == h) {
                     paints.rainbow.push((h.clone(), is_belly));
@@ -418,18 +454,19 @@ pub fn dress_beans(
             commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
         }
         // Shoes of the outfit's colour, or the model's own (plain too: no baked AO).
-        let model_shoe = materials.get(&parts.shoe_mat);
-        let (shoe_key, shoe_color) = match outfit.shoes {
-            Some(t) => (format!("shoe {}", t.hex()), hex(t.hex())),
-            None => ("shoe".to_string(), model_shoe.map_or(Color::WHITE, |m| m.base_color)),
-        };
-        let made = plain_part(model_shoe, shoe_color, 0.5, false);
-        let shoe = paints.get(shoe_key, &mut materials, || made);
+        let shoe = paints.get(PaintKey::Shoe(outfit.shoes.map(|t| t as u8)), &mut materials, |m| {
+            let model = m.get(&parts.shoe_mat);
+            let color = match outfit.shoes {
+                Some(t) => crate::view::color(t.rgb()),
+                None => model.map_or(Color::WHITE, |m| m.base_color),
+            };
+            plain_part(model, color, 0.5, false)
+        });
         for e in &parts.shoes {
             commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
         }
 
-        let hat = make_hat(outfit.hat, outfit.hat_color.map(|t| t.hex()));
+        let hat = make_hat(outfit.hat, outfit.hat_color.map(|t| crate::view::color(t.rgb())));
         let crown_lift = hat.as_ref().map_or(0.0, |h| h.crown_lift);
         let mut wiggles = Vec::new();
         for (acc, shadows) in [(hat, true), (make_glasses(outfit.glasses), false)] {
@@ -464,13 +501,13 @@ pub fn dress_beans(
             dress.parts.push(e);
         }
         if tail {
-            let fur = paints.get("tail".into(), &mut materials, || StandardMaterial {
-                base_color: hex("#ff9f1c"),
+            let fur = paints.get(PaintKey::Tail, &mut materials, |_| StandardMaterial {
+                base_color: FUR,
                 perceptual_roughness: 0.7,
                 ..default()
             });
-            let tip = paints.get("tail tip".into(), &mut materials, || StandardMaterial {
-                base_color: hex("#fff4d6"),
+            let tip = paints.get(PaintKey::TailTip, &mut materials, |_| StandardMaterial {
+                base_color: FUR_TIP,
                 perceptual_roughness: 0.8,
                 ..default()
             });
@@ -808,8 +845,10 @@ pub fn animate_beans(
             if let Ok(mut tf) = parts.get_mut(rig.aura) {
                 tf.scale = Vec3::splat(s);
             }
-            if let (Ok(mut m), Some(h)) = (aura_mats.get_mut(rig.aura), paints.aura.get(power as usize))
-                && m.0 != *h
+            if let (Ok(mut m), Some(h)) = (
+                aura_mats.get_mut(rig.aura),
+                power.and_then(|p| paints.aura.get(p as usize)),
+            ) && m.0 != *h
             {
                 m.0 = h.clone();
             }

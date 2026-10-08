@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::game::{Map, ProbeInput, Stats};
 use crate::net::Conn;
 use crate::session::{Session, send};
-use crate::ui::{HomeTab, MenuTab, Ui};
+use crate::ui::{Fold, HomeTab, MenuTab, Ui};
 
 pub struct BrpPlugin {
     pub port: u16,
@@ -201,8 +201,8 @@ struct UiParams {
     menu: Option<bool>,
     /// "game", "settings" or "dev" (the menu's tabs); "rooms" or "home-settings" at the room list.
     tab: Option<String>,
-    /// Opens or folds a folded part ("practice", "outfit", "keys", "dev-maps").
-    fold: Option<String>,
+    /// Opens or folds a folded part ("gfx", "keys", "problems", "practice", "outfit", "dev-maps").
+    fold: Option<Fold>,
     debug: Option<bool>,
 }
 
@@ -225,16 +225,7 @@ fn ui_state(In(params): In<Option<Value>>, ui: Option<ResMut<Ui>>) -> BrpResult 
         None => {}
     }
     if let Some(k) = p.fold {
-        let k: &'static str = match k.as_str() {
-            "practice" => "practice",
-            "outfit" => "outfit",
-            "dev-maps" => "dev-maps",
-            "keys" => "keys",
-            _ => return Err(bad("fold: practice, outfit, keys or dev-maps")),
-        };
-        if !ui.open.remove(k) {
-            ui.open.insert(k);
-        }
+        ui.toggle(k);
     }
     if let Some(d) = p.debug {
         ui.debug = d;

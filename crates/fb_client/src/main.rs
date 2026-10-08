@@ -18,6 +18,7 @@ mod game;
 #[cfg(test)]
 mod harness;
 mod hud;
+mod job;
 mod keys;
 mod logs;
 #[cfg(test)]

@@ -437,7 +437,7 @@ mod tests {
     fn dust_is_light_in_every_look() {
         for l in fb_sim::looks::LOOKS {
             let c = dust_color(l);
-            assert!(c.red > 0.2 && c.green > 0.2 && c.blue > 0.2, "{}", l.id);
+            assert!(c.red > 0.2 && c.green > 0.2 && c.blue > 0.2, "{:?}", l.id);
         }
     }
 }

@@ -1,6 +1,7 @@
 //! A recorded round (humans' frames, bots from the seed, dev ops in between) replays to the same state.
 use fb_arena::{Arena, ArenaKind, replay};
 use fb_shared::input::{BTN_JUMP, InputFrame};
+use fb_sim::math::V3;
 
 #[test]
 fn replays_end_in_the_recorded_state() {
@@ -14,7 +15,7 @@ fn replays_end_in_the_recorded_state() {
         }
         for k in -359..=3600i64 {
             if k == 1200 {
-                a.dev_knock(1, [3.0, 4.0, 0.0]);
+                a.dev_knock(1, V3::new(3.0, 4.0, 0.0));
             }
             if k == 2400 {
                 a.add_late_pawn(9, true, None);

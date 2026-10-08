@@ -11,7 +11,7 @@ use bevy::log::tracing::{Event, Level, Subscriber};
 use bevy::log::tracing_subscriber::Layer;
 use bevy::log::tracing_subscriber::layer::Context;
 use bevy::prelude::App;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 const LINES: usize = 2000;
 
@@ -19,9 +19,14 @@ const LINES: usize = 2000;
 pub struct LogLine {
     /// Milliseconds since the epoch.
     pub at: u64,
-    pub level: &'static str,
+    #[serde(serialize_with = "level_name")]
+    pub level: Level,
     pub target: String,
     pub msg: String,
+}
+
+fn level_name<S: Serializer>(l: &Level, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(l.as_str())
 }
 
 fn book() -> &'static Mutex<VecDeque<LogLine>> {
@@ -30,12 +35,12 @@ fn book() -> &'static Mutex<VecDeque<LogLine>> {
 }
 
 /// The newest `n` lines at `level` (None: every level), oldest first.
-pub fn recent(level: Option<&str>, n: usize) -> Vec<LogLine> {
+pub fn recent(level: Option<Level>, n: usize) -> Vec<LogLine> {
     let book = book().lock().unwrap_or_else(|e| e.into_inner());
     let mut lines: Vec<LogLine> = book
         .iter()
         .rev()
-        .filter(|l| level.is_none_or(|w| l.level.eq_ignore_ascii_case(w)))
+        .filter(|l| level.is_none_or(|w| l.level == w))
         .take(n)
         .cloned()
         .collect();
@@ -56,7 +61,7 @@ pub fn tail(n: usize) -> Vec<LogLine> {
 
 pub fn warnings() -> usize {
     let book = book().lock().unwrap_or_else(|e| e.into_inner());
-    book.iter().filter(|l| l.level == "WARN").count()
+    book.iter().filter(|l| l.level == Level::WARN).count()
 }
 
 /// For `LogPlugin::custom_layer`.
@@ -100,7 +105,7 @@ impl<S: Subscriber> Layer<S> for Logbook {
         let at = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64;
         let line = LogLine {
             at,
-            level: meta.level().as_str(),
+            level: *meta.level(),
             target: f.2.unwrap_or_else(|| meta.target().to_string()),
             msg: f.0 + &f.1,
         };

@@ -5,12 +5,14 @@
 //!   debug cookie   access to the production debug API, earned with the debug key.
 //! It also rate limits guessing (PINs of private rooms, the debug key). A new secret resets all of them.
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+
+use crate::rooms::Uid;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -75,20 +77,20 @@ impl Auth {
     }
 
     /// A new player: the id the server knows them by, and the token their client keeps.
-    pub fn issue_identity(&self) -> (String, String) {
+    pub fn issue_identity(&self) -> (Uid, String) {
         let uid = B64.encode(random_bytes::<12>());
         let payload = format!("u1.{uid}");
         let token = format!("{payload}.{}", self.sign(&payload));
-        (uid, token)
+        (uid.into(), token)
     }
 
     /// The player id of an identity token, or None when it is not one of ours.
-    pub fn identity(&self, token: &str) -> Option<String> {
+    pub fn identity(&self, token: &str) -> Option<Uid> {
         let mut parts = token.split('.');
         let (Some("u1"), Some(uid), Some(sig), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
             return None;
         };
-        (!uid.is_empty() && self.verify(&format!("u1.{uid}"), sig)).then(|| uid.to_string())
+        (!uid.is_empty() && self.verify(&format!("u1.{uid}"), sig)).then(|| uid.into())
     }
 
     /// A short tag of the debug key, signed into its cookies: a new key and the old cookies stop working.
@@ -137,7 +139,8 @@ const LOCKOUT_MAX_MS: u64 = 3_600_000;
 /// target's guessers cannot lock the others.
 #[derive(Default)]
 pub struct Limiter {
-    per_ip: BTreeMap<String, Guesser>,
+    /// None: guessers whose address is unknown, together.
+    per_ip: BTreeMap<Option<AddrKey>, Guesser>,
     per_target: BTreeMap<String, Vec<u64>>,
 }
 
@@ -151,30 +154,37 @@ struct Guesser {
     last_miss: u64,
 }
 
-/// Who a guess is counted against: the address, or for IPv6 its /64 (one subscriber's network has
-/// billions of addresses).
-fn guesser(ip: &str) -> String {
-    match ip.parse::<Ipv6Addr>() {
-        Ok(v6) if v6.to_ipv4_mapped().is_none() => {
-            let s = v6.segments();
-            format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+/// Who a guess or a limit per address is counted against: the IPv4 address, or for IPv6 its /64 (one
+/// subscriber's network has billions of addresses).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AddrKey {
+    V4(Ipv4Addr),
+    V6Net([u16; 4]),
+}
+
+impl AddrKey {
+    pub fn of(ip: IpAddr) -> Self {
+        match ip.to_canonical() {
+            IpAddr::V4(v4) => Self::V4(v4),
+            IpAddr::V6(v6) => {
+                let s = v6.segments();
+                Self::V6Net([s[0], s[1], s[2], s[3]])
+            }
         }
-        _ => ip.to_string(),
     }
 }
 
-/// Who a limit per address counts against (`guesser`); None for this machine and unknown addresses, which
-/// no such limit applies to (dev servers, stress runs: every client is 127.0.0.1).
-pub fn address_key(ip: &str) -> Option<String> {
-    let parsed: IpAddr = ip.parse().ok()?;
-    let parsed = parsed.to_canonical();
-    (!parsed.is_loopback() && !parsed.is_unspecified()).then(|| guesser(ip))
+/// Who a limit per address counts against (`AddrKey`); None for this machine, which no such limit applies to
+/// (dev servers, stress runs: every client is 127.0.0.1).
+pub fn address_key(ip: IpAddr) -> Option<AddrKey> {
+    let ip = ip.to_canonical();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| AddrKey::of(ip))
 }
 
 /// So many requests a minute per address (`address_key`).
 pub struct Budget {
     per_minute: usize,
-    per_ip: BTreeMap<String, Vec<u64>>,
+    per_ip: BTreeMap<AddrKey, Vec<u64>>,
 }
 
 impl Budget {
@@ -186,7 +196,7 @@ impl Budget {
     }
 
     /// `now` in milliseconds (any monotonic origin).
-    pub fn allow(&mut self, ip: &str, now: u64) -> bool {
+    pub fn allow(&mut self, ip: IpAddr, now: u64) -> bool {
         let Some(key) = address_key(ip) else { return true };
         // (Within the last minute: `t > now - 60 s` would drop what came at 0 during the first minute.)
         let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
@@ -205,9 +215,9 @@ impl Budget {
 
 impl Limiter {
     /// Whether `ip` may guess at `target` now; `now` in milliseconds (any monotonic origin).
-    pub fn allow(&mut self, ip: &str, target: &str, now: u64) -> bool {
+    pub fn allow(&mut self, ip: Option<IpAddr>, target: &str, now: u64) -> bool {
         let fresh = |t: &u64| now.saturating_sub(*t) < 60_000;
-        let (locked, recent) = self.per_ip.get_mut(&guesser(ip)).map_or((false, false), |g| {
+        let (locked, recent) = self.per_ip.get_mut(&ip.map(AddrKey::of)).map_or((false, false), |g| {
             g.misses.retain(fresh);
             (now < g.locked_until, !g.misses.is_empty())
         });
@@ -222,8 +232,8 @@ impl Limiter {
     }
 
     /// Counts a wrong guess.
-    pub fn failed(&mut self, ip: &str, target: &str, now: u64) {
-        let g = self.per_ip.entry(guesser(ip)).or_default();
+    pub fn failed(&mut self, ip: Option<IpAddr>, target: &str, now: u64) {
+        let g = self.per_ip.entry(ip.map(AddrKey::of)).or_default();
         if now.saturating_sub(g.last_miss) > LOCKOUT_MAX_MS {
             g.strikes = 0;
         }
@@ -274,20 +284,27 @@ pub fn same_key(given: &str, want: &str) -> bool {
 /// A player id and the address their client asked for the token from (behind a reverse proxy: `X-Real-IP`) into a
 /// connect token's user data: `uid`, NUL, the address. The token is sealed with the server's key, so the
 /// address can be trusted where the link's own cannot (a WebSocket through a reverse proxy comes from 127.0.0.1).
-pub fn to_user_data(uid: &str, ip: Option<IpAddr>) -> [u8; 256] {
+pub fn to_user_data(uid: &Uid, ip: Option<IpAddr>) -> [u8; 256] {
     let mut data = [0u8; 256];
     let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();
-    let bytes = uid.bytes().chain((!ip.is_empty()).then_some(0)).chain(ip.bytes());
+    let bytes = uid
+        .as_str()
+        .bytes()
+        .chain((!ip.is_empty()).then_some(0))
+        .chain(ip.bytes());
     for (d, b) in data.iter_mut().zip(bytes) {
         *d = b;
     }
     data
 }
 
-/// The player id (empty when there is none) and the address of `to_user_data`.
-pub fn from_user_data(data: &[u8]) -> (String, Option<IpAddr>) {
+/// The player id and the address of `to_user_data`.
+pub fn from_user_data(data: &[u8]) -> (Option<Uid>, Option<IpAddr>) {
     let mut parts = data.split(|&b| b == 0);
-    let uid = String::from_utf8_lossy(parts.next().unwrap_or_default()).into_owned();
+    let uid = parts
+        .next()
+        .filter(|b| !b.is_empty())
+        .map(|b| String::from_utf8_lossy(b).into_owned().into());
     let ip = parts
         .next()
         .and_then(|b| core::str::from_utf8(b).ok())
@@ -306,35 +323,43 @@ pub fn read_cookie<'a>(header: Option<&'a str>, name: &str) -> Option<&'a str> {
 mod tests {
     use super::*;
 
+    fn ip(s: &str) -> Option<IpAddr> {
+        Some(s.parse().unwrap())
+    }
+
     #[test]
     fn rate_limits_guessing() {
         let mut l = Limiter::default();
         let mut now = 1_000_000;
-        let guess = |l: &mut Limiter, ip: &str, target: &str, now: u64| {
-            let ok = l.allow(ip, target, now);
+        let guess = |l: &mut Limiter, at: &str, target: &str, now: u64| {
+            let ok = l.allow(ip(at), target, now);
             if ok {
-                l.failed(ip, target, now);
+                l.failed(ip(at), target, now);
             }
             ok
         };
+        let (a, b, c) = ("192.0.2.1", "192.0.2.2", "192.0.2.3");
         for _ in 0..5 {
-            assert!(guess(&mut l, "a", "r1", now));
+            assert!(guess(&mut l, a, "r1", now));
         }
-        assert!(!guess(&mut l, "a", "r1", now));
-        assert!(!guess(&mut l, "a", "r2", now));
-        assert!(guess(&mut l, "b", "r1", now));
+        assert!(!guess(&mut l, a, "r1", now));
+        assert!(!guess(&mut l, a, "r2", now));
+        assert!(guess(&mut l, b, "r1", now));
         now += 61_000;
-        assert!(guess(&mut l, "a", "r1", now));
+        assert!(guess(&mut l, a, "r1", now));
         // One IPv6 network is one guesser, whichever of its addresses it uses.
         for i in 0..5 {
             assert!(guess(&mut l, &format!("2001:db8:1:2::{i}"), "r1", now));
         }
         assert!(!guess(&mut l, "2001:db8:1:2:ffff::9", "r1", now));
         assert!(guess(&mut l, "2001:db8:1:3::1", "r1", now));
-        assert_eq!(guesser("::ffff:10.0.0.1"), "::ffff:10.0.0.1");
+        assert_eq!(
+            AddrKey::of("::ffff:10.0.0.1".parse().unwrap()),
+            AddrKey::V4(Ipv4Addr::new(10, 0, 0, 1))
+        );
         // Right guesses do not count.
         for _ in 0..10 {
-            assert!(l.allow("c", "r1", now));
+            assert!(l.allow(ip(c), "r1", now));
         }
         // Many guessers at one target: past its cap only those without a recent miss may try, so the right
         // PIN still gets in; other targets are not touched.
@@ -342,19 +367,19 @@ mod tests {
             assert!(guess(&mut l, &format!("10.0.1.{i}"), "r3", now));
         }
         assert_eq!(l.misses_at("r3", now), 30);
-        assert!(!l.allow("10.0.1.1", "r3", now));
-        assert!(l.allow("10.0.1.1", "r4", now));
-        assert!(l.allow("10.0.2.1", "r3", now));
-        l.failed("10.0.2.1", "r3", now);
-        assert!(!l.allow("10.0.2.1", "r3", now));
+        assert!(!l.allow(ip("10.0.1.1"), "r3", now));
+        assert!(l.allow(ip("10.0.1.1"), "r4", now));
+        assert!(l.allow(ip("10.0.2.1"), "r3", now));
+        l.failed(ip("10.0.2.1"), "r3", now);
+        assert!(!l.allow(ip("10.0.2.1"), "r3", now));
         l.forget_target("r3");
-        assert!(l.allow("10.0.2.1", "r3", now));
+        assert!(l.allow(ip("10.0.2.1"), "r3", now));
     }
 
     #[test]
     fn locks_out_for_longer_each_time() {
         let mut l = Limiter::default();
-        let ip = "203.0.113.4";
+        let ip = ip("203.0.113.4");
         let mut now = 0;
         for lockout in [60_000, 120_000, 240_000] {
             for _ in 0..5 {
@@ -376,19 +401,22 @@ mod tests {
     #[test]
     fn budgets_per_address_spare_this_machine() {
         let mut b = Budget::new(3);
+        let at = |s: &str| -> IpAddr { s.parse().unwrap() };
         for _ in 0..3 {
-            assert!(b.allow("203.0.113.5", 0));
+            assert!(b.allow(at("203.0.113.5"), 0));
         }
-        assert!(!b.allow("203.0.113.5", 1));
-        assert!(b.allow("203.0.113.6", 1));
-        assert!(b.allow("203.0.113.5", 61_000));
+        assert!(!b.allow(at("203.0.113.5"), 1));
+        assert!(b.allow(at("203.0.113.6"), 1));
+        assert!(b.allow(at("203.0.113.5"), 61_000));
         for _ in 0..10 {
-            assert!(b.allow("127.0.0.1", 2));
-            assert!(b.allow("::1", 2));
-            assert!(b.allow("?", 2));
+            assert!(b.allow(at("127.0.0.1"), 2));
+            assert!(b.allow(at("::1"), 2));
         }
-        assert_eq!(address_key("2001:db8:1:2::7").as_deref(), Some("2001:db8:1:2::/64"));
-        assert_eq!(address_key("::ffff:127.0.0.1"), None);
+        assert_eq!(
+            address_key(at("2001:db8:1:2::7")),
+            Some(AddrKey::V6Net([0x2001, 0xdb8, 1, 2]))
+        );
+        assert_eq!(address_key(at("::ffff:127.0.0.1")), None);
     }
 
     #[test]
@@ -417,10 +445,11 @@ mod tests {
     fn compares_keys_and_reads_cookies() {
         assert!(same_key("1234", "1234"));
         assert!(!same_key("1234", "1235"));
-        assert_eq!(from_user_data(&to_user_data("abc", None)), ("abc".into(), None));
+        let abc = Uid::from("abc");
+        assert_eq!(from_user_data(&to_user_data(&abc, None)), (Some(abc.clone()), None));
         let ip: IpAddr = "2001:db8::7".parse().unwrap();
-        assert_eq!(from_user_data(&to_user_data("abc", Some(ip))), ("abc".into(), Some(ip)));
-        assert_eq!(from_user_data(&[0; 256]), (String::new(), None));
+        assert_eq!(from_user_data(&to_user_data(&abc, Some(ip))), (Some(abc), Some(ip)));
+        assert_eq!(from_user_data(&[0; 256]), (None, None));
         assert_ne!(Auth::new(&[1; 32]).netcode_key(), Auth::new(&[2; 32]).netcode_key());
         assert_eq!(
             read_cookie(Some("a=1; fb_debug=x.y.z; b=2"), DEBUG_COOKIE),

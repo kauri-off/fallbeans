@@ -214,7 +214,7 @@ mod tests {
     fn lines_read_as_a_clock() {
         let l = fb_net::logbook::LogLine {
             at: 1_759_691_000_042,
-            level: "WARN",
+            level: bevy::log::Level::WARN,
             target: "fb_client::net".into(),
             msg: "lost".into(),
         };

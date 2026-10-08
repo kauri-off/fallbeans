@@ -35,7 +35,7 @@ pub struct GameMeta {
     pub goal: &'static str,
     /// Round length in seconds (60–180).
     pub duration: f64,
-    pub min_players: Option<u32>,
+    pub min_players: u32,
     /// Grab (Q / right mouse) does something special in this game.
     pub grab: bool,
     /// A big, busy map: planned as the last round of a game when possible.
@@ -59,10 +59,15 @@ impl GameMeta {
             desc,
             goal,
             duration,
-            min_players: None,
+            min_players: 1,
             grab: false,
             finale: false,
         }
+    }
+
+    /// A map that is not a game (the lobby, the podium): no description and no end.
+    pub const fn place(id: &'static str, title: &'static str) -> Self {
+        Self::new(id, title, Genre::Points, "", "", f64::INFINITY)
     }
 
     /// What is wrong with the description; empty when it is fine.
@@ -89,8 +94,8 @@ impl GameMeta {
         if self.duration.fract() != 0.0 || !(60.0..=180.0).contains(&self.duration) {
             out.push(format!("meta.duration: {} (a whole number, 60…180)", self.duration));
         }
-        if self.min_players.is_some_and(|n| !(1..=8).contains(&n)) {
-            out.push("meta.minPlayers: 1…8".to_string());
+        if !(1..=8).contains(&self.min_players) {
+            out.push("meta.min_players: 1…8".to_string());
         }
         out
     }

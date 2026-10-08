@@ -47,38 +47,27 @@ const EXPRS: [Expr; 10] = [
 
 // ---------------------------------------------------------------- a small canvas
 
-type Rgba = [f32; 4];
-
-fn rgba(hex: &str, a: f32) -> Rgba {
-    let c = crate::view::hex(hex).to_srgba();
-    [c.red, c.green, c.blue, a]
-}
-
 /// Straight-alpha sRGB pixels, blended as a 2D canvas does.
 struct Canvas {
-    px: Vec<Rgba>,
+    px: Vec<Srgba>,
 }
 
 impl Canvas {
     fn new() -> Self {
         Self {
-            px: vec![[0.0; 4]; TEX * TEX],
+            px: vec![Srgba::NONE; TEX * TEX],
         }
     }
 
-    fn blend(&mut self, i: usize, c: Rgba, cov: f32) {
-        let a = c[3] * cov;
+    fn blend(&mut self, i: usize, c: Srgba, cov: f32) {
+        let a = c.alpha * cov;
         if a <= 0.0 {
             return;
         }
         let d = self.px[i];
-        let out_a = a + d[3] * (1.0 - a);
-        let mut o = [0.0; 4];
-        for k in 0..3 {
-            o[k] = (c[k] * a + d[k] * d[3] * (1.0 - a)) / out_a.max(1e-6);
-        }
-        o[3] = out_a;
-        self.px[i] = o;
+        let out_a = a + d.alpha * (1.0 - a);
+        let mix = |s: f32, t: f32| (s * a + t * d.alpha * (1.0 - a)) / out_a.max(1e-6);
+        self.px[i] = Srgba::new(mix(c.red, d.red), mix(c.green, d.green), mix(c.blue, d.blue), out_a);
     }
 
     /// Coverage of a closed polygon (non-zero winding), 4 sub-rows per pixel, exact across a row.
@@ -122,7 +111,7 @@ impl Canvas {
         cov
     }
 
-    fn fill(&mut self, poly: &[Vec2], paint: impl Fn(usize, usize) -> Rgba, clip: Option<&[f32]>) {
+    fn fill(&mut self, poly: &[Vec2], paint: impl Fn(usize, usize) -> Srgba, clip: Option<&[f32]>) {
         let cov = Self::coverage(poly);
         for (i, c) in cov.iter().enumerate() {
             let c = c.min(1.0) * clip.map_or(1.0, |m| m[i].min(1.0));
@@ -133,7 +122,7 @@ impl Canvas {
     }
 
     /// A polyline of `width` with round caps and joins.
-    fn stroke(&mut self, pts: &[Vec2], closed: bool, width: f32, color: Rgba) {
+    fn stroke(&mut self, pts: &[Vec2], closed: bool, width: f32, color: Srgba) {
         let mut cov = vec![0f32; TEX * TEX];
         let r = width / 2.0;
         let n = if closed { pts.len() } else { pts.len() - 1 };
@@ -164,7 +153,7 @@ impl Canvas {
     fn image(&self) -> Image {
         let mut data = Vec::with_capacity(TEX * TEX * 4);
         for p in &self.px {
-            for c in p {
+            for c in [p.red, p.green, p.blue, p.alpha] {
                 data.push((c.clamp(0.0, 1.0) * 255.0).round() as u8);
             }
         }
@@ -293,13 +282,14 @@ fn m(d: f32) -> f32 {
     d / (X1 - X0) * TEX as f32
 }
 
-const INK: &str = "#3a0f22";
-const TONGUE: &str = "#ff6f8f";
+const INK: Srgba = Srgba::new(58.0 / 255.0, 15.0 / 255.0, 34.0 / 255.0, 1.0);
+const TONGUE: Srgba = Srgba::new(1.0, 111.0 / 255.0, 143.0 / 255.0, 1.0);
+const TEAR: Srgba = Srgba::new(140.0 / 255.0, 210.0 / 255.0, 1.0, 1.0);
 
 /// The mouth of an expression, drawn into a texture.
 fn draw(e: Expr) -> Image {
     let mut g = Canvas::new();
-    let ink = rgba(INK, 1.0);
+    let ink = INK;
     let cx = px(0.0);
     let my = py(1.095);
     let open_mouth = |g: &mut Canvas, w: f32, h: f32, down: bool, top: f32| {
@@ -321,13 +311,13 @@ fn draw(e: Expr) -> Image {
         let ty = if down { y0 - hh * 0.05 } else { y0 + hh * 0.95 };
         g.fill(
             &ellipse(Vec2::new(cx, ty), hw * 0.55, hh * 0.45),
-            |_, _| rgba(TONGUE, 1.0),
+            |_, _| TONGUE,
             Some(&clip),
         );
         if !down {
             g.fill(
                 &rect(cx - hw, y0 - hh * 0.2, hw * 2.0, hh * 0.3),
-                |_, _| [1.0; 4],
+                |_, _| Srgba::WHITE,
                 Some(&clip),
             );
         }
@@ -346,7 +336,11 @@ fn draw(e: Expr) -> Image {
         Expr::Surprised => g.fill(&ellipse(Vec2::new(cx, py(1.085)), m(0.03), m(0.036)), |_, _| ink, None),
         Expr::Scared => {
             g.fill(&ellipse(Vec2::new(cx, py(1.08)), m(0.04), m(0.052)), |_, _| ink, None);
-            g.fill(&rect(cx - m(0.03), py(1.12), m(0.06), m(0.012)), |_, _| [1.0; 4], None);
+            g.fill(
+                &rect(cx - m(0.03), py(1.12), m(0.06), m(0.012)),
+                |_, _| Srgba::WHITE,
+                None,
+            );
         }
         Expr::Sad => arc(&mut g, 0.1, -0.03, 0.013, 1.095),
         Expr::Cry => {
@@ -370,7 +364,7 @@ fn draw(e: Expr) -> Image {
                     &tear,
                     |_, y| {
                         let f = ((y as f32 - t0) / (t1 - t0)).clamp(0.0, 1.0);
-                        [140.0 / 255.0, 210.0 / 255.0, 1.0, 0.95 + (0.15 - 0.95) * f]
+                        TEAR.with_alpha(0.95 + (0.15 - 0.95) * f)
                     },
                     None,
                 );
@@ -392,7 +386,7 @@ fn draw(e: Expr) -> Image {
             // Gritted teeth.
             let (w, h) = (m(0.11), m(0.04));
             let box_ = round_rect(cx - w / 2.0, my - h / 2.0, w, h, h * 0.45);
-            g.fill(&box_, |_, _| [1.0; 4], None);
+            g.fill(&box_, |_, _| Srgba::WHITE, None);
             g.stroke(&box_, true, m(0.009), ink);
             g.stroke(
                 &[Vec2::new(cx - w / 2.0, my), Vec2::new(cx + w / 2.0, my)],
@@ -675,7 +669,7 @@ fn make_kit(
             patch: meshes.add(parts.patch),
             brow: meshes.add(parts.brow),
             brow_mat: materials.add(StandardMaterial {
-                base_color: crate::view::hex(INK),
+                base_color: INK.into(),
                 perceptual_roughness: 0.6,
                 ..default()
             }),
