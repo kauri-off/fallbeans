@@ -323,7 +323,11 @@ fn update_box(
         update_state(p, f, &state, can);
         if let Some(c) = &crash.0 {
             let report = c.report.display().to_string();
-            let msg = if c.gpu_lost { text::gpu_lost(&report) } else { text::crashed(&report) };
+            let msg = if c.gpu_lost {
+                text::gpu_lost(&report)
+            } else {
+                text::crashed(&report)
+            };
             let t = rich(p, f, &msg, 13.0, RED_INK);
             wrap_anywhere(p, t);
             button(p, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);

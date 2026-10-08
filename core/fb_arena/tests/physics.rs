@@ -440,6 +440,32 @@ fn does_not_catch_a_ledge_too_high_or_when_not_pushing_towards_it() {
 }
 
 #[test]
+fn does_not_catch_a_ledge_that_cannot_be_grabbed() {
+    let mut b = Builder::new(1, false);
+    block(&mut b, 0.0, -1.0, 0.0, 20.0, 2.0, 40.0);
+    let col = ColliderOpts {
+        no_grab: true,
+        ..Default::default()
+    };
+    b.box_(
+        0.0,
+        1.3,
+        7.0,
+        20.0,
+        2.6,
+        6.0,
+        pal::BLUE,
+        PrimOpts {
+            col,
+            ..Default::default()
+        },
+    );
+    let mut s = Sim::new(b);
+    assert!(!jump_at(&mut s, FORWARD).0);
+    assert!(s.body.pos.y < 0.1, "{}", s.body.pos.y);
+}
+
+#[test]
 fn carries_on_climbing_from_a_full_state_exactly() {
     let mut a = ledge_course(2.6);
     a.reset(0.0, 0.02, 0.0);

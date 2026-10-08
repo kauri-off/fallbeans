@@ -58,8 +58,6 @@ pub enum MapEvent {
 /// An event of one section of a course.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SegEvent {
-    /// Somebody stands on a gate's button (or nobody any more), from `at`.
-    Button { on: bool, at: f64 },
     /// A door breaks.
     Door(u32),
     /// A real pane of a hidden bridge has been stood on: it shows.

@@ -32,6 +32,8 @@ pub struct ColliderOpts {
     pub trigger: bool,
     pub ladder: bool,
     pub launch: Option<V3>,
+    /// Its edge cannot be grabbed and climbed.
+    pub no_grab: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -63,6 +65,7 @@ pub struct Collider {
     pub trigger: bool,
     pub ladder: bool,
     pub launch: Option<V3>,
+    pub no_grab: bool,
     pub cur: Affine,
     pub prev: Affine,
     pub inv: Affine,
@@ -100,6 +103,7 @@ impl Collider {
             trigger: o.trigger || o.ladder,
             ladder: o.ladder,
             launch: o.launch,
+            no_grab: o.no_grab,
             cur: Affine::IDENTITY,
             prev: Affine::IDENTITY,
             inv: Affine::IDENTITY,

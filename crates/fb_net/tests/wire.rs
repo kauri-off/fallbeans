@@ -82,7 +82,6 @@ fn event_kind(e: &MapEventKind) -> &'static str {
         MapEventKind::Ko { .. } => "Ko",
         MapEventKind::Map(MapEvent::Portal { .. }) => "Portal",
         MapEventKind::Map(MapEvent::Seg { ev, .. }) => match ev {
-            SegEvent::Button { .. } => "Seg.Button",
             SegEvent::Door(_) => "Seg.Door",
             SegEvent::Safe(_) => "Seg.Safe",
             SegEvent::Fall { .. } => "Seg.Fall",
@@ -359,7 +358,6 @@ fn map_events() -> Vec<MapEventKind> {
             from: 0,
             t: 20.5,
         }),
-        seg(SegEvent::Button { on: true, at: 5.0 }),
         seg(SegEvent::Door(2)),
         seg(SegEvent::Safe(7)),
         seg(SegEvent::Fall { i: 3, at: 9.75 }),

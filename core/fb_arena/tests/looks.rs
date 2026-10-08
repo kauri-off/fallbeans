@@ -55,7 +55,6 @@ fn looks_run_through_rounds() {
         "portal",
         "portal-exit",
         "portal-lamp",
-        "gate-lamp",
         "drum-rims",
         "plate-tint",
         "bell",

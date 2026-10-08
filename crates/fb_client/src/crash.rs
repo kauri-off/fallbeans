@@ -176,7 +176,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fb-crash-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(MARKER), "/x/crash-1.txt\n").unwrap();
-        let crash = |gpu_lost| Some(Crash { report: PathBuf::from("/x/crash-1.txt"), gpu_lost });
+        let crash = |gpu_lost| {
+            Some(Crash {
+                report: PathBuf::from("/x/crash-1.txt"),
+                gpu_lost,
+            })
+        };
         assert_eq!(take_marker(&dir), crash(false));
         assert_eq!(take_marker(&dir), None);
         fs::write(dir.join(MARKER), format!("/x/crash-1.txt\n{GPU_LOST}")).unwrap();

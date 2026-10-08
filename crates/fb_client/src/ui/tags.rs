@@ -4,6 +4,7 @@
 //! beans behind the course (a wall, the floor over one that fell) fade out.
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 use fb_net::*;
 use fb_proto::Pid;
 use fb_sim::collider::ColId;
@@ -34,7 +35,9 @@ impl Plugin for TagsPlugin {
             PostUpdate,
             place_tags
                 .after(TransformSystems::Propagate)
-                .after(VisibilitySystems::VisibilityPropagate),
+                .after(VisibilitySystems::VisibilityPropagate)
+                // Laid out this frame: otherwise a tag lags the scene by a frame now and then and jumps.
+                .before(UiSystems::Layout),
         );
     }
 }

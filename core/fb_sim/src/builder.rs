@@ -306,17 +306,29 @@ impl Builder {
     }
 
     pub fn rails(&mut self, z0: f64, z1: f64, half_width: f64, y: f64, p: Palette) {
+        self.fence(z0, z1, half_width, y, 1.2, false, p);
+    }
+
+    /// Side walls `h` high; `no_grab`: their top edge cannot be climbed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fence(&mut self, z0: f64, z1: f64, half_width: f64, y: f64, h: f64, no_grab: bool, p: Palette) {
         let len = (z1 - z0).abs();
         for s in [-1.0, 1.0] {
             self.box_(
                 s * (half_width + 0.4),
-                y + 0.6,
+                y + h / 2.0,
                 (z0 + z1) / 2.0,
                 0.8,
-                1.2,
+                h,
                 len,
                 p,
-                PrimOpts::default(),
+                PrimOpts {
+                    col: ColliderOpts {
+                        no_grab,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             );
         }
     }

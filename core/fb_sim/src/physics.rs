@@ -226,6 +226,7 @@ fn holdable(c: &Collider) -> bool {
         && c.bounce == 0.0
         && c.pad == 0.0
         && c.slip < 0.5
+        && !c.no_grab
 }
 
 /// A moving platform the body rides on; not a hazard like a rotor arm or a hammer.

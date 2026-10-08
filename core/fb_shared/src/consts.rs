@@ -1,5 +1,5 @@
 /// Bumped on every change to a replicated component or message (`fb_net`): old clients cannot connect.
-pub const WIRE_VERSION: u32 = 21;
+pub const WIRE_VERSION: u32 = 22;
 
 /// The simulation's fingerprint: FNV-1a of `fb_arena/tests/determinism.txt`, the recorded end states of full
 /// rounds on every map. A change to the physics, a map or the bots changes a hash there (`cargo xtask check`

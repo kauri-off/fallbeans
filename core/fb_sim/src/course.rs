@@ -13,7 +13,7 @@ use crate::map::{Checkpoint, Cx, Finish, MapCtx, MapEvent, MapSpec, OnTick, PosT
 use crate::math::V3;
 use crate::nodes::{NodeId, ROOT};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
-use crate::scene::{Palette, Piece, lamp_part, pal};
+use crate::scene::{Palette, pal};
 use fb_shared::rng::{Rng, shuffle};
 
 pub type SegHandler = Box<dyn FnMut(&mut Cx, &SegEvent) + Send + Sync>;
@@ -35,10 +35,6 @@ pub struct SegCtx<'a> {
 /// Bots' notes that hold across the sections of a course.
 #[derive(Clone, Copy)]
 pub struct CourseNotes {
-    /// Helping at a gate: until when, on which side, and the gate (its z) last helped at.
-    pub help: Note<f64>,
-    pub help_side: Note<f64>,
-    pub helped: Note<f64>,
     /// Seconds spent pushing a door that holds.
     pub push: Note<f64>,
 }
@@ -136,12 +132,7 @@ fn dynamic() -> PrimOpts {
 pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     let spawns = b.start_area(0.0);
     let mut handlers: BTreeMap<u32, Vec<SegHandler>> = BTreeMap::new();
-    let notes = CourseNotes {
-        help: b.note(),
-        help_side: b.note(),
-        helped: b.note(),
-        push: b.note(),
-    };
+    let notes = CourseNotes { push: b.note() };
     let mut ticks: Vec<OnTick> = Vec::new();
     let mut routes: Vec<Vec<Vec<Waypoint>>> = Vec::new();
     let mut forbidden: Vec<PosTest> = Vec::new();
@@ -444,6 +435,9 @@ pub fn hammer_bridges(n: u32) -> Segment {
     })
 }
 
+/// Fences along the door sections: higher than a jump (and not to be climbed).
+const DOOR_FENCE: f64 = 2.4;
+
 /// Open fraction (0 shut … 1 open) of a door that opens `share` of every `period`, smoothly.
 pub fn cycle_open(t: f64, period: f64, phase: f64, share: f64) -> f64 {
     let f = (((t + phase) % period) + period) % period / period;
@@ -461,7 +455,7 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
         let gap_z = 7.0;
         let len = rows as f64 * gap_z + 2.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
-        s.b.rails(s.z, s.z + len, w / 2.0, y, pal::PINK);
+        s.b.fence(s.z, s.z + len, w / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let mut routes: Vec<Vec<Waypoint>> = vec![Vec::new(), Vec::new()];
         let door_w = 3.2;
         for r in 0..rows {
@@ -541,168 +535,6 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
     })
 }
 
-/// The heavy gate's button state: transitions from the server; the gate's lift follows from them.
-struct Gate {
-    pressed: bool,
-    level0: f64,
-    at: f64,
-    period: f64,
-    phase: f64,
-}
-
-const GATE_RATE: f64 = 2.2;
-
-impl Gate {
-    fn held(&self, t: f64) -> f64 {
-        if self.pressed {
-            1f64.at_most(self.level0 + 0f64.at_least(t - self.at) * GATE_RATE)
-        } else {
-            0f64.at_least(self.level0 - 0f64.at_least(t - self.at) * GATE_RATE)
-        }
-    }
-
-    fn open(&self, t: f64) -> f64 {
-        cycle_open(t, self.period, self.phase, 0.22).at_least(self.held(t))
-    }
-
-    fn set_pressed(&mut self, on: bool, t: f64) {
-        self.level0 = self.held(t);
-        self.at = t;
-        self.pressed = on;
-    }
-}
-
-/// A heavy gate that only opens now and then by itself, or while somebody stands on one of the
-/// buttons beside it: hold it for the others (and lose time), or wait for your turn.
-pub fn coop_gate(w: f64) -> Segment {
-    Box::new(move |s| {
-        let y = s.y;
-        let len = 16.0;
-        let wz = s.z + 10.0;
-        s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::TEAL, d());
-        s.b.rails(s.z, s.z + len, w / 2.0, y, pal::PINK);
-        let gw = 4.4;
-        for side in [-1.0, 1.0] {
-            let x = side * (gw / 2.0 + (w / 2.0 - gw / 2.0) / 2.0);
-            s.b.box_(x, y + 1.8, wz, w / 2.0 - gw / 2.0, 3.6, 1.0, pal::PURPLE, d());
-        }
-        s.b.box_(0.0, y + 3.9, wz, w, 0.6, 1.1, pal::YELLOW, d());
-        let period = 8.0 + s.rng() * 3.0;
-        let phase = s.rng() * period;
-        let gate = s.b.state(Gate {
-            pressed: false,
-            level0: 0.0,
-            at: -1e9,
-            period,
-            phase,
-        });
-        s.on(move |cx, ev| {
-            if let SegEvent::Button { on, at } = *ev {
-                cx.world.st_mut(gate).set_pressed(on, at);
-            }
-        });
-        for side in [-1.0, 1.0] {
-            let o = PrimOpts {
-                dynamic: true,
-                col: ColliderOpts {
-                    sinks: true,
-                    nav_skip: true,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let node =
-                s.b.box_(side * gw / 4.0, y + 1.8, wz, gw / 2.0, 3.6, 0.5, pal::ORANGE, o)
-                    .node;
-            s.b.mover(move |t, ctx| {
-                let open = ctx.st(gate).open(t);
-                ctx.node(node).pos.x = side * (gw / 4.0 + open * (gw / 2.0 - 0.05));
-            });
-        }
-        // Buttons: round plates at both sides of the approach.
-        let mut buttons: Vec<ColId> = Vec::new();
-        let bx = w / 2.0 - 2.0;
-        let bz = s.z + 4.0;
-        for side in [-1.0, 1.0] {
-            let rim = PrimOpts {
-                no_collide: true,
-                surface: Some("rubber"),
-                ..Default::default()
-            };
-            s.b.cyl(side * bx, y + 0.02, bz, 1.25, 0.1, pal::hex("#5a3fb8"), rim);
-            let top = PrimOpts {
-                surface: Some("rubber"),
-                ..Default::default()
-            };
-            buttons.push(s.b.cyl(side * bx, y + 0.1, bz, 1.0, 0.2, pal::RED, top).col());
-        }
-        if !s.b.server() {
-            let lamp = s.b.anchor(0.0, y + 4.6, wz, ROOT);
-            s.b.special_look(lamp, "gate-lamp", &[lamp_part(0.35)], move |w, t, out| {
-                let on = w.st(gate).open(t) > 0.5;
-                out.pieces
-                    .push(Piece::at(0, 0.0, 0.0, 0.0).tone(if on { 1.0 } else { 0.0 }));
-            });
-        }
-        // Server: somebody standing on a button holds the gate open.
-        let (seg, notes) = (s.seg(), s.notes);
-        s.tick(move |cx, t| {
-            let mut any = false;
-            for id in cx.bodies.ids() {
-                if let Some(body) = cx.bodies.get(id)
-                    && body.grounded
-                    && buttons.iter().any(|&c| body.ground_col == c as i32)
-                {
-                    any = true;
-                }
-            }
-            if any != cx.world.st(gate).pressed && t >= 0.0 {
-                cx.world.st_mut(gate).set_pressed(any, t);
-                seg_emit(cx, seg, SegEvent::Button { on: any, at: t });
-            }
-        });
-        let route = vec![
-            Waypoint::spread(0.0, s.z + 2.0, 1.0),
-            // Helpful bots go and stand on a button for a while when the gate is shut and nobody helps.
-            Waypoint::spread(0.0, wz - 2.0, 0.8).detour(move |bot| {
-                if bot.mem.get(notes.help).unwrap_or(-1e9) > bot.t {
-                    let side = bot.mem.get(notes.help_side).unwrap_or(1.0);
-                    return Some((side * bx, bz));
-                }
-                if bot.mem.get(notes.helped) == Some(wz) || bot.body.pos.z > wz - 3.5 || bot.t <= 0.0 {
-                    return None;
-                }
-                let g = bot.world.st(gate);
-                if g.open(bot.t) < 0.3
-                    && !g.pressed
-                    && bot.mem.traits.aggro < 0.35
-                    && bot.rng.next() < 0.4 * BOT_DT * 10.0
-                {
-                    bot.mem.set(notes.helped, wz);
-                    let side = if bot.body.pos.x < 0.0 { -1.0 } else { 1.0 };
-                    bot.mem.set(notes.help_side, side);
-                    let until = bot.t + 3.0 + bot.rng.next() * 3.0;
-                    bot.mem.set(notes.help, until);
-                    return Some((side * bx, bz));
-                }
-                None
-            }),
-            Waypoint::spread(0.0, wz + 2.0, 0.3).wait(move |bot| {
-                let g = bot.world.st(gate);
-                g.open(bot.t) > 0.75 && g.open(bot.t + 0.5) > 0.7
-            }),
-            Waypoint::spread(0.0, s.z + len - 1.0, 1.0),
-        ];
-        SegOut {
-            z: s.z + len,
-            y,
-            routes: vec![route],
-            forbidden: Some(Box::new(move |p| (p.z - wz).abs() < 1.0 && p.y > y + 2.0)),
-            ..Default::default()
-        }
-    })
-}
-
 /// How long (s) a door a client's prediction broke stays open without the server's word.
 const DOOR_PREDICTED: f64 = 1.0;
 
@@ -727,7 +559,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
         let gap_z = 9.0;
         let len = rows as f64 * gap_z + 3.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w + 1.0, 2.0, len, pal::BLUE, d());
-        s.b.rails(s.z, s.z + len, (w + 1.0) / 2.0, y, pal::PINK);
+        s.b.fence(s.z, s.z + len, (w + 1.0) / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let n = 5;
         let dw = w / n as f64;
         let mut doors: Vec<Door> = Vec::new();
@@ -1453,7 +1285,8 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                     )
                     .node;
                 s.b.mover(move |t, ctx| {
-                    ctx.node(node).pos.x = side * (w / 2.0 + (w / 4.0 + 0.25) - out(t) * (w / 2.0 - 0.1));
+                    // Pulled back a little inside its housing: no face shared with it.
+                    ctx.node(node).pos.x = side * (w / 2.0 + 0.15 + (w / 4.0 + 0.25) - out(t) * (w / 2.0 + 0.05));
                 });
             }
             route.push(Waypoint::spread(0.0, pz - 2.0, 0.5));
