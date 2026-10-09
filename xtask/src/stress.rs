@@ -52,6 +52,9 @@ pub struct StressArgs {
     /// Fails when the room tick's 99th percentile is above this, µs.
     #[arg(long, default_value_t = 1000)]
     max_tick_us: u64,
+    /// Fails when the server's longest frame (a stall: the ticks due wait) went above this, ms.
+    #[arg(long, default_value_t = 30.0)]
+    max_frame_ms: f64,
     /// Fails when the server process used more than this share of one core in a window, %.
     #[arg(long, default_value_t = 60.0)]
     max_cpu: f64,
@@ -594,6 +597,9 @@ fn report(a: &StressArgs, dir: &Path) -> Result<()> {
     }
     if p99 > a.max_tick_us as f64 {
         failures.push(format!("server: tick p99 {p99:.0} µs (max {})", a.max_tick_us));
+    }
+    if frame_max > a.max_frame_ms {
+        failures.push(format!("server: frame max {frame_max:.0} ms (max {})", a.max_frame_ms));
     }
     if cpu > a.max_cpu {
         failures.push(format!("server: cpu {cpu:.1}% of a core (max {})", a.max_cpu));
