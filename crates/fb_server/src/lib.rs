@@ -1,5 +1,6 @@
 //! Authoritative server: rooms of players and bots over UDP and WebSocket. A library so that the client's
 //! tests can run a real server in their process.
+#![warn(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 mod auth;
 mod http;
 mod metrics;

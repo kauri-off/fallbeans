@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::time::common_conditions::on_real_timer;
 use fb_arena::PawnStatus;
 use fb_net::*;
-use fb_proto::Pid;
+use fb_proto::PlayerId;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::{INPUT_HOLD, TICK_RATE};
 use lightyear::connection::client::Disconnecting;
@@ -26,7 +26,7 @@ use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
 use crate::rooms::{Backoff, ConnId, Inputs, Out, ticks};
 
-/// A bean in play in a room (`RoomTag`, `PlayerId`).
+/// A bean in play in a room (`RoomTag`, `BeanId`).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Pawn;
 
@@ -42,7 +42,7 @@ struct PawnEntity {
 #[derive(Resource)]
 pub struct Rooms {
     pub hub: Hub,
-    pawns: BTreeMap<(u32, Pid), PawnEntity>,
+    pawns: BTreeMap<(u32, PlayerId), PawnEntity>,
     rounds: BTreeMap<u32, Entity>,
     /// The room each link is in, as last told to Replicon.
     in_room: BTreeMap<ConnId, u32>,
@@ -168,7 +168,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
     let base = RoomOptions {
         min_players: if opts.solo { 1 } else { 2 },
         seed: opts.seed,
-        intro_ticks: ticks(opts.intro) as u32,
+        intro_ticks: u32::try_from(ticks(opts.intro)).unwrap_or(u32::MAX),
         dev: opts.dev,
         eliminate: !opts.respawn,
         ..default()
@@ -320,7 +320,7 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
         if st.gap > 0 && st.gap.is_multiple_of(still) && (st.gap / still).is_power_of_two() {
             warn!(
                 room,
-                id,
+                %id,
                 secs = st.gap / rate,
                 behind = st.behind,
                 "still no input from the player"
@@ -331,13 +331,13 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
                 st.hushed.0 += 1;
                 st.hushed.1 += ticks;
             } else {
-                warn!(room, id, ms = ms(ticks), behind, "input gap");
+                warn!(room, %id, ms = ms(ticks), behind, "input gap");
                 st.quiet_until = now + QUIET_S * rate;
             }
         }
         if st.hushed.0 > 0 && now >= st.quiet_until {
             let (n, ticks) = core::mem::take(&mut st.hushed);
-            warn!(room, id, n, ms = ms(ticks), "more input gaps in {QUIET_S} s");
+            warn!(room, %id, n, ms = ms(ticks), "more input gaps in {QUIET_S} s");
             st.quiet_until = now + QUIET_S * rate;
         }
     }
@@ -352,7 +352,7 @@ struct LinkInputs<'a, 'w, 's> {
 }
 
 impl Inputs for LinkInputs<'_, '_, '_> {
-    fn frame(&mut self, _: Pid, conn: ConnId, tick: u32) -> InputFrame {
+    fn frame(&mut self, _: PlayerId, conn: ConnId, tick: u32) -> InputFrame {
         let Some(&e) = self.owners.get(&conn) else {
             return InputFrame::IDLE;
         };
@@ -364,7 +364,7 @@ impl Inputs for LinkInputs<'_, '_, '_> {
         f
     }
 
-    fn view(&mut self, _: Pid, conn: ConnId) -> u32 {
+    fn view(&mut self, _: PlayerId, conn: ConnId) -> u32 {
         self.views.get(&conn).copied().unwrap_or(0)
     }
 }
@@ -375,7 +375,6 @@ type Bodies = (
     &'static mut RemotePose,
     &'static mut Hold,
 );
-
 fn tick_rooms(
     timeline: Res<LocalTimeline>,
     mut rooms: ResMut<Rooms>,
@@ -398,6 +397,11 @@ fn tick_rooms(
         .values()
         .filter_map(|p| Some((p.owner?, p.entity)))
         .collect();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "milliseconds of delay"
+    )]
     let views: BTreeMap<ConnId, u32> = delays
         .iter()
         .map(|(link, d)| (conn_of(link), d.delay.value.to_num::<f64>().round() as u32))
@@ -522,7 +526,7 @@ fn publish(
         let round = || Round {
             arena: room.arena_id,
             kind: room.arena.kind,
-            map: map.into(),
+            map,
             seed: room.arena.seed,
             zero_tick,
             fall: room.arena.fall,
@@ -570,8 +574,8 @@ fn publish(
             let full = BodyFull {
                 body: p.body.clone(),
                 teleports: p.teleports,
-                checkpoint: p.checkpoint.map(|c| c as u16),
-                spawn: p.spawn_i as u16,
+                checkpoint: p.checkpoint.and_then(|c| u16::try_from(c).ok()),
+                spawn: u16::try_from(p.spawn_i).unwrap_or(u16::MAX),
             };
             let hold = Hold {
                 target: p.grabbing,
@@ -597,7 +601,7 @@ fn publish(
             let mut e = commands.spawn((
                 Pawn,
                 RoomTag(key),
-                PlayerId(p.id),
+                BeanId(p.id),
                 BeanColor(color),
                 InputState::new(tick),
                 RemotePose::of(&full, &hold),
@@ -678,7 +682,7 @@ fn measure_rtt(rooms: Option<ResMut<Rooms>>, links: Query<(Entity, &Link), With<
         let Some((key, id)) = rooms.hub.seat(conn_of(link)) else {
             continue;
         };
-        let rtt = l.stats.rtt.as_millis() as u32;
+        let rtt = u32::try_from(l.stats.rtt.as_millis()).unwrap_or(u32::MAX);
         if let Some(r) = rooms.hub.rooms.get_mut(&key) {
             r.set_rtt(id, rtt);
         }

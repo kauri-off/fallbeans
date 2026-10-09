@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use fb_proto::{AwardKind, Cause, DenyReason, DevCmd, Goto, Hazard, MapEvent, MapEventKind, Mode, Phase, RejectReason};
 use fb_shared::TICK_RATE;
-use fb_shared::game::{ArenaKind, FallBehaviour};
+use fb_shared::game::{ArenaKind, FallBehaviour, MapId};
 use fb_shared::outfit::{Glasses, Hat, Tint};
 use fb_shared::rules::RoundNote;
 use fb_sim::map::SegEvent;
@@ -17,7 +17,7 @@ use serde_reflection::{ContainerFormat, Format, Named, Tracer, TracerConfig, Var
 
 use crate::wire::{POS_STEPS, SIZE_STEPS, TILT_DIR_STEPS, TILT_STEPS, VEL_STEPS, YAW_STEPS};
 use crate::{
-    Anim, BeanColor, BodyFull, ClientMsg, FbInput, Hold, MapEventMsg, PlayerId, ProtocolPlugin, RemotePose, Round,
+    Anim, BeanColor, BeanId, BodyFull, ClientMsg, FbInput, Hold, MapEventMsg, ProtocolPlugin, RemotePose, Round,
     ServerMsg, TICK,
 };
 
@@ -130,7 +130,7 @@ fn types() -> Vec<String> {
     trace::<ServerMsg>(&mut tracer);
     trace::<MapEventMsg>(&mut tracer);
     trace::<FbInput>(&mut tracer);
-    trace::<PlayerId>(&mut tracer);
+    trace::<BeanId>(&mut tracer);
     trace::<BeanColor>(&mut tracer);
     trace::<Round>(&mut tracer);
     trace::<BodyFull>(&mut tracer);
@@ -150,6 +150,7 @@ fn types() -> Vec<String> {
     trace::<Goto>(&mut tracer);
     trace::<Hat>(&mut tracer);
     trace::<MapEvent>(&mut tracer);
+    trace::<MapId>(&mut tracer);
     trace::<MapEventKind>(&mut tracer);
     trace::<Mode>(&mut tracer);
     trace::<Phase>(&mut tracer);

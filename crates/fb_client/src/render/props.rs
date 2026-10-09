@@ -29,7 +29,7 @@ pub struct Prop {
     /// A special's piece: its special moves it, and it gets no level-of-detail copies.
     pub special: bool,
     /// Scenery or a special's piece: its own transform is left alone (stars and mushrooms of the map
-    /// bob and squash; the scenery's are placed and scaled by `decor.rs`).
+    /// bob and squash; the scenery's are placed and scaled by `decor`).
     still: bool,
 }
 

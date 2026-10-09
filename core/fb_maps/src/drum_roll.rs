@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::{Palette, pal};
@@ -21,7 +21,7 @@ use crate::util::{deco, o};
 pub struct DrumRoll;
 
 static META: GameMeta = GameMeta::new(
-    "drum-roll",
+    MapId::DrumRoll,
     "Барабаны",
     Genre::Race,
     "Лестница из барабанов, которые то разгоняются, то замедляются (или батут на мостик над ними), барабаны с шипами, катки, брёвна, которые катят вбок и меняют направление. Порядок каждый раз свой!",
@@ -60,7 +60,7 @@ fn drum(
     };
     let d = b.cyl(0.0, 0.0, 0.0, r, len, p, opts).node;
     for k in 0..8 {
-        let a = (k as f64 / 8.0) * m::PI * 2.0;
+        let a = (f64::from(k) / 8.0) * m::PI * 2.0;
         let stripe = PrimOpts {
             parent: Some(d),
             ..deco()
@@ -78,7 +78,7 @@ fn drum(
     }
     // Pegs: bars across the drum that come round and sweep the top.
     for k in 0..pegs {
-        let a = (k as f64 / pegs.max(1) as f64) * m::PI * 2.0 + 0.4;
+        let a = (f64::from(k) / f64::from(pegs.max(1))) * m::PI * 2.0 + 0.4;
         let opts = PrimOpts {
             parent: Some(d),
             dynamic: true,
@@ -138,8 +138,8 @@ fn drum_stairs() -> Segment {
                 let ph = s.rng() * 6.0;
                 (
                     x,
-                    s.z + 5.8 + i as f64 * 4.8,
-                    y + 0.3 + i as f64 * 0.5,
+                    s.z + 5.8 + f64::from(i) * 4.8,
+                    y + 0.3 + f64::from(i) * 0.5,
                     Pulse { base, amp, w, ph },
                 )
             })
@@ -302,7 +302,8 @@ fn peg_drums(n: u32) -> Segment {
                 }
                 let phi = m::atan2(p.z - c, p.y - axis_y);
                 for k in 0..pegs {
-                    let mut d = ((k as f64 / pegs as f64) * m::PI * 2.0 + 0.4 + ang(bot.t) - phi) % (m::PI * 2.0);
+                    let mut d =
+                        ((f64::from(k) / f64::from(pegs)) * m::PI * 2.0 + 0.4 + ang(bot.t) - phi) % (m::PI * 2.0);
                     if d < 0.0 {
                         d += m::PI * 2.0;
                     }
@@ -340,7 +341,7 @@ fn roller_bridge(n: u32) -> Segment {
         let pitch = 1.3;
         s.b.box_(0.0, y - 1.0, s.z + 1.0, 10.0, 2.0, 2.0, pal::PURPLE, o());
         for i in 0..n {
-            let c = s.z + 2.0 + r + i as f64 * pitch;
+            let c = s.z + 2.0 + r + f64::from(i) * pitch;
             let sp = (if i % 2 == 1 { 1.0 } else { -1.0 }) * (2.0 + s.rng() * 2.0);
             drum(
                 s.b,
@@ -355,16 +356,16 @@ fn roller_bridge(n: u32) -> Segment {
                 0,
             );
         }
-        let end = s.z + 2.0 + n as f64 * pitch + 0.2;
+        let end = s.z + 2.0 + f64::from(n) * pitch + 0.2;
         for (x, f) in [(-2.0, 0.3), (2.0, 0.65)] {
-            s.b.bumper(x, y + 0.2, s.z + 2.0 + n as f64 * pitch * f, 0.7, 9.0);
+            s.b.bumper(x, y + 0.2, s.z + 2.0 + f64::from(n) * pitch * f, 0.7, 9.0);
         }
         s.b.box_(0.0, y - 1.0, end + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
         SegOut {
             z: end + 6.0,
             y,
             routes: vec![vec![
-                Waypoint::spread(0.0, s.z + 2.0 + n as f64 * pitch * 0.5, 0.5),
+                Waypoint::spread(0.0, s.z + 2.0 + f64::from(n) * pitch * 0.5, 0.5),
                 Waypoint::spread(0.0, end + 3.0, 1.0),
             ]],
             checkpoint: Some((end + 0.5, V3::new(0.0, y + 0.1, end + 3.0))),

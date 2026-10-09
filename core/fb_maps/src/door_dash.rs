@@ -6,12 +6,12 @@ use fb_sim::course::{
     timed_doors, with_rests,
 };
 use fb_sim::looks::LookId;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 
 pub struct DoorDash;
 
 static META: GameMeta = GameMeta::new(
-    "door-dash",
+    MapId::DoorDash,
     "Дверной переполох",
     Genre::Race,
     "Двери, которые ломаются (или нет), и двери по таймеру. Порядок испытаний каждый раз новый!",

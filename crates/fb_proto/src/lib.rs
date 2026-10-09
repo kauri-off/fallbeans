@@ -3,16 +3,15 @@
 //! sends passes `ClientMsg::check` (bounds and shapes) before the server looks at it.
 pub use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::ArenaKind;
+pub use fb_shared::game::MapId;
 use fb_shared::rules::RoundRow;
 use fb_shared::{CHAT_MAX, COLORS, EMOTES, ROOM_PIN_DIGITS};
 pub use fb_sim::map::MapEvent;
 use serde::{Deserialize, Serialize};
 
 pub use fb_maps::director::{Mode, Playlist};
+pub use fb_shared::PlayerId;
 pub use fb_shared::outfit::Outfit;
-
-/// A player's id in a room (small, sequential; not the network id).
-pub type Pid = u32;
 
 /// Room ids: short codes, as in a link to the room.
 pub fn valid_room_id(id: &str) -> bool {
@@ -80,7 +79,7 @@ pub struct Hello {
     pub room: Option<String>,
     pub pin: Option<String>,
     /// A practice round of this game, alone with bots.
-    pub practice: Option<String>,
+    pub practice: Option<MapId>,
     /// The suit colour picked last time (taken if nobody in the room has it) and the outfit.
     pub color: Option<u8>,
     pub outfit: Option<Outfit>,
@@ -105,7 +104,7 @@ pub enum DevCmd {
     EndRound,
     /// Start a game now: optional list of games, rounds, and exactly how many bots (replacing any).
     Start {
-        games: Vec<String>,
+        games: Vec<MapId>,
         rounds: Option<u32>,
         bots: Option<u32>,
     },
@@ -119,13 +118,13 @@ pub enum DevCmd {
         ticks: u32,
     },
     Teleport {
-        id: Option<Pid>,
+        id: Option<PlayerId>,
         p: [f64; 3],
         yaw: Option<f64>,
     },
     /// Teleport to the spawn, a checkpoint or just before the finish.
     Goto {
-        id: Option<Pid>,
+        id: Option<PlayerId>,
         to: Goto,
     },
     /// Add bots (in any phase; in a round they join it), optionally right next to the sender.
@@ -138,17 +137,17 @@ pub enum DevCmd {
         on: bool,
     },
     Kill {
-        id: Option<Pid>,
+        id: Option<PlayerId>,
     },
     /// Knock a bean over with this velocity.
     Knock {
-        id: Option<Pid>,
+        id: Option<PlayerId>,
         v: [f64; 3],
     },
     /// Make `actor` hold `target` for `s` seconds (as if the grab button were held).
     Grab {
-        actor: Option<Pid>,
-        target: Pid,
+        actor: Option<PlayerId>,
+        target: PlayerId,
         s: Option<f64>,
     },
     /// Seed of the next round's map.
@@ -179,9 +178,9 @@ pub enum ClientMsg {
     Abort,
     Playlist(Playlist),
     AddBot,
-    RemoveBot(Pid),
+    RemoveBot(PlayerId),
     /// The host makes another player the host.
-    Host(Pid),
+    Host(PlayerId),
     /// The host makes the room private (the server picks a PIN) or public.
     Access {
         private: bool,
@@ -205,12 +204,12 @@ fn ensure(ok: bool, what: &'static str) -> Result<(), &'static str> {
 }
 
 // (No upper bound: a room's ids start at 1 and only grow, past 65535 after heavy bot churn.)
-fn check_pid(id: Pid) -> Result<(), &'static str> {
-    ensure(id != 0, "player id")
+fn check_pid(id: PlayerId) -> Result<(), &'static str> {
+    ensure(id.0 != 0, "player id")
 }
 
-fn check_games(games: &[String]) -> Result<(), &'static str> {
-    ensure(games.len() <= 12 && games.iter().all(|g| chars_max(g, 32)), "games")
+fn check_games(games: &[MapId]) -> Result<(), &'static str> {
+    ensure(games.len() <= 12, "games")
 }
 
 fn finite(v: &[f64]) -> bool {
@@ -219,7 +218,7 @@ fn finite(v: &[f64]) -> bool {
 
 impl DevCmd {
     pub fn check(&self) -> Result<(), &'static str> {
-        let opt_pid = |id: &Option<Pid>| id.map_or(Ok(()), check_pid);
+        let opt_pid = |id: &Option<PlayerId>| id.map_or(Ok(()), check_pid);
         match self {
             DevCmd::SkipIntro | DevCmd::EndRound | DevCmd::Lobby | DevCmd::Bots { .. } => Ok(()),
             DevCmd::Warp { s } => ensure((0.0..=180.0).contains(s), "warp"),
@@ -283,7 +282,6 @@ impl ClientMsg {
                 ensure(chars_max(&h.name, 64), "name")?;
                 ensure(h.room.as_deref().is_none_or(valid_room_id), "room")?;
                 ensure(h.pin.as_deref().is_none_or(valid_pin), "pin")?;
-                ensure(h.practice.as_deref().is_none_or(|p| chars_max(p, 32)), "practice")?;
                 h.color.map_or(Ok(()), color)
             }
             ClientMsg::Name(name) => ensure(chars_max(name, 64), "name"),
@@ -346,7 +344,7 @@ pub struct RoomInfo {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct LobbyPlayer {
-    pub id: Pid,
+    pub id: PlayerId,
     pub name: String,
     pub color: u8,
     pub outfit: Outfit,
@@ -365,7 +363,7 @@ pub struct LobbyPlayer {
 pub struct Lobby {
     pub room: RoomRef,
     pub phase: Phase,
-    pub host: Option<Pid>,
+    pub host: Option<PlayerId>,
     pub min: u32,
     pub max: u32,
     pub players: Vec<LobbyPlayer>,
@@ -385,22 +383,22 @@ pub struct ArenaInfo {
     /// Changes with every new arena (the replicated `Round` carries the same id).
     pub id: u32,
     pub kind: ArenaKind,
-    pub game: String,
-    pub participants: Vec<Pid>,
+    pub game: MapId,
+    pub participants: Vec<PlayerId>,
     /// Round number in the game (1-based) and the number of rounds; 0 outside rounds.
     pub index: u32,
     pub total: u32,
     pub practice: bool,
     /// Sent to someone joining an arena already running.
     pub late: bool,
-    pub finished: Vec<Pid>,
-    pub out: Vec<Pid>,
-    pub scores: Vec<(Pid, i64)>,
+    pub finished: Vec<PlayerId>,
+    pub out: Vec<PlayerId>,
+    pub scores: Vec<(PlayerId, i64)>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Standing {
-    pub id: Pid,
+    pub id: PlayerId,
     pub name: String,
     pub color: u8,
     pub place: u32,
@@ -412,7 +410,7 @@ pub struct Standing {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Award {
     pub kind: AwardKind,
-    pub id: Pid,
+    pub id: PlayerId,
     /// What it was won with: seconds survived, knock-offs, grabs, falls, shortcuts.
     pub value: u32,
 }
@@ -475,7 +473,7 @@ pub enum ServerMsg {
     },
     /// Entered a room (`id` is the player's id there); its lobby and arena follow.
     Welcome {
-        id: Pid,
+        id: PlayerId,
         room: String,
         solo: bool,
         practice: bool,
@@ -484,7 +482,7 @@ pub enum ServerMsg {
     Lobby(Lobby),
     Arena(ArenaInfo),
     RoundEnd {
-        game: String,
+        game: MapId,
         index: u32,
         total: u32,
         rows: Vec<RoundRow>,
@@ -494,19 +492,19 @@ pub enum ServerMsg {
         standings: Vec<Standing>,
         awards: Vec<Award>,
     },
-    Scores(Vec<(Pid, i64)>),
+    Scores(Vec<(PlayerId, i64)>),
     Emote {
-        id: Pid,
+        id: PlayerId,
         e: u8,
     },
     Chat {
-        id: Pid,
+        id: PlayerId,
         name: String,
         text: String,
     },
     /// The server says something in the room's chat.
     Notice(String),
-    Left(Pid),
+    Left(PlayerId),
     /// Reply to a dev command (`q` echoes the request's): what it did, or why it could not.
     DevAck {
         q: Option<u32>,
@@ -523,19 +521,19 @@ pub enum ServerMsg {
 pub enum MapEventKind {
     Bonus {
         i: u32,
-        id: Pid,
+        id: PlayerId,
         at: f64,
     },
     Finish {
-        id: Pid,
+        id: PlayerId,
         place: u32,
         time: f64,
     },
     /// A bean fell (respawned) or was eliminated, with who or what caused it.
     Ko {
-        id: Pid,
+        id: PlayerId,
         out: bool,
-        by: Option<Pid>,
+        by: Option<PlayerId>,
         cause: Cause,
         shortcut: bool,
     },
@@ -644,7 +642,7 @@ mod tests {
         assert!(ClientMsg::Color(12).check().is_ok());
         assert!(ClientMsg::Color(13).check().is_err());
         assert!(ClientMsg::Color(255).check().is_err());
-        let playlist = |games: Vec<String>, rounds| {
+        let playlist = |games: Vec<MapId>, rounds| {
             ClientMsg::Playlist(Playlist {
                 games,
                 rounds,
@@ -652,26 +650,17 @@ mod tests {
             })
             .check()
         };
-        assert!(playlist(vec!["door-dash".into()], 5).is_ok());
+        assert!(playlist(vec![MapId::DoorDash], 5).is_ok());
         assert!(playlist(Vec::new(), 0).is_err());
         assert!(playlist(Vec::new(), 13).is_err());
-        assert!(playlist(vec!["door-dash".into(); 13], 5).is_err());
-        assert!(playlist(vec!["ы".repeat(33)], 5).is_err());
-        assert!(ClientMsg::RemoveBot(0).check().is_err());
-        assert!(ClientMsg::RemoveBot(3).check().is_ok());
-        assert!(ClientMsg::Host(0).check().is_err());
+        assert!(playlist(vec![MapId::DoorDash; 13], 5).is_err());
+        assert!(ClientMsg::RemoveBot(PlayerId(0)).check().is_err());
+        assert!(ClientMsg::RemoveBot(PlayerId(3)).check().is_ok());
+        assert!(ClientMsg::Host(PlayerId(0)).check().is_err());
         assert!(ClientMsg::Emote(6).check().is_err());
         assert!(
             ClientMsg::Hello(Hello {
                 name: long,
-                ..Default::default()
-            })
-            .check()
-            .is_err()
-        );
-        assert!(
-            ClientMsg::Hello(Hello {
-                practice: Some("ы".repeat(33)),
                 ..Default::default()
             })
             .check()
@@ -690,16 +679,16 @@ mod tests {
         assert!(!ok(DevCmd::Step { ticks: 1201 }));
         assert!(ok(DevCmd::Seed { seed: 1 << 31 }));
         assert!(!ok(DevCmd::Seed { seed: (1 << 31) + 1 }));
-        let start = |games: Vec<String>, rounds, bots| DevCmd::Start { games, rounds, bots };
+        let start = |games: Vec<MapId>, rounds, bots| DevCmd::Start { games, rounds, bots };
         assert!(ok(start(Vec::new(), Some(12), Some(7))));
         assert!(!ok(start(Vec::new(), Some(0), None)));
         assert!(!ok(start(Vec::new(), None, Some(8))));
-        assert!(!ok(start(vec!["x".into(); 13], None, None)));
+        assert!(!ok(start(vec![MapId::DoorDash; 13], None, None)));
         let goto = |to| DevCmd::Goto { id: None, to };
         assert!(ok(goto(Goto::Checkpoint(64))));
         assert!(!ok(goto(Goto::Checkpoint(65))));
         assert!(!ok(DevCmd::Goto {
-            id: Some(0),
+            id: Some(PlayerId(0)),
             to: Goto::Spawn
         }));
         let teleport = |p, yaw| DevCmd::Teleport { id: None, p, yaw };
@@ -707,15 +696,15 @@ mod tests {
         assert!(!ok(teleport([1.0, f64::INFINITY, 3.0], None)));
         assert!(!ok(teleport([1.0, 2.0, 3.0], Some(f64::NAN))));
         let grab = |target, s| DevCmd::Grab { actor: None, target, s };
-        assert!(ok(grab(2, Some(10.0))));
-        assert!(!ok(grab(0, None)));
-        assert!(!ok(grab(2, Some(10.5))));
+        assert!(ok(grab(PlayerId(2), Some(10.0))));
+        assert!(!ok(grab(PlayerId(0), None)));
+        assert!(!ok(grab(PlayerId(2), Some(10.5))));
         assert!(ok(DevCmd::Bot { n: Some(7), near: true }));
         assert!(!ok(DevCmd::Bot {
             n: Some(0),
             near: false
         }));
-        assert!(!ok(DevCmd::Kill { id: Some(0) }));
+        assert!(!ok(DevCmd::Kill { id: Some(PlayerId(0)) }));
         assert!(!ok(DevCmd::Rate { k: -0.5 }));
     }
 }

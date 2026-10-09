@@ -8,7 +8,7 @@ use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::Genre;
 use fb_shared::hash::Fingerprint;
 use fb_shared::m::MinMax;
-use fb_shared::{DT, MAX_PLAYERS, m};
+use fb_shared::{DT, MAX_PLAYERS, PlayerId, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
 use fb_sim::map::MapDef;
 use fb_sim::math::{V3, dist_xz};
@@ -56,6 +56,7 @@ fn built(map: &'static dyn MapDef, seed: u32) -> Arena {
 
 /// Steps a lone bean as the arena does (map touch handlers included), from sim time t0 for `seconds`;
 /// `each` after every tick, true to stop.
+#[expect(clippy::cast_possible_truncation, reason = "a tick count")]
 fn simulate(
     arena: &mut Arena,
     body: &mut Body,
@@ -82,7 +83,7 @@ fn simulate(
                 out: &mut out,
             };
             let mut one = [Stepper {
-                id: 99,
+                id: PlayerId(99),
                 body: &mut *body,
                 ev: &mut ev,
                 input,
@@ -394,7 +395,7 @@ fn sample_points(c: &Collider) -> Vec<V3> {
         }
         Shape::Cyl { r, hh } => {
             for i in 0..12 {
-                let a = (i as f64 / 12.0) * m::PI * 2.0;
+                let a = (f64::from(i) / 12.0) * m::PI * 2.0;
                 for y in [-1.0, 0.0, 1.0] {
                     pts.push(V3::new(m::cos(a) * r, y * hh, m::sin(a) * r));
                 }
@@ -443,6 +444,7 @@ struct Clip {
     times: BTreeSet<usize>,
 }
 
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a sample count")]
 fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut a = built(map, ctx.seed);
     let meta = map.meta();
@@ -599,7 +601,7 @@ fn determinism(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             let world = h.arena.world.hash(false);
             let hashes = (1..=seconds)
                 .map(|t| {
-                    h.run_to(t as f64);
+                    h.run_to(f64::from(t));
                     h.arena.state_hash()
                 })
                 .collect();
@@ -651,7 +653,7 @@ fn limits(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 
 #[derive(Default)]
 pub(crate) struct SeedRun {
-    stuck: Vec<(u32, V3, f64)>,
+    stuck: Vec<(PlayerId, V3, f64)>,
     pub finish_times: Vec<f64>,
     pub out_times: Vec<f64>,
     pub survivors: usize,
@@ -663,6 +665,7 @@ pub(crate) struct SeedRun {
     ticks: i64,
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "a round's whole seconds")]
 pub(crate) fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
     let mut h = Harness::new(
         map,
@@ -672,7 +675,7 @@ pub(crate) fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
         },
     );
     let mut r = SeedRun::default();
-    let mut last: BTreeMap<u32, (V3, f64)> = BTreeMap::new();
+    let mut last: BTreeMap<PlayerId, (V3, f64)> = BTreeMap::new();
     let end = map.meta().duration as i64;
     let tick0 = h.arena.tick;
     let clock = Clock::start();
@@ -759,11 +762,11 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     out.metric("seeds", runs.len());
     // (A fall in a survival round is an elimination: there are no falls to count.)
     if meta.genre != Genre::Survival {
-        out.metric("falls_per_bot_min", r1(falls as f64 / bot_seconds * 60.0));
+        out.metric("falls_per_bot_min", r1(f64::from(falls) / bot_seconds * 60.0));
     }
     out.metric("ms_per_tick_8_bots", r3(sim_ms / ticks.max(1) as f64));
     if stuck > 0 {
-        out.metric("stuck", stuck as u32);
+        out.metric("stuck", stuck);
     }
     let mut hot = spots;
     hot.sort_by_key(|s| std::cmp::Reverse(s.1));

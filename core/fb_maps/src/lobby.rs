@@ -6,13 +6,13 @@
 //! south-west blocks to climb, west the spinner, north-west a launch pad; planters round the edge.
 use std::collections::BTreeSet;
 
-use fb_shared::{Rgb, rgb};
+use fb_shared::{PlayerId, Rgb, rgb};
 use fb_sim::bots::{ArenaOpts, BotBrain, BotInput, BotView, arena_brain};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::Pattern;
 use fb_sim::m;
-use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapLogic, MapSpec};
+use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapId, MapLogic, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
@@ -23,7 +23,7 @@ use crate::util::{deco, o};
 
 pub struct Lobby;
 
-pub static META: GameMeta = GameMeta::place("lobby", "Лобби");
+pub static META: GameMeta = GameMeta::place(MapId::Lobby, "Лобби");
 
 const FLOOR_R: f64 = 24.0;
 /// The bell tower: x, z, top, half width.
@@ -163,7 +163,7 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
         surface: Some(Surface::Wood),
         ..Default::default()
     };
-    b.box_(x, 1.25, z, 0.22, 2.5, 0.22, wood, post.clone());
+    b.box_(x, 1.25, z, 0.22, 2.5, 0.22, wood, post);
     let board = PrimOpts {
         rot: Some(V3::new(0.0, yaw, 0.0)),
         ..post
@@ -180,7 +180,7 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
 /// The lobby's game: ring the bell.
 struct Bell {
     /// Who has been down on the floor since they last rang it.
-    armed: BTreeSet<u32>,
+    armed: BTreeSet<PlayerId>,
     brain: BotBrain,
 }
 
@@ -285,7 +285,7 @@ impl MapDef for Lobby {
         };
         for sx in [-1.0, 1.0] {
             let y = top + BELL_HANG / 2.0;
-            b.box_(tx + sx * 1.75, y, tz, 0.3, BELL_HANG, 0.3, pal::WHITE, metal.clone());
+            b.box_(tx + sx * 1.75, y, tz, 0.3, BELL_HANG, 0.3, pal::WHITE, metal);
         }
         b.box_(tx, top + BELL_HANG + 0.15, tz, 3.8, 0.3, 0.3, pal::WHITE, metal);
         // (The bell swings a little: a still collider round where it hangs.)
@@ -366,7 +366,7 @@ impl MapDef for Lobby {
         b.bumper(rx - 1.6, 0.12, rz - 1.4, 0.8, 11.0);
         b.bumper(rx + 2.0, 0.12, rz + 1.5, 0.8, 11.0);
         for k in 0..10 {
-            let a = (k as f64 / 10.0) * m::PI * 2.0;
+            let a = (f64::from(k) / 10.0) * m::PI * 2.0;
             let cone = PropOpts {
                 scale: 0.7,
                 ..Default::default()

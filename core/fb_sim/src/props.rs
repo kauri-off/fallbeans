@@ -50,7 +50,7 @@ impl SpinUp {
 /// Seconds until a rotor arm sweeps over (x, z).
 pub fn sweep_eta(x: f64, z: f64, angle: f64, omega: f64, arms: u32, cx: f64, cz: f64) -> f64 {
     let phi = m::atan2(-(z - cz), x - cx);
-    let period = m::TAU / arms as f64;
+    let period = m::TAU / f64::from(arms);
     let mut d = (phi - angle) % period;
     if d < 0.0 {
         d += period;
@@ -63,7 +63,7 @@ pub fn arm_contact_eta(pos: V3, angle: f64, omega: f64, arms: u32, cx: f64, cz: 
     let r = m::hypot(pos.x - cx, pos.z - cz).at_least(0.5);
     let margin = (half + 0.55) / r / omega.abs();
     let eta = sweep_eta(pos.x, pos.z, angle, omega, arms, cx, cz);
-    let period = (m::PI * 2.0) / arms as f64 / omega.abs();
+    let period = (m::PI * 2.0) / f64::from(arms) / omega.abs();
     // Just passed: still touching until the arm clears the other side.
     if eta > period - margin {
         eta - period - margin
@@ -140,7 +140,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
     let mut balls = Vec::new();
     for (li, &x) in o.lanes.iter().enumerate() {
         for k in 0..o.per_lane {
-            let phase = b.rng.unit() * o.period + (k as f64 * o.period) / o.per_lane as f64;
+            let phase = b.rng.unit() * o.period + (f64::from(k) * o.period) / f64::from(o.per_lane);
             balls.push((x, phase));
             let ball = b.sphere(
                 x,
@@ -192,6 +192,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
     })
 }
 
+#[derive(Clone, Copy)]
 pub struct GloveOpts {
     pub x: f64,
     pub y: f64,

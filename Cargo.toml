@@ -104,6 +104,10 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 # A byte index into a str panics inside a character (Cyrillic, emoji): `get`, `split_once`, `char_indices`.
 string_slice = "warn"
+cast_lossless = "warn"
+manual_let_else = "warn"
+redundant_clone = "warn"
+uninlined_format_args = "warn"
 
 # Local fixes to dependencies, each to drop once upstream has it.
 [patch.crates-io]

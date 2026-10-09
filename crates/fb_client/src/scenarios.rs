@@ -3,6 +3,7 @@ use bevy::input::keyboard::Key;
 use bevy::prelude::{KeyCode, Vec2, World};
 use fb_arena::ArenaKind;
 use fb_net::ClientMsg;
+use fb_proto::MapId;
 use fb_proto::{DenyReason, DevCmd, Phase};
 
 use crate::harness::Game;
@@ -62,9 +63,9 @@ fn menu(g: &mut Game) {
 }
 
 /// A game of one round of `map` begun with the dev command, past its intro.
-fn into_round(g: &mut Game, map: &str) {
+fn into_round(g: &mut Game, map: MapId) {
     g.dev(DevCmd::Start {
-        games: vec![map.into()],
+        games: vec![map],
         rounds: None,
         bots: Some(3),
     });
@@ -157,7 +158,7 @@ fn a_round_starts_while_typing_a_name() {
     in_lobby(&mut g);
     g.focus(Field::MenuName);
     g.type_text("ё");
-    into_round(&mut g, "door-dash");
+    into_round(&mut g, MapId::DoorDash);
     assert!(!g.res::<Ui>().menu, "the round closes the menu");
     keys_in_play(&mut g);
 }
@@ -181,7 +182,7 @@ fn a_room_created_with_enter() {
 fn abort_mid_round_and_start_again() {
     let mut g = Game::new(&["--room", "dev", "--autopilot"]);
     in_lobby(&mut g);
-    into_round(&mut g, "hammer-swing");
+    into_round(&mut g, MapId::HammerSwing);
     menu(&mut g);
     g.press(2.0, "Прервать игру", |a| {
         matches!(a, Action::Send(ClientMsg::Abort))
@@ -227,7 +228,7 @@ fn leave_the_room_and_come_back() {
             .as_ref()
             .is_some_and(|l| l.players.len() == 2)
     });
-    into_round(&mut g, "door-dash");
+    into_round(&mut g, MapId::DoorDash);
 
     g.as_peer(guest);
     g.until(10.0, "the guest's round", in_round);
@@ -292,7 +293,7 @@ fn private_room_pin_and_a_second_player() {
     let guest = g.add_peer(wgpu::DeviceType::IntegratedGpu, &["--name", "Гость"]);
     g.as_peer(guest);
     on_room_list(&mut g);
-    let r = room.clone();
+    let r = room;
     g.press(5.0, "Войти", move |a| matches!(a, Action::Join(id) if *id == r));
     g.until(5.0, "the PIN asked", |w| {
         w.resource::<Session>()
@@ -417,7 +418,7 @@ fn a_newcomer_watches_the_round_in_play() {
     let mut g = Game::new(&["--autopilot"]);
     create_room(&mut g, "Идёт игра", false);
     let room = g.res::<Session>().room.clone().unwrap();
-    into_round(&mut g, "hammer-swing");
+    into_round(&mut g, MapId::HammerSwing);
 
     let late = g.add_peer(wgpu::DeviceType::IntegratedGpu, &["--autopilot"]);
     g.as_peer(late);
@@ -443,7 +444,7 @@ fn a_newcomer_watches_the_round_in_play() {
     g.until_arena(30.0, "the podium", |a| a.kind == ArenaKind::Podium);
     g.frames(60);
     g.as_peer(0);
-    into_round(&mut g, "door-dash");
+    into_round(&mut g, MapId::DoorDash);
     g.as_peer(late);
     g.until(20.0, "the next game's round, played", |w| {
         w.resource::<Session>()
@@ -460,7 +461,7 @@ fn a_newcomer_watches_the_round_in_play() {
 fn rebind_a_key_mid_round() {
     let mut g = Game::new(&["--room", "dev", "--autopilot"]);
     in_lobby(&mut g);
-    into_round(&mut g, "door-dash");
+    into_round(&mut g, MapId::DoorDash);
     menu(&mut g);
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
@@ -713,7 +714,7 @@ fn connect_pressed_twice() {
 fn practice_and_back() {
     let mut g = Game::new(&["--autopilot"]);
     on_room_list(&mut g);
-    let practice = |game: &'static str| move |a: &Action| matches!(a, Action::Practice(id) if *id == game);
+    let practice = |game: MapId| move |a: &Action| matches!(a, Action::Practice(id) if *id == game);
     let in_practice = |w: &mut World| {
         let s = w.resource::<Session>();
         s.practice && s.arena.as_ref().is_some_and(|a| a.kind == ArenaKind::Round)
@@ -721,7 +722,7 @@ fn practice_and_back() {
     g.press(5.0, "Тренировка", |a| {
         matches!(a, Action::Fold(Fold::Practice))
     });
-    g.press(2.0, "Тренировка: прыжки", practice("jump-club"));
+    g.press(2.0, "Тренировка: прыжки", practice(MapId::JumpClub));
     g.until(15.0, "the practice round", in_practice);
     g.frames(120);
     g.dev(DevCmd::EndRound);
@@ -736,7 +737,7 @@ fn practice_and_back() {
     let room = g.res::<Session>().room.clone();
     // (The fold stays open as it was left at the room list.)
     assert!(g.res::<Folds>().open(Fold::Practice));
-    g.press(2.0, "Тренировка: двери", practice("door-dash"));
+    g.press(2.0, "Тренировка: двери", practice(MapId::DoorDash));
     g.until(15.0, "the practice round", in_practice);
     g.frames(120);
     menu(&mut g);
@@ -796,7 +797,7 @@ fn reconnecting_spares_commands_queued_on_beans() {
 fn reconnect_after_the_server_was_away() {
     let mut g = Game::new(&["--room", "dev", "--autopilot"]);
     in_lobby(&mut g);
-    into_round(&mut g, "hammer-swing");
+    into_round(&mut g, MapId::HammerSwing);
     let room = g.res::<Session>().room.clone();
     g.server_away(crate::harness::LINK_TIMEOUT_S as f32 + 4.0);
     assert!(!g.res::<crate::net::Conn>().connected, "the link is down");
@@ -921,7 +922,7 @@ fn a_button_takes_a_click_anywhere_on_it() {
 fn every_setting_mid_round() {
     let mut g = Game::new(&["--room", "dev", "--autopilot"]);
     in_lobby(&mut g);
-    into_round(&mut g, "portal-panic");
+    into_round(&mut g, MapId::PortalPanic);
     menu(&mut g);
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
@@ -945,15 +946,15 @@ fn every_setting_mid_round() {
 
 /// One round of `map` with bots: the intro, a few seconds of play by the autopilot, time warped ahead (the
 /// map's moving parts, falls, events), the end of the round and the podium.
-fn play_round(map: &str) {
+fn play_round(map: MapId) {
     play_round_on(wgpu::DeviceType::DiscreteGpu, map);
 }
 
-fn play_round_on(gpu: wgpu::DeviceType, map: &str) {
+fn play_round_on(gpu: wgpu::DeviceType, map: MapId) {
     let mut g = Game::on(gpu, &["--room", "dev", "--autopilot"]);
     in_lobby(&mut g);
     g.dev(DevCmd::Start {
-        games: vec![map.into()],
+        games: vec![map],
         rounds: Some(1),
         bots: Some(3),
     });
@@ -974,21 +975,21 @@ fn play_round_on(gpu: wgpu::DeviceType, map: &str) {
 /// Tier T0 (a software device): the Low preset's own paths.
 #[test]
 fn round_on_the_lowest_tier() {
-    play_round_on(wgpu::DeviceType::Cpu, "portal-panic");
+    play_round_on(wgpu::DeviceType::Cpu, MapId::PortalPanic);
 }
 
 macro_rules! rounds {
-    ($($test:ident: $map:literal,)*) => {
+    ($($test:ident: $map:ident,)*) => {
         $(
             #[test]
             fn $test() {
-                play_round($map);
+                play_round(MapId::$map);
             }
         )*
 
         #[test]
         fn every_map_has_a_round_test() {
-            let tested = [$($map),*];
+            let tested = [$(MapId::$map),*];
             for m in fb_maps::GAMES {
                 assert!(tested.contains(&m.meta().id), "no round test for {}", m.meta().id);
             }
@@ -997,23 +998,23 @@ macro_rules! rounds {
 }
 
 rounds! {
-    round_door_dash: "door-dash",
-    round_hammer_swing: "hammer-swing",
-    round_ball_hill: "ball-hill",
-    round_hidden_bridge: "hidden-bridge",
-    round_drum_roll: "drum-roll",
-    round_jump_club: "jump-club",
-    round_roll_out: "roll-out",
-    round_wall_rush: "wall-rush",
-    round_tail_tag: "tail-tag",
-    round_hex_a_gone: "hex-a-gone",
-    round_crown_peak: "crown-peak",
-    round_plate_drop: "plate-drop",
-    round_portal_panic: "portal-panic",
-    round_bounce_park: "bounce-park",
-    round_cliff_climb: "cliff-climb",
-    round_frost_sky: "frost-sky",
-    round_star_fall: "star-fall",
+    round_door_dash: DoorDash,
+    round_hammer_swing: HammerSwing,
+    round_ball_hill: BallHill,
+    round_hidden_bridge: HiddenBridge,
+    round_drum_roll: DrumRoll,
+    round_jump_club: JumpClub,
+    round_roll_out: RollOut,
+    round_wall_rush: WallRush,
+    round_tail_tag: TailTag,
+    round_hex_a_gone: HexAGone,
+    round_crown_peak: CrownPeak,
+    round_plate_drop: PlateDrop,
+    round_portal_panic: PortalPanic,
+    round_bounce_park: BouncePark,
+    round_cliff_climb: CliffClimb,
+    round_frost_sky: FrostSky,
+    round_star_fall: StarFall,
 }
 
 /// A tester's run on a real server: through a round's intro the own bean stood where it was in the lobby, and
@@ -1022,7 +1023,7 @@ rounds! {
 #[test]
 fn the_own_bean_is_at_its_spawn_in_the_intro() {
     use bevy::prelude::*;
-    use fb_net::{BodyFull, PlayerId};
+    use fb_net::{BeanId, BodyFull};
     use lightyear::prelude::Predicted;
 
     // (A real network's delay: on the bench's loopback the server's spawn came back before anything moved.)
@@ -1031,21 +1032,21 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
     // Somewhere in the lobby that is no round's spawn.
     g.frames(30);
     g.dev(DevCmd::Start {
-        games: vec!["door-dash".into()],
+        games: vec![MapId::DoorDash],
         rounds: None,
         bots: Some(3),
     });
     g.until_arena(20.0, "the round", |a| {
-        a.kind == ArenaKind::Round && a.game == "door-dash"
+        a.kind == ArenaKind::Round && a.game == MapId::DoorDash
     });
     g.frames(90);
     let me = g.res::<Session>().me.expect("in a room");
     let mine = |w: &mut World| {
-        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let mut q = w.query_filtered::<(&BeanId, &BodyFull), With<Predicted>>();
         q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos)
     };
     let client = mine(g.client().world_mut()).expect("the own bean is predicted");
-    let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+    let mut q = g.server.world_mut().query::<(&BeanId, &BodyFull)>();
     let server: Vec<_> = q
         .iter(g.server.world())
         .filter(|(p, _)| p.0 == me)
@@ -1064,7 +1065,7 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
 #[test]
 fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
     use bevy::prelude::*;
-    use fb_net::{BodyFull, PlayerId};
+    use fb_net::{BeanId, BodyFull};
     use lightyear::prelude::{Predicted, PredictionHistory};
 
     #[rustfmt::skip]
@@ -1090,9 +1091,9 @@ fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
     for _ in 0..60 {
         g.step();
         let w = g.client().world_mut();
-        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let mut q = w.query_filtered::<(&BeanId, &BodyFull), With<Predicted>>();
         let client = q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos);
-        let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+        let mut q = g.server.world_mut().query::<(&BeanId, &BodyFull)>();
         let server = q
             .iter(g.server.world())
             .find(|(p, _)| p.0 == me)

@@ -7,6 +7,7 @@ use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 use fb_net::Anim;
+use fb_shared::PlayerId;
 use fb_sim::physics::Power;
 
 /// Height of the tip-over pivot (the lower collision sphere).
@@ -266,7 +267,7 @@ pub struct BeanAnim {
 }
 
 impl BeanAnim {
-    pub fn new(id: u32) -> Self {
+    pub fn new(id: PlayerId) -> Self {
         let mut a = Self {
             limbs: [Limb::default(); 4],
             stretch: [Spring::at(1.0); 2],
@@ -290,7 +291,7 @@ impl BeanAnim {
             glance: Vec2::ZERO,
             glance_at: 0.0,
             seed: 0.0,
-            rng: id.wrapping_mul(2_654_435_761) | 1,
+            rng: id.0.wrapping_mul(2_654_435_761) | 1,
             last_vel: Vec3::ZERO,
             last_yaw: 0.0,
             yaw_rate: 0.0,
@@ -977,7 +978,7 @@ mod tests {
     #[test]
     fn every_state_animates_to_finite_poses() {
         for anim in Anim::ALL {
-            let mut a = BeanAnim::new(5);
+            let mut a = BeanAnim::new(PlayerId(5));
             a.play_emote(2);
             for i in 0..400 {
                 // Frames from 1 ms to 80 ms (a hitch): the springs stay stable.
@@ -1017,7 +1018,7 @@ mod tests {
     /// The body's height after a landing at `fps`: settled, then squashed at t = 1 s; sampled every frame.
     fn landing(fps: f32) -> Vec<(f32, f32)> {
         let dt = 1.0 / fps;
-        let mut a = BeanAnim::new(3);
+        let mut a = BeanAnim::new(PlayerId(3));
         let mut out = Vec::new();
         for i in 0..(fps * 2.0) as u32 {
             let t = i as f32 * dt;
@@ -1064,7 +1065,7 @@ mod tests {
     fn a_knock_wobbles_the_body_both_ways() {
         // Holding on (a fixed lean), standing, then shoved forward at 6 m/s in one frame.
         let dt = 1.0 / 60.0;
-        let mut a = BeanAnim::new(9);
+        let mut a = BeanAnim::new(PlayerId(9));
         for i in 0..120 {
             a.animate(dt, &still(Anim::Grab, Vec3::ZERO, i as f32 * dt));
         }

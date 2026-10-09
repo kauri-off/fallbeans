@@ -165,13 +165,13 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
     let mut y = 0.0;
     let mut min_y: f64 = 0.0;
     let mut max_y: f64 = 0.0;
-    for (i, seg) in o.sections.into_iter().enumerate() {
+    for (i, seg) in (0u32..).zip(o.sections) {
         let mut s = SegCtx {
             b,
             ctx,
             z: zz,
             y,
-            seg: i as u32,
+            seg: i,
             sections: &mut sections,
             notes,
         };
@@ -450,7 +450,7 @@ pub fn moving_platforms(n: u32) -> Segment {
 pub fn hammer_bridges(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
-        let len = n as f64 * 7.0 + 6.5;
+        let len = f64::from(n) * 7.0 + 6.5;
         let mut routes = Vec::new();
         for bx in [-4.5, 4.5] {
             let p = if bx < 0.0 { pal::BLUE } else { pal::TEAL };
@@ -458,7 +458,7 @@ pub fn hammer_bridges(n: u32) -> Segment {
             let mut route = vec![Waypoint::exact(bx, s.z + 0.8)];
             for k in 0..n {
                 // The two bridges' hammers are staggered (their heads swing over the other bridge).
-                let hz = s.z + 3.5 + k as f64 * 7.0 + if bx > 0.0 { 3.5 } else { 0.0 };
+                let hz = s.z + 3.5 + f64::from(k) * 7.0 + if bx > 0.0 { 3.5 } else { 0.0 };
                 let w = 1.7 + s.rng() * 0.9;
                 let ph = s.rng() * m::TAU;
                 s.b.hammer(bx, y + 7.4, hz, w, ph, 1.12, true);
@@ -504,13 +504,13 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let gap_z = 7.0;
-        let len = rows as f64 * gap_z + 2.0;
+        let len = f64::from(rows) * gap_z + 2.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
         s.b.fence(s.z, s.z + len, w / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let mut routes: Vec<Vec<Waypoint>> = vec![Vec::new(), Vec::new()];
         let door_w = 3.2;
         for r in 0..rows {
-            let wz = s.z + 4.0 + r as f64 * gap_z;
+            let wz = s.z + 4.0 + f64::from(r) * gap_z;
             let doors: Vec<[f64; 4]> = [-4.2, 4.2]
                 .iter()
                 .map(|dx| {
@@ -662,7 +662,11 @@ impl Section for DoorRows {
             return;
         };
         if cx.server {
-            self.emit(cx, self.seg, SegEvent::Door(id as u32));
+            self.emit(
+                cx,
+                self.seg,
+                SegEvent::Door(u32::try_from(id).expect("fewer than 2³² doors")),
+            );
         } else {
             self.predict_door(cx, id);
         }
@@ -695,7 +699,7 @@ impl Section for DoorRows {
 
     /// Like a player: take a door someone broke, or barge into one; if it holds, try the next.
     fn steer(&self, hook: Hook, bot: &mut BotView, _: &mut BotInput) -> Steer {
-        let Some((r, row)) = self.rows.iter().enumerate().find(|(_, row)| row.hook == hook) else {
+        let Some((r, row)) = (0u32..).zip(&self.rows).find(|(_, row)| row.hook == hook) else {
             return Steer::Follow;
         };
         let (wz, pick_key, tried_key, notes) = (row.z, row.pick, row.tried, self.notes);
@@ -706,7 +710,7 @@ impl Section for DoorRows {
         let row: Vec<(bool, f64)> = self
             .doors
             .iter()
-            .filter(|d| d.row == r as u32)
+            .filter(|d| d.row == r)
             .map(|d| (d.broken.is_some(), d.x))
             .collect();
         let mut pick = bot.mem.get(pick_key);
@@ -773,7 +777,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let gap_z = 9.0;
-        let len = rows as f64 * gap_z + 3.0;
+        let len = f64::from(rows) * gap_z + 3.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w + 1.0, 2.0, len, pal::BLUE, d());
         s.b.fence(s.z, s.z + len, (w + 1.0) / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let n = 5;
@@ -782,7 +786,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
         let mut breakable = BTreeMap::new();
         let mut row_z = Vec::new();
         for r in 0..rows {
-            let wz = s.z + 5.0 + r as f64 * gap_z;
+            let wz = s.z + 5.0 + f64::from(r) * gap_z;
             row_z.push(wz);
             let n_break = if s.rng() < 0.5 { 1 } else { 2 };
             let mut idx = [0usize, 1, 2, 3, 4];
@@ -888,7 +892,7 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
             );
         }
         for k in 0..5 {
-            let bz = z0 + 4.0 + k as f64 * ((len - 7.0) / 4.0);
+            let bz = z0 + 4.0 + f64::from(k) * ((len - 7.0) / 4.0);
             let bx = (if k % 2 == 1 { 1.0 } else { -1.0 }) * (1.5 + s.rng() * 2.5);
             s.b.bumper(bx, y_at(bz) - 0.1, bz, 0.9, 11.0);
         }
@@ -963,6 +967,11 @@ pub fn seesaws(n: u32) -> Segment {
 }
 
 /// A conveyor belt running back at you, with punching walls and bumpers.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "punches along a segment's length"
+)]
 pub fn conveyor(len: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
@@ -983,7 +992,7 @@ pub fn conveyor(len: f64) -> Segment {
         let mut route = Vec::new();
         let punches = (len / 9.0).floor() as u32;
         for k in 0..punches {
-            let pz = s.z + 5.0 + k as f64 * 8.5;
+            let pz = s.z + 5.0 + f64::from(k) * 8.5;
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
             let w = 1.4 + s.rng() * 0.6;
             let ph = s.rng() * 6.0;
@@ -1098,7 +1107,7 @@ pub fn portal_fork() -> Segment {
         }
         let mut zig = vec![Waypoint::exact(4.5, s.z + 1.0)];
         for k in 0..4 {
-            let wz = s.z + 4.0 + k as f64 * 5.5;
+            let wz = s.z + 4.0 + f64::from(k) * 5.5;
             let left = k % 2 == 0;
             s.b.box_(
                 if left { 3.5 } else { 5.5 },
@@ -1162,12 +1171,12 @@ pub fn portal_fork() -> Segment {
 pub fn glove_alley(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
-        let len = n as f64 * 5.0 + 4.0;
+        let len = f64::from(n) * 5.0 + 4.0;
         let w = 7.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::TEAL, d());
         let mut route = vec![Waypoint::exact(0.0, s.z + 1.0)];
         for k in 0..n {
-            let gz = s.z + 3.0 + k as f64 * 5.0;
+            let gz = s.z + 3.0 + f64::from(k) * 5.0;
             let side = if k % 2 == 1 { 1.0 } else { -1.0 };
             let gw = 1.1 + s.rng() * 0.5;
             let ph = s.rng() * 6.0;
@@ -1207,7 +1216,7 @@ pub fn glove_alley(n: u32) -> Segment {
 pub fn sliding_gates(n: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
-        let len = n as f64 * 8.0 + 4.0;
+        let len = f64::from(n) * 8.0 + 4.0;
         let w = 16.0;
         let z0 = s.z;
         let z1 = s.z + len;
@@ -1233,10 +1242,10 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
         }
         let mut route = Vec::new();
         for k in 0..n {
-            let gz = z0 + 5.0 + k as f64 * 8.0;
+            let gz = z0 + 5.0 + f64::from(k) * 8.0;
             let gw = 0.8 + s.rng() * 0.6;
             let ph = s.rng() * 6.0;
-            let gap = 3.6 - k as f64 * 0.15;
+            let gap = 3.6 - f64::from(k) * 0.15;
             let gx = move |t: f64| m::sin(t * gw + ph) * (w / 2.0 - gap / 2.0 - 0.4);
             let gate = s.b.anchor(0.0, y_at(gz), gz, ROOT);
             for side in [-1.0, 1.0] {
@@ -1324,11 +1333,11 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let gap_z = 5.0;
-        let len = rows as f64 * gap_z + 4.0;
+        let len = f64::from(rows) * gap_z + 4.0;
         s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
         let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.5)];
         for k in 0..rows {
-            let pz = s.z + 3.0 + k as f64 * gap_z;
+            let pz = s.z + 3.0 + f64::from(k) * gap_z;
             let period = 2.2 + s.rng() * 1.2;
             let ph = s.rng() * period;
             // Out for 40% of the period (a fast shove, a slower pull back).

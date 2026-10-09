@@ -6,7 +6,7 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use fb_net::*;
-use fb_proto::Pid;
+use fb_proto::PlayerId;
 use fb_sim::collider::ColId;
 use fb_sim::math::V3;
 use fb_sim::world::World;
@@ -45,7 +45,7 @@ impl Plugin for TagsPlugin {
 
 #[derive(Component)]
 struct Tag {
-    id: Pid,
+    id: PlayerId,
     /// What it shows: the name with its badge, and the suit colour (rebuilt when that changes).
     name: String,
     color: u8,
@@ -61,7 +61,7 @@ struct Tag {
 }
 
 struct Seen {
-    id: Pid,
+    id: PlayerId,
     /// The head on screen (px of the interface), the tag's bottom middle.
     at: Vec2,
     d: f32,
@@ -74,10 +74,7 @@ struct Seen {
 fn place_tags(
     mut commands: Commands,
     layers: Res<Layers>,
-    beans: Query<
-        (&PlayerId, &GlobalTransform, &InheritedVisibility, &RemotePose),
-        (With<BeanView>, With<Interpolated>),
-    >,
+    beans: Query<(&BeanId, &GlobalTransform, &InheritedVisibility, &RemotePose), (With<BeanView>, With<Interpolated>)>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut tags: Query<(
         Entity,
@@ -187,7 +184,7 @@ fn place_tags(
             });
             continue;
         };
-        if (*frame).wrapping_add(s.id) % 4 == 0 {
+        if (*frame).wrapping_add(s.id.0) % 4 == 0 {
             tag.blocked = map.as_ref().is_some_and(|m| look(&m.world));
         }
         // Change size only when clearly nearer another step: no flicker between two.
@@ -344,15 +341,15 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
     }
     let dir = span / len;
     let (o, d) = (
-        V3::new(from.x as f64, from.y as f64, from.z as f64),
-        V3::new(dir.x as f64, dir.y as f64, dir.z as f64),
+        V3::new(f64::from(from.x), f64::from(from.y), f64::from(from.z)),
+        V3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z)),
     );
     const STEP: f32 = 2.0;
     checked.clear();
     let n = (len / STEP).ceil() as usize;
     for i in 0..=n {
         let p = from + dir * (i as f32 * STEP).min(len);
-        world.query(p.x as f64, p.z as f64, STEP as f64, near);
+        world.query(f64::from(p.x), f64::from(p.z), f64::from(STEP), near);
         for &ci in near.iter() {
             if checked.contains(&ci) {
                 continue;
@@ -362,7 +359,7 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
             if !c.enabled || c.opts.trigger || c.opts.hit > 0.0 || c.opts.sweep {
                 continue;
             }
-            if c.raycast(o, d, (len - 0.3) as f64).is_some() {
+            if c.raycast(o, d, f64::from(len - 0.3)).is_some() {
                 return true;
             }
         }

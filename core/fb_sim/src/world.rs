@@ -99,6 +99,7 @@ impl ColliderGrid {
 
     /// Cells [x0, x1, z0, z1] that a span covers. (`as` saturates: a huge or infinite position gives
     /// cells outside the block, never an overflow.)
+    #[expect(clippy::cast_possible_truncation, reason = "saturating on purpose: see above")]
     fn cells(&self, x0: f64, x1: f64, z0: f64, z1: f64) -> [i64; 4] {
         [
             (x0 / self.cell).floor() as i64,
@@ -117,6 +118,11 @@ impl ColliderGrid {
     }
 
     /// Lays out every collider inserted so far.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "cells inside the block, which fits in usize"
+    )]
     fn build(&mut self) {
         let Some(&(_, first)) = self.placed.first() else {
             return;
@@ -162,6 +168,11 @@ impl ColliderGrid {
 
     /// Colliders in the cells within r of (x, z), each once, in the order a walk over those cells (by x, then
     /// by z; in a cell, in insertion order) first meets them.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "cells clamped to the block"
+    )]
     fn query(&self, x: f64, z: f64, r: f64, out: &mut Vec<ColId>) {
         if self.items.is_empty() {
             return;
@@ -227,7 +238,7 @@ impl Default for World {
 impl World {
     pub fn add(&mut self, node: NodeId, shape: Shape, opts: ColliderOpts) -> ColId {
         assert!(!self.finalized, "world is finalized");
-        let id = self.colliders.len() as ColId;
+        let id = ColId::try_from(self.colliders.len()).expect("fewer than 2³² colliders");
         self.colliders.push(Collider::new(id, node, shape, opts));
         id
     }
@@ -281,7 +292,7 @@ impl World {
             }
         }
         self.grid.build();
-        self.dyn_nodes = (0..chain.len() as NodeId).filter(|&i| chain[i as usize]).collect();
+        self.dyn_nodes = (0..).zip(&chain).filter(|&(_, &c)| c).map(|(i, _)| i).collect();
         self.t = t;
         self.finalized = true;
     }

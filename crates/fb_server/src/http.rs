@@ -20,7 +20,7 @@ use bevy::log::Level;
 use bevy::prelude::*;
 use fb_net::logbook;
 use fb_net::{PROTOCOL_ID, PROTOCOL_VERSION};
-use fb_proto::{Health, Pid, SessionReply, SessionRequest, TransportKind};
+use fb_proto::{Health, PlayerId, SessionReply, SessionRequest, TransportKind};
 use fb_shared::text::sanitize_title;
 use lightyear::netcode::ConnectToken;
 use serde::{Deserialize, Deserializer};
@@ -736,7 +736,7 @@ async fn session(
 ) -> Response {
     let (ip, proxied) = client_ip(peer.remote, &headers);
     api.check_proxy(peer.remote, &headers);
-    let now_ms = api.started.elapsed().as_millis() as u64;
+    let now_ms = u64::try_from(api.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let allowed = api.sessions.lock().unwrap_or_else(|e| e.into_inner()).allow(ip, now_ms);
     if !allowed {
         // (The client takes any error for a failed attempt and asks again in a few seconds.)
@@ -799,7 +799,7 @@ struct DebugQuery {
     n: Option<usize>,
     #[serde(default, deserialize_with = "level")]
     level: Option<Level>,
-    id: Option<Pid>,
+    id: Option<PlayerId>,
     s: Option<f64>,
     /// A replay's number, or `current`.
     i: Option<String>,
@@ -935,7 +935,7 @@ async fn login(
     api.check_proxy(peer.remote, &headers);
     let key = body.trim();
     let key = key.strip_prefix("key=").unwrap_or(key);
-    let now_ms = api.started.elapsed().as_millis() as u64;
+    let now_ms = u64::try_from(api.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let mut guesses = api.guesses.lock().unwrap_or_else(|e| e.into_inner());
     if !guesses.allow(Some(ip), "debug", now_ms) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();

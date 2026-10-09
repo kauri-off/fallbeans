@@ -5,7 +5,7 @@
 use fb_arena::{Stepper, tick_plain};
 use fb_shared::input::InputFrame;
 use fb_shared::rgb;
-use fb_shared::{DT, m};
+use fb_shared::{DT, PlayerId, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::map::NoLogic;
@@ -320,11 +320,11 @@ fn path(name: &str) -> String {
     build(name, &mut b);
     let mut world = b.world;
     world.finalize(0.0, &NoLogic);
-    let mut bodies: Vec<(u32, Body, StepEvents)> = beans
+    let mut bodies: Vec<(PlayerId, Body, StepEvents)> = beans
         .iter()
-        .zip(1..)
+        .zip((1..).map(PlayerId))
         .map(|(d, id)| {
-            let mut body = Body::new(id as i32);
+            let mut body = Body::new(id.0 as i32);
             body.reset(V3::new(d.at[0], d.at[1], d.at[2]), 0.0);
             if let Some(power) = d.power {
                 body.give_power(power, 0.0);

@@ -2,7 +2,7 @@
 //! main pass: `quality.rs`). Both parts darken the ambient light (the baked one a little of the sun too,
 //! `surface.wgsl`), are soft and short (a few metres), and cost the frame next to nothing:
 //! - Baked: the vertices of the map's merged static geometry (`view.rs`) carry how much of the sky the rest of the
-//!   course hides from them, in UV_0.y as the scenery's do (`decor.rs`; 0 is open sky). The course is boxes,
+//!   course hides from them, in UV_0.y as the scenery's do (`decor`; 0 is open sky). The course is boxes,
 //!   cylinders and spheres in known frames, so the occlusion comes from their distance fields (`Solids`), not from
 //!   rays cast at triangles; the models standing on it count as rounded boxes of their parts. Big faces are cut
 //!   finer first (`refine`), so that a pillar's foot shades the middle of a floor. It is made off the main thread
@@ -1132,7 +1132,7 @@ mod tests {
         assert_eq!(half(1.0 + 3.0 / 2048.0), 0x3c02);
         // Decoded: multiples of the anchor's grid out to 8 km are exact.
         let decode = |h: u16| {
-            let (s, e, m) = ((h >> 15) as i32, ((h >> 10) & 0x1f) as i32, (h & 0x3ff) as f32);
+            let (s, e, m) = (i32::from(h >> 15), i32::from((h >> 10) & 0x1f), f32::from(h & 0x3ff));
             let v = if e == 0 {
                 m * 2f32.powi(-24)
             } else {

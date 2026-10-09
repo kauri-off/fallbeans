@@ -1,5 +1,5 @@
 //! Someone in a room.
-use fb_proto::{Outfit, Pid};
+use fb_proto::{Outfit, PlayerId};
 
 use super::awards::GameStats;
 use super::{Backoff, ConnId, RateWindow, Uid};
@@ -7,7 +7,7 @@ use super::{Backoff, ConnId, RateWindow, Uid};
 /// A person (connected, or within the reconnect grace) or a bot.
 #[derive(Clone, Debug)]
 pub struct Player {
-    pub id: Pid,
+    pub id: PlayerId,
     pub name: String,
     /// Index into `fb_shared::COLORS`.
     pub color: u8,
@@ -40,7 +40,7 @@ pub enum Kind {
 }
 
 impl Player {
-    fn new(id: Pid, name: String, color: u8, outfit: Outfit, kind: Kind) -> Self {
+    fn new(id: PlayerId, name: String, color: u8, outfit: Outfit, kind: Kind) -> Self {
         Self {
             id,
             name,
@@ -58,7 +58,7 @@ impl Player {
         }
     }
 
-    pub fn human(id: Pid, name: String, color: u8, outfit: Outfit, uid: Uid, conn: ConnId) -> Self {
+    pub fn human(id: PlayerId, name: String, color: u8, outfit: Outfit, uid: Uid, conn: ConnId) -> Self {
         let kind = Kind::Human {
             uid,
             conn: Some(conn),
@@ -67,7 +67,7 @@ impl Player {
         Self::new(id, name, color, outfit, kind)
     }
 
-    pub fn bot(id: Pid, name: String, color: u8, outfit: Outfit, auto: bool) -> Self {
+    pub fn bot(id: PlayerId, name: String, color: u8, outfit: Outfit, auto: bool) -> Self {
         Self::new(id, name, color, outfit, Kind::Bot { auto })
     }
 
@@ -118,7 +118,7 @@ const BOT_NAMES: [&str; 10] = [
 ];
 
 /// A bot name nobody in the room has yet.
-pub fn bot_name<'a>(taken: impl IntoIterator<Item = &'a str> + Clone, id: Pid) -> String {
+pub fn bot_name<'a>(taken: impl IntoIterator<Item = &'a str> + Clone, id: PlayerId) -> String {
     BOT_NAMES
         .iter()
         .map(|n| format!("Бот {n}"))

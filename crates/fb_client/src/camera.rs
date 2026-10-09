@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_shared::INTRO_S;
+use fb_shared::PlayerId;
 use fb_sim::collider::{ColId, Contact};
 use fb_sim::math::V3;
 use fb_sim::world::World;
@@ -55,7 +56,7 @@ pub struct Rig {
     look: Vec3,
     generation: Option<u32>,
     teleports: u32,
-    watching: Option<u32>,
+    watching: Option<PlayerId>,
     cut_arena: Option<u32>,
     /// The yaw a round starts with: the angles stay there through the intro, whatever the mouse does.
     start_yaw: f32,
@@ -167,7 +168,7 @@ impl Rig {
             'arm: for i in 1..=STEPS {
                 let d = DISTANCE * i as f32 / STEPS as f32;
                 let p = self.smooth_target + dir * d;
-                let probe = V3::new(p.x as f64, p.y as f64, p.z as f64);
+                let probe = V3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
                 world.query(probe.x, probe.z, 0.6, &mut self.near);
                 for &ci in &self.near {
                     let c = world.col(ci);
@@ -260,7 +261,7 @@ pub fn place_camera(
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
     own: Query<(&Transform, &BodyFull), (With<Predicted>, With<BeanView>, Without<MainCamera>)>,
-    others: Query<(&PlayerId, &Transform), (With<Interpolated>, With<BeanView>, Without<MainCamera>)>,
+    others: Query<(&BeanId, &Transform), (With<Interpolated>, With<BeanView>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, With<MainCamera>>,
     fixed_cam: Option<Res<CameraOverride>>,
 ) {

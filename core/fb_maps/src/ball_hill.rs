@@ -12,7 +12,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, rolling_balls, y_on_ramp};
@@ -24,7 +24,7 @@ use crate::util::{o, rot};
 pub struct BallHill;
 
 static META: GameMeta = GameMeta::new(
-    "ball-hill",
+    MapId::BallHill,
     "Скользкий склон",
     Genre::Race,
     "Ледяной склон: держаться можно только на ковровых дорожках, сверху катятся шары, поперёк ездят блоки. Дальше — случайные испытания и ворота со сдвигающимися проёмами.",

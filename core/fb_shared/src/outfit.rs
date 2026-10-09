@@ -1,7 +1,7 @@
 //! What a bean wears besides its suit colour (visual only).
 use serde::{Deserialize, Serialize};
 
-use crate::{Rgb, rgb};
+use crate::{PlayerId, Rgb, rgb};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Hat {
@@ -121,9 +121,9 @@ pub struct Outfit {
 }
 
 /// A bot's outfit: picked from its id, so the same bot always looks the same.
-pub fn bot_outfit(id: u32) -> Outfit {
+pub fn bot_outfit(id: PlayerId) -> Outfit {
     let h = |n: u32| {
-        let x = (id.wrapping_mul(31).wrapping_add(n + 1) ^ 0x5bd1_e995).wrapping_mul(0x9e37_79b1);
+        let x = (id.0.wrapping_mul(31).wrapping_add(n + 1) ^ 0x5bd1_e995).wrapping_mul(0x9e37_79b1);
         let y = (x ^ (x >> 15)).wrapping_mul(0x85eb_ca77);
         y ^ (y >> 13)
     };
@@ -167,16 +167,16 @@ mod tests {
             shoes,
         };
         assert_eq!(
-            bot_outfit(1),
+            bot_outfit(PlayerId(1)),
             o(Hat::Halo, Some(Tint::Brown), Glasses::None, Some(Tint::Red))
         );
         assert_eq!(
-            bot_outfit(2),
+            bot_outfit(PlayerId(2)),
             o(Hat::Cap, Some(Tint::Pink), Glasses::Shades, Some(Tint::Grey))
         );
-        assert_eq!(bot_outfit(5), o(Hat::None, None, Glasses::Hearts, None));
+        assert_eq!(bot_outfit(PlayerId(5)), o(Hat::None, None, Glasses::Hearts, None));
         assert_eq!(
-            bot_outfit(9),
+            bot_outfit(PlayerId(9)),
             o(Hat::Viking, Some(Tint::Black), Glasses::Monocle, Some(Tint::Teal))
         );
     }

@@ -9,7 +9,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
-use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, Pid, Playlist};
+use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, PlayerId, Playlist};
 use fb_shared::COLORS;
 use fb_shared::outfit::{GLASSES, HATS, Hat, Tint};
 use lightyear::prelude::client::Client;
@@ -437,9 +437,11 @@ fn top(
     show(practice_node, session.practice);
     show(&mut room, !session.practice && session.lobby.is_some());
     if session.practice {
-        let game = session.arena.as_ref().map(|a| a.game.clone()).unwrap_or_default();
-        let title = fb_maps::by_id(&game).map_or(game.clone(), |d| d.meta().title.to_string());
-        relabel(practice_e, &text::practice_now(&title), &children, &mut texts);
+        let title = session
+            .arena
+            .as_ref()
+            .map_or("", |a| fb_maps::by_id(a.game).meta().title);
+        relabel(practice_e, &text::practice_now(title), &children, &mut texts);
     }
     let host = session.host();
     let private = session.lobby.as_ref().is_some_and(|l| l.room.private);
@@ -532,7 +534,7 @@ fn phase_line(
     };
     let line = match &session.arena {
         Some(a) if a.kind == ArenaKind::Round => {
-            let title = fb_maps::by_id(&a.game).map_or("", |d| d.meta().title);
+            let title = fb_maps::by_id(a.game).meta().title;
             text::round_now(a.index, a.total, title)
         }
         _ if l.phase == Phase::Podium => text::PODIUM_NOW.into(),
@@ -558,7 +560,7 @@ fn player_row(
     f: &Fonts,
     l: &Lobby,
     pl: &fb_proto::LobbyPlayer,
-    me: Option<Pid>,
+    me: Option<PlayerId>,
     host: bool,
 ) {
     p.spawn((
@@ -649,17 +651,17 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
             row(g, true, |r| {
                 for def in fb_maps::GAMES {
                     let m = def.meta();
-                    let at = pl.games.iter().position(|g| g == m.id);
+                    let at = pl.games.iter().position(|&g| g == m.id);
                     let s = match at {
                         Some(i) => format!("{}. {}", i + 1, m.title),
                         None => m.title.to_string(),
                     };
-                    let id = m.id.to_string();
+                    let id = m.id;
                     let act = with(&|p| {
-                        if let Some(i) = p.games.iter().position(|g| *g == id) {
+                        if let Some(i) = p.games.iter().position(|&g| g == id) {
                             p.games.remove(i);
                         } else if p.games.len() < 12 {
-                            p.games.push(id.clone());
+                            p.games.push(id);
                         }
                     });
                     button(r, f, &s, Look::Chip(at.is_some()), act);
@@ -891,7 +893,7 @@ fn dev(
                 for def in fb_maps::GAMES {
                     let m = def.meta();
                     let cmd = DevCmd::Start {
-                        games: vec![m.id.to_string()],
+                        games: vec![m.id],
                         rounds: Some(1),
                         bots: Some(3),
                     };

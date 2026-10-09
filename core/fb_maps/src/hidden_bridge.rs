@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapSfx, MapSpec, SegEvent, Steer};
+use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapId, MapSfx, MapSpec, SegEvent, Steer};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
@@ -25,7 +25,7 @@ use crate::util::{deco, o};
 pub struct HiddenBridge;
 
 static META: GameMeta = GameMeta::new(
-    "hidden-bridge",
+    MapId::HiddenBridge,
     "Невидимый мост",
     Genre::Race,
     "Три стеклянных моста: ложная панель лопается от первого касания, и оттолкнуться от неё уже не выйдет. Смотрите, где упали другие, и идите по зелёным! Дальше мосты уже и с перчатками.",
@@ -95,7 +95,11 @@ impl GlassBridge {
         let pane = self.panes[i];
         if self.tiles[i].real {
             if !pane.trusted && cx.server {
-                self.emit(cx, self.seg, SegEvent::Safe(i as u32));
+                self.emit(
+                    cx,
+                    self.seg,
+                    SegEvent::Safe(u32::try_from(i).expect("fewer than 2³² panes")),
+                );
             }
             return;
         }
@@ -106,7 +110,8 @@ impl GlassBridge {
         // when the server disagrees).
         if cx.server {
             let now = cx.t;
-            self.emit(cx, self.seg, SegEvent::Fall { i: i as u32, at: now });
+            let i = u32::try_from(i).expect("fewer than 2³² panes");
+            self.emit(cx, self.seg, SegEvent::Fall { i, at: now });
         }
     }
 }
@@ -290,6 +295,7 @@ impl Section for GlassBridge {
     }
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "a column below cols")]
 fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segment {
     Box::new(move |s| {
         let y = s.y;

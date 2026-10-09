@@ -1,4 +1,5 @@
 //! Rare one-off bonuses on the course: spots and kinds follow from the seed; the server decides who took one.
+use fb_shared::PlayerId;
 use fb_shared::rng::Rng;
 
 use crate::m::MinMax;
@@ -15,14 +16,14 @@ pub struct Bonus {
     /// Sim time it shows up (0 on race courses).
     pub appear_at: f64,
     /// Who took it, and when.
-    pub taken: Option<(u32, f64)>,
+    pub taken: Option<(PlayerId, f64)>,
 }
 
 /// A bonus was taken: the authoritative map event.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BonusTaken {
     pub i: u32,
-    pub id: u32,
+    pub id: PlayerId,
     pub at: f64,
 }
 
@@ -48,7 +49,7 @@ impl Bonuses {
         });
         let mut pool: Vec<usize> = (0..spots.len()).collect();
         let kinds = Power::ALL;
-        for k in 0..count {
+        for i in (0u32..).take(count) {
             let pick = pool.remove(rng.index(pool.len()));
             let s = spots[pick];
             let kind = kinds[rng.index(kinds.len())];
@@ -58,7 +59,7 @@ impl Bonuses {
                 0.0
             };
             list.push(Bonus {
-                i: k as u32,
+                i,
                 pos: s,
                 kind,
                 appear_at,
@@ -73,7 +74,7 @@ impl Bonuses {
     }
 
     /// Server: bodies (id, body) that touch a bonus take it.
-    pub fn check(&mut self, t: f64, bodies: &mut [(u32, &mut Body)]) -> Vec<BonusTaken> {
+    pub fn check(&mut self, t: f64, bodies: &mut [(PlayerId, &mut Body)]) -> Vec<BonusTaken> {
         let mut out = Vec::new();
         for x in &mut self.list {
             if x.taken.is_some() || t < x.appear_at {

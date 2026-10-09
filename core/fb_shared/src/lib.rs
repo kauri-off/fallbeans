@@ -1,3 +1,8 @@
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 pub mod cause;
 pub mod color;
 pub mod consts;
@@ -6,9 +11,11 @@ pub mod hash;
 pub mod input;
 pub mod m;
 pub mod outfit;
+pub mod player;
 pub mod rng;
 pub mod rules;
 pub mod text;
 
 pub use color::{Rgb, rgb, rgba};
 pub use consts::*;
+pub use player::PlayerId;

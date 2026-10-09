@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::PlayerId;
 use crate::game::Genre;
 use crate::rng::{Rng, shuffle};
 
@@ -33,22 +34,22 @@ pub struct RoundStats {
 pub struct RoundView<'a> {
     pub genre: Genre,
     /// The beans the round started with (a later round of the same game may have more or fewer).
-    pub participants: &'a [u32],
-    pub connected: &'a dyn Fn(u32) -> bool,
+    pub participants: &'a [PlayerId],
+    pub connected: &'a dyn Fn(PlayerId) -> bool,
     /// In finishing order.
-    pub finished: &'a [u32],
+    pub finished: &'a [PlayerId],
     /// In elimination order.
-    pub out: &'a [u32],
-    pub scores: &'a BTreeMap<u32, i64>,
-    pub progress: &'a dyn Fn(u32) -> f64,
+    pub out: &'a [PlayerId],
+    pub scores: &'a BTreeMap<PlayerId, i64>,
+    pub progress: &'a dyn Fn(PlayerId) -> f64,
     pub time_up: bool,
     /// Bots among the participants (a round with only bots left in it ends early).
-    pub bots: Option<&'a BTreeSet<u32>>,
+    pub bots: Option<&'a BTreeSet<PlayerId>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RoundRow {
-    pub id: u32,
+    pub id: PlayerId,
     pub place: usize,
     /// Placement points (0…10).
     pub points: i64,
@@ -74,7 +75,7 @@ pub enum RoundNote {
 }
 
 impl RoundView<'_> {
-    fn in_round(&self) -> Vec<u32> {
+    fn in_round(&self) -> Vec<PlayerId> {
         self.participants
             .iter()
             .copied()
@@ -82,14 +83,14 @@ impl RoundView<'_> {
             .collect()
     }
 
-    fn remaining(&self) -> Vec<u32> {
+    fn remaining(&self) -> Vec<PlayerId> {
         self.in_round()
             .into_iter()
             .filter(|id| !self.finished.contains(id) && !self.out.contains(id))
             .collect()
     }
 
-    fn score_of(&self, id: u32) -> i64 {
+    fn score_of(&self, id: PlayerId) -> i64 {
         self.scores.get(&id).copied().unwrap_or(0)
     }
 
@@ -120,10 +121,10 @@ impl RoundView<'_> {
     /// Ranked groups, best first; players in one group tie. When a round ends early with only bots in it,
     /// the bots still racing go by their progress (as everybody does at the time limit), and `rng` places
     /// the bots still standing in a survival round.
-    pub fn rank_groups(&self, rng: Option<&mut Rng>) -> Vec<Vec<u32>> {
+    pub fn rank_groups(&self, rng: Option<&mut Rng>) -> Vec<Vec<PlayerId>> {
         let ids = self.in_round();
         let early = !self.time_up && self.only_bots_left();
-        let bots: Vec<Vec<u32>> = if !early {
+        let bots: Vec<Vec<PlayerId>> = if !early {
             Vec::new()
         } else if self.genre == Genre::Race {
             group_by(&self.remaining(), |id| (self.progress)(id).round())
@@ -136,20 +137,20 @@ impl RoundView<'_> {
         };
         match self.genre {
             Genre::Race => {
-                let fin: Vec<u32> = self.finished.iter().copied().filter(|id| ids.contains(id)).collect();
-                let rest: Vec<u32> = ids
+                let fin: Vec<PlayerId> = self.finished.iter().copied().filter(|id| ids.contains(id)).collect();
+                let rest: Vec<PlayerId> = ids
                     .iter()
                     .copied()
                     .filter(|id| !fin.contains(id) && !bots.iter().any(|b| b.contains(id)))
                     .collect();
-                let mut out: Vec<Vec<u32>> = fin.iter().map(|&id| vec![id]).collect();
+                let mut out: Vec<Vec<PlayerId>> = fin.iter().map(|&id| vec![id]).collect();
                 out.extend(bots);
                 out.extend(group_by(&rest, |id| (self.progress)(id).round()));
                 out
             }
             Genre::Survival => {
-                let outs: Vec<u32> = self.out.iter().copied().filter(|id| ids.contains(id)).collect();
-                let stayed: Vec<u32> = ids.iter().copied().filter(|id| !outs.contains(id)).collect();
+                let outs: Vec<PlayerId> = self.out.iter().copied().filter(|id| ids.contains(id)).collect();
+                let stayed: Vec<PlayerId> = ids.iter().copied().filter(|id| !outs.contains(id)).collect();
                 let gone = outs.iter().rev().map(|&id| vec![id]);
                 if early {
                     return bots.into_iter().chain(gone).collect();
@@ -166,7 +167,7 @@ impl RoundView<'_> {
     }
 
     /// Did the player do what the round asked (finish, survive, score)?
-    fn succeeded(&self, id: u32) -> bool {
+    fn succeeded(&self, id: PlayerId) -> bool {
         match self.genre {
             Genre::Race => self.finished.contains(&id),
             Genre::Survival => !self.out.contains(&id),
@@ -174,7 +175,7 @@ impl RoundView<'_> {
         }
     }
 
-    fn note(&self, id: u32, s: &RoundStats) -> RoundNote {
+    fn note(&self, id: PlayerId, s: &RoundStats) -> RoundNote {
         match self.genre {
             Genre::Race => RoundNote::Finish(s.finish_at),
             Genre::Survival => RoundNote::Survived(s.out_at),
@@ -187,8 +188,8 @@ impl RoundView<'_> {
     /// `totals` are the game totals before this round; a total never drops below 0.
     pub fn score_round(
         &self,
-        stats: &BTreeMap<u32, RoundStats>,
-        totals: &BTreeMap<u32, i64>,
+        stats: &BTreeMap<PlayerId, RoundStats>,
+        totals: &BTreeMap<PlayerId, i64>,
         rng: Option<&mut Rng>,
     ) -> Vec<RoundRow> {
         let groups = self.rank_groups(rng);
@@ -199,7 +200,7 @@ impl RoundView<'_> {
             if self.succeeded(id) {
                 TOP_POINTS
             } else {
-                (TOP_POINTS as f64 / 2.0).round() as i64
+                (TOP_POINTS + 1) / 2
             }
         };
         let mut rows = Vec::new();
@@ -236,14 +237,14 @@ impl RoundView<'_> {
 
 /// Sorted by key, best first (a stable sort), equal keys grouped. A NaN key ranks last (as −∞):
 /// the comparison stays a total order and those players share one group.
-fn group_by(ids: &[u32], key: impl Fn(u32) -> f64) -> Vec<Vec<u32>> {
+fn group_by(ids: &[PlayerId], key: impl Fn(PlayerId) -> f64) -> Vec<Vec<PlayerId>> {
     let key = |id| {
         let k = key(id);
         if k.is_nan() { f64::NEG_INFINITY } else { k }
     };
     let mut sorted = ids.to_vec();
     sorted.sort_by(|&a, &b| key(b).total_cmp(&key(a)));
-    let mut groups: Vec<Vec<u32>> = Vec::new();
+    let mut groups: Vec<Vec<PlayerId>> = Vec::new();
     for id in sorted {
         match groups.last_mut() {
             Some(last) if key(last[0]) == key(id) => last.push(id),
@@ -254,7 +255,8 @@ fn group_by(ids: &[u32], key: impl Fn(u32) -> f64) -> Vec<Vec<u32>> {
 }
 
 /// Placement points: ties share the average of the places they occupy. Returns (id, place, points).
-pub fn placement_points(groups: &[Vec<u32>]) -> BTreeMap<u32, (usize, i64)> {
+#[expect(clippy::cast_possible_truncation, reason = "rounded points within 0…TOP_POINTS")]
+pub fn placement_points(groups: &[Vec<PlayerId>]) -> BTreeMap<PlayerId, (usize, i64)> {
     let n: usize = groups.iter().map(Vec::len).sum();
     let mut out = BTreeMap::new();
     let mut pos = 0usize;
@@ -306,38 +308,56 @@ mod tests {
 
     const IDS: [u32; 4] = [1, 2, 3, 4];
 
+    fn pids(ids: &[u32]) -> Vec<PlayerId> {
+        ids.iter().copied().map(PlayerId).collect()
+    }
+
+    fn plain(groups: Vec<Vec<PlayerId>>) -> Vec<Vec<u32>> {
+        groups
+            .into_iter()
+            .map(|g| g.into_iter().map(|id| id.0).collect())
+            .collect()
+    }
+
     fn with<R>(x: &V, f: impl FnOnce(&RoundView) -> R) -> R {
-        let connected = |id| !x.gone.contains(&id);
-        let progress = |id| x.progress.get(&id).copied().unwrap_or(0.0);
+        let connected = |id: PlayerId| !x.gone.contains(&id.0);
+        let progress = |id: PlayerId| x.progress.get(&id.0).copied().unwrap_or(0.0);
+        let (ids, finished, out) = (pids(&x.ids), pids(&x.finished), pids(&x.out));
+        let scores = x.scores.iter().map(|(&id, &v)| (PlayerId(id), v)).collect();
+        let bots = x
+            .bots
+            .as_ref()
+            .map(|b| b.iter().copied().map(PlayerId).collect::<BTreeSet<_>>());
         let view = RoundView {
             genre: x.genre,
-            participants: &x.ids,
+            participants: &ids,
             connected: &connected,
-            finished: &x.finished,
-            out: &x.out,
-            scores: &x.scores,
+            finished: &finished,
+            out: &out,
+            scores: &scores,
             progress: &progress,
             time_up: x.time_up,
-            bots: x.bots.as_ref(),
+            bots: bots.as_ref(),
         };
         f(&view)
     }
 
-    fn stats(list: &[(u32, RoundStats)]) -> BTreeMap<u32, RoundStats> {
-        list.iter().copied().collect()
+    fn stats(list: &[(u32, RoundStats)]) -> BTreeMap<PlayerId, RoundStats> {
+        list.iter().map(|&(id, s)| (PlayerId(id), s)).collect()
     }
 
-    fn score(x: &V, s: &BTreeMap<u32, RoundStats>, totals: &BTreeMap<u32, i64>) -> Vec<RoundRow> {
-        with(x, |r| r.score_round(s, totals, None))
+    fn score(x: &V, s: &BTreeMap<PlayerId, RoundStats>, totals: &BTreeMap<u32, i64>) -> Vec<RoundRow> {
+        let totals = totals.iter().map(|(&id, &v)| (PlayerId(id), v)).collect();
+        with(x, |r| r.score_round(s, &totals, None))
     }
 
     #[test]
     fn spreads_placement_points_ties_sharing() {
-        let p = placement_points(&[vec![1], vec![2, 3], vec![4]]);
-        assert_eq!(p[&1], (1, 10));
-        assert_eq!(p[&2], (2, 5));
-        assert_eq!(p[&3], (2, 5));
-        assert_eq!(p[&4], (4, 0));
+        let p = placement_points(&[pids(&[1]), pids(&[2, 3]), pids(&[4])]);
+        assert_eq!(p[&PlayerId(1)], (1, 10));
+        assert_eq!(p[&PlayerId(2)], (2, 5));
+        assert_eq!(p[&PlayerId(3)], (2, 5));
+        assert_eq!(p[&PlayerId(4)], (4, 0));
     }
 
     #[test]
@@ -362,7 +382,7 @@ mod tests {
             ),
         ]);
         let rows = score(&x, &s, &BTreeMap::new());
-        assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), [2, 1, 4, 3]);
+        assert_eq!(rows.iter().map(|r| r.id.0).collect::<Vec<_>>(), [2, 1, 4, 3]);
         assert_eq!(rows.iter().map(|r| r.points).collect::<Vec<_>>(), [10, 7, 3, 0]);
         assert_eq!(rows[0].note, RoundNote::Finish(Some(40.0)));
     }
@@ -373,7 +393,7 @@ mod tests {
         x.out = vec![4, 3];
         x.time_up = true;
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
-        let pts = |id| rows.iter().find(|r| r.id == id).unwrap().points;
+        let pts = |id| rows.iter().find(|r| r.id.0 == id).unwrap().points;
         assert_eq!([pts(1), pts(2), pts(3), pts(4)], [8, 8, 3, 0]);
     }
 
@@ -388,7 +408,7 @@ mod tests {
         };
         let s = stats(&[(1, st(2, 0)), (2, st(9, 0)), (3, st(0, 1))]);
         let rows = score(&x, &s, &[(4, 3)].into());
-        let by = |id| rows.iter().find(|r| r.id == id).unwrap().clone();
+        let by = |id| rows.iter().find(|r| r.id.0 == id).unwrap().clone();
         assert_eq!((by(1).points, by(1).penalty, by(1).delta), (10, 2, 8));
         assert_eq!((by(2).points, by(2).penalty, by(2).delta), (7, 4, 3));
         assert_eq!((by(3).points, by(3).penalty, by(3).delta), (3, 2, 1));
@@ -396,7 +416,7 @@ mod tests {
         let mut y = v(Genre::Race);
         y.finished = vec![2, 1];
         let broke = score(&y, &stats(&[(1, st(3, 0))]), &[(1, 1)].into());
-        assert_eq!(broke.iter().find(|r| r.id == 1).unwrap().total, 1 + 7 - 3);
+        assert_eq!(broke.iter().find(|r| r.id.0 == 1).unwrap().total, 1 + 7 - 3);
     }
 
     #[test]
@@ -411,7 +431,7 @@ mod tests {
             },
         )]);
         let rows = score(&x, &s, &BTreeMap::new());
-        assert_eq!(rows.iter().find(|r| r.id == 1).unwrap().penalty, 0);
+        assert_eq!(rows.iter().find(|r| r.id.0 == 1).unwrap().penalty, 0);
     }
 
     #[test]
@@ -419,18 +439,18 @@ mod tests {
         let mut x = v(Genre::Points);
         x.scores = [(1, 5), (2, 20), (3, 5), (4, 0)].into();
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
-        let got: Vec<(u32, i64)> = rows.iter().map(|r| (r.id, r.points)).collect();
+        let got: Vec<(u32, i64)> = rows.iter().map(|r| (r.id.0, r.points)).collect();
         assert_eq!(got, [(2, 10), (1, 5), (3, 5), (4, 0)]);
     }
 
     #[test]
     fn nan_keys_rank_last_in_one_group() {
-        let key = |id| match id {
+        let key = |id: PlayerId| match id.0 {
             1 | 3 => f64::NAN,
             2 => 3.0,
             _ => 1.0,
         };
-        assert_eq!(group_by(&IDS, key), [vec![2], vec![4], vec![1, 3]]);
+        assert_eq!(plain(group_by(&pids(&IDS), key)), [vec![2], vec![4], vec![1, 3]]);
     }
 
     #[test]
@@ -457,7 +477,7 @@ mod tests {
         assert!(!with(&x, |r| r.is_round_over()));
         x.time_up = true;
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
-        assert_eq!((rows[0].id, rows[0].points, rows[0].ok), (1, TOP_POINTS, true));
+        assert_eq!((rows[0].id.0, rows[0].points, rows[0].ok), (1, TOP_POINTS, true));
         x.time_up = false;
         x.out = vec![1];
         assert!(with(&x, |r| r.is_round_over()));
@@ -483,7 +503,7 @@ mod tests {
         x.out = vec![2, 3];
         assert!(with(&x, |r| r.is_round_over()));
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
-        let pts = |id| rows.iter().find(|r| r.id == id).unwrap().points;
+        let pts = |id| rows.iter().find(|r| r.id.0 == id).unwrap().points;
         assert_eq!([pts(1), pts(3), pts(2)], [10, 5, 0]);
     }
 
@@ -495,6 +515,6 @@ mod tests {
         x.progress = [(2, 10.0), (3, 50.2), (4, 30.0)].into();
         assert!(with(&x, |r| r.is_round_over()));
         let groups = with(&x, |r| r.rank_groups(Some(&mut Rng::new(3))));
-        assert_eq!(groups, [vec![1], vec![3], vec![4], vec![2]]);
+        assert_eq!(plain(groups), [vec![1], vec![3], vec![4], vec![2]]);
     }
 }

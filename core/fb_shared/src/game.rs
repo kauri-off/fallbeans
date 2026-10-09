@@ -1,4 +1,6 @@
 //! What a game is: its description, genre, and how a round treats beans.
+use core::fmt;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,9 +28,93 @@ impl Genre {
     }
 }
 
+/// Every map: the games, the lobby and the podium. Its id is a variant index on the wire and the kebab-case
+/// name (`as_str`) in text: files, command lines, JSON.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum MapId {
+    DoorDash,
+    HammerSwing,
+    BallHill,
+    HiddenBridge,
+    DrumRoll,
+    JumpClub,
+    RollOut,
+    WallRush,
+    TailTag,
+    HexAGone,
+    CrownPeak,
+    PlateDrop,
+    PortalPanic,
+    BouncePark,
+    CliffClimb,
+    FrostSky,
+    StarFall,
+    Lobby,
+    Podium,
+}
+
+impl MapId {
+    pub const ALL: [MapId; 19] = [
+        MapId::DoorDash,
+        MapId::HammerSwing,
+        MapId::BallHill,
+        MapId::HiddenBridge,
+        MapId::DrumRoll,
+        MapId::JumpClub,
+        MapId::RollOut,
+        MapId::WallRush,
+        MapId::TailTag,
+        MapId::HexAGone,
+        MapId::CrownPeak,
+        MapId::PlateDrop,
+        MapId::PortalPanic,
+        MapId::BouncePark,
+        MapId::CliffClimb,
+        MapId::FrostSky,
+        MapId::StarFall,
+        MapId::Lobby,
+        MapId::Podium,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            MapId::DoorDash => "door-dash",
+            MapId::HammerSwing => "hammer-swing",
+            MapId::BallHill => "ball-hill",
+            MapId::HiddenBridge => "hidden-bridge",
+            MapId::DrumRoll => "drum-roll",
+            MapId::JumpClub => "jump-club",
+            MapId::RollOut => "roll-out",
+            MapId::WallRush => "wall-rush",
+            MapId::TailTag => "tail-tag",
+            MapId::HexAGone => "hex-a-gone",
+            MapId::CrownPeak => "crown-peak",
+            MapId::PlateDrop => "plate-drop",
+            MapId::PortalPanic => "portal-panic",
+            MapId::BouncePark => "bounce-park",
+            MapId::CliffClimb => "cliff-climb",
+            MapId::FrostSky => "frost-sky",
+            MapId::StarFall => "star-fall",
+            MapId::Lobby => "lobby",
+            MapId::Podium => "podium",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.as_str() == s)
+    }
+}
+
+impl fmt::Display for MapId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct GameMeta {
-    pub id: &'static str,
+    pub id: MapId,
     pub title: &'static str,
     pub genre: Genre,
     pub desc: &'static str,
@@ -45,7 +131,7 @@ pub struct GameMeta {
 impl GameMeta {
     /// A game description with the optional parts left out (fill them with struct update syntax).
     pub const fn new(
-        id: &'static str,
+        id: MapId,
         title: &'static str,
         genre: Genre,
         desc: &'static str,
@@ -66,21 +152,13 @@ impl GameMeta {
     }
 
     /// A map that is not a game (the lobby, the podium): no description and no end.
-    pub const fn place(id: &'static str, title: &'static str) -> Self {
+    pub const fn place(id: MapId, title: &'static str) -> Self {
         Self::new(id, title, Genre::Points, "", "", f64::INFINITY)
     }
 
     /// What is wrong with the description; empty when it is fine.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let id_ok = self.id.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-            && self
-                .id
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-        if !id_ok {
-            out.push("meta.id: lowercase letters, digits and dashes".to_string());
-        }
         let chars = |s: &str| s.chars().count();
         if !(2..=24).contains(&chars(self.title)) {
             out.push(format!("meta.title: {} characters (2…24)", chars(self.title)));

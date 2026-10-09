@@ -102,6 +102,7 @@ impl<S: Subscriber> Layer<S> for Logbook {
         }
         let mut f = Fields::default();
         event.record(&mut f);
+        #[expect(clippy::cast_possible_truncation, reason = "milliseconds since 1970 fit in u64")]
         let at = SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64;
         let line = LogLine {
             at,

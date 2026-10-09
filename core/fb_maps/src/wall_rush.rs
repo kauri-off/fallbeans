@@ -9,7 +9,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::{ColId, ColliderOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::scene::{Palette, pal};
@@ -19,7 +19,7 @@ use crate::util::{deco, freq, o};
 pub struct WallRush;
 
 static META: GameMeta = GameMeta::new(
-    "wall-rush",
+    MapId::WallRush,
     "Стенобой",
     Genre::Survival,
     "На платформу несутся стены — быстро и каждая по-своему: сплошные блоки, низкие стенки, балки сверху, окна и проёмы разной ширины. Найдите путь или перепрыгните — иначе снесёт!",
@@ -85,7 +85,7 @@ impl MapDef for WallRush {
             b.box_(sx * (W / 2.0 + 0.4), 0.6, 0.0, 0.8, 1.2, 16.0, pal::PINK, o());
         }
         for k in 0..4 {
-            b.bonus(-6.0 + k as f64 * 4.0, 0.0, -3.0 + (k % 2) as f64 * 6.0);
+            b.bonus(-6.0 + f64::from(k) * 4.0, 0.0, -3.0 + f64::from(k % 2) * 6.0);
         }
 
         let mut walls: Vec<Wall> = Vec::new();
@@ -195,7 +195,7 @@ impl MapDef for WallRush {
         });
         b.clouds(0.0, -20.0, 50.0);
 
-        let spawns = (0..8).map(|i| V3::new(-7.0 + i as f64 * 2.0, 0.1, 2.0)).collect();
+        let spawns = (0..8).map(|i| V3::new(-7.0 + f64::from(i) * 2.0, 0.1, 2.0)).collect();
         MapSpec {
             spawns,
             kill_y: -8.0,

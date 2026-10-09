@@ -9,7 +9,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::{LookId, Pattern};
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Surface;
@@ -20,7 +20,7 @@ use crate::util::o;
 pub struct BouncePark;
 
 static META: GameMeta = GameMeta::new(
-    "bounce-park",
+    MapId::BouncePark,
     "Прыг-скок",
     Genre::Race,
     "Грибы, батуты и катапульты: скачите со шляпки на шляпку, ловите летающие батуты, взлетайте над стенами. Рулите в полёте, чтобы приземлиться куда надо!",

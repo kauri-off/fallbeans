@@ -2,7 +2,8 @@
 //! it runs during a round (ticks, events, grabs, falls, touches, bots) and the state they keep.
 use std::collections::BTreeMap;
 
-pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, can_move, fall_behaviour};
+use fb_shared::PlayerId;
+pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, MapId, can_move, fall_behaviour};
 use serde::{Deserialize, Serialize};
 
 use crate::bots::{BotBrain, BotInput, BotView};
@@ -16,7 +17,7 @@ use crate::world::{MoveCtx, World};
 pub struct MapCtx<'a> {
     pub server: bool,
     pub seed: u32,
-    pub participants: &'a [u32],
+    pub participants: &'a [PlayerId],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,13 +46,17 @@ pub enum MapEvent {
     /// A floor tile starts to fall at `at`.
     Tile { i: u32, at: f64 },
     /// Bean `id` took star `k`.
-    Star { k: u32, id: u32 },
+    Star { k: u32, id: PlayerId },
     /// Bean `from` fell with `n` stars: they go to `to` (who knocked it down), or burn.
-    Drop { from: u32, to: Option<u32>, n: i64 },
+    Drop {
+        from: PlayerId,
+        to: Option<PlayerId>,
+        n: i64,
+    },
     /// Bean `to` snatched a star from `from`.
-    Snatch { from: u32, to: u32 },
+    Snatch { from: PlayerId, to: PlayerId },
     /// Who has a tail now; `by` has just got one.
-    Tails { ids: Vec<u32>, by: u32 },
+    Tails { ids: Vec<PlayerId>, by: PlayerId },
 }
 
 /// An event of one section of a course.
@@ -83,14 +88,14 @@ pub enum MapOut {
         keep: bool,
     },
     Score {
-        id: u32,
+        id: PlayerId,
         v: i64,
     },
     /// Client: a sound to play.
     Sfx(MapSfx),
     /// Client: a bean's decoration (a tail, a badge by the name tag).
     Decorate {
-        id: u32,
+        id: PlayerId,
         change: DecoChange,
     },
 }
@@ -121,22 +126,22 @@ impl BeanDeco {
 
 /// The beans in play (server: all of them, in the order they joined; client: the local one).
 pub trait Bodies {
-    fn ids(&self) -> Vec<u32>;
-    fn get(&self, id: u32) -> Option<&Body>;
-    fn get_mut(&mut self, id: u32) -> Option<&mut Body>;
+    fn ids(&self) -> Vec<PlayerId>;
+    fn get(&self, id: PlayerId) -> Option<&Body>;
+    fn get_mut(&mut self, id: PlayerId) -> Option<&mut Body>;
 }
 
 /// No beans (map logic running inside a bean's own step).
 pub struct NoBodies;
 
 impl Bodies for NoBodies {
-    fn ids(&self) -> Vec<u32> {
+    fn ids(&self) -> Vec<PlayerId> {
         Vec::new()
     }
-    fn get(&self, _: u32) -> Option<&Body> {
+    fn get(&self, _: PlayerId) -> Option<&Body> {
         None
     }
-    fn get_mut(&mut self, _: u32) -> Option<&mut Body> {
+    fn get_mut(&mut self, _: PlayerId) -> Option<&mut Body> {
         None
     }
 }
@@ -164,11 +169,11 @@ pub trait MapLogic: Send + Sync {
     fn tick(&mut self, _cx: &mut Cx, _t: f64) {}
     /// Both sides, after `tick`: what the map does to a bean in play each tick from its state alone (a tail
     /// slows its holder). A client predicts it for its own bean.
-    fn bean(&self, _id: u32, _body: &mut Body, _t: f64) {}
+    fn bean(&self, _id: PlayerId, _body: &mut Body, _t: f64) {}
     /// Server: `actor` grabbed `target` (grab button, target in reach).
-    fn grab(&mut self, _cx: &mut Cx, _actor: u32, _target: u32) {}
+    fn grab(&mut self, _cx: &mut Cx, _actor: PlayerId, _target: PlayerId) {}
     /// Server: `id` fell off during the round (and respawns); `by` is the player credited with it.
-    fn fall(&mut self, _cx: &mut Cx, _id: u32, _by: Option<u32>) {}
+    fn fall(&mut self, _cx: &mut Cx, _id: PlayerId, _by: Option<PlayerId>) {}
     /// Client: one line of HUD text (e.g. "Ваши очки: 12").
     fn hud(&self, _cx: &Cx) -> Option<String> {
         None
@@ -235,10 +240,10 @@ pub struct Cx<'a> {
     /// Current sim time in seconds (negative during the intro).
     pub t: f64,
     /// Client: id of the local player.
-    pub me: Option<u32>,
+    pub me: Option<PlayerId>,
     pub world: &'a mut World,
     pub bodies: &'a mut dyn Bodies,
-    pub scores: &'a mut BTreeMap<u32, i64>,
+    pub scores: &'a mut BTreeMap<PlayerId, i64>,
     pub out: &'a mut Vec<MapOut>,
     /// An event handler is running (it does not emit).
     pub(crate) in_event: bool,
@@ -249,10 +254,10 @@ impl<'a> Cx<'a> {
         server: bool,
         apply: bool,
         t: f64,
-        me: Option<u32>,
+        me: Option<PlayerId>,
         world: &'a mut World,
         bodies: &'a mut dyn Bodies,
-        scores: &'a mut BTreeMap<u32, i64>,
+        scores: &'a mut BTreeMap<PlayerId, i64>,
         out: &'a mut Vec<MapOut>,
     ) -> Self {
         Self {
@@ -282,11 +287,11 @@ impl<'a> Cx<'a> {
         self.apply
     }
 
-    pub fn score(&self, id: u32) -> i64 {
+    pub fn score(&self, id: PlayerId) -> i64 {
         self.scores.get(&id).copied().unwrap_or(0)
     }
 
-    pub fn set_score(&mut self, id: u32, v: i64) {
+    pub fn set_score(&mut self, id: PlayerId, v: i64) {
         self.scores.insert(id, v);
         self.out.push(MapOut::Score { id, v });
     }
@@ -297,7 +302,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    pub fn decorate(&mut self, id: u32, change: DecoChange) {
+    pub fn decorate(&mut self, id: PlayerId, change: DecoChange) {
         if !self.server {
             self.out.push(MapOut::Decorate { id, change });
         }

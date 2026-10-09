@@ -7,6 +7,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_proto::MapId;
 use fb_proto::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
@@ -20,12 +21,12 @@ use crate::settings::Me;
 pub struct Session {
     pub dev: bool,
     /// Player id in the room, and the room's id.
-    pub me: Option<Pid>,
+    pub me: Option<PlayerId>,
     pub room: Option<String>,
     pub lobby: Option<Lobby>,
     pub arena: Option<ArenaInfo>,
     /// Points of the current arena (the map's own scoring: stars, tails).
-    pub scores: BTreeMap<Pid, i64>,
+    pub scores: BTreeMap<PlayerId, i64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
     /// The host already asked to start the game in this lobby.
@@ -75,7 +76,7 @@ pub struct Denied {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Results {
-    pub game: String,
+    pub game: MapId,
     pub index: u32,
     pub total: u32,
     pub rows: Vec<fb_shared::rules::RoundRow>,
@@ -92,7 +93,7 @@ pub struct GameEnd {
 pub struct ChatLine {
     pub n: u32,
     /// None: the server.
-    pub id: Option<Pid>,
+    pub id: Option<PlayerId>,
     pub name: String,
     pub text: String,
     /// Real time it came (seconds since start).
@@ -102,8 +103,8 @@ pub struct ChatLine {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Feed {
     Ko {
-        victim: Pid,
-        by: Option<Pid>,
+        victim: PlayerId,
+        by: Option<PlayerId>,
         cause: Cause,
         out: bool,
         shortcut: bool,
@@ -125,11 +126,11 @@ const CHAT_MAX_LINES: usize = 50;
 pub const FEED_SECS: f32 = 6.0;
 
 impl Session {
-    pub fn player(&self, id: Pid) -> Option<&LobbyPlayer> {
+    pub fn player(&self, id: PlayerId) -> Option<&LobbyPlayer> {
         self.lobby.as_ref()?.players.iter().find(|p| p.id == id)
     }
 
-    pub fn name_of(&self, id: Pid) -> String {
+    pub fn name_of(&self, id: PlayerId) -> String {
         self.player(id).map_or_else(|| format!("#{id}"), |p| p.name.clone())
     }
 
@@ -147,7 +148,7 @@ impl Session {
 }
 
 impl ChatLog {
-    pub fn push(&mut self, now: f32, id: Option<Pid>, name: String, text: String) {
+    pub fn push(&mut self, now: f32, id: Option<PlayerId>, name: String, text: String) {
         let n = self.0.back().map_or(0, |l| l.n + 1);
         if self.0.len() >= CHAT_MAX_LINES {
             self.0.pop_front();
@@ -223,7 +224,7 @@ fn say_hello(
             .filter(|r| !r.is_empty())
             .or_else(|| opts.room.clone()),
         pin: opts.pin.clone(),
-        practice: opts.practice.clone(),
+        practice: opts.practice,
         color: me.color(),
         outfit: Some(me.player.outfit()),
     };
@@ -454,7 +455,8 @@ fn start_game(
         return;
     }
     session.started = true;
-    info!("starting {} with {n} players", opts.start.join(","));
+    let games: Vec<&str> = opts.start.iter().map(|m| m.as_str()).collect();
+    info!("starting {} with {n} players", games.join(","));
     if opts.fill {
         send(&mut senders, ClientMsg::Fill(true));
     }
@@ -467,7 +469,7 @@ fn start_game(
                 .iter()
                 .cycle()
                 .take(opts.start_rounds as usize)
-                .cloned()
+                .copied()
                 .collect(),
             rounds: opts.start_rounds,
         }),

@@ -10,7 +10,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::Surface;
@@ -21,7 +21,7 @@ use crate::util::o;
 pub struct CliffClimb;
 
 static META: GameMeta = GameMeta::new(
-    "cliff-climb",
+    MapId::CliffClimb,
     "Скалолазы",
     Genre::Race,
     "Всё выше и выше! Запрыгивайте на уступы и цепляйтесь за край, лезьте по лестницам (прыжок — соскочить) и не попадитесь под маятник. Наверху ждёт финиш.",
@@ -196,8 +196,8 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
         let mut end = s.z;
         let mut top = s.y;
         for k in 1..=levels {
-            let face = s.z + 7.0 + (k - 1) as f64 * depth;
-            let y = s.y + k as f64 * rise;
+            let face = s.z + 7.0 + f64::from(k - 1) * depth;
+            let y = s.y + f64::from(k) * rise;
             let d = if k == levels { 9.0 } else { depth };
             let h = y - s.y + 3.0;
             let p = STEP_PALS[(k as usize + 2) % STEP_PALS.len()];

@@ -56,8 +56,8 @@ fn state(
     stats: Res<Stats>,
     timeline: Res<LocalTimeline>,
     links: Query<&Link>,
-    own: Query<(&PlayerId, &BodyFull), With<Predicted>>,
-    others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
+    own: Query<(&BeanId, &BodyFull), With<Predicted>>,
+    others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     metrics: Option<Res<PredictionMetrics>>,
 ) -> BrpResult {
     let lobby = session.lobby.as_ref().map(|l| {
@@ -76,7 +76,7 @@ fn state(
             "map": m.round.map,
             "kind": m.round.kind,
             "seed": m.round.seed,
-            "t": m.time(timeline.tick().0 as f64),
+            "t": m.time(f64::from(timeline.tick().0)),
             "index": a.map(|a| a.index),
             "total": a.map(|a| a.total),
             "participants": m.info.participants,

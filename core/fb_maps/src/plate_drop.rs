@@ -9,7 +9,7 @@ use fb_sim::builder::Builder;
 use fb_sim::collider::ColId;
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -22,7 +22,7 @@ pub struct PlateDrop;
 static META: GameMeta = GameMeta {
     finale: true,
     ..GameMeta::new(
-        "plate-drop",
+        MapId::PlateDrop,
         "Падающие плиты",
         Genre::Survival,
         "Плиты обрушиваются по две-три сразу и быстро, а над ними крутятся балки-шлагбаумы, сбивающие с ног. Продержитесь дольше всех!",
@@ -33,7 +33,7 @@ static META: GameMeta = GameMeta {
 
 const PLATE: f64 = 3.6;
 const GAP: f64 = 0.25;
-const N: i32 = 9;
+const N: u32 = 9;
 /// Warning (shaking, reddening) before a plate drops, and how fast it falls away.
 const WARN: f64 = 1.1;
 const DROP: f64 = 48.0;
@@ -61,15 +61,15 @@ impl MapDef for PlateDrop {
     fn build(&self, b: &mut Builder, _ctx: &MapCtx) -> MapSpec {
         let mut plates: Vec<Plate> = Vec::new();
         let pals: [Palette; 4] = [pal::PURPLE, pal::BLUE, pal::PINK, pal::TEAL];
-        let half = (N - 1) as f64 / 2.0;
+        let half = f64::from(N - 1) / 2.0;
         for i in 0..N {
             for k in 0..N {
-                let x = (i as f64 - half) * (PLATE + GAP);
-                let z = (k as f64 - half) * (PLATE + GAP);
+                let x = (f64::from(i) - half) * (PLATE + GAP);
+                let z = (f64::from(k) - half) * (PLATE + GAP);
                 if m::hypot(x, z) > (half + 0.6) * (PLATE + GAP) {
                     continue;
                 }
-                if i as f64 == half && k as f64 == half {
+                if f64::from(i) == half && f64::from(k) == half {
                     continue;
                 }
                 let p = pals[((i + k) % 4) as usize];
@@ -119,7 +119,7 @@ impl MapDef for PlateDrop {
         }
         for r in [3.0, 7.0] {
             for a in 0..4 {
-                let a = a as f64;
+                let a = f64::from(a);
                 b.bonus(m::cos(a * 1.57 + r) * r * 1.3, 0.0, m::sin(a * 1.57 + r) * r * 1.3);
             }
         }
@@ -162,14 +162,11 @@ impl MapDef for PlateDrop {
         }
         b.clouds(0.0, 0.0, 55.0);
 
-        let plate_at = {
-            let plates = plates.clone();
-            move |x: f64, z: f64| {
-                plates
-                    .iter()
-                    .find(|p| (p.x - x).abs() < PLATE / 2.0 && (p.z - z).abs() < PLATE / 2.0)
-                    .map(|p| p.fall_at)
-            }
+        let plate_at = move |x: f64, z: f64| {
+            plates
+                .iter()
+                .find(|p| (p.x - x).abs() < PLATE / 2.0 && (p.z - z).abs() < PLATE / 2.0)
+                .map(|p| p.fall_at)
         };
         let plate_at2 = plate_at.clone();
         let mut opts = ArenaOpts {

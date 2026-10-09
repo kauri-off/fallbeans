@@ -922,7 +922,7 @@ fn home_actions(
             Action::Practice(id) => {
                 let Some(c) = conn.as_deref_mut() else { continue };
                 session.back_to = session.room.clone().filter(|r| !r.is_empty());
-                opts.practice = Some((*id).to_string());
+                opts.practice = Some(*id);
                 opts.room = None;
                 session.room = None;
                 ui.menu = false;

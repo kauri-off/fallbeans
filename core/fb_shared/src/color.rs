@@ -19,7 +19,7 @@ pub const fn rgb(v: u32) -> Rgb {
 pub const fn rgba(v: u32) -> Rgb {
     Rgb {
         rgb: v >> 8,
-        alpha: v as u8,
+        alpha: v.to_be_bytes()[3],
     }
 }
 
@@ -27,7 +27,8 @@ impl Rgb {
     pub const WHITE: Rgb = rgb(0xffffff);
 
     pub const fn bytes(self) -> [u8; 3] {
-        [(self.rgb >> 16) as u8, (self.rgb >> 8) as u8, self.rgb as u8]
+        let [_, r, g, b] = self.rgb.to_be_bytes();
+        [r, g, b]
     }
 
     pub fn from_bytes([r, g, b]: [u8; 3]) -> Self {

@@ -108,7 +108,7 @@ fn update(
                 "{} seed {} arena {} | map hash {} {ok}",
                 m.round.map, m.round.seed, m.round.arena, m.static_hash
             ),
-            m.time(timeline.tick().0 as f64),
+            m.time(f64::from(timeline.tick().0)),
         )
     });
     let body_s = own

@@ -1,5 +1,5 @@
 //! The rounds of one game.
-use fb_shared::game::{GameMeta, Genre};
+use fb_shared::game::{GameMeta, Genre, MapId};
 use fb_shared::rng::{Rng, shuffle};
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,7 @@ pub enum Mode {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Playlist {
     pub mode: Mode,
-    pub games: Vec<String>,
+    pub games: Vec<MapId>,
     pub rounds: u32,
 }
 
@@ -33,7 +33,7 @@ impl Default for Playlist {
     }
 }
 
-pub fn game(id: &str) -> Option<&'static GameMeta> {
+pub fn game(id: MapId) -> Option<&'static GameMeta> {
     GAMES.iter().map(|m| m.meta()).find(|g| g.id == id)
 }
 
@@ -59,13 +59,13 @@ fn pool_for(mode: Mode, players: u32) -> Vec<&'static GameMeta> {
 
 /// The rounds of one game. Every player plays every round; genres alternate where possible and a big
 /// "finale" map closes the game when the pool has one.
-pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<&'static str> {
+pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<MapId> {
     // (Nobody in the room yet: plan as for one, every game fits it.)
     let players = players.max(1);
-    let custom: Vec<&'static str> = pl
+    let custom: Vec<MapId> = pl
         .games
         .iter()
-        .filter_map(|id| game(id))
+        .filter_map(|&id| game(id))
         .filter(|g| fits(g, players))
         .map(|g| g.id)
         .collect();
@@ -111,16 +111,16 @@ pub fn plan_game(players: u32, pl: &Playlist, rng: &mut Rng) -> Vec<&'static str
     rounds.iter().map(|g| g.id).collect()
 }
 
-/// A playlist with unknown games dropped and the length one the host can pick.
+/// A playlist with only games in it (not the lobby nor the podium) and the length one the host can pick.
 pub fn valid_playlist(pl: &Playlist) -> Playlist {
     Playlist {
         mode: pl.mode,
         games: pl
             .games
             .iter()
-            .filter(|id| game(id).is_some())
+            .filter(|&&id| game(id).is_some())
             .take(12)
-            .cloned()
+            .copied()
             .collect(),
         rounds: if ROUND_COUNTS.contains(&pl.rounds) {
             pl.rounds
@@ -162,7 +162,7 @@ mod tests {
         let plan = plan_game(6, &with_rounds(5), &mut Rng::new(9));
         let genres: Vec<Genre> = plan[..plan.len() - 1]
             .iter()
-            .map(|id| game(id).unwrap().genre)
+            .map(|&id| game(id).unwrap().genre)
             .collect();
         for w in genres.windows(2) {
             assert_ne!(w[0], w[1]);
@@ -173,7 +173,7 @@ mod tests {
     fn respects_minimum_player_counts_and_playlist_modes() {
         let mut rng = Rng::new(1);
         for _ in 0..50 {
-            assert!(!plan_game(1, &Playlist::default(), &mut rng).contains(&"tail-tag"));
+            assert!(!plan_game(1, &Playlist::default(), &mut rng).contains(&MapId::TailTag));
             let races = Playlist {
                 mode: Mode::Races,
                 ..Default::default()
@@ -200,7 +200,7 @@ mod tests {
             };
             let plan = plan_game(0, &pl, &mut Rng::new(5));
             assert_eq!(plan.len(), 5, "{mode:?}");
-            assert!(plan.iter().all(|id| fits(game(id).unwrap(), 1)), "{mode:?}");
+            assert!(plan.iter().all(|&id| fits(game(id).unwrap(), 1)), "{mode:?}");
         }
     }
 
@@ -208,12 +208,12 @@ mod tests {
     fn uses_custom_playlists_as_given() {
         let pl = Playlist {
             mode: Mode::Custom,
-            games: vec!["jump-club".into(), "door-dash".into(), "crown-peak".into()],
+            games: vec![MapId::JumpClub, MapId::DoorDash, MapId::CrownPeak],
             rounds: 5,
         };
         assert_eq!(
             plan_game(4, &pl, &mut Rng::new(3)),
-            ["jump-club", "door-dash", "crown-peak"]
+            [MapId::JumpClub, MapId::DoorDash, MapId::CrownPeak]
         );
     }
 
@@ -221,14 +221,14 @@ mod tests {
     fn sanitizes_playlists() {
         let pl = Playlist {
             mode: Mode::Custom,
-            games: vec!["nope".into(), "hex-a-gone".into(), "wall-rush".into()],
+            games: vec![MapId::Lobby, MapId::HexAGone, MapId::WallRush],
             rounds: 4,
         };
         assert_eq!(
             valid_playlist(&pl),
             Playlist {
                 mode: Mode::Custom,
-                games: vec!["hex-a-gone".into(), "wall-rush".into()],
+                games: vec![MapId::HexAGone, MapId::WallRush],
                 rounds: 5,
             }
         );

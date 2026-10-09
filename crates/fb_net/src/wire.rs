@@ -3,6 +3,7 @@
 use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
+use fb_shared::PlayerId;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyState, GIANT_SIZE, Power};
 use serde::{Deserialize, Serialize};
@@ -42,13 +43,14 @@ pub struct Full {
     power: Option<Power>,
     power_until: f64,
     climb_to: [f64; 3],
-    tackled: Option<u32>,
+    tackled: Option<PlayerId>,
     teleports: u32,
     checkpoint: Option<u16>,
     spawn: u16,
 }
 
 impl From<BodyFull> for Full {
+    #[expect(clippy::cast_possible_truncation, reason = "f32 is plenty for this field")]
     fn from(f: BodyFull) -> Self {
         let b = f.body;
         Self {
@@ -127,11 +129,21 @@ pub struct Pose {
     teleports: u8,
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a turn quantized below n"
+)]
 fn turn(a: f32, n: u32) -> u32 {
     ((a.rem_euclid(TAU) / TAU * n as f32).round() as u32) % n
 }
 
 impl From<RemotePose> for Pose {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "quantized for the wire within each field's range; teleports wrap on purpose"
+    )]
     fn from(p: RemotePose) -> Self {
         Self {
             pos: p.pos.to_array().map(|v| (v * POS_STEPS).round() as i32),
@@ -154,13 +166,13 @@ impl From<Pose> for RemotePose {
     fn from(w: Pose) -> Self {
         Self {
             pos: Vec3::from_array(w.pos.map(|v| v as f32)) / POS_STEPS,
-            yaw: w.yaw as f32 / YAW_STEPS as f32 * TAU,
-            tilt: w.tilt as f32 / TILT_STEPS * PI,
-            tilt_dir: w.tilt_dir as f32 / TILT_DIR_STEPS as f32 * TAU,
+            yaw: f32::from(w.yaw) / YAW_STEPS as f32 * TAU,
+            tilt: f32::from(w.tilt) / TILT_STEPS * PI,
+            tilt_dir: f32::from(w.tilt_dir) / TILT_DIR_STEPS as f32 * TAU,
             anim: w.anim,
             power: w.power,
-            size: w.size as f32 / SIZE_STEPS,
-            vel: Vec2::new(w.vel[0] as f32, w.vel[1] as f32) / VEL_STEPS,
+            size: f32::from(w.size) / SIZE_STEPS,
+            vel: Vec2::new(f32::from(w.vel[0]), f32::from(w.vel[1])) / VEL_STEPS,
             teleports: w.teleports.into(),
         }
     }
@@ -231,14 +243,17 @@ mod tests {
         assert_eq!((back.anim, back.power), (p.anim, p.power));
         assert_ne!(
             back.teleports,
-            RemotePose::of(
-                &BodyFull {
-                    teleports: 301,
-                    ..moving_body()
-                },
-                &Default::default()
+            u32::from(
+                RemotePose::of(
+                    &BodyFull {
+                        teleports: 301,
+                        ..moving_body()
+                    },
+                    &Default::default()
+                )
+                .teleports
+                .to_le_bytes()[0]
             )
-            .teleports as u8 as u32
         );
     }
 }

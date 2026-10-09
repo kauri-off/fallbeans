@@ -105,10 +105,15 @@ fn start_tick(mut t: ResMut<TickTimes>) {
 
 fn end_tick(mut t: ResMut<TickTimes>) {
     if let Some(s) = t.started.take() {
-        t.us.push(s.elapsed().as_micros().min(u32::MAX as u128) as u32);
+        t.us.push(u32::try_from(s.elapsed().as_micros()).unwrap_or(u32::MAX));
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "an index below len"
+)]
 fn report(
     opts: Res<Opts>,
     time: Res<Time<Real>>,
@@ -140,7 +145,7 @@ fn report(
             .copied()
             .unwrap_or(0)
     };
-    let mean = us.iter().map(|&u| u as f64).sum::<f64>() / us.len().max(1) as f64;
+    let mean = us.iter().map(|&u| f64::from(u)).sum::<f64>() / us.len().max(1) as f64;
     let bytes = (stats.bytes_out - t.last_bytes) as f64 / span;
     let packets = (stats.packets_out - t.last_packets) as f64 / span;
     (t.last_bytes, t.last_packets) = (stats.bytes_out, stats.packets_out);

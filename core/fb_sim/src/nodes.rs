@@ -35,7 +35,7 @@ impl Default for Nodes {
 
 impl Nodes {
     pub fn add(&mut self, parent: NodeId, pos: V3) -> NodeId {
-        let id = self.0.len() as NodeId;
+        let id = NodeId::try_from(self.0.len()).expect("fewer than 2³² nodes");
         self.0.push(Node {
             parent: Some(parent),
             pos,
@@ -77,8 +77,8 @@ impl Nodes {
     }
 
     pub fn update_all(&mut self) {
-        for i in 0..self.0.len() {
-            self.update_one(i as NodeId);
+        for i in (0..).take(self.0.len()) {
+            self.update_one(i);
         }
     }
 

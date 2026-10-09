@@ -266,7 +266,7 @@ fn log_stats(
     }
     let span = now - core::mem::replace(&mut line.at, now);
     let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
-    let t = map.as_ref().map_or(0.0, |m| m.time(timeline.tick().0 as f64));
+    let t = map.as_ref().map_or(0.0, |m| m.time(f64::from(timeline.tick().0)));
     // (A rate: the lines come every `every` s, or a bit later.)
     let out = bytes.bytes_out.saturating_sub(*last_bytes) as f64 / f64::from(span.max(1e-3));
     *last_bytes = bytes.bytes_out;

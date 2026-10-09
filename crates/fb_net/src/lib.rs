@@ -1,5 +1,6 @@
 //! The Lightyear protocol shared by server and client: replicated components, inputs, channels, plus
 //! the network tooling both sides use (link conditioner flags, traffic counters).
+#![warn(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 use core::time::Duration;
 
 use bevy::prelude::*;
@@ -58,6 +59,7 @@ pub const LATE_TICKS: u32 = 30;
 pub const INPUT_RING: u32 = 64;
 /// Each input message repeats the inputs of this many before it (two ticks a message): a loss burst of up
 /// to LATE_TICKS (250 ms, a Wi-Fi hiccup) loses no press. Lightyear's default, 5, covers 83 ms.
+#[expect(clippy::cast_possible_truncation, reason = "15 ticks")]
 pub const INPUT_REDUNDANCY: u16 = (LATE_TICKS / 2) as u16;
 /// The server's loop rate: twice the tick rate, so ticks run on time without spinning.
 pub const SERVER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / (2 * TICK_RATE as u64));
@@ -105,7 +107,7 @@ impl Plugin for ProtocolPlugin {
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
-        app.component::<PlayerId>().replicate();
+        app.component::<BeanId>().replicate();
         app.component::<BeanColor>().replicate();
         app.component::<Round>().replicate();
         app.component::<BodyFull>()

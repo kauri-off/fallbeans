@@ -13,7 +13,7 @@ use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
-use fb_net::{Anim, BodyFull, PlayerId, RemotePose};
+use fb_net::{Anim, BeanId, BodyFull, RemotePose};
 use fb_sim::looks::Look;
 use lightyear::prelude::Predicted;
 
@@ -382,7 +382,7 @@ fn bean_dust(
 /// Confetti where a bean finishes or rings the bell, sparkles where one takes a bonus.
 fn cue_bursts(
     mut cues: MessageReader<Cue>,
-    beans: Query<(&PlayerId, &GlobalTransform), With<BeanView>>,
+    beans: Query<(&BeanId, &GlobalTransform), With<BeanView>>,
     mut bursts: MessageWriter<Burst>,
 ) {
     for c in cues.read() {

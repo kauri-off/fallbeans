@@ -8,9 +8,10 @@ use fb_shared::input::{BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
 use fb_shared::rng::{Rng, shuffle};
 use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS};
-use fb_shared::{DT, MAX_PLAYERS, m};
+use fb_shared::{DT, MAX_PLAYERS, PlayerId, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
+use fb_sim::map::MapId;
 use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyInput, BodyState, RUN_SPEED, StepEvents};
@@ -73,7 +74,7 @@ fn run(
     for k in 1..=ticks {
         let i = input(k, body);
         let mut one = [Stepper {
-            id: 1,
+            id: PlayerId(1),
             body: &mut *body,
             ev: &mut ev,
             input: i,
@@ -230,6 +231,11 @@ pub(crate) fn physics(_: &Ctx, out: &mut Out) {
 
 /// What of input handling the core owns: frames clamped as the server takes them, and a press acted on
 /// in the tick it is for. (The wire format and the room's input buffer are tested in fb_net/fb_server.)
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "random frames within the type's range"
+)]
 fn input(ctx: &Ctx, out: &mut Out) {
     let mut rng = Rng::new(ctx.seed);
     let n = if ctx.quick { 2000 } else { 20000 };
@@ -257,9 +263,9 @@ fn input(ctx: &Ctx, out: &mut Out) {
     }
 
     // The arena acts on a press in the tick it is for.
-    let map = fb_maps::by_id("jump-club").unwrap_or(fb_maps::GAMES[0]);
-    let (mut a, _) = Arena::new(map, ArenaKind::Lobby, 1, 0, &[1], false);
-    a.add_pawn(1, false);
+    let map = fb_maps::by_id(MapId::JumpClub);
+    let (mut a, _) = Arena::new(map, ArenaKind::Lobby, 1, 0, &[PlayerId(1)], false);
+    a.add_pawn(PlayerId(1), false);
     for k in 1..=120 {
         a.step(k, |_| InputFrame::IDLE);
     }
@@ -268,7 +274,7 @@ fn input(ctx: &Ctx, out: &mut Out) {
         ..InputFrame::IDLE
     };
     a.step(121, |_| jump);
-    if !a.pawn(1).is_some_and(|p| p.body.vel.y > 0.0) {
+    if !a.pawn(PlayerId(1)).is_some_and(|p| p.body.vel.y > 0.0) {
         out.error("a jump pressed for tick k did not start in tick k");
     }
     out.metric("fuzz_frames", n);
@@ -276,6 +282,11 @@ fn input(ctx: &Ctx, out: &mut Out) {
 
 // ------------------------------------------------------------------ game rules and planning
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "small random counts"
+)]
 fn rules(ctx: &Ctx, out: &mut Out) {
     let mut rng = Rng::new(ctx.seed);
     // Planning: every player count, mode and length gives a valid game.
@@ -296,7 +307,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         plan.len()
                     ));
                 }
-                for id in &plan {
+                for &id in &plan {
                     match game(id) {
                         None => {
                             out.error(format!("planned an unknown game {id}"));
@@ -315,9 +326,12 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         }
                     }
                 }
-                let uniq: BTreeSet<&str> = plan.iter().copied().collect();
+                let uniq: BTreeSet<MapId> = plan.iter().copied().collect();
                 if uniq.len() < plan.len().min(5) {
-                    out.warn(format!("{name} {rounds} rounds repeats a game: {}", plan.join(", ")));
+                    out.warn(format!(
+                        "{name} {rounds} rounds repeats a game: {}",
+                        plan.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
                 }
             }
         }
@@ -329,12 +343,12 @@ fn rules(ctx: &Ctx, out: &mut Out) {
     let total = if ctx.quick { 300 } else { 3000 };
     for i in 0..total {
         let n = 1 + (rng.unit() * 8.0).floor() as u32;
-        let ids: Vec<u32> = (1..=n).collect();
+        let ids: Vec<PlayerId> = (1..=n).map(PlayerId).collect();
         let genre = genres[i % 3];
         let mut shuffled = ids.clone();
         shuffle(&mut shuffled, &mut rng);
         let cut = rng.index(n as usize + 1);
-        let scores: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.unit() * 5.0).floor() as i64)).collect();
+        let scores: BTreeMap<PlayerId, i64> = ids.iter().map(|&id| (id, (rng.unit() * 5.0).floor() as i64)).collect();
         let finished = if genre == Genre::Race { &shuffled[..cut] } else { &[] };
         let outs = if genre == Genre::Survival {
             &shuffled[..cut]
@@ -348,11 +362,11 @@ fn rules(ctx: &Ctx, out: &mut Out) {
             finished,
             out: outs,
             scores: &scores,
-            progress: &|id| id as f64 * 3.0,
+            progress: &|id| f64::from(id.0) * 3.0,
             time_up: true,
             bots: None,
         };
-        let stats: BTreeMap<u32, RoundStats> = ids
+        let stats: BTreeMap<PlayerId, RoundStats> = ids
             .iter()
             .map(|&id| {
                 let falls = (rng.unit() * 6.0).floor() as u32;
@@ -367,7 +381,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                 )
             })
             .collect();
-        let totals: BTreeMap<u32, i64> = ids.iter().map(|&id| (id, (rng.unit() * 30.0).floor() as i64)).collect();
+        let totals: BTreeMap<PlayerId, i64> = ids.iter().map(|&id| (id, (rng.unit() * 30.0).floor() as i64)).collect();
         let rows = view.score_round(&stats, &totals, None);
         for r in &rows {
             if r.points < 0 || r.points > TOP_POINTS {

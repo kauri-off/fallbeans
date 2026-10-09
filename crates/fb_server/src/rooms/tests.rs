@@ -19,12 +19,12 @@ fn conn(n: u32) -> ConnId {
 /// What every client holds down, and one-tick presses on top.
 #[derive(Default)]
 struct Script {
-    held: BTreeMap<Pid, InputFrame>,
-    press: BTreeMap<Pid, u8>,
+    held: BTreeMap<PlayerId, InputFrame>,
+    press: BTreeMap<PlayerId, u8>,
 }
 
 impl Inputs for Script {
-    fn frame(&mut self, id: Pid, _: ConnId, _: u32) -> InputFrame {
+    fn frame(&mut self, id: PlayerId, _: ConnId, _: u32) -> InputFrame {
         let f = self.held.get(&id).copied().unwrap_or(InputFrame::IDLE);
         InputFrame {
             buttons: f.buttons | self.press.remove(&id).unwrap_or(0),
@@ -46,7 +46,7 @@ fn opts() -> RoomOptions {
     RoomOptions {
         min_players: 2,
         seed: Some(7),
-        intro_ticks: ticks(1.0) as u32,
+        intro_ticks: u32::try_from(ticks(1.0)).unwrap_or(u32::MAX),
         ..Default::default()
     }
 }
@@ -54,7 +54,7 @@ fn opts() -> RoomOptions {
 #[derive(Clone, Copy)]
 struct Client {
     conn: ConnId,
-    id: Pid,
+    id: PlayerId,
 }
 
 impl Bench {
@@ -166,7 +166,7 @@ impl Bench {
         self.inputs.held.insert(c.id, InputFrame { mx: 0, mz, buttons });
     }
 
-    fn body(&mut self, id: Pid) -> &mut fb_sim::physics::Body {
+    fn body(&mut self, id: PlayerId) -> &mut fb_sim::physics::Body {
         &mut self
             .room
             .arena
@@ -188,7 +188,7 @@ fn assigns_host_and_colors_and_puts_players_into_the_lobby_world() {
     assert_ne!(lobby.players[0].color, lobby.players[1].color);
     assert_eq!(t.arena_msg(b).map(|a| a.kind), Some(ArenaKind::Lobby));
     t.advance(0.2);
-    let ids: Vec<Pid> = t.room.arena.pawns.iter().map(|p| p.id).collect();
+    let ids: Vec<PlayerId> = t.room.arena.pawns.iter().map(|p| p.id).collect();
     assert_eq!(ids, [a.id, b.id]);
 }
 
@@ -203,7 +203,7 @@ fn keeps_the_wished_colour_when_free_and_passes_outfits_on() {
     };
     let a = t.hello_with(who("wa"));
     let b = t.hello_with(who("wb"));
-    let colors: BTreeMap<Pid, u8> = t.lobby(b).players.iter().map(|p| (p.id, p.color)).collect();
+    let colors: BTreeMap<PlayerId, u8> = t.lobby(b).players.iter().map(|p| (p.id, p.color)).collect();
     assert_eq!(colors[&a.id], 4);
     assert_ne!(colors[&b.id], 4);
     let o = Outfit {
@@ -275,11 +275,11 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec!["jump-club".into(), "hex-a-gone".into()],
+        games: vec![MapId::JumpClub, MapId::HexAGone],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
-    assert_eq!(t.arena_msg(a).unwrap().game, "jump-club");
+    assert_eq!(t.arena_msg(a).unwrap().game, MapId::JumpClub);
     // During the intro inputs move nobody.
     t.advance(0.2);
     let start = t.body(b.id).pos;
@@ -308,7 +308,7 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     assert_eq!(rows.iter().find(|r| r.id == a.id).unwrap().points, 10);
     assert_eq!(rows.iter().find(|r| r.id == b.id).unwrap().points, 0);
     t.inputs.held.clear();
-    t.until(10.0, |t| t.room.arena.map.meta().id == "hex-a-gone", |_| {});
+    t.until(10.0, |t| t.room.arena.map.meta().id == MapId::HexAGone, |_| {});
     t.advance(1.1);
     t.hold(b, 127, 0);
     t.until(
@@ -343,7 +343,7 @@ fn bots_count_as_players_and_are_simulated_on_the_server() {
     let bot = t.lobby(a).players.iter().find(|p| p.bot).unwrap().id;
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec!["door-dash".into()],
+        games: vec![MapId::DoorDash],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
@@ -417,7 +417,7 @@ fn tail_tag_steals_only_by_grabbing_within_reach() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec!["tail-tag".into()],
+        games: vec![MapId::TailTag],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
@@ -444,7 +444,7 @@ fn practice_rooms_start_immediately_with_bots_and_loop() {
     let mut t = Bench::new(RoomOptions {
         min_players: 1,
         practice: Some(Practice {
-            game: Game::by_id("jump-club").expect("a game"),
+            game: Game::by_id(MapId::JumpClub).expect("a game"),
             bots: 2,
         }),
         intro_ticks: 12,
@@ -486,6 +486,7 @@ fn ignores_dev_commands_unless_the_server_runs_with_dev() {
 }
 
 #[test]
+#[expect(clippy::cast_possible_truncation, reason = "rounded within ±127")]
 fn replays_a_recorded_round_to_exactly_the_same_state() {
     let mut t = Bench::new(RoomOptions {
         min_players: 1,
@@ -500,7 +501,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
         &mut t,
         a,
         DevCmd::Start {
-            games: vec!["hammer-swing".into()],
+            games: vec![MapId::HammerSwing],
             rounds: None,
             bots: Some(2),
         },
@@ -559,14 +560,14 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
     }
     cmd(&mut t, a, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
-    assert_eq!(rec.game, "hammer-swing");
+    assert_eq!(rec.game, MapId::HammerSwing);
     let has = |f: fn(&fb_arena::Op) -> bool| rec.ops.iter().any(|o| f(&o.1));
     assert!(has(|o| matches!(o, fb_arena::Op::Teleport { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Knock { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Late { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Grab { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Bots(_))), "{:?}", rec.ops);
-    let r = fb_arena::replay(&rec, |_| false).unwrap();
+    let r = fb_arena::replay(&rec, |_| false);
     assert!(r.ticks > 900);
     assert!(r.matches);
 }
@@ -579,9 +580,9 @@ fn dev_start_plays_the_rounds_asked_for() {
         ..opts()
     });
     let a = t.hello("A", "ua");
-    let mut start = |games: &[&str], rounds| {
+    let mut start = |games: &[MapId], rounds| {
         let cmd = DevCmd::Start {
-            games: games.iter().map(|g| g.to_string()).collect(),
+            games: games.to_vec(),
             rounds,
             bots: Some(3),
         };
@@ -594,13 +595,19 @@ fn dev_start_plays_the_rounds_asked_for() {
             .map(|g| g.id())
             .collect::<Vec<_>>()
     };
-    assert_eq!(start(&["jump-club", "door-dash", "crown-peak"], Some(1)), ["jump-club"]);
-    assert_eq!(start(&["door-dash"], Some(3)), ["door-dash"; 3]);
     assert_eq!(
-        start(&["jump-club", "door-dash"], Some(3)),
-        ["jump-club", "door-dash", "jump-club"]
+        start(&[MapId::JumpClub, MapId::DoorDash, MapId::CrownPeak], Some(1)),
+        [MapId::JumpClub]
     );
-    assert_eq!(start(&["jump-club", "door-dash"], None), ["jump-club", "door-dash"]);
+    assert_eq!(start(&[MapId::DoorDash], Some(3)), [MapId::DoorDash; 3]);
+    assert_eq!(
+        start(&[MapId::JumpClub, MapId::DoorDash], Some(3)),
+        [MapId::JumpClub, MapId::DoorDash, MapId::JumpClub]
+    );
+    assert_eq!(
+        start(&[MapId::JumpClub, MapId::DoorDash], None),
+        [MapId::JumpClub, MapId::DoorDash]
+    );
 }
 
 #[test]
@@ -616,7 +623,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     cmd(
         &mut t,
         DevCmd::Start {
-            games: vec!["jump-club".into(), "door-dash".into()],
+            games: vec![MapId::JumpClub, MapId::DoorDash],
             rounds: Some(2),
             bots: Some(3),
         },
@@ -624,7 +631,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     cmd(&mut t, DevCmd::EndRound);
     assert_eq!(t.room.phase(), Phase::Results);
     assert!(t.room.round_prepared());
-    t.until(15.0, |t| t.room.arena.map.meta().id == "door-dash", |_| {});
+    t.until(15.0, |t| t.room.arena.map.meta().id == MapId::DoorDash, |_| {});
     assert!(!t.room.round_prepared());
     t.inputs.held.insert(
         a.id,
@@ -637,8 +644,8 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     t.advance(8.0);
     cmd(&mut t, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
-    assert_eq!(rec.game, "door-dash");
-    let r = fb_arena::replay(&rec, |_| false).unwrap();
+    assert_eq!(rec.game, MapId::DoorDash);
+    let r = fb_arena::replay(&rec, |_| false);
     assert!(r.ticks > 900);
     assert!(r.matches);
 }
@@ -849,14 +856,14 @@ fn hub_gives_identities_lists_rooms_and_opens_private_ones() {
     // A practice round: its own room, not listed.
     let p = t.hello(Hello {
         name: "p".into(),
-        practice: Some("hex-a-gone".into()),
+        practice: Some(MapId::HexAGone),
         ..Default::default()
     });
     assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 1);
     let Some(ServerMsg::Arena(a)) = t.last(p, |m| matches!(m, ServerMsg::Arena(_))) else {
         panic!("no arena");
     };
-    assert_eq!(a.game, "hex-a-gone");
+    assert_eq!(a.game, MapId::HexAGone);
     t.hub.close(p);
     assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 0);
 }
@@ -974,12 +981,12 @@ fn hub_closes_a_room_that_panics_and_carries_on() {
 #[test]
 fn one_address_cannot_take_the_whole_server() {
     let mut t = HubBench::new(false);
-    let hello = |t: &mut HubBench, ip: &str, uid: &str, practice: Option<&str>| {
+    let hello = |t: &mut HubBench, ip: &str, uid: &str, practice: Option<MapId>| {
         let c = t.open_from(ip, uid);
         t.send(
             c,
             ClientMsg::Hello(Hello {
-                practice: practice.map(String::from),
+                practice,
                 ..Default::default()
             }),
         );
@@ -1012,9 +1019,9 @@ fn one_address_cannot_take_the_whole_server() {
     let other = hello(&mut t, "198.51.100.2", "x", None);
     assert!(create(&mut t, other));
     // Practice: one per address.
-    let p = hello(&mut t, "203.0.113.9", "p1", Some("hex-a-gone"));
+    let p = hello(&mut t, "203.0.113.9", "p1", Some(MapId::HexAGone));
     assert!(!t.closed(p));
-    let p2 = hello(&mut t, "203.0.113.9", "p2", Some("hex-a-gone"));
+    let p2 = hello(&mut t, "203.0.113.9", "p2", Some(MapId::HexAGone));
     assert!(t.closed(p2));
     // Connections: SESSIONS_PER_ADDRESS from one IPv6 network (any of its addresses), not from this machine.
     for i in 0..super::hub::SESSIONS_PER_ADDRESS {
@@ -1128,7 +1135,7 @@ fn names_are_unique_in_a_room_and_people_are_not_bots() {
     let a = t.hello("Аня", "u1");
     let b = t.hello("аня", "u2");
     let c = t.hello("Бот Кекс", "u3");
-    let name = |t: &Bench, id: Pid| t.room.player(id).unwrap().name.clone();
+    let name = |t: &Bench, id: PlayerId| t.room.player(id).unwrap().name.clone();
     assert_eq!(name(&t, a.id), "Аня");
     assert_eq!(name(&t, b.id), "аня 2");
     assert_eq!(name(&t, c.id), format!("Боб {}", c.id));
@@ -1170,11 +1177,11 @@ fn a_survival_round_with_one_player_left_is_played_not_won_at_once() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec!["hex-a-gone".into()],
+        games: vec![MapId::HexAGone],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
-    t.until(15.0, |t| t.room.arena.map.meta().id == "hex-a-gone", |_| {});
+    t.until(15.0, |t| t.room.arena.map.meta().id == MapId::HexAGone, |_| {});
     // One of the two leaves in the intro: "the last bean standing" used to end the round on its next tick.
     t.room.quit(b.id);
     t.pump();
@@ -1248,7 +1255,7 @@ fn hub_closes_a_practice_nobody_plays() {
     let mut t = HubBench::new(false);
     t.hub.practice_idle_s = 2.0;
     let p = t.hello(Hello {
-        practice: Some("hex-a-gone".into()),
+        practice: Some(MapId::HexAGone),
         ..Default::default()
     });
     assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 1);

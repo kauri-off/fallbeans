@@ -11,7 +11,7 @@ use bevy::world_serialization::{WorldAssetRoot, WorldInstanceReady};
 use fb_arena::ArenaKind;
 use fb_net::*;
 use fb_shared::outfit::Outfit;
-use fb_shared::{COLORS, Suit};
+use fb_shared::{COLORS, PlayerId, Suit};
 use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
@@ -179,7 +179,7 @@ pub fn plain_part(model: Option<&StandardMaterial>, color: Color, roughness: f32
 pub fn spawn_beans(
     mut commands: Commands,
     beans: Query<
-        (Entity, &PlayerId),
+        (Entity, &BeanId),
         (
             With<BeanColor>,
             Without<BeanView>,
@@ -387,7 +387,7 @@ pub fn dress_beans(
     mut commands: Commands,
     session: Res<Session>,
     map: Option<Res<Map>>,
-    mut beans: Query<(&PlayerId, &BeanColor, &Rig, &mut Dress)>,
+    mut beans: Query<(&BeanId, &BeanColor, &Rig, &mut Dress)>,
     assets: Res<AssetServer>,
     mut paints: ResMut<Paints>,
     mut wardrobe: ResMut<Wardrobe>,
@@ -576,7 +576,7 @@ type OtherBeans<'w, 's> = Query<
     'w,
     's,
     (
-        &'static PlayerId,
+        &'static BeanId,
         &'static RemotePose,
         &'static mut Transform,
         &'static mut Visibility,
@@ -601,10 +601,10 @@ pub fn place_beans(
     let out = |p: Vec3, tilt: f32, dir: f32, size: f32| match map.as_ref() {
         Some(m) => fb_sim::physics::push_out(
             &m.world,
-            fb_sim::math::V3::new(p.x as f64, p.y as f64, p.z as f64),
-            tilt as f64,
-            dir as f64,
-            size as f64,
+            fb_sim::math::V3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)),
+            f64::from(tilt),
+            f64::from(dir),
+            f64::from(size),
         )
         .as_vec3(),
         None => p,
@@ -663,7 +663,7 @@ pub fn animate_beans(
     outcome: Res<Outcome>,
     mut cues: MessageReader<Cue>,
     mut beans: Query<(
-        &PlayerId,
+        &BeanId,
         &mut BeanAnim,
         &Rig,
         &Dress,
@@ -679,7 +679,7 @@ pub fn animate_beans(
     mut vis: Query<&mut Visibility, Without<BeanAnim>>,
     mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
     paints: Res<Paints>,
-    mut scratch: Local<(Vec<Cue>, HashMap<u32, (Vec3, f32)>)>,
+    mut scratch: Local<(Vec<Cue>, HashMap<PlayerId, (Vec3, f32)>)>,
     (mut hits, timeline, fixed): (Option<ResMut<HitTrace>>, Res<LocalTimeline>, Res<Time<Fixed>>),
 ) {
     let dt = time.delta_secs();

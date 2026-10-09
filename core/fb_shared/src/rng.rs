@@ -20,10 +20,15 @@ impl Rng {
         let a = self.a;
         let mut t = (a ^ (a >> 15)).wrapping_mul(1 | a);
         t = (t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t))) ^ t;
-        (t ^ (t >> 14)) as f64 / 4_294_967_296.0
+        f64::from(t ^ (t >> 14)) / 4_294_967_296.0
     }
 
     /// Uniform in 0..len (0 for len 0).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "unit() is in [0, 1): the floor is in 0..len"
+    )]
     pub fn index(&mut self, len: usize) -> usize {
         (self.unit() * len as f64).floor() as usize
     }

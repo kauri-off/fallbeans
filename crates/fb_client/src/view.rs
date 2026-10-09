@@ -11,7 +11,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
-use fb_shared::Rgb;
+use fb_shared::{PlayerId, Rgb};
 use fb_sim::V3;
 use fb_sim::looks::{Pattern, ResolvedLook};
 use fb_sim::math::Affine;
@@ -99,7 +99,7 @@ pub struct MainCamera;
 #[derive(Resource, Default)]
 pub struct Spectate {
     /// None: the overview of the map.
-    pub target: Option<u32>,
+    pub target: Option<PlayerId>,
     /// The player picked the target; until then (or until it leaves) the first bean in play is followed.
     manual: bool,
     generation: u32,
@@ -786,7 +786,7 @@ pub fn prim_spec(
 
 /// The frame's sim time: the predicted tick plus how far into the next one the frame is.
 pub fn frame_tick(timeline: &LocalTimeline, fixed: &Time<Fixed>) -> f64 {
-    timeline.tick().0 as f64 + fixed.overstep_fraction() as f64
+    f64::from(timeline.tick().0) + f64::from(fixed.overstep_fraction())
 }
 
 /// What `pose_map` saw of each node the frame before, so that only what moves is posed again.
@@ -901,7 +901,7 @@ fn place_bonuses(
         let grow = ((t - b.appear_at) / 0.5 + if b.appear_at <= 0.0 { 1.0 } else { 0.0 }).min(1.0);
         let gone = b.taken.map_or(0.0, |(_, at)| (t - at) / 0.35);
         let s = (grow * (1.0 + gone * 0.8) * (1.0 - gone)).max(0.01) as f32;
-        let i = v.0 as f64;
+        let i = f64::from(v.0);
         let bob = ((t * 2.4 + i).sin() * 0.15) as f32;
         for &c in children {
             let Ok((part, mut tf)) = parts.get_mut(c) else {
@@ -928,8 +928,8 @@ const NEXT_KEYS: [KeyCode; 3] = [KeyCode::ArrowRight, KeyCode::KeyD, KeyCode::Ke
 /// (and, with the mouse captured, its buttons) go through the beans and the overview.
 fn spectate(
     map: Option<Res<Map>>,
-    own: Query<(), (With<Predicted>, With<PlayerId>)>,
-    beans: Query<&PlayerId, (With<Interpolated>, Without<Predicted>)>,
+    own: Query<(), (With<Predicted>, With<BeanId>)>,
+    beans: Query<&BeanId, (With<Interpolated>, Without<Predicted>)>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     pads: Query<&Gamepad>,
@@ -948,7 +948,7 @@ fn spectate(
         spec.target = None;
         return;
     }
-    let mut ids: Vec<u32> = beans.iter().map(|p| p.0).filter(|id| !map.gone(*id)).collect();
+    let mut ids: Vec<PlayerId> = beans.iter().map(|p| p.0).filter(|id| !map.gone(*id)).collect();
     ids.sort_unstable();
     ids.dedup();
     if spec.target.is_some_and(|t| !ids.contains(&t)) {
@@ -973,7 +973,7 @@ fn spectate(
         0
     };
     if dir != 0 {
-        let all: Vec<Option<u32>> = core::iter::once(None).chain(ids.iter().copied().map(Some)).collect();
+        let all: Vec<Option<PlayerId>> = core::iter::once(None).chain(ids.iter().copied().map(Some)).collect();
         let i = all.iter().position(|t| *t == spec.target).unwrap_or(0) as i32;
         spec.target = all[(i + dir).rem_euclid(all.len() as i32) as usize];
         spec.manual = true;

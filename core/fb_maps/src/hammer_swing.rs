@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::scene::pal;
 
@@ -20,7 +20,7 @@ use crate::util::o;
 pub struct HammerSwing;
 
 static META: GameMeta = GameMeta::new(
-    "hammer-swing",
+    MapId::HammerSwing,
     "Молоты и качели",
     Genre::Race,
     "Развилка: мост под молотами или коридор с толкателями. Дальше — качели, мостики-перевёртыши, ленты, перчатки и молоты в случайном порядке и со своими таймингами.",

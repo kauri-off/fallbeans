@@ -12,7 +12,7 @@ mod tests;
 use core::fmt;
 
 use bevy::ecs::entity::Entity;
-use fb_proto::{MapEventMsg, Pid, ServerMsg};
+use fb_proto::{MapEventMsg, PlayerId, ServerMsg};
 use fb_shared::TICK_RATE;
 use fb_shared::input::InputFrame;
 
@@ -60,10 +60,10 @@ pub enum Out {
 /// Where the players' inputs come from.
 pub trait Inputs {
     /// Player `id`'s frame for server tick `tick`.
-    fn frame(&mut self, id: Pid, conn: ConnId, tick: u32) -> InputFrame;
+    fn frame(&mut self, id: PlayerId, conn: ConnId, tick: u32) -> InputFrame;
 
     /// How many ticks behind its own bean player `id` sees the others.
-    fn view(&mut self, _id: Pid, _conn: ConnId) -> u32 {
+    fn view(&mut self, _id: PlayerId, _conn: ConnId) -> u32 {
         0
     }
 }
@@ -72,19 +72,29 @@ pub trait Inputs {
 pub struct NoInputs;
 
 impl Inputs for NoInputs {
-    fn frame(&mut self, _: Pid, _: ConnId, _: u32) -> InputFrame {
+    fn frame(&mut self, _: PlayerId, _: ConnId, _: u32) -> InputFrame {
         InputFrame::IDLE
     }
 }
 
+/// A count for messages and plans: never near 2³², saturating rather than wrapping.
+pub fn count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Seconds in server ticks.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "rounded, saturating"
+)]
 pub fn ticks(s: f64) -> u64 {
-    (s * TICK_RATE as f64).round() as u64
+    (s * f64::from(TICK_RATE)).round() as u64
 }
 
 /// Server ticks in seconds.
 pub fn secs(ticks: u64) -> f64 {
-    ticks as f64 / TICK_RATE as f64
+    ticks as f64 / f64::from(TICK_RATE)
 }
 
 /// A warning that backs off while it keeps coming: logged at once, then at most after 1 s, 2 s, 4 s … (up to

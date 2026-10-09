@@ -1,7 +1,7 @@
 //! Client prediction replays ticks from a server state after its world has run ahead: the replay must give
 //! the same bodies, bit for bit, as ticking straight through (a bean riding a moving, turning platform).
 use fb_arena::{Stepper, tick_plain};
-use fb_shared::{DT, m};
+use fb_shared::{DT, PlayerId, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
@@ -47,7 +47,7 @@ fn input(k: i64) -> BodyInput {
 fn step(world: &mut World, body: &mut Body, k: i64) {
     let mut ev = StepEvents::default();
     let mut s = [Stepper {
-        id: 1,
+        id: PlayerId(1),
         body,
         ev: &mut ev,
         input: input(k),

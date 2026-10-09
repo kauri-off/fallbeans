@@ -1,5 +1,5 @@
 //! Fun titles at the end of a game.
-use fb_proto::{Award, AwardKind, Pid};
+use fb_proto::{Award, AwardKind, PlayerId};
 
 /// A player's numbers over a whole game.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -18,8 +18,12 @@ pub struct GameStats {
 }
 
 /// The single best player for a score at or above `min` (ties: nobody).
-fn best(players: &[(Pid, &GameStats)], score: impl Fn(&GameStats) -> Option<f64>, min: f64) -> Option<(Pid, f64)> {
-    let mut top: Option<(Pid, f64)> = None;
+fn best(
+    players: &[(PlayerId, &GameStats)],
+    score: impl Fn(&GameStats) -> Option<f64>,
+    min: f64,
+) -> Option<(PlayerId, f64)> {
+    let mut top: Option<(PlayerId, f64)> = None;
     let mut tie = false;
     for (id, s) in players {
         let Some(v) = score(s) else { continue };
@@ -39,7 +43,12 @@ fn best(players: &[(Pid, &GameStats)], score: impl Fn(&GameStats) -> Option<f64>
 }
 
 /// Each award goes to the single best player for it.
-pub fn compute_awards(players: &[(Pid, &GameStats)]) -> Vec<Award> {
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "small award values"
+)]
+pub fn compute_awards(players: &[(PlayerId, &GameStats)]) -> Vec<Award> {
     let rank = |s: &GameStats| {
         (!s.race_ranks.is_empty()).then(|| 1.0 - s.race_ranks.iter().sum::<f64>() / s.race_ranks.len() as f64)
     };
@@ -81,8 +90,8 @@ mod tests {
             race_ranks: vec![1.0],
             ..Default::default()
         };
-        let awards = compute_awards(&[(1, &a), (2, &b)]);
-        let got: Vec<(AwardKind, Pid, u32)> = awards.iter().map(|w| (w.kind, w.id, w.value)).collect();
+        let awards = compute_awards(&[(PlayerId(1), &a), (PlayerId(2), &b)]);
+        let got: Vec<(AwardKind, u32, u32)> = awards.iter().map(|w| (w.kind, w.id.0, w.value)).collect();
         assert_eq!(
             got,
             [

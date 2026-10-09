@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use fb_shared::NEVER;
 use fb_shared::cause::Hazard;
-use fb_shared::{rgb, rgba};
+use fb_shared::{PlayerId, rgb, rgba};
 use fb_sim::bots::{
     ArenaOpts, BOT_DT, BotBrain, BotInput, BotView, HumanOpts, Note, aim_landing, arena_brain, humanize, init_bot,
     nav_to, steer, unstick,
@@ -16,7 +16,7 @@ use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapLogic, MapSfx, MapSpec};
+use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSfx, MapSpec};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::BodyState;
@@ -33,7 +33,7 @@ pub struct StarFall;
 static META: GameMeta = GameMeta {
     grab: true,
     ..GameMeta::new(
-        "star-fall",
+        MapId::StarFall,
         "Звездопад",
         Genre::Points,
         "Звёзды сыплются на арену: собирайте! На башне и островах — крупные. Сбили вас — все звёзды достаются обидчику, упали сами — сгорают. Захват (Q / ПКМ) выхватывает звезду.",
@@ -94,10 +94,10 @@ struct Sky {
 
 /// Who took which star (from the server's events).
 struct Taken {
-    taken: BTreeMap<usize, (u32, f64)>,
+    taken: BTreeMap<usize, (PlayerId, f64)>,
     /// Stars before this one are gone (server).
     first: usize,
-    immune: BTreeMap<u32, f64>,
+    immune: BTreeMap<PlayerId, f64>,
     /// What happened to me lately (client): a line on the HUD for a few seconds.
     flash: Option<(String, f64)>,
 }
@@ -181,7 +181,7 @@ fn go_to(bot: &mut BotView, sp: &Spot, out: &mut BotInput) {
 struct Stars {
     sky: Sky,
     taken: Taken,
-    participants: Vec<u32>,
+    participants: Vec<PlayerId>,
     /// Client: the stars' special.
     look: Option<Hook>,
     sweep: Sweep,
@@ -232,7 +232,13 @@ impl MapLogic for Stars {
                 if dist_xz(body.pos, sp.pos) > REACH + 0.3 * body.size {
                     continue;
                 }
-                self.emit(cx, MapEvent::Star { k: s.k as u32, id });
+                self.emit(
+                    cx,
+                    MapEvent::Star {
+                        k: u32::try_from(s.k).expect("fewer than 2³² stars"),
+                        id,
+                    },
+                );
                 let v = cx.score(id) + s.value;
                 cx.set_score(id, v);
                 break;
@@ -240,7 +246,7 @@ impl MapLogic for Stars {
         }
     }
 
-    fn fall(&mut self, cx: &mut Cx, id: u32, by: Option<u32>) {
+    fn fall(&mut self, cx: &mut Cx, id: PlayerId, by: Option<PlayerId>) {
         let n = cx.score(id);
         if n <= 0 {
             return;
@@ -254,7 +260,7 @@ impl MapLogic for Stars {
         self.emit(cx, MapEvent::Drop { from: id, to, n });
     }
 
-    fn grab(&mut self, cx: &mut Cx, actor: u32, target: u32) {
+    fn grab(&mut self, cx: &mut Cx, actor: PlayerId, target: PlayerId) {
         let t = cx.t;
         if t < 0.0 || cx.score(target) <= 0 || self.taken.immune.get(&target).copied().unwrap_or(NEVER) > t {
             return;
@@ -281,7 +287,7 @@ impl MapLogic for Stars {
     fn event(&mut self, cx: &mut Cx, ev: &MapEvent) {
         let t = cx.t;
         let me = cx.me;
-        let is_me = |id: u32| me == Some(id);
+        let is_me = |id: PlayerId| me == Some(id);
         match *ev {
             MapEvent::Star { k, id } => {
                 let k = k as usize;
@@ -327,7 +333,7 @@ impl MapLogic for Stars {
         {
             return Some(text.clone());
         }
-        let me = cx.me.unwrap_or(0);
+        let me = cx.me.unwrap_or(PlayerId(0));
         Some(format!("Ваши звёзды: {} · Q / ПКМ — выхватить звезду", cx.score(me)))
     }
 
@@ -573,7 +579,7 @@ impl MapDef for StarFall {
         let sweeper = b.anchor(0.0, 0.6, 0.0, ROOT);
         for k in 0..2 {
             let pivot = b.anchor(0.0, 0.0, 0.0, sweeper);
-            b.world.nodes.get_mut(pivot).rot.y = k as f64 * m::PI;
+            b.world.nodes.get_mut(pivot).rot.y = f64::from(k) * m::PI;
             let holder = b.anchor(SWEEP_IN, 0.0, 0.0, pivot);
             let arm = b.model(Model::Arm, holder);
             b.world.nodes.get_mut(arm).scale = V3::new(SWEEP_OUT - SWEEP_IN, 1.0, 1.0);
@@ -616,7 +622,7 @@ impl MapDef for StarFall {
             b.bumper(x, 0.0, z, 0.8, 8.0);
         }
         for k in 0..4 {
-            let a = k as f64 * 1.57 + 0.4;
+            let a = f64::from(k) * 1.57 + 0.4;
             b.bonus(m::cos(a) * 11.8, 0.0, m::sin(a) * 11.8);
         }
         b.clouds(0.0, 0.0, 50.0);
@@ -625,7 +631,7 @@ impl MapDef for StarFall {
         let mut spots: Vec<Spot> = Vec::new();
         for (r, n, off) in [(5.4, 8, 0.2), (10.0, 12, 0.13), (12.8, 14, 0.3)] {
             for k in 0..n {
-                let a = off + (k as f64 / n as f64) * m::PI * 2.0;
+                let a = off + (f64::from(k) / f64::from(n)) * m::PI * 2.0;
                 let x = m::cos(a) * r;
                 let z = m::sin(a) * r;
                 if x.abs() > TRAMP_X - 2.2 && z.abs() < 2.4 {

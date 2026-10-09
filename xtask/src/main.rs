@@ -283,6 +283,22 @@ pub fn run(cmd: &mut Command) -> Result<()> {
 pub fn cargo() -> Command {
     let mut c = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     c.current_dir(root());
+    // What `cargo run` sets for xtask: ring's build script fingerprints it, so plain cargo and xtask rebuilt it in turn.
+    for (k, _) in std::env::vars_os() {
+        let k = k.to_string_lossy();
+        if k.starts_with("CARGO_PKG_")
+            || [
+                "CARGO_MANIFEST_DIR",
+                "CARGO_MANIFEST_PATH",
+                "CARGO_CRATE_NAME",
+                "CARGO_BIN_NAME",
+                "CARGO_PRIMARY_PACKAGE",
+            ]
+            .contains(&&*k)
+        {
+            c.env_remove(&*k);
+        }
+    }
     sdk::apply(&mut c);
     c
 }

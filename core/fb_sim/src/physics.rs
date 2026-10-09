@@ -1,5 +1,6 @@
 //! The bean: a kinematic character of two spheres with a small state machine.
 use fb_shared::NEVER;
+use fb_shared::PlayerId;
 use fb_shared::cause::Hazard;
 use serde::{Deserialize, Serialize};
 
@@ -103,8 +104,8 @@ pub struct BodyInput {
 impl From<fb_shared::input::InputFrame> for BodyInput {
     fn from(f: fb_shared::input::InputFrame) -> Self {
         Self {
-            mx: f.mx as f64 / 127.0,
-            mz: f.mz as f64 / 127.0,
+            mx: f64::from(f.mx) / 127.0,
+            mz: f64::from(f.mz) / 127.0,
             jump: f.jump(),
             dive: f.dive(),
         }
@@ -113,7 +114,7 @@ impl From<fb_shared::input::InputFrame> for BodyInput {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OtherBody {
-    pub id: u32,
+    pub id: PlayerId,
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -148,7 +149,7 @@ pub struct StepEvents {
     pub knocked: bool,
     pub bumped: f64,
     /// Knocked over by this bean's tackle.
-    pub tackled_by: Option<u32>,
+    pub tackled_by: Option<PlayerId>,
     /// Tackles this bean landed.
     pub tackles: u32,
     /// Contacts, tackles and dives in detail (`--trace-hits`).
@@ -202,7 +203,7 @@ pub struct Body {
     pub size: f64,
     pub climb_to: V3,
     /// The last bean this dive (and the slide after it) knocked over: it is not knocked over again.
-    pub tackled: Option<u32>,
+    pub tackled: Option<PlayerId>,
 }
 
 /// Centre of collision sphere i of a body with its feet at `pos`, tipped by `tilt` towards `tilt_dir`.
@@ -676,6 +677,11 @@ impl Body {
             self.vel.y = (self.vel.y - GRAVITY * dt).at_least(-32.0);
         }
         let travel = if still { 0.0 } else { self.vel.length() * dt };
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 1…MAX_SUBSTEPS first"
+        )]
         let substeps = MAX_SUBSTEPS.at_most(1f64.at_least((travel / (r * SUBSTEP_REACH)).ceil())) as usize;
 
         let vy_before = self.vel.y;
