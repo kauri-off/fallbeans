@@ -1,6 +1,4 @@
-//! Sound effects: each one synthesized into a PCM buffer at start from oscillators (frequency and gain sliding exponentially), played on what happens
-//! with a little variation in pitch. Other beans' sounds come from where they are (panned, fainter
-//! with distance); the volume is the player's setting. No music.
+//! Sound effects synthesized at start into PCM buffers; other beans' sounds are panned and attenuated by distance.
 use std::collections::HashMap;
 use std::sync::Arc;
 

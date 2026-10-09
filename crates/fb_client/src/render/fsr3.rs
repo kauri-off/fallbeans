@@ -1,14 +1,7 @@
-//! AMD FSR 3.1 upscaling (`upscale.rs` chooses it) through AMD's own signed DLL (`ffx.rs`), on wgpu's Vulkan
-//! device: the context is made from wgpu-hal's raw handles, the upscale recorded into a command buffer of its own
-//! right after the main pass's (as Bevy does DLSS), on the main pass's colour, the prepass's depth and motion
-//! vectors and the jitter it asked for, into the full-resolution target before the post-processing. What has no
-//! motion vectors of its own is in the reactive mask (`reactive.rs`), given as both of FSR's masks, and the
-//! history is a little shorter than FSR's own (`HISTORY`).
-//!
-//! The images are where FidelityFX is told they are: wgpu moves them there first (`transition_resources`), and
-//! FidelityFX hands them back so. Colour and motion are sampled (`SHADER_READ_ONLY_OPTIMAL`), the output is a
-//! storage image (`GENERAL`), the mask sampled too; the prepass's depth stays the copy destination it already is
-//! (`TRANSFER_DST_OPTIMAL`: wgpu keeps a sampled depth texture in a layout FidelityFX has no name for).
+//! AMD FSR 3.1 upscaling (`ffx.rs`, AMD's signed DLL) on wgpu's Vulkan device, recorded into its own command buffer
+//! after the main pass.
+//! Images are put in the layouts FidelityFX expects (`transition_resources`); the reactive mask (`reactive.rs`) feeds
+//! both of its masks.
 #![allow(
     unsafe_code,
     reason = "wgpu-hal's raw Vulkan device and command buffer for AMD's DLL"
@@ -51,9 +44,8 @@ fn tune(u: &mut ffx::Upscaler) {
     }
 }
 
-/// The context's flags: HDR colour before the tone mapping (already exposed: `Exposure`, so FSR's own auto
-/// exposure only guides its internal tone mapping), Bevy's reversed infinite depth. `FB_FSR3_DEBUG=1` adds
-/// FidelityFX's checks of the inputs (into the log).
+/// Context flags: HDR colour before tone mapping, already exposed, reversed infinite depth; `FB_FSR3_DEBUG=1` logs
+/// FidelityFX's input checks.
 fn flags() -> u32 {
     let debug = std::env::var_os("FB_FSR3_DEBUG").is_some_and(|v| v != "0");
     let base = ffx::HIGH_DYNAMIC_RANGE | ffx::DEPTH_INVERTED | ffx::DEPTH_INFINITE | ffx::AUTO_EXPOSURE;
@@ -293,9 +285,7 @@ fn upscale(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("fsr3_upscale"),
         });
-    // SAFETY: the raw command buffer is the new encoder's, open for recording, and nothing else touches the
-    // encoder meanwhile; it is submitted right after the main encoder's commands (`add_command_buffer`), which
-    // put every image in the state the descriptor names. The images are the view's, alive through the frame.
+    // SAFETY: the raw buffer is the new encoder's, submitted after the main one put every image in its named state.
     let done = unsafe {
         encoder.as_hal_mut::<Vulkan, _, _>(|e| match e {
             Some(e) => fsr.dispatch(&queue, e.raw_handle(), &mut d),

@@ -1,6 +1,5 @@
-//! `cargo xtask stress`: a server and N headless autopilot clients under a simulated network. Afterwards
-//! each client's own-bean prediction is compared tick by tick with the server's trace, and the run fails
-//! on late inputs, unexplained divergences, panics, map hash mismatches or tick cost (traffic is reported only).
+//! `cargo xtask stress`: a server and N headless autopilot clients under a simulated network.
+//! Each client's prediction is checked against the server's trace; fails on late inputs, divergences, panics, cost.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::path::Path;
@@ -354,9 +353,8 @@ impl Server {
             .any(|(o, p)| o.room == bean.room && o.id != bean.id && dist(p, pos) < 2.5)
     }
 
-    /// The first prediction of each tick (what the player saw) against the server's tick. Each run of
-    /// mismatches is classified by its first tick: a respawn (the server teleported the bean), a late input,
-    /// a push (another bean was within reach: the client sees it in the past) or something else.
+    /// The first prediction of each tick against the server's. A run of mismatches is classified by its first tick:
+    /// respawn, late input, push (another bean in reach) or other.
     fn compare(&self, client: &[Traced], connects: &BTreeSet<u32>) -> Divergence {
         let mut first: BTreeMap<u32, (Bean, Row)> = BTreeMap::new();
         for t in client {

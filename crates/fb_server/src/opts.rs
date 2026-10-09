@@ -24,9 +24,8 @@ pub struct Opts {
     /// Address the HTTP API binds (127.0.0.1 behind a reverse proxy's https).
     #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED.into())]
     pub http_addr: IpAddr,
-    /// The address players reach the UDP port at, put into connect tokens (and checked by netcode). Default:
-    /// the address the client asked the HTTP API at when it is an IP, else the address of our socket that
-    /// took the request (127.0.0.1 when unknown), and no check.
+    /// The address players reach the UDP port at, put into connect tokens. Default: the IP the client asked at,
+    /// else our socket's (127.0.0.1 when unknown), unchecked by netcode.
     #[arg(long)]
     pub public_host: Option<IpAddr>,
     /// The WebSocket URL players are given (default: wss://<host>/fallbeans/ws when asked through an https

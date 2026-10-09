@@ -1,7 +1,4 @@
-//! Names over the beans: interface nodes placed every frame where the bean's head
-//! is on screen, crisp and untouched by fog and the scene's lighting. Maps may add a badge («⭐ 5»).
-//! A nearer tag keeps its place, a farther one that would cover it moves up; tags of far beans and of
-//! beans behind the course (a wall, the floor over one that fell) fade out.
+//! Name tags over the beans, placed each frame above their heads and faded when far or behind the course.
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;

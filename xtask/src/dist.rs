@@ -303,10 +303,8 @@ pub const FFX_LIB: &str = if cfg!(windows) {
     "libamd_fidelityfx_vk.so"
 };
 
-/// The upscalers' libraries beside the client (the game falls back to FSR 1 without them): NVIDIA's DLSS
-/// (`dlss_runtime`) when the client is built with it, AMD's FidelityFX for FSR 3.1 (`fidelityfx`). With
-/// `licenses` (a package), AMD's license goes there, and a missing library fails the package.
-/// Each failure is printed as it comes (the others are still tried): the result only says whether one was fatal.
+/// The upscalers' libraries beside the client (without them: FSR 1): DLSS (`dlss_runtime`) and FidelityFX (FSR 3.1).
+/// A missing library fails a package; failures are printed as they come, the result says only whether one was fatal.
 pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> Result<()> {
     let package = licenses.is_some();
     let mut ok = true;

@@ -1,8 +1,5 @@
-//! The scenery around a map (client only): drifting clouds kept clear
-//! of the course, birds circling far out, hot-air balloons on the horizon, floating islands, the set
-//! pieces of the round's look (castle towers, gears, snowmen, planets, tents, neon rings, lighthouses,
-//! cacti, volcanoes, crowns, lollipops…) and the land far below. Visual only: its own random numbers. The parts
-//! nothing moves are merged by cell and material.
+//! Scenery around a map (client only): clouds, birds, balloons, islands, set pieces and the land below; visual only,
+//! with its own random numbers.
 use std::collections::{HashMap, HashSet};
 
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};

@@ -1,7 +1,4 @@
-//! The bean's mouth and brows. The mouth is drawn into a texture per expression and
-//! shown on a thin patch laid over the front of the model (visor and body), so nothing sticks out of it
-//! or cuts into it; the brows are small solid strokes lying on the visor above the eyes, which squint,
-//! widen and roll with them. The eyes and tears are animated in `bean.rs`/`beans.rs`.
+//! The bean's mouth (a texture per expression on a patch over the front) and brows (strokes on the visor).
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;

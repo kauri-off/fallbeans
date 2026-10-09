@@ -1,7 +1,4 @@
-//! Audits: the game's content and systems checked without a client. Maps (rules,
-//! spawns, clipping, reachability, balance), physics feel, determinism, input handling and budgets.
-//! Each audit returns findings (problems, by severity) and metrics (numbers worth tracking). Run them
-//! with `cargo xtask audit`, or the quick subset from tests.
+//! Audits of maps, physics, determinism and input, run without a client; each returns findings and metrics.
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

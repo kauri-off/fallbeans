@@ -1,6 +1,4 @@
-//! What the log says about the connection: a `net:` summary a minute while connected, and a line as soon as
-//! something goes wrong (loss, a slow round trip, a long frame, a clock jump). `NetNow` is the same for other
-//! lines (a correction, an F8 report). `stats:` (every second headless) is what stress runs compare.
+//! Connection log lines: a `net:` summary a minute, and a line as soon as something goes wrong.
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_net::NetStats;

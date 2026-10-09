@@ -1,8 +1,5 @@
-//! Surfaces: every map material gets fine detail from a procedural, tileable
-//! texture per kind of surface (normal from a height map in RG, the height in B, a roughness mask in A),
-//! mapped triplanar in the object's own space (the models have no UVs), so detail keeps its size on any
-//! primitive and stays glued to moving parts. Palette materials also carry the look's pattern
-//! (stripes, checker, dots, chevron, waves) in its two tones.
+//! Map material surfaces: a procedural tileable detail texture per surface kind, mapped triplanar in the object's space
+//! (models have no UVs), plus palette patterns.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -124,9 +121,7 @@ struct Def {
     metalness: Option<f32>,
     /// Whitening where the roughness mask is high (frost on ice).
     frost: f32,
-    /// Size of the kind's features, log2 of texels: how much further than the finest detail it shows (the
-    /// shader fades the detail by its texels a pixel). Only for what is seen as a whole (clouds, foliage,
-    /// rocks); the tiles of floors and walls go early, before their repeats can read as a grid.
+    /// Feature size of a kind, log2 of texels; floors and walls lose their detail early, before repeats read as a grid.
     far: f32,
 }
 
@@ -296,9 +291,8 @@ fn smooth(x: f32, a: f32, b: f32) -> f32 {
 
 use core::f32::consts::PI;
 
-/// Height and roughness mask of a kind at (u, v) in the unit square.
-/// Every cell of every noise spans 4 texels or more, and every period divides the tile: anything finer only
-/// shows as the sampling's beats (lines, moiré), and a noise that does not wrap draws a seam on each tile edge.
+/// Height and roughness mask of a kind at (u, v) in the unit square; noise cells span 4+ texels and periods divide the
+/// tile, so tiles wrap seamlessly.
 fn build(k: Kind, u: f32, v: f32) -> (f32, f32) {
     match k {
         Kind::Plastic => {
@@ -465,10 +459,8 @@ pub fn filtered(image: &mut Image, anisotropy: u16) {
     });
 }
 
-/// The models' textures (their baked AO) come from the glTF without mips: Bevy makes none for PNG or JPEG,
-/// and crevices and seams sparkle at a distance. The chain is made here once each is loaded; `AO_MARGIN`
-/// (`blender/export.py`) pads the UV islands by 4 px, so the mips are used down to the 8th of the size only
-/// (`lod_max_clamp`), past which the islands would bleed into each other.
+/// Mips for the models' glTF textures (Bevy makes none for PNG/JPEG); `AO_MARGIN` pads UV islands, so mips go down only
+/// to 1/8 size (`lod_max_clamp`).
 fn mip_model_textures(
     mut events: MessageReader<AssetEvent<Image>>,
     server: Res<AssetServer>,
@@ -505,9 +497,8 @@ fn mip_model_textures(
     }
 }
 
-/// Appends the mip chain to a square, power-of-two RGBA8 image made on the CPU and sets its level count:
-/// 2×2 averages. sRGB images are averaged in linear light, weighted by alpha (no dark fringes where they turn
-/// transparent); the rest channel by channel, as plain data (the detail textures' normals and masks).
+/// Appends a mip chain to a square power-of-two RGBA8 image: sRGB averaged in linear light weighted by alpha, other
+/// channels as plain data.
 pub fn add_mips(image: &mut Image) {
     let size = image.width() as usize;
     let srgb = image.texture_descriptor.format.is_srgb();
@@ -606,12 +597,8 @@ pub struct SurfaceUniform {
     pub extra: Vec4,
 }
 
-/// Bindless where the standard material is (Vulkan; not DX12, whose 2048 samplers do not hold its six per slot
-/// of a 2048-slot slab): an extended material is bindless only when both halves are, and only then do the map's
-/// many materials share one bind group.
-/// Bindless indices 50…53 (the standard material has 0…30) in their own index table at binding 100, the
-/// data in an array at 101; without bindless, a uniform at 50, the texture and sampler at 51 and 52 and the
-/// occluders at 53.
+/// Bindless only on Vulkan (DX12's sampler limit): an extended material is bindless only if both halves are.
+/// Bindless indices 50-53 with data at 100/101; else a uniform at 50, texture and sampler at 51/52, occluders at 53.
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 #[data(50, SurfaceUniform, binding_array(101))]
 #[bindless(index_table(range(50..54), binding(100)))]

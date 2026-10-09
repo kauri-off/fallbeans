@@ -1,9 +1,5 @@
-//! How far ahead of the server the client's clock runs. Lightyear aims at its estimate of the server's tick
-//! (the last tick heard + RTT/2) + 4 × jitter + margin, and jumps the clock (relabelling inputs already sent)
-//! when it is more than `max_error_margin` off. Both the estimate and the jitter follow every burst up and
-//! down within a second, so on a jerky path (TCP in a VPN) the aim swung by tens of ticks and the clock
-//! jumped in pairs, back and forth. Here the aim rises at once but comes down slowly, errors short of a
-//! large jump only pace the clock, and WebSocket gets a bigger margin.
+//! How far ahead of the server the client's clock runs. The aim rises at once but falls slowly, so a jerky path does
+//! not make the clock jump back and forth.
 use bevy::prelude::*;
 use fb_net::TICK;
 use lightyear::core::time::TickDelta;
@@ -27,15 +23,10 @@ const MAX_ERROR: f32 = 24.0;
 const SPEEDUP: f32 = 1.1;
 /// Changes of the margin smaller than this leave the config alone.
 const STEP: f32 = 0.1;
-/// A frame this long (s) stalls the clocks: packets come in a burst while the remote timeline has not yet
-/// moved on, and its estimate jumps by the frame's length for a while. Not the path: for STALL_QUIET s
-/// after such a frame the estimate's offset may not raise the held aim (once it did, and stayed up for a
-/// minute). RTT and jitter still may: every map load is such a frame, right at the start of a round.
+/// A frame this long (s) stalls the clocks: its burst skews the estimate, so the offset may not raise the aim.
 const STALL: f32 = 0.1;
 const STALL_QUIET: f32 = 5.0;
-/// Most ticks an input may arrive ahead of the server's tick (the margin plus a clock error short of a
-/// jump): Lightyear's server drops input messages more than 64 ticks ahead (`MAX_INPUT_LOOKAHEAD_TICKS`),
-/// and then the bean stands still. Past it presses arrive late instead (`fb_net::LATE_TICKS` recovers them).
+/// Most ticks an input may lead the server's tick: Lightyear drops inputs more than 64 ticks ahead.
 const MAX_AHEAD: f32 = (fb_net::INPUT_RING - 4) as f32;
 /// Above this margin a late press can be lost: the server's input buffer is a ring of 64 ticks ending at
 /// the newest input, and it must still hold the ticks up to LATE_TICKS behind the server's.
@@ -43,9 +34,7 @@ const LATE_LEAD: f32 = (fb_net::INPUT_RING - 1 - fb_net::LATE_TICKS) as f32;
 /// How often the warning about a margin above LATE_LEAD may repeat, s.
 const WARN_EVERY_S: f32 = 30.0;
 
-/// The aim over the remote timeline's own clock (its estimate's offset + RTT/2 + JITTER_K × jitter) as
-/// held, ticks; None before the first estimate. Offsets count from the first one of the connection (the
-/// remote clock starts at 0, the server's tick may be in the millions: too far out for f32).
+/// The held aim on the remote timeline, ticks; offsets are from the connection's first estimate (f32 precision).
 #[derive(Resource, Default)]
 pub struct Lead {
     pub held: Option<f32>,

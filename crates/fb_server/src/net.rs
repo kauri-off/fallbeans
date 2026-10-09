@@ -65,11 +65,8 @@ impl Shutdown {
     }
 }
 
-/// One Lightyear server listening on both transports: the UDP socket binds `LocalAddr`, the WebSocket
-/// listener its own config's address, and every client link (`LinkOf`) is of this server whichever way
-/// it came in. One netcode server sees all clients (one id cannot be in twice over two transports),
-/// and Lightyear's topology is a valid `Server` (with a server per transport it was `Invalid`,
-/// lightyear#1693, and the systems that need one server stayed off).
+/// One Lightyear server for both transports: one netcode server sees every client, and the topology stays
+/// valid (a server per transport was `Invalid`, lightyear#1693).
 fn start_server(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>) {
     let udp_addr = SocketAddr::new(opts.udp_addr, opts.udp_port);
     let ws_addr = SocketAddr::new(opts.ws_addr, opts.ws_port);
@@ -120,10 +117,8 @@ fn on_link(trigger: On<Add, LinkOf>, time: Res<Time<Real>>, mut commands: Comman
 /// Links not connected yet.
 type Unconnected = (With<LinkOf>, Without<Connected>);
 
-/// Links that never connect go after LINK_CONNECT_S, and the oldest beyond MAX_PENDING_LINKS: UDP makes one
-/// per source address before any token is checked (spoofed packets, scanners), WebSocket one per finished
-/// handshake, and neither ever lets go of one that stays silent. Its UDP address and netcode handshake go with it
-/// (patched `lightyear_udp`, `lightyear_netcode`).
+/// Links that never connect go after LINK_CONNECT_S, the oldest beyond MAX_PENDING_LINKS: UDP makes one per source
+/// before any token is checked. Their UDP address and handshake go too (patched `lightyear_udp`, `lightyear_netcode`).
 fn reap_links(
     time: Res<Time<Real>>,
     opts: Res<Opts>,
@@ -177,9 +172,7 @@ fn drop_broken_links(links: Query<(Entity, &Transport, &RemoteId), Joined>, mut 
 /// Whether the server started, stopped or was unlinked (and why).
 type ServerState = (Has<Started>, Has<Stopped>, Option<&'static Unlinked>);
 
-/// The server's transports gave up: an accept error closes the WebSocket listener, and with it the one
-/// `Server` UDP is on too (every link let go of). The process exits with an error, and systemd starts it
-/// again (`Restart=always`).
+/// The transports gave up: an accept error closes the shared `Server`. The process exits and systemd restarts it.
 fn watch_server(
     servers: Query<ServerState, With<NetcodeServer>>,
     shutdown: Res<Shutdown>,
@@ -254,9 +247,7 @@ fn on_connected(
     let (Ok((remote, addr, data)), Some(mut rooms)) = (links.get(link), rooms) else {
         return;
     };
-    // The address the link came from: a player's own, a VPN's exit, or a reverse proxy's for a WebSocket. Through a
-    // local proxy, the address the client asked for its token from (in the sealed token) stands for the
-    // player: otherwise every WebSocket player would share 127.0.0.1, and its PIN guesses.
+    // Through a local proxy the sealed token's address stands for the player, else all share 127.0.0.1.
     let (uid, asked_from) = data.map(|d| from_user_data(&d.0)).unwrap_or_default();
     let link_ip = addr.map(|a| a.0.ip());
     let ip = match link_ip {

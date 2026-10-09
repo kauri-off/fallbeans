@@ -1,8 +1,4 @@
-// A portal's disc (`portal.rs`), unlit, on the disc's UVs (the middle at 0.5, 0.5; the rim at radius 0.5).
-// A way in: a vortex. Spiral arms wind into the middle and turn; bands of a tunnel sink towards a white-hot
-// core, closer together the deeper they are (it looks deep); sparks are drawn in along the spiral; the rim
-// glows; the whole pulses slowly. An exit: rings flow out of a deep middle to a white rim, sparks thrown out.
-// The trip's flash brightens it and spins it up. Colours are linear and may go past 1 (the bloom picks them up).
+// A portal's unlit disc (`portal.rs`): a vortex in, rings out; linear colours may exceed 1 for bloom.
 #import bevy_pbr::{
     forward_io::VertexOutput,
     mesh_view_bindings::globals,

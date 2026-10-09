@@ -1,7 +1,5 @@
-// A burst of particles (`vfx.rs`): each a small billboard whose place, size and colour are a function of the
-// burst's age and the particle's own direction and seed. The mesh's transform places the burst and scales it;
-// colours come out premultiplied, the alpha the coverage (the glowing kinds' light is added whatever it is, and
-// it marks the reactive mask: `reactive.rs`).
+// A burst's particles (`vfx.rs`): billboards placed and coloured by the burst's age and each particle's seed;
+// premultiplied, alpha is coverage.
 #import bevy_pbr::{
     mesh_functions,
     mesh_view_bindings::{view, globals},

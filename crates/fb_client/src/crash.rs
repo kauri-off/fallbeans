@@ -47,10 +47,7 @@ impl Plugin for CrashPlugin {
     }
 }
 
-/// A thread whose panic does not end the game: Bevy's I/O and async pools (a file loaded or saved, a face
-/// drawn) and the game's own helpers named `fb-…` (an update, a request). Such a panic is no crash to tell the
-/// player about, and must not take the one report of the run from a real crash after it. The main thread,
-/// the systems' pool and the render thread (unnamed) are the game.
+/// Panics on I/O, async and `fb-…` threads are not game crashes and must not consume the crash report.
 fn background(thread: Option<&str>) -> bool {
     thread.is_some_and(|n| {
         n.starts_with("fb-") || n.starts_with("IO Task Pool") || n.starts_with("Async Compute Task Pool")

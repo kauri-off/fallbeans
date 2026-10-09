@@ -1,6 +1,4 @@
-//! The client's side of the control protocol: the hello, where the player is (`Session`: a room, its lobby
-//! and arena), the room list (`RoomList`), and what the interface shows of the room (`Outcome`, `ChatLog`,
-//! `FeedLog`). `--start` plays a game by itself as the room's host (stress runs, `xtask dev`).
+//! The client's side of the control protocol: where the player is (`Session`), the room list and the room's UI state.
 use std::collections::{BTreeMap, VecDeque};
 
 use bevy::ecs::system::SystemParam;

@@ -1,7 +1,5 @@
-// Surfaces: triplanar detail in the object's own space (normal, cavity shading,
-// roughness, frost) and the look's two-tone pattern, on top of the standard PBR material; ambient occlusion
-// (`ao.rs`): baked into merged static geometry, from the moving occluders near the camera, at the foot of what
-// stands on the ground. (The forward pass only: the prepasses and shadows use the standard material's shaders.)
+// Surface detail and pattern on the standard PBR material (forward pass only): triplanar in object space, plus baked
+// and moving occlusion (`ao.rs`).
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
@@ -113,9 +111,8 @@ fn occluder(slot: u32, i: i32) -> vec4<f32> {
 #endif
 }
 
-// The sky the moving occluders leave a point `p` with normal `n`: each capsule as the ball at its point nearest
-// to `p`, by Íñigo Quílez's sphere occlusion (with his approximation where the ball dips below the horizon),
-// fading to nothing at `OCCLUDER_REACH` radii.
+// Sky occlusion from a point by each moving capsule as its nearest ball (Íñigo Quílez's sphere occlusion), fading out
+// at `OCCLUDER_REACH` radii.
 fn moving_sky(slot: u32, p: vec3<f32>, n: vec3<f32>) -> f32 {
     let head = occluder(slot, 0);
     let count = i32(head.w + 0.5);
@@ -219,10 +216,8 @@ fn fragment(
             let dp = p * surface.detail.x;
             let gx = dpdx(dp);
             let gy = dpdy(dp);
-            // How much of the detail shows: texels a pixel along the footprint's longer axis (so it goes at
-            // grazing angles too) against the size of the kind's features. Finer than a few texels a pixel, the
-            // tile's repeats read as a grid and its bumps as moiré (worse after the upscaler's sharpening): the
-            // detail gives way to the tile's average, gone well before its features are a pixel wide.
+            // Detail fades by the footprint's texels per pixel against the feature size: finer than a few texels per
+            // pixel reads as a grid and moiré.
             let texels = max(length(gx), length(gy)) * DETAIL_SIZE;
             let fade = 1.0 - smoothstep(0.5, 2.5, log2(max(texels, 1e-4)) - surface.extra.w);
             let mean = sample_mean(slot);

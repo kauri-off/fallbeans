@@ -1,7 +1,5 @@
-//! Meshes of map primitives: soft, toy-like boxes and cylinders (rounded edges and corners, a lip round broad
-//! slabs; the cylinders' first segment faces +z), UV spheres; a few levels of detail with fewer segments,
-//! switched by size on screen; the millimetre lifts that keep overlapping primitives from z-fighting; and static
-//! geometry merged into one mesh per cell and material.
+//! Soft, toy-like boxes, cylinders and UV spheres for map primitives at a few levels of detail; millimetre lifts stop
+//! z-fighting; static geometry is merged per cell and material.
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
@@ -76,12 +74,7 @@ pub fn rounded_box(size: Vec3, segments: u32, radius: f32) -> Mesh {
         .with_inserted_indices(Indices::U32(idx))
 }
 
-// ---------------------------------------------------------------- soft boxes and cylinders
-//
-// Both are an outline seen from above (a rounded rectangle, a rounded polygon, a circle) swept along a profile
-// from the bottom up: each point of the profile is the outline moved in by its inset, at its height. Moving a
-// rounded outline in by no more than its corners' radius keeps it a rounded outline with the same normals,
-// so the normals of the sides are the outline's tilted by the profile's.
+// ---- soft boxes and cylinders: an outline swept up a profile, each point inset by at most the corner radius.
 
 /// A point of a profile: how far in from the outline (m), its height, and its normal in the (out, up) plane.
 #[derive(Clone, Copy, Debug)]
@@ -111,9 +104,7 @@ pub fn edge_radius(a: f32) -> f32 {
     (0.45 * a).min(0.1 + 0.15 * a).min(0.3)
 }
 
-/// The rim of a piece of height `h` with edges of radius `e`, its insets within `room` (what the outline's
-/// corners allow); with a lip (its shaded underside a darker band under the top) round a broad slab, but not at
-/// a chamfer's detail.
+/// The rim of a piece of height `h`, edge radius `e`, insets within `room`; a lip under broad slabs, not chamfers.
 fn rim(h: f32, e: f32, room: f32, slab: bool, arcs: u32) -> Rim {
     let e = e.min(room);
     let plain = Rim {
@@ -310,9 +301,8 @@ pub fn soft_box(size: Vec3, arcs: u32) -> Mesh {
     sweep(&outline, &profile(&sides, arcs))
 }
 
-/// A soft cylinder of `radius` and height `h`: rims rounded to the piece, a lip round a broad disc. Up to
-/// `POLYGON` sides it is a polygon with rounded corners (the first at +z: hexagonal tiles line up; half the
-/// segments, as their normals turn smoothly round them), smooth otherwise; `arcs` segments per rounded quarter.
+/// Soft cylinder of `radius` and height `h`; up to `POLYGON` sides a polygon with rounded corners, first side at +z so
+/// hex tiles line up.
 pub fn soft_cylinder(radius: f32, h: f32, seg: u32, arcs: u32) -> Mesh {
     if radius <= 1e-3 || h <= 1e-3 || seg < 3 {
         return Cylinder::new(radius.max(1e-3), h.max(1e-3))
@@ -513,9 +503,8 @@ pub fn prim(kind: PrimKind, dims: [f64; 3], band: usize) -> Mesh {
     }
 }
 
-/// Lift steps (of `LIFT`) for primitives by their world bounds (min, max): any two that touch or overlap get
-/// different steps, so faces they share never meet at one depth. (One with every step taken around it reuses
-/// one.)
+/// Lift steps (of `LIFT`) by world bounds: touching or overlapping primitives get different steps, so shared faces
+/// never meet at one depth.
 pub fn lifts(bounds: &[(Vec3, Vec3)]) -> Vec<u32> {
     const TOUCH: f32 = 0.001;
     let mut order: Vec<usize> = (0..bounds.len()).collect();
@@ -554,10 +543,8 @@ pub fn lifts(bounds: &[(Vec3, Vec3)]) -> Vec<u32> {
 /// detail still tell near from far.
 pub const CELL: f32 = 20.0;
 
-/// Marks a merged mesh whose vertices carry the frames of the pieces they came from, for the surface shader's
-/// object-space mapping (`OBJECT_FRAME` in surface.wgsl): the piece's rotation in COLOR, the position in its
-/// frame (at world scale) in UV_1 and UV_0.x; UV_0.y is the sky hidden from the vertex, 0 until a bake writes it
-/// (`ao.rs`, `decor`). (The value itself is unused.)
+/// Merged mesh whose vertices carry their piece's frame (`OBJECT_FRAME`): rotation in COLOR, position in UV_1/UV_0.x.
+/// UV_0.y is the sky occlusion, 0 until `ao.rs` bakes it.
 pub const ATTRIBUTE_FRAME: MeshVertexAttribute =
     MeshVertexAttribute::new("Fb_ObjectFrame", 0x4642_4652_414d_4500, VertexFormat::Float32);
 
@@ -596,10 +583,8 @@ pub fn mergeable(mesh: &Mesh) -> bool {
             .is_ok_and(|mut attrs| attrs.all(|(a, _)| known.contains(&a.id)))
 }
 
-/// Static pieces (a mesh and its world matrix each) baked into one mesh around `origin`: positions (less
-/// `origin`) and normals in the world. With `frames` (surface materials), each vertex also carries its piece's
-/// frame (`ATTRIBUTE_FRAME`) instead of its UVs; without, the UVs are kept. None: nothing to merge, or a piece
-/// that `mergeable` or `frame` turns down.
+/// Bakes static pieces into one mesh around `origin`, with frames or UVs; None if nothing merges or `mergeable`/`frame`
+/// refuse a piece.
 pub fn merge(pieces: &[(&Mesh, Mat4)], origin: Vec3, frames: bool) -> Option<Mesh> {
     let mut pos: Vec<[f32; 3]> = Vec::new();
     let mut nrm: Vec<[f32; 3]> = Vec::new();
@@ -661,9 +646,8 @@ pub fn merge(pieces: &[(&Mesh, Mat4)], origin: Vec3, frames: bool) -> Option<Mes
     Some(out)
 }
 
-/// What a primitive's levels of detail must share with another's for the two to be merged: where its levels
-/// start, and (with more than one level) its size to within a factor of √2: a group switches levels at the
-/// distances of its biggest piece.
+/// Whether two primitives' levels of detail can share a merged group: same level starts, and sizes within √2 when there
+/// is more than one level.
 pub fn level_class(levels: &[LodBand]) -> u64 {
     let starts = levels.iter().fold(0u64, |m, l| m | (1u64 << l.first));
     if levels.len() < 2 {

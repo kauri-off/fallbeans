@@ -1,7 +1,6 @@
-//! FSR 1 upscaling: the main pass draws at a lower resolution
-//! (`MainPassResolutionOverride`), EASU brings it to the full one before the post-processing, and Bevy's
-//! robust contrast-adaptive sharpening (RCAS, the second half of FSR 1) restores the detail. The fallback when
-//! neither temporal upscaler runs (`upscale.rs`); the main pass's size is set here for all of them.
+//! FSR 1 upscaling, the fallback: the main pass draws at a lower resolution (`MainPassResolutionOverride`), EASU
+//! upscales it and RCAS sharpens.
+//! Runs when neither temporal upscaler does (`upscale.rs`).
 use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::camera::MainPassResolutionOverride;
@@ -76,9 +75,8 @@ impl Plugin for FsrPlugin {
         render_app
             .add_systems(RenderStartup, init_pipeline)
             .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
-            // (Before the post-processing, on linear HDR, not after the tone mapping as FSR 1 would have it:
-            // the vignette (effect stack) runs before the tone mapping over the whole target, so it would
-            // centre on the full frame instead of the small one. `easu.wgsl` tone-maps its taps reversibly.)
+            // Before the post-processing, on linear HDR: the vignette would otherwise centre on the full target, not
+            // the small frame.
             .add_systems(Core3d, easu.in_set(Core3dSystems::EarlyPostProcess));
     }
 }

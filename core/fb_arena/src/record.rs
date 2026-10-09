@@ -1,6 +1,4 @@
-//! Recorded rounds and replays: enough
-//! to simulate a round again tick by tick and get the same result. Human input is stored as the frames
-//! the simulation actually used, run-length encoded; bots replay from the seed.
+//! Replays: human input as the frames actually used (run-length encoded); bots replay from the seed.
 use core::num::TryFromIntError;
 use std::collections::BTreeMap;
 

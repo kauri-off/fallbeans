@@ -1,6 +1,4 @@
-//! What the player (and a log) needs to tell a bad network from a blocked one: transport, RTT, jitter,
-//! the share of packets lost on the way to the server, why the game went over WebSocket and what the last
-//! UDP check found; and, after a fallback, how to let the game through a VPN over UDP.
+//! Network diagnosis for the player and the log: transport, RTT, jitter, loss, and why it fell back to WebSocket.
 use std::collections::VecDeque;
 
 use bevy::prelude::*;

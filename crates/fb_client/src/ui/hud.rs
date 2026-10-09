@@ -1,6 +1,4 @@
-//! The HUD over the game: the players' panel, the feed, the intro and countdown,
-//! the timer and the map's line, the round's results, the game's summary, the status of a player out of
-//! play, the controls line and the prompt to click back in.
+//! The in-game HUD: players, feed, intro and countdown, timer, round results and summary.
 use std::time::Duration;
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};

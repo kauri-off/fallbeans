@@ -58,9 +58,7 @@ const SESSIONS_PER_MINUTE: usize = 128;
 const BODY_MAX: usize = 16 * 1024;
 /// Open HTTP connections at most: beyond it the listener waits (each is a task and a file descriptor).
 const MAX_CONNECTIONS: usize = 512;
-/// A connection that sends nothing and takes nothing for this long is closed. axum's server has no header
-/// or keep-alive timeout of its own (hyper's needs a timer it is not given): a client could hold a
-/// connection forever.
+/// A connection idle this long is closed: axum has no header or keep-alive timeout, so a client could hold it forever.
 const IDLE: Duration = Duration::from_secs(20);
 /// A request (head and body) must be in this long after its first byte, however its bytes trickle in.
 const REQUEST: Duration = Duration::from_secs(10);
@@ -533,9 +531,8 @@ impl Api {
         }
     }
 
-    /// The UDP address for a connect token: `--public-host`, else the IP the client asked at, else (behind
-    /// a reverse proxy) what the name it asked at resolves to, else the address of our socket that took the
-    /// request.
+    /// The UDP address for a connect token: `--public-host`, else the IP asked at, else what the asked name resolves
+    /// to, else our socket's.
     async fn token_host(&self, headers: &HeaderMap, local: Option<SocketAddr>, proxied: bool) -> IpAddr {
         if let Some(h) = self.public_host {
             return h;
@@ -718,9 +715,8 @@ pub fn to_text(v: &Value, indent: &str) -> String {
     }
 }
 
-/// Up, its version, and how busy.
-/// Anyone may ask, so it reads what the main loop published instead of queueing work for it; a main loop
-/// that stopped publishing is a 503.
+/// Up, its version and how busy: reads what the main loop published, never queues work.
+/// A main loop that stopped publishing is a 503.
 async fn health(State(api): State<Api>) -> Response {
     let counts = *api.shared.counts.lock().unwrap_or_else(|e| e.into_inner());
     let Some(c) = counts.filter(|c| c.at.elapsed() <= MAIN_LOOP_PATIENCE) else {

@@ -55,13 +55,8 @@ pub struct BodyFull {
     pub spawn: u16,
 }
 
-/// Rolls back on any difference in what the physics step reads. Server and client run the same code on
-/// the same bits and the state travels exactly, so a difference is never float noise: it is the client
-/// having seen something else (another bean where it was a moment ago, an input that came late). Left
-/// alone below a threshold it grows until it crosses it, a second later, as a bigger correction.
-/// Not compared: the landing impact (drawn only, f32 on the wire) and the size (set from the bonus at
-/// the start of every step). Floats compare by their bits: a NaN equals itself (`!=` would roll back on
-/// every snapshot) and −0 differs from +0 (the next step may not treat them alike).
+/// Bitwise: a difference is a real divergence (another bean, a late input), never float noise: roll back at once.
+/// Floats compare by bits: a NaN equals itself, and −0 differs from +0.
 pub fn body_differs(a: &BodyFull, b: &BodyFull) -> bool {
     let (x, y) = (&a.body, &b.body);
     let f = |a: f64, b: f64| a.to_bits() != b.to_bits();

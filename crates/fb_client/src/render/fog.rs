@@ -1,14 +1,6 @@
-//! Haze in the air around the camera, on High: the sky's light and the sun's scattered in it, shafts of
-//! sunlight where the course shades it, thicker low down (a sea of mist under the course) and drifting in wisps
-//! with the wind. Beyond it the look's distance fog takes over; on Low that fog alone, beginning nearer.
-//!
-//! Bevy's own volumetric fog marches its rays over the whole target and ignores `MainPassResolutionOverride`
-//! (FSR draws the main pass into a corner of it, `fsr.rs`): its rays and the depth it reads would not match. The
-//! haze is drawn in the main pass instead, as slices across the view at growing distances, far to near in one
-//! draw, each depth-tested against the scene (no prepass needed) and sampling the sun's shadow map once.
-//!
-//! It leaves the upscalers' reactive mask (`reactive.rs`) as it is: smooth, and over the whole scene, it lies
-//! almost as far as what it covers, which keeps it in the history; marked, all far away would shimmer.
+//! Haze around the camera on High: scattered sky and sun light, sunlight shafts, low mist, wisps with the wind.
+//! Drawn as depth-tested slices in the main pass (Bevy's volumetric fog ignores `MainPassResolutionOverride`); kept out
+//! of the reactive mask, where it would shimmer.
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -168,9 +160,7 @@ pub fn haze_of(l: &Look) -> HazeUniform {
     }
 }
 
-/// The look's distance fog (its colour is set with the rest of the look, `apply_look`): from where the look says
-/// with the haze in front of it; without the haze (Low), from a little over half as far, a little thicker,
-/// for the depth the haze would give.
+/// The look's distance fog; without the haze (Low) it starts nearer, for the depth the haze would give.
 fn falloff(l: &Look, haze: bool) -> FogFalloff {
     let (near, far) = (l.fog.near as f32, l.fog.far as f32);
     let (start, end) = if haze { (near, far) } else { (near * 0.55, far * 0.9) };

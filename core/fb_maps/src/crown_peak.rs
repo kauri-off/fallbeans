@@ -1,6 +1,4 @@
-//! The climb: a fork up to the first plateau (a ramp with balls, or sliding steps), hammer bridges, a
-//! glove-swept plateau with launch pads up to a rotor deck, then more climbing drawn from the seed, and the
-//! summit: sliding steps up to the crown, guarded by a sweeper. First to touch it wins.
+//! A climb to the crown, the first to touch it wins; the middle sections are drawn from the seed.
 use std::sync::Arc;
 
 use fb_sim::bots::Waypoint;

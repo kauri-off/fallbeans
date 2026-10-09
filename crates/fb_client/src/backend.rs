@@ -1,9 +1,5 @@
-//! The graphics API, chosen before Bevy starts its renderer. Windows: Vulkan 1.2+, DirectX 12 when it has no
-//! Vulkan GPU. Elsewhere: Vulkan 1.2+. A real GPU wins over a software one (WARP, lavapipe) on either API. The
-//! player may force one (`--backend`, the settings), `WGPU_BACKEND` narrows the choice. A start that draws no
-//! frame is remembered: a marker written before the renderer starts and cleared a few frames in outlives a start
-//! that crashes or hangs. The next start drops a saved choice of that backend, and the automatic choice passes it
-//! over while it has another, until a start with it draws.
+//! The graphics API, chosen before Bevy starts its renderer: Vulkan 1.2+, DX12 on Windows without one.
+//! A start that draws no frame is remembered, so a crashing backend is skipped until one draws.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -77,10 +73,7 @@ impl<'de> Deserialize<'de> for BackendSetting {
     }
 }
 
-/// The automatic choice, in order. Windows too tries Vulkan first: measured on an RTX 5060 Ti (portal-panic,
-/// High, DX12 with DXC), wgpu's DX12 backend spent ~9.4 ms of render-thread CPU a frame against Vulkan's 3.0 ms
-/// for the same picture (102 against 288 fps): on DX12 Bevy cannot use bindless materials (D3D12's sampler heap
-/// is too small for the standard material's samplers). DX12 remains for machines without a usable Vulkan 1.2.
+/// Vulkan first on every OS: DX12 costs ~3x the render-thread CPU and has no bindless materials.
 fn auto_order() -> &'static [Backend] {
     if cfg!(target_os = "windows") {
         &[Backend::Vulkan, Backend::Dx12]
@@ -395,9 +388,7 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
     if !cfg!(debug_assertions) && p.backend != Backend::Dx12 {
         wgpu.instance_flags.remove(InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
-    // DX12 compiles shaders with DXC when the installer put it beside the exe: Bevy looks for it in the current
-    // folder only, and falls back to FXC, which takes seconds per pipeline (objects stay invisible until theirs
-    // is ready, and the stalls once read as a slow GPU). `WGPU_DX12_COMPILER` still chooses.
+    // DXC is found only beside the exe; FXC fallback stalls seconds per pipeline.
     if p.backend == Backend::Dx12
         && std::env::var_os("WGPU_DX12_COMPILER").is_none()
         && let Some(dxc) = std::env::current_exe()

@@ -29,9 +29,7 @@ impl InputFrame {
         .clamped()
     }
 
-    /// The stick clamped to unit length (127), as the server applies it to every frame. Idempotent: a
-    /// client sending clamped frames predicts with exactly the input the server uses. (Rounding a
-    /// rescaled stick may leave it a hair over 127; scaling again would then move it once more.)
+    /// Stick clamped to 127, as the server applies it; idempotent, so client prediction matches the server.
     #[expect(clippy::cast_possible_truncation, reason = "rounded and clamped to ±127 first")]
     pub fn clamped(self) -> Self {
         const MAX: i32 = 127 * 127;

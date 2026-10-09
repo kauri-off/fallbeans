@@ -1,6 +1,5 @@
-//! Levels of detail of the models: a model mesh with enough triangles gets simplified versions
-//! (meshoptimizer, made once per mesh in a background task, each with only the vertices it uses), and every
-//! placed mesh is drawn at the level its size on screen calls for.
+//! Simplified versions of models with enough triangles (meshoptimizer, once per mesh in the background); each placed
+//! mesh draws the level its screen size calls for.
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;

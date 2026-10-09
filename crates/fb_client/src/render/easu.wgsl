@@ -1,9 +1,5 @@
-// AMD FidelityFX Super Resolution 1, EASU (github.com/GPUOpen-Effects/FidelityFX-FSR, MIT):
-// edge-adaptive spatial upsampling, 12 taps, a Lanczos-like kernel stretched along local edges, deringed.
-// The scene was drawn into the top-left `in_size` of the source; the output fills the whole target.
-// The source is linear HDR (EASU runs before the post-processing, which works on the whole target): taps go
-// through FSR 1's simple reversible tone mapper (FsrSrtm, c / (1 + max(c))) and the result back through
-// its inverse, so highlights neither steer the edge analysis nor ring.
+// AMD FidelityFX FSR 1 EASU (MIT): edge-adaptive upsampling of the top-left `in_size` of the source; taps go through
+// FSR's reversible tone map so highlights don't ring.
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
 struct Easu {

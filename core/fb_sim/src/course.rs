@@ -1,7 +1,4 @@
-//! Race courses built from sections. A map lists its sections (fixed ones, and
-//! pools the seed draws from and shuffles); each builds itself from where the last one ended, with its
-//! own timings drawn from the seed, and tells the bots how to get through (one or more routes). Rest
-//! platforms between them are checkpoints. Server and clients build the same course.
+//! Race courses: sections chained from the seed; server and clients build the same course.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

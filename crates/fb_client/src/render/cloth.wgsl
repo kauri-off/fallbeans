@@ -1,8 +1,5 @@
-// Cloth: the vertex stage of a pennant waving in the wind (`cloth.rs`). A wave runs from the pole to the
-// tip along the length (local x), bending the cloth across it (local z), stronger in gusts; the normals bend
-// with it. It grows from nothing (and leaves flat) at the sleeve's seam: the sleeve round the pole, short of
-// the seam, never moves, and the cloth never reaches the pole. The prepass (depth, normals, motion vectors and
-// the shadows) runs the same, so what is drawn and its shadow wave alike.
+// Cloth vertex stage (`cloth.rs`): a wave from the pole to the tip, stronger in gusts; flat at the sleeve's seam. The
+// prepass runs the same.
 #import bevy_pbr::{
     mesh_functions,
     view_transformations::position_world_to_clip,

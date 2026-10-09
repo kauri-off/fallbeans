@@ -2,9 +2,7 @@
 use super::*;
 
 impl Arena {
-    /// Hash of the arena's state, by the bits (replays and determinism checks compare it): every bean (body,
-    /// timers, holds, rules, bot's generator), scores, who finished and who is out, and the world. Not what
-    /// the room changes from outside (`teleports`), nor the round's stats.
+    /// Hash of the state replays compare; excludes `teleports` and the round's stats.
     pub fn state_hash(&self) -> StateHash {
         let mut h = Fnv::default();
         let opt = |v: Option<u64>| v.unwrap_or(u64::MAX);

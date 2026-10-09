@@ -255,9 +255,7 @@ fn capture(cursor: &mut Mut<CursorOptions>, on: bool) {
     }
 }
 
-/// Who has the mouse, and when the menu opens and closes: it opens on entering a room and
-/// with Esc; a round's start, Esc again or a click on the field close it and capture the mouse.
-/// The primary window: its cursor, whether it has the focus, and when it loses it.
+/// Mouse capture: the menu opens in a room on Esc and closes on a round's start or a click on the field.
 #[derive(SystemParam)]
 pub(super) struct MainWindow<'w, 's> {
     cursor: Query<'w, 's, &'static mut CursorOptions, With<PrimaryWindow>>,

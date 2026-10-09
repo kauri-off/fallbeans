@@ -1,6 +1,4 @@
-// Haze around the camera (`fog.rs`): slices across the view, far to near in one draw, each depth-tested
-// against the scene. A slice adds what its stretch of air scatters towards the eye (the sky's light, and the
-// sun's where the shadow map lets it through) and hides as much of what is behind it.
+// Haze slices (`fog.rs`): each adds the air's scattered sky and sun light and hides what is behind it.
 #import bevy_pbr::mesh_view_bindings::{view, lights, globals}
 #import bevy_pbr::mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT
 #import bevy_pbr::shadows::{get_cascade_index, world_to_directional_light_local}

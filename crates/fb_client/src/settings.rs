@@ -1,7 +1,4 @@
-//! What the player keeps between runs: name and look, controls, sound, display (`settings.toml`), and the
-//! identity each server gave (`identity.json`). One folder per profile in the system's settings directory;
-//! `--profile b` is a second player on the same machine. Flags (`--name`, `--token`, `--color`) win over the
-//! files for the run and are not saved.
+//! What the player keeps between runs (`settings.toml`, `identity.json`), one folder per `--profile`.
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::fs;
@@ -167,9 +164,7 @@ impl Default for Display {
     }
 }
 
-/// Graphics (`render/quality.rs`): one of two presets, the upscaler and its mode, the frame pacing and the API. The
-/// rest is not the player's: upscaling is always on, and the switches below are only for the perf sweep, which
-/// takes the features away one at a time (`perf/capture.rs`); they are never saved, and an old file's are ignored.
+/// Graphics settings; the perf-sweep switches below are never saved.
 #[derive(Resource, SettingsGroup, Reflect, Clone, PartialEq, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "graphics")]
@@ -354,9 +349,7 @@ impl Me<'_> {
     }
 }
 
-/// Which server an identity belongs to: the host (lower case), the port unless it is the scheme's own or the
-/// game's HTTP port, and the path unless it is the usual `/fallbeans`. A domain's two candidates
-/// (`https://host/fallbeans`, `http://host:5887/fallbeans`) are the same server.
+/// Identity key of a server: host, non-default port and path; a domain's http and https forms are one server.
 pub fn server_key(http: &str) -> String {
     let http = http.trim();
     let (scheme, rest) = http.split_once("://").unwrap_or(("http", http));
@@ -394,10 +387,7 @@ pub fn server_key(http: &str) -> String {
     key
 }
 
-/// The identity tokens servers gave, one per server (`server_key`): each server is sent only its own, so one
-/// server never sees (and cannot play as) the player's identity on another, and a visit to one keeps the
-/// player's room on the other. Kept in `identity.json` of the profile, written whole and atomically: a broken
-/// `settings.toml` cannot take it.
+/// Identity tokens, one per server (`server_key`), written atomically so a broken `settings.toml` cannot lose them.
 #[derive(Resource, Default)]
 pub struct Identities {
     by_server: BTreeMap<String, String>,
@@ -524,9 +514,7 @@ fn keep_unreadable(path: &Path) -> Option<String> {
     Some(set_aside(path, &why))
 }
 
-/// The single identity of older versions goes to the server it most likely came from: the one played on last,
-/// else the only one in the list. With neither it is dropped (the player is new there next time): sent to a
-/// server that did not issue it, it would only hand that server's operator a token for another server.
+/// A legacy identity goes to the last-played server only; with no sure match it is dropped, never sent to a stranger.
 fn migrate(world: &mut World, notes: &mut Vec<String>) {
     let old = world.resource::<Player>().identity.clone();
     if old.is_empty() {

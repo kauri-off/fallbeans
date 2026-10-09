@@ -1,9 +1,4 @@
-//! Not a game: the playground players run around in between shows.
-//!
-//! Layout (metres; y up, the plaza in the middle, every zone clear of the others): the plaza (r < 7.5,
-//! the spawn ring round the fountain), north the bell tower (a spiral of pillars up, an icy slide down
-//! to the east), east trampolines and a high platform with a portal down, south-east the ice rink,
-//! south-west blocks to climb, west the spinner, north-west a launch pad; planters round the edge.
+//! Not a game: the playground between shows; zones are laid out in metres around a central plaza.
 use std::collections::BTreeSet;
 
 use fb_shared::{PlayerId, Rgb, rgb};

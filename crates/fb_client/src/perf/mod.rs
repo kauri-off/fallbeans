@@ -419,9 +419,7 @@ impl Spike {
     }
 }
 
-/// The scene's counts, twice a second while the overlay shows them or a recording runs. A command: the
-/// counting needs the whole world, and an exclusive system would stop `Update` at a sync point every frame
-/// even when it has nothing to do; the command runs where `Update` applies its commands anyway.
+/// Scene counts, twice a second; a command, since an exclusive system would stop `Update` at a sync point every frame.
 fn count_scene(mut commands: Commands, time: Res<Time<Real>>, perf: Res<Perf>, recording: Res<capture::Recording>) {
     if perf.mode != Mode::Full && recording.0.is_none() {
         return;

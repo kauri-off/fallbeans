@@ -1,6 +1,4 @@
-//! Beans on screen: the model under a pivot (tumbles) and a body node (lean, squash), painted in the
-//! player's colour and outfit, with hat, glasses, crown and tail; placed every frame and animated
-//! (`bean.rs`) from what the bean is doing.
+//! Beans on screen: the model under a pivot and a body node, painted in the player's colour and outfit.
 use core::f32::consts::FRAC_PI_2;
 use std::collections::HashMap;
 
@@ -160,10 +158,7 @@ fn suit_of(color: u8) -> (u8, Suit) {
     (i as u8, COLORS[i])
 }
 
-/// A painted part of the bean (suit with arms, hands and legs; belly; shoes) as plain colour on the model's own
-/// sides, with none of the model's textures: its ambient-occlusion bake (512², no mipmaps, small islands on
-/// black) held the arms' shadow at rest, which stayed on the body as they moved, and showed as stripes, moiré and
-/// dark seam lines. Real-time shadows and SSAO shade the bean instead; `coat` adds the faint clearcoat.
+/// Painted parts use plain colour, not the model's textures: its AO bake left shadows stuck to the body.
 pub fn plain_part(model: Option<&StandardMaterial>, color: Color, roughness: f32, coat: bool) -> StandardMaterial {
     let sides = StandardMaterial::default();
     let model = model.unwrap_or(&sides);

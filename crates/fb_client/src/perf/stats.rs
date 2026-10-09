@@ -12,10 +12,7 @@ pub struct Frame {
     pub sleep: f32,
     /// The main world's schedules, `First` to `Last`.
     pub main: f32,
-    /// The render thread's last finished frame (the main frame before this one): its `Render` schedule,
-    /// `ExtractCommands` to `PostCleanup`, the swapchain waits included. Extract itself (on the main thread,
-    /// after `Last`) and the main thread's wait for the render thread are in neither `main` nor `render`:
-    /// only in `frame`.
+    /// The render thread's last finished frame; extract and the main thread's wait are only in `frame`.
     pub render: f32,
     /// Of it, waiting for the swapchain: acquire (`prepare_windows`) and present (the `present_frames` span,
     /// so only with the profiler built in; NaN without).

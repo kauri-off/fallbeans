@@ -1,6 +1,5 @@
-// The sky: a gradient from the horizon up, the sun's glow, slowly drifting
-// clouds and, at night, twinkling stars. Linear colours, as bright as a lit white surface.
-// (Drawn after the opaque geometry, `SkyMaterial`: covered pixels never get here.)
+// The sky: horizon gradient, sun glow, drifting clouds and night stars, in linear colour; drawn after the opaque
+// geometry, so covered pixels skip it.
 #import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::{view, globals}}
 
 struct Sky {

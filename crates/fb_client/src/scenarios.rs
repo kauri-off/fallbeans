@@ -95,9 +95,7 @@ fn the_warm_up_builds_every_map() {
     on_room_list(&mut g);
 }
 
-/// fb3af03: after a line was sent, the next one typed panicked (a cursor past the end of the cleared text).
-/// Also: Enter opens the chat while the window holds the input focus (Bevy's default, and after a click on
-/// nothing focusable).
+/// fb3af03: typing after a sent line panicked (cursor past the cleared text).
 #[test]
 fn chat_lines_one_after_another() {
     let mut g = Game::new(&["--room", "dev"]);
@@ -569,9 +567,7 @@ fn connect_through_the_list(g: &mut Game, addr: &str) {
     );
 }
 
-/// Audit #4: one identity was shared by every server. Server B was sent the token server A gave, and B's reply
-/// replaced it, so back on A the player was somebody new (their room no longer theirs). Now each server gets
-/// only its own.
+/// Audit #4: each server is sent only its own identity token.
 #[test]
 fn an_identity_for_each_server() {
     let mut g = Game::new(&[]);
@@ -749,10 +745,7 @@ fn practice_and_back() {
     assert!(!g.res::<Session>().practice);
 }
 
-/// Into practice and back reconnects (`net::restart`), and what the server sent goes with the old link. Found by
-/// `practice_and_back` under load: a bean's face was attached in the frame of the reconnect, and its `insert`
-/// hit the despawned bean. Here a system reconnects and the next one, with no sync point between them, gives
-/// every bean a command; then the same with leaving the server (`net::close`).
+/// Reconnects (`net::restart`, `net::close`) race with bean commands: a face inserted on a despawned bean.
 #[test]
 fn reconnecting_spares_commands_queued_on_beans() {
     use bevy::prelude::*;
@@ -1017,9 +1010,7 @@ rounds! {
     round_star_fall: StarFall,
 }
 
-/// A tester's run on a real server: through a round's intro the own bean stood where it was in the lobby, and
-/// the server's spawn point came only as a respawn of 4–20 m some ticks after the start. Here, in the intro,
-/// the predicted bean must already be where the server has it.
+/// In a round's intro the predicted own bean must already be at the server's spawn, not the lobby's.
 #[test]
 fn the_own_bean_is_at_its_spawn_in_the_intro() {
     use bevy::prelude::*;
@@ -1058,10 +1049,7 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
     );
 }
 
-/// Every stress client's one unexplained divergence: a client that joins as a round starts has its clock set in
-/// the intro, and Lightyear checks no server tick before the first one it predicted. The own bean stood where it
-/// was in the lobby until the server's tick came that far (in an intro where nothing moves, until the start). It
-/// must be where the server has it from the first ticks after the clock is set.
+/// A client joining as a round starts must have its own bean at the server's place from its first tick.
 #[test]
 fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
     use bevy::prelude::*;
