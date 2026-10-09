@@ -1016,11 +1016,10 @@ pub fn conveyor(len: f64) -> Segment {
             let node = s.b.box_(v3(0.0, y + 0.9, pz), v3(3.4, 1.8, 1.2), pal::ORANGE, o).node;
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = px(t));
             s.b.bumper(v3(-side * 2.9, y, pz + 4.0), 0.75, 10.0);
+            // Across from the pusher, which reaches |x| = 0.7 at most: nothing to wait for.
             let lane = -side * 1.9;
             route.push(Waypoint::exact(lane, pz - 2.0));
-            route.push(
-                Waypoint::exact(lane, pz + 1.5).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
-            );
+            route.push(Waypoint::exact(lane, pz + 1.5));
         }
         s.b.bonus(v3(0.0, y, s.z + len * 0.5));
         route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
