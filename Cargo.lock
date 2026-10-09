@@ -3492,6 +3492,7 @@ dependencies = [
  "fb_shared",
  "fb_sim",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
