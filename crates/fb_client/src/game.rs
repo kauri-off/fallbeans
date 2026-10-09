@@ -267,9 +267,7 @@ pub const SMOOTH_T: f32 = 0.1;
 /// A correction farther than this (m) is not smoothed: the bean is put where it is at once.
 const SMOOTH_MAX: f64 = 1.5;
 
-/// A rollback's correction of the own bean, drawn away: the bean is drawn and animated off its state by `pos`,
-/// `vel` and `yaw`, which fade over SMOOTH_T (`beans::place_beans`), instead of jumping (and the body's jelly
-/// with its speed).
+/// A rollback's correction fades over SMOOTH_T instead of jumping.
 #[derive(Component, Default)]
 pub struct Smoothing {
     /// The own bean as last predicted at each recent tick (pos, vel, yaw).
@@ -370,9 +368,7 @@ impl Plugin for GamePlugin {
     }
 }
 
-/// Out of the room (at the room list, on another server): its map goes, and with it what the next room would
-/// take for its own (players, bonuses, decorations). The scene stays drawn until the next map's replaces it. The
-/// warm-up's maps are in no room: they go when it is done with them.
+/// Out of the room, its map goes with its players and bonuses; the scene stays drawn until a new map replaces it.
 fn drop_map(map: Option<Res<Map>>, session: Res<Session>, mut commands: Commands) {
     if map.is_some_and(|m| !m.warmup) && session.room.is_none() {
         commands.remove_resource::<Map>();
@@ -467,13 +463,8 @@ fn build_round(
     commands.insert_resource(next);
 }
 
-/// Lightyear checks the prediction at completed server ticks only, and only where the prediction history reaches
-/// back that far. Just after the clock is first set (or for a bean given since) it has nothing so old and the
-/// check passes silently, and in an intro where nothing moves no tick completes at all: the own bean kept what it
-/// had (the lobby's place) while the server had it at the round's spawn, until the start. So the newest server
-/// state of the own bean is rolled back to as it comes when the prediction has nothing at its tick, or another
-/// respawn count (a respawn, a new arena); and once more when a new arena's map is built (a rollback in the frame
-/// its `Round` came replayed its first ticks on the old map). Anything else is left to Lightyear.
+/// Lightyear skips prediction checks for ticks it has no history for, so the own bean's newest server state is rolled
+/// back to by hand on respawns and new arenas.
 fn reconcile(
     timeline: SyncedLocalTimeline,
     map: Option<Res<Map>>,
@@ -542,13 +533,7 @@ struct Rollbacks<'w> {
     last: ResMut<'w, LastRollback>,
 }
 
-/// Beans leaning on each other: the client pushes against the others where it draws them, a little in the
-/// past, so while they touch nearly every snapshot finds the own bean a few millimetres off and rolls back
-/// (portal-panic's crowds at a checkpoint: up to 800 rollbacks in 100 s at one every 8 ticks). A difference
-/// only in where the bean is and how fast it goes, with another bean near, waits after the last rollback
-/// (state checks are off for the frame): PUSH_EVERY ticks near PUSH_MAX, up to PUSH_EVERY_MAX for millimetres
-/// nobody sees (40 rollbacks at most in the same test); anything else rolls back at once. Waiting loses
-/// nothing: the difference stays in the history, and the next check finds it.
+/// Millimetre differences near other beans wait a few ticks before a rollback; the difference stays in the history.
 fn pace_pushes(
     timeline: SyncedLocalTimeline,
     mut rollbacks: Rollbacks,
@@ -994,9 +979,7 @@ fn predict(
     }
 }
 
-/// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall
-/// puts it back (the server would say so only a round trip later, after a rollback or three). A fall that
-/// puts it out of a survival round, a shortcut and the lobby's free spawn stay the server's.
+/// Local arena rules for the own bean (checkpoint, fall respawn); the server keeps the rest.
 fn predict_respawn(map: &Map, id: PlayerId, full: &mut BodyFull) {
     let (kind, fall) = (map.round.kind, map.round.fall);
     let mut checkpoint = full
@@ -1014,9 +997,7 @@ fn predict_respawn(map: &Map, id: PlayerId, full: &mut BodyFull) {
     }
 }
 
-/// Map events as they arrive. They may come before the arena they belong to is replicated (the history
-/// sent on join, or a round that just started), so they wait here (a few seconds at most) until that
-/// arena's map is built.
+/// Map events wait (a few seconds at most) until their arena's map is built.
 #[derive(Resource, Default)]
 struct Inbox(Vec<(MapEventMsg, f64)>);
 
@@ -1054,9 +1035,7 @@ pub struct Tell<'w> {
     pub feed: ResMut<'w, FeedLog>,
 }
 
-/// Bonuses about the own bean apply at once (it is drawn ahead), the others' when they are drawn at their
-/// tick. The rest apply as they come: a map event changes the world the own bean is predicted in
-/// (a tile falls, a portal shuts), and a bean that finished or is out leaves the arena.
+/// The own bean's bonuses apply at once, others' at their tick; map events and departures apply as they come.
 fn apply_map_events(
     map: Option<ResMut<Map>>,
     mut inbox: ResMut<Inbox>,

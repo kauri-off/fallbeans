@@ -1,8 +1,4 @@
-//! Stars fall on the arena, one about every second (bigger ones on the tower and the islands now and
-//! then): run through them to collect. Knocked off, you lose them all to whoever knocked you; falling by
-//! yourself, they are gone. A grab snatches one. Bars sweep round the tower in the middle; trampolines at
-//! the rim throw you up to the islands. Where and when stars fall follows from the seed; who took which
-//! one comes from the server.
+//! Collect falling stars; stars held are lost to whoever knocks you off, and falls come from the seed.
 use std::collections::BTreeMap;
 
 use fb_shared::NEVER;

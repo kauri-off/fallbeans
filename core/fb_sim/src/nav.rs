@@ -1,6 +1,4 @@
-//! Navigation for bots: a grid over the static part of a map with up to a few
-//! walkable layers per cell, linked by walking, stepping, jumping up, dropping down and jumping gaps.
-//! A* finds routes on it; moving parts are left to the map's bot logic.
+//! Bot navigation: an A* grid over the static map geometry; moving parts are left to the map's bot logic.
 use std::sync::Mutex;
 
 use fb_shared::hash::{Fingerprint, Fnv};
@@ -295,9 +293,7 @@ impl NavGrid {
         }
     }
 
-    /// Fingerprint of what `build` reads: the static, solid colliders as they are now. A grid built earlier
-    /// is still the world's while this is the same (a start gate that opens is skipped by the grid, and
-    /// changes nothing here).
+    /// Fingerprint of the static solid colliders `build` reads; a grid stays valid while it matches.
     pub fn key(world: &World) -> Fingerprint {
         let mut h = Fnv::default();
         let mut mix = |v: f64| h.mix(v, 1e3);

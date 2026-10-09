@@ -1,6 +1,5 @@
-//! `cargo xtask smoke`: the client on lavapipe (Mesa's software Vulkan), offscreen, through a practice round with
-//! each upscaler. The tests' noop device makes no pipelines: shaders, pipelines and the upscalers only fail on a
-//! driver.
+//! `cargo xtask smoke`: the client on lavapipe, offscreen, through a practice round with each upscaler.
+//! Shaders, pipelines and upscalers only fail on a real driver, not the tests' noop device.
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;

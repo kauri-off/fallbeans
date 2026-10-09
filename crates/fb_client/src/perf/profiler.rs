@@ -1,6 +1,4 @@
-//! Built-in CPU profiler: Bevy's system and schedule spans summed per frame (feature `profiler`). The spans of
-//! systems and schedules exist only with `--profiler` (`main.rs` filters them out otherwise); `present_frames`
-//! is always there and always summed (the swapchain wait).
+//! Built-in CPU profiler: Bevy's system spans summed per frame (feature `profiler`, `--profiler`).
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

@@ -1,6 +1,4 @@
-//! How the game feels, in numbers, against the recorded baseline (`baseline.json`): how the bean handles, and
-//! how bots do on every map averaged over seeds. A change to the simulation that moves one of them beyond its
-//! tolerance changes the feel. `fb_audit --baseline` compares, `fb_audit --bless-baseline` records.
+//! Feel numbers checked against `baseline.json`; `--bless-baseline` records them again.
 use std::collections::BTreeMap;
 
 use fb_shared::game::Genre;

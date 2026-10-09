@@ -66,14 +66,9 @@ pub const INPUT_RING: u32 = 64;
 pub const INPUT_REDUNDANCY: u16 = (LATE_TICKS / 2) as u16;
 /// The server's loop rate: twice the tick rate, so ticks run on time without spinning.
 pub const SERVER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / (2 * TICK_RATE as u64));
-/// An unacked reliable message goes again after 1.5 × RTT, never sooner than this. Lightyear's minimum, 0,
-/// resent every unacked message every 1.5 × RTT through a WebSocket stall (TCP loses nothing): bursts of
-/// duplicates once it clears. On UDP a lost message waits at least this long (channels are not per
-/// transport). Lightyear's own channels (replication, inputs) keep their settings.
+/// Floor for resending unacked reliable messages: Lightyear's 1.5 × RTT bursts after a WebSocket stall.
 pub const RESEND_MIN: Duration = Duration::from_millis(150);
-/// A packet counts as lost once unacked this long. An ack rides the peer's next packet (60 a second, plus a
-/// frame on each side): Lightyear's 1.5 × RTT from 10 ms called a tenth of the packets lost on a LAN and a
-/// third over WebSocket.
+/// Lightyear's 1.5 × RTT called a tenth of LAN packets lost: an ack rides the peer's next frame.
 fn nack() -> PacketNackSettings {
     PacketNackSettings {
         rtt_multiplier: 2.0,

@@ -1,6 +1,4 @@
-//! Gaps that only portals cross: one-way portals from island to island (under sweeping bars), portals
-//! that open in turn, portals at the foot of a wall that throw you over it, portal cannons across the
-//! void; in between, a few more challenges drawn from the seed.
+//! Gaps crossed only by portals, with a few seed-drawn challenges in between.
 use std::sync::Arc;
 
 use fb_shared::{Rgb, rgb};

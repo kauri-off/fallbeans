@@ -18,11 +18,8 @@ pub(crate) const TILT_STEPS: f32 = 255.0;
 pub(crate) const TILT_DIR_STEPS: u32 = 256;
 pub(crate) const SIZE_STEPS: f32 = 100.0;
 
-/// The own bean: what prediction resumes from. Everything the physics step reads is exact: after a
-/// rollback the client must go on from the server's very state. (Timers in f32 would cross zero a tick
-/// earlier or later than on the server: the state changes at another tick and the next rollback follows a
-/// second later.) Only the landing impact, drawn and never read, is f32.
-/// The size is not sent: it follows the bonus (`Body::step` sets it from `power` every tick).
+/// What prediction resumes from: every physics input is exact f64, so a rollback matches the server bit for bit.
+/// The size is not sent: it follows the bonus.
 #[derive(Serialize, Deserialize)]
 pub struct Full {
     actor: i32,

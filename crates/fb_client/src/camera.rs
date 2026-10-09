@@ -1,6 +1,4 @@
-//! The camera: a third-person orbit that pulls in
-//! instead of going through walls (the arm stops at `fb_sim` colliders), shakes from hits and hard
-//! landings, flies over the course during a round's intro and circles the podium.
+//! The camera: a third-person orbit that stops at `fb_sim` colliders, shakes on hits and landings.
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;

@@ -1,8 +1,4 @@
-//! The bean's procedural animation: damped springs on the limbs and the
-//! body, poses by what the bean is doing, emotes, podium poses, arms reaching for whom it holds, the
-//! tumble's spin, squash and stretch (a crouch into the jump, a jiggling landing, a bob in each step), the
-//! body's jelly wobble when it stops, turns or is knocked, and the eyes (blinking, glancing about,
-//! opening by expression). The mouth and brows (`face.rs`) follow the expression and eye opening set here.
+//! The bean's procedural animation: damped springs on limbs and body, poses, squash and stretch, and the eyes.
 use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;

@@ -780,10 +780,7 @@ impl Builder {
             .collect()
     }
 
-    /// Two linked portals (rings standing up, facing yaw): running into either takes PORTAL_T, out of
-    /// sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip closes
-    /// both ends (solid sashes) until a moment after the traveller is out. One-way: only `a` takes beans
-    /// in. Returns the pair's index.
+    /// Linked portal pair; one-way (only `a` takes beans in). Returns the pair's index.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "options built for the call, like the other builders'"

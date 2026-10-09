@@ -122,10 +122,7 @@ pub fn tick_bodies_with(
     seen: &dyn Fn(PlayerId, PlayerId) -> Option<OtherBody>,
     map: &mut MapRun,
 ) {
-    // Where a body stands on a moving platform is read in the world of the previous tick. The server's
-    // world is always there; a client replaying a rollback finds it at its latest prediction instead.
-    // At a tick time the world goes by the tick number: (k − 1)·DT is the server's previous time, and
-    // k·DT − DT may differ from it in the last bit.
+    // Platform positions come from the previous tick's world; the tick number, not `t`, picks it (float rounding).
     let k = (t / DT).round();
     #[expect(clippy::cast_possible_truncation, reason = "a whole tick number")]
     let tick = (t.is_finite() && k * DT == t).then_some(k as i64);

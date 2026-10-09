@@ -1,7 +1,4 @@
-//! How a map looks: its colours (the palettes its parts are painted with), the
-//! patterns on them, the sky, sun, fog and ambient light, the land far below and the scenery around it.
-//! Each map has a few looks (the first is its signature); a round picks one by its seed and shifts the
-//! colours a little. Visual only: nothing here touches colliders or the map's layout.
+//! Visual only: palettes, sky, fog and scenery per map; a round picks a look by seed.
 use fb_shared::m::{self, MinMax};
 use fb_shared::rng::Rng;
 use fb_shared::{Rgb, rgb};

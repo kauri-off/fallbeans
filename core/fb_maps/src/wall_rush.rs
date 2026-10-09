@@ -1,6 +1,4 @@
-//! Walls rush across the platform, fast, each one different: pieces of every width, low ones to jump,
-//! high bars to run under, windows to jump through, full blocks, and gaps. Find your way through (or
-//! over) in time, or get swept off.
+//! Walls sweep across the platform, each with a different gap to jump, run under or pass through.
 use std::sync::Arc;
 
 use fb_shared::cause::Hazard;

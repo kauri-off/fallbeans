@@ -873,9 +873,7 @@ impl Body {
             self.ground_col = None;
             return;
         }
-        // Feet kept on the ground over a crest or down a slope, static or moving: without it a body going
-        // down a slope left it every tick (grounded only on the hops' landings), so ice gave no slide and
-        // air control steered it.
+        // Keeps feet grounded over crests and down slopes, else ice gives no slide.
         if g && !self.grounded
             && !ev.jumped
             && self.state != BodyState::Dive

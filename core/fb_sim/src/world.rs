@@ -347,9 +347,7 @@ impl World {
         self.t = t;
     }
 
-    /// Moves to tick k (time k·DT) as if ticking there: the previous matrices are those of tick k − 1,
-    /// whatever the world showed before (client prediction replays ticks out of order). Both times come
-    /// from the tick (k·DT − DT and (k − 1)·DT may differ in the last bit), so a replay is the server's tick.
+    /// Moves to tick k, with tick k − 1 as the previous matrices whatever came before (replays run out of order).
     pub fn goto_tick(&mut self, k: i64, logic: &dyn MapLogic) {
         let t = k as f64 * DT;
         if t == self.t {

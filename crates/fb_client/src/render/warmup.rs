@@ -1,17 +1,7 @@
-//! The warm-up behind the loading screen (`ui/loading.rs`). At the start every model is loaded (and kept), every
-//! surface's detail texture, every model's levels of detail and every look's ambient light are made; then every
-//! map is built as a round of it would be (the same `Map`, drawn by the same systems: props, decor, specials,
-//! bonuses, sky, motes), one after another with its clock run through the round, beside beans in every hat and
-//! glasses and a sample of every kind of material, until the pipeline cache has nothing left to compile; at the
-//! end, until the maps' baked occlusion (`ao.rs`) is made. Nothing compiles or is made later, in play. Bevy
-//! specializes pipelines only for what a view sees: everything is in every view meanwhile (`NoFrustumCulling`),
-//! drawn under the opaque loading screen.
-//!
-//! A change of the graphics settings changes the pipelines: at the room list the maps are warmed again (fewer
-//! frames each), in a room what is on screen is (and the maps later, at the room list).
-//!
-//! No pipeline cache is kept on disk: Bevy 0.19 creates its pipelines with `cache: None` (`PipelineCache`), so
-//! wgpu's is out of reach; the driver's own shader cache still works.
+//! Warm-up behind the loading screen: models, textures, levels of detail, looks and each map's round are built until
+//! nothing compiles, so nothing compiles later in play.
+//! Changing graphics warms the maps again; the baked occlusion (`ao.rs`) is made last. No disk pipeline cache: Bevy
+//! 0.19 uses `cache: None`.
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -45,9 +35,8 @@ use crate::settings::Graphics;
 use crate::ui::text;
 use crate::view::MapRoot;
 
-/// Frames a map's clock is run through its round (movers, specials and bonuses in every state they show), and
-/// then frames in a row with nothing compiling, loading or appearing before the next map; after a change of
-/// the graphics, fewer.
+/// Frames a map's clock runs through its round, then frames with nothing compiling or loading before the next map;
+/// fewer after a graphics change.
 const SCRUB_FRAMES: u32 = 8;
 const QUIET_FRAMES: u32 = 6;
 const SCRUB_FRAMES_AGAIN: u32 = 4;

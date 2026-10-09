@@ -72,9 +72,7 @@ fn image_bytes(image: &Image) -> u64 {
     sum * u64::from(d.size.depth_or_array_layers.max(1))
 }
 
-/// What `count` keeps between looks: the process's CPU time, the last GPU allocator report. The process is
-/// read only while the counts are shown or recorded (Bevy's system information plugin would refresh it, and
-/// every CPU's load, five times a second for every player).
+/// Process stats are read only while shown or recorded, not by Bevy's plugin, which polls every CPU at 5 Hz.
 #[derive(Resource)]
 pub struct Probe {
     sys: System,

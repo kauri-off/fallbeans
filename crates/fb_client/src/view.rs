@@ -179,10 +179,7 @@ struct Placed {
     mover: bool,
 }
 
-/// Nodes that never move, turn or vanish (`fixed`), and of them those never tinted either (`still`): no moving
-/// collider is on them, and neither the movers nor the looks change them or a node above them at any time of the
-/// round tried (`PROBES`). The world is not touched: the movers pose a copy. (What the trial misses, `pose_map`
-/// still catches.)
+/// Nodes never moved, turned or hidden (`fixed`), and of those never tinted (`still`), by a trial over the round.
 fn still_nodes(map: &Map) -> (Vec<bool>, Vec<bool>) {
     let base = &map.render;
     let n = base.0.len();
@@ -277,10 +274,7 @@ struct Merging<'a> {
     lod_k: f32,
 }
 
-/// A merged group of static primitives: one mesh per level of detail around the group's centre, its
-/// distances padded by how far its pieces lie from the centre (`BandPad`) and taken at its biggest piece's
-/// size (`meshes::level_class` keeps the sizes close), each baked again with its occlusion in the background.
-/// None: a piece that does not merge.
+/// A merged group of static primitives, one mesh per level of detail; None if a piece does not merge.
 fn spawn_group(
     commands: &mut Commands,
     m: &mut Merging,
@@ -736,9 +730,7 @@ fn spawn_map(
     }
 }
 
-/// What a primitive is painted with: the palette as the
-/// round's look repaints it with the look's pattern, or a plain colour; and its surface (padded for big
-/// floors, rubber for balls, plastic otherwise).
+/// What a primitive is painted with: the round's palette and pattern, and its surface (padded, rubber or plastic).
 pub fn prim_spec(
     look: &ResolvedLook,
     kind: PrimKind,

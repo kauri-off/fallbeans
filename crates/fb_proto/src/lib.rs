@@ -1,6 +1,5 @@
-//! Messages between client and server besides replication and input:
-//! the room list, rooms and their lobby, game flow, chat, dev commands, map events. Everything a client
-//! sends passes `ClientMsg::check` (bounds and shapes) before the server looks at it.
+//! Messages besides replication and input: room list, lobby, game flow, chat, dev commands, map events.
+//! Everything a client sends passes `ClientMsg::check` first.
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 pub use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::ArenaKind;

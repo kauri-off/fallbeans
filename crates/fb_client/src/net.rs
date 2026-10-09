@@ -167,16 +167,12 @@ fn despawn_closed(mut commands: Commands, closing: Query<Entity, (With<Closing>,
 
 fn setup_prediction(mut commands: Commands) {
     let mut manager = PredictionManager::default();
-    // At 150 ms RTT plus jitter the default 20 ticks rejects every rollback. No deeper than the input
-    // buffer (a ring of 64 ticks, `lightyear_inputs::input_buffer::INPUT_BUFFER_CAPACITY`): ticks replayed
-    // past it have no inputs, and their replay differs from the server's and rolls back again.
+    // Default 20 ticks rejects every rollback at 150 ms RTT; capped at the 64-tick input buffer.
     manager.rollback_policy.max_rollback_ticks = 63;
     commands.insert_resource(manager);
 }
 
-/// The WebSocket URL when nobody named one (a server too old to say): behind https the proxy's
-/// `wss://…/fallbeans/ws`, as the server names it (`fb_server::http::ws_url`); else the HTTP API's host
-/// on the WebSocket port.
+/// Default WebSocket URL for servers that do not name one; behind https it is the proxy's `wss://…/fallbeans/ws`.
 fn default_ws(http: &str, port: u16) -> String {
     let (scheme, rest) = http.split_once("://").unwrap_or(("http", http));
     if scheme == "https" {
@@ -202,10 +198,7 @@ fn session_request(conn: &Conn, transport: Transport) -> SessionRequest {
     }
 }
 
-/// The HTTP client of every request to a game server (session, `/health`): one for the whole game, so
-/// connections are reused. It trusts the system's root certificates, as the WebSocket does
-/// (`with_native_certs`): a server one of them takes, the other takes too. Mozilla's bundled roots
-/// (ureq's default) only when the system has none.
+/// One HTTP client for all game requests; trusts the system's root certificates like the WebSocket does.
 pub fn agent() -> &'static ureq::Agent {
     static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         use ureq::tls::{Certificate, RootCerts, TlsConfig};
@@ -640,9 +633,7 @@ fn fallback_to_ws(mut commands: Commands, opts: Res<Opts>, time: Res<Time<Real>>
     ask(&mut conn, now);
 }
 
-/// `auto` on WebSocket: checks UDP every minute; once it works, closes the link at a moment that costs nothing
-/// (between rounds, or outside a room: a drop takes the player out of a lobby) and reconnects over UDP, back
-/// into the room. Should UDP fail after all, `auto` goes back to WebSocket as on any start.
+/// `auto` on WebSocket checks UDP each minute and switches over only when it costs nothing (between rounds).
 fn back_to_udp(
     mut commands: Commands,
     opts: Res<Opts>,

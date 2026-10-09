@@ -1,6 +1,4 @@
-//! The rooms on the network: the hub as a resource, fed with connections, messages and inputs from Lightyear,
-//! and its rooms' arenas published as replicated entities (a `Round` per room, a pawn per bean in play), each
-//! visible only to the links in that room.
+//! The rooms on the network: the hub as a resource, its arenas replicated to the links in each room only.
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -132,16 +130,12 @@ impl Plugin for PlayPlugin {
         app.add_systems(Startup, start);
         #[cfg(feature = "traces")]
         app.add_systems(Startup, trace::open);
-        // Lightyear's copy of the input buffer into `ActionState` would also drop every tick before
-        // the current one, and with them any input that arrives late: a late press would be lost.
-        // The room reads the buffer itself (`frame_for`); the buffer is a ring of 64 ticks.
+        // Lightyear's copy into `ActionState` would drop late inputs: the room reads the buffer itself (`frame_for`).
         app.configure_sets(
             FixedPreUpdate,
             lightyear::input::server::InputSystems::UpdateActionState.run_if(|| false),
         );
-        // A client's input goes only into the pawn it controls (`ControlledBy`): Lightyear writes an input
-        // message into whatever entity it names, so a modified client could drive another player's bean
-        // (or hang input buffers on any entity). The check is opt-in in Lightyear 0.30.
+        // Lightyear writes an input into any entity it names: only the `ControlledBy` pawn may take it (opt-in check).
         app.add_input_validator(authorize_controlled_targets::<NativeStateSequence<FbInput>>);
         app.init_resource::<FarInputs>();
         app.add_input_validator(count_far_inputs);
@@ -244,9 +238,8 @@ impl InputState {
     }
 }
 
-/// The input for `tick`, read from the buffer directly (see `PlayPlugin` for why). Without one in time the
-/// pawn keeps its stick (and grab) for INPUT_HOLD ticks, never repeating a jump or dive; a press that
-/// arrives late is not lost but happens now.
+/// The input for `tick`, read from the buffer directly. A late press happens now; a missing input keeps
+/// the stick for INPUT_HOLD ticks, never repeating a jump or dive.
 fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> InputFrame {
     let k = tick.0;
     if let Some(b) = buffer {
@@ -288,9 +281,7 @@ fn frame_for(tick: Tick, buffer: Option<&InputBuf>, st: &mut InputState) -> Inpu
     }
 }
 
-/// The server's side of a bean that snaps back: runs of ticks it had to play without the player's input.
-/// `behind`: how many ticks the newest input that had come was behind the tick at worst (0: later ticks' input
-/// came, these were lost; a few: input comes, but late; as long as the gap: nothing came at all).
+/// Runs of ticks without input. `behind`: how old the newest input was (0: lost; a few: late; the gap: none came).
 fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Query<&mut InputState, With<Pawn>>) {
     let now = timeline.tick().0;
     let rate = TICK_RATE;

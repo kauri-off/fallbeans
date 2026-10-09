@@ -1,16 +1,5 @@
-//! World-space ambient occlusion, in place of SSAO (Bevy 0.19's works on the whole target, not on the upscaled
-//! main pass: `quality.rs`). Both parts darken the ambient light (the baked one a little of the sun too,
-//! `surface.wgsl`), are soft and short (a few metres), and cost the frame next to nothing:
-//! - Baked: the vertices of the map's merged static geometry (`view.rs`) carry how much of the sky the rest of the
-//!   course hides from them, in UV_0.y as the scenery's do (`decor`; 0 is open sky). The course is boxes,
-//!   cylinders and spheres in known frames, so the occlusion comes from their distance fields (`Solids`), not from
-//!   rays cast at triangles; the models standing on it count as rounded boxes of their parts. Big faces are cut
-//!   finer first (`refine`), so that a pillar's foot shades the middle of a floor. It is made off the main thread
-//!   while the warm-up builds the maps, and kept by piece and by what went into it: a round of a map the warm-up
-//!   built finds it ready, in whatever look.
-//! - Moving: the beans and the course's moving parts as capsules, the nearest to the camera in a small texture
-//!   each frame (`gather`); the surface shader adds their soft contact shade (Íñigo Quílez's sphere occlusion) to
-//!   what is near them. The models that stand on the ground get its shade at their foot (`Grounded`).
+//! World-space ambient occlusion, soft and a few metres short, in place of SSAO (whole-target only: `quality.rs`).
+//! Baked into static vertices (UV_0.y) off the main thread; moving beans and parts add capsule shade (`gather`).
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -242,11 +231,7 @@ impl Solids {
     }
 }
 
-/// How much of the sky the solids hide from a point `p` with normal `n` (0 to `MOST`), leaving out solid `own`
-/// (the point's own piece: a convex piece never hides itself) and any the point is buried in. Distance-field
-/// occlusion: along the normal and four directions leaning 45° off it, samples ever further out; each counts by
-/// how much closer to a solid it is than to the point's tangent plane (so the coplanar tiles of a floor do not
-/// shade each other), the solid's strength times that. `near` is scratch space.
+/// Sky hidden from `p` (normal `n`) by the solids except `own`, 0 to `MOST`; coplanar tiles must not shade each other.
 pub fn occlusion(solids: &Solids, own: Option<u32>, p: Vec3, n: Vec3, near: &mut Vec<u32>) -> f32 {
     near.clear();
     for &i in solids.near(p) {
@@ -405,10 +390,7 @@ fn extend<T: Copy>(v: &mut Vec<T>, splits: &[(u32, u32)], f: impl Fn(T, T) -> T)
     }
 }
 
-/// Splits the triangles `idx` over the points `pos` until no edge is longer than `most`: each pass halves every
-/// edge longer than that at a midpoint both its triangles share (no cracks), a triangle into two, three or four
-/// (the same way round). The new points are appended to `pos`; returned: the edge each was made on, in order.
-/// No pass starts once there are `limit` points.
+/// Splits triangles `idx` at edge midpoints until no edge exceeds `most`, appending to `pos`; stops at `limit` points.
 fn split_edges(pos: &mut Vec<Vec3>, idx: &mut Vec<u32>, most: f32, limit: usize) -> Vec<(u32, u32)> {
     let most2 = most * most;
     let mut splits: Vec<(u32, u32)> = Vec::new();
@@ -455,9 +437,7 @@ fn split_edges(pos: &mut Vec<Vec3>, idx: &mut Vec<u32>, most: f32, limit: usize)
     splits
 }
 
-/// Cuts a mesh's triangles until no edge is longer than `most` (m) once placed by `world` (`split_edges`). Every
-/// attribute of a new vertex is the mean of its edge's ends' (normals normalised again). False if it is not
-/// indexed triangles of float attributes (it is left as it was).
+/// Splits a mesh's triangles until no world edge exceeds `most` (m); false if it is not indexed float triangles.
 pub fn refine(mesh: &mut Mesh, world: &Mat4, most: f32) -> bool {
     if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
         return false;

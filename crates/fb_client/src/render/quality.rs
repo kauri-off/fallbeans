@@ -1,7 +1,5 @@
-//! Graphics presets and the hardware tier: two presets, High (every machine's until the player picks Low) and Low,
-//! both upscaled in the player's mode, ultra quality, quality or balanced (DLSS 4.5, FSR 3.1 or FSR 1: `upscale.rs`). The tier is read from the
-//! adapter at start (T0: a software device; T1: an integrated GPU, or one that says neither; T2: a discrete GPU)
-//! and only told: it changes nothing.
+//! Graphics presets (High, Low, each upscaled in the player's mode) and the hardware tier (T0 software, T1 integrated,
+//! T2 discrete), which is only reported.
 use core::time::Duration;
 
 use bevy::anti_alias::fxaa::Fxaa;
@@ -262,9 +260,8 @@ fn apply(
         e.remove::<(MipBias, TemporalJitter, DepthPrepass, MotionVectorPrepass)>();
     }
     e.insert(Msaa::Off);
-    // (The main pass is always upscaled (`fsr.rs`), and Bevy 0.19's TAA and SSAO work on the whole target, not
-    // on the smaller main pass (`MainPassResolutionOverride` is only for DLSS): with FSR 1, SMAA before the
-    // upscale instead, and no SSAO; DLSS and FSR 3.1 do their own anti-aliasing.)
+    // FSR 1 only: SMAA before the upscale and no SSAO, since Bevy's TAA and SSAO work on the whole target; DLSS and FSR
+    // 3.1 anti-alias themselves.
     if wanted.g.aa && !temporal {
         match preset {
             Preset::High => {
@@ -302,9 +299,8 @@ fn apply(
         Preset::High => ShadowFilteringMethod::Gaussian,
         Preset::Low => ShadowFilteringMethod::Hardware2x2,
     });
-    // (A coarse map shows its texels as stairs along every shadow's edge: High 4096 over two cascades, Low 1024
-    // over one; the cascades overlap by a third, so their seams blend instead of showing. A third cascade on High
-    // looked the same and cost a view: 2.5–4 ms of the render thread on DX12, without bindless.)
+    // Coarse shadow maps show stairs along their edges; a third High cascade cost 2.5-4 ms of render thread on DX12, so
+    // two overlap instead.
     let (size, cascades, reach) = match preset {
         Preset::High => (4096, 2, 80.0),
         Preset::Low => (1024, 1, 30.0),

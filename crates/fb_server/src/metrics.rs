@@ -1,7 +1,5 @@
-//! What stress runs measure on the server, logged as one `metrics:` line every `--metrics-every` s (with
-//! nobody playing, only the first): the rooms' tick cost (all rooms), the longest frame (a stalled server
-//! reads inputs late), ticks run without a player's input in time, traffic out, process CPU (share of one
-//! core over the window) and resident memory.
+//! Stress-run numbers, logged as a `metrics:` line every `--metrics-every` s: tick cost, longest frame,
+//! ticks without input, traffic, CPU and memory.
 use std::time::Instant;
 
 use bevy::ecs::system::SystemParam;

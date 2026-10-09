@@ -1,7 +1,4 @@
-//! The bean's physics in small worlds: pushes, slopes, ice, conveyors, pads, sweeping arms, hammers,
-//! platforms, ledges, ladders, giants. The beans of each world follow a script; where they are every quarter
-//! second must stay within `TOL` of the recorded path (`tests/paths/<world>.txt`). Record again after an
-//! intended change with `FB_BLESS=1 cargo test -p fb_arena --test scenarios`.
+//! Bean physics in small worlds, checked against recorded paths; re-record with `FB_BLESS=1` after an intended change.
 use fb_arena::{Stepper, tick_plain};
 use fb_shared::input::InputFrame;
 use fb_shared::rgb;

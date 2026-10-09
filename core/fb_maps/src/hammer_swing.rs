@@ -1,6 +1,4 @@
-//! The fork: a narrow bridge under swinging hammers (short, but you must time it) or a walled zig-zag
-//! with pushers (safe, but longer); then seesaws, tipping bridges, belts, gloves and hammers in an order
-//! and with timings from the seed.
+//! A fork of a timed hammer bridge or a longer safe zig-zag, then seed-ordered obstacles.
 use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
 use fb_sim::builder::{Builder, PrimOpts};

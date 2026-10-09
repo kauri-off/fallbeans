@@ -1,19 +1,7 @@
-//! Which upscaler draws the frame: the graphics setting's (`Graphics::upscaler`, switched in play) when this machine
-//! offers it, else the best offered, told in the log: AMD FSR 3.1 (Vulkan, AMD's library beside the game:
-//! `fsr3.rs`), else NVIDIA DLSS 4.5 Super Resolution (an RTX GPU, Vulkan, the `dlss` feature: `dlss.rs`), else FSR 1
-//! (DX12, no library, anything that failed: `fsr.rs`). DLSS looks better but costs more of the frame (preset M took
-//! ~4× FSR 3.1's on an RTX 5070 Laptop): beside FSR 3.1 only when chosen. All draw the main pass at the scale of the
-//! player's mode (`Graphics::upscale`, switched in play: the vendors' ultra quality 0.77, quality 0.67 or balanced
-//! 0.59) and bring it to the full resolution. A temporal one (DLSS, FSR 3.1) failing at run time is not offered again
-//! this session: the next best takes over.
-//!
-//! A temporal upscaler is the anti-aliasing too: no SMAA, FXAA or CAS with it (`quality.rs`, `fsr.rs`). It needs
-//! the depth and motion vector prepasses (every material writes its motion, the cloth's waves too:
-//! `cloth.wgsl`), the projection jittered by a sub-pixel offset each frame (`TemporalJitter`, set in the render
-//! world from the upscaler's own sequence), a negative texture mip bias for the scale (`MipBias`), its history
-//! dropped on camera cuts (`Temporal::reset`), the main texture writable by a compute shader, and a reactive
-//! mask where the motion vectors are not what is seen (`reactive.rs`). The background (the sky) has Bevy's own
-//! vectors of the camera's turn (`BackgroundMotionVectorsPlugin`).
+//! Picks the setting's upscaler when offered, else the best: FSR 3.1 (`fsr3.rs`), DLSS 4.5 (`dlss.rs`, only when
+//! chosen: about 4x FSR 3.1's cost), FSR 1 (`fsr.rs`).
+//! A temporal one that fails at run time is not offered again this session; temporal upscalers need the prepasses,
+//! jitter and a reactive mask.
 use std::sync::{Arc, Mutex};
 
 use bevy::camera::{CameraMainTextureUsages, MainPassResolutionOverride};

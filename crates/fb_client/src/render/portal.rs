@@ -1,9 +1,6 @@
-//! Portal discs, drawn by `portal.wgsl`: a way in is a vortex in the portal's colour (spiral arms winding in,
-//! a tunnel of bands sinking towards a white-hot core, sparks drawn in, a glowing rim, a slow pulse); a one-way
-//! exit is rings flowing out of a deep middle, sparks thrown out. A trip's flash (the special's tone)
-//! brightens the disc and spins it up. Animated on the GPU's clock: one draw a disc, nothing done on the CPU.
-//! Its opacity marks the upscalers' reactive mask (`reactive.rs`): it moves with no motion vectors.
-//! Also the exit's arrow.
+//! Portal discs drawn by `portal.wgsl`: a way in is a vortex, a one-way exit is rings flowing out; animated on the GPU
+//! clock, one draw each.
+//! Their opacity marks the reactive mask (`reactive.rs`), as they have no motion vectors.
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};

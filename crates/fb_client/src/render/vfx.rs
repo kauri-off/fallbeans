@@ -1,9 +1,5 @@
-//! Little bursts where things happen, from a pool of slots drawn by `vfx.wgsl` on the GPU's clock (a uniform
-//! written per burst, nothing per frame): dust where a bean lands or throws itself on its belly (and behind it
-//! as it slides on), confetti where one finishes or rings the lobby's bell, sparkles where one takes a bonus,
-//! a ring where a bumper throws one off (`props.rs`); and the twinkle about the finish's stars. Cheap enough for
-//! every preset. Also the glow of a bean's aura (`GlowMaterial`). Both mark the upscalers' reactive mask
-//! (`reactive.rs`): they have no motion vectors.
+//! Little bursts (dust, confetti, sparkles, rings, the finish's twinkle) from a slot pool drawn by `vfx.wgsl` on the
+//! GPU clock; they mark the reactive mask (`reactive.rs`).
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;

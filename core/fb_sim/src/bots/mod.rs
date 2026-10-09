@@ -1,6 +1,4 @@
-//! Bot behaviour shared by the maps: personalities, steering, A* routes,
-//! getting unstuck, dodging, tackles and grabs, and the waypoint and arena brains. Brains run at
-//! 20 Hz on the server; everything random comes from the bot's own `rng`.
+//! Bot behaviour shared by the maps; brains run at 20 Hz on the server, randomness from the bot's own `rng`.
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 use std::collections::BTreeMap;

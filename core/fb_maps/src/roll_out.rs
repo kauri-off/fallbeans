@@ -1,6 +1,4 @@
-//! Three huge drums with missing slats turn under you: run against the turn and hop the holes. Fall in
-//! through a hole and you land inside the drum: keep running on the inside (the holes come round down
-//! there too). Only falling out of a drum ends your round.
+//! Three rolling drums with holes; falling in keeps you running inside, and only falling out ends the round.
 use std::collections::BTreeSet;
 
 use fb_shared::NEVER;

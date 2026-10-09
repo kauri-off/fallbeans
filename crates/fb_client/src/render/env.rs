@@ -1,6 +1,5 @@
-//! Ambient light without a light source: a small cube map of the look's sky
-//! and ground colours as a vertical gradient (what a hemisphere light gives) plus a soft even fill
-//! (a studio room), used for image-based lighting. Made on the CPU.
+//! Ambient light without a light source: a small cube map of the look's sky and ground colours, made on the CPU, for
+//! image-based lighting.
 use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::render::render_resource::{
@@ -49,9 +48,7 @@ fn dir(face: usize, x: u32, y: u32, size: u32) -> [f32; 3] {
 /// Which of the two maps of the ambient light.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Map {
-    /// What a surface's normal receives (Bevy samples it at the normal, level 0, as it is: no convolution
-    /// of its own): the hemisphere light's irradiance, sky to ground over n.y with half their difference as
-    /// the slope, as three.js's `HemisphereLight` gives it.
+    /// Irradiance of a normal: the hemisphere light's sky-to-ground blend over n.y, as three.js gives it (level 0).
     Diffuse,
     /// What a reflection sees (with mip levels, read by roughness): the radiance whose cosine-weighted
     /// average is that irradiance. Over a hemisphere a gradient flattens to 2/3 of its slope, so 1.5× steeper.

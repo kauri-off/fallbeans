@@ -1,6 +1,5 @@
-// Specks drifting in the air around the camera: each a small billboard whose
-// place is a function of time and its seed, wrapped in a box that follows the camera; added light, its
-// coverage in the alpha for the reactive mask (`reactive.rs`).
+// Air specks: billboards in a box that follows the camera; added light, coverage in alpha for the reactive mask
+// (`reactive.rs`).
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 
 struct Motes {

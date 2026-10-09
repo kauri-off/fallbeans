@@ -1,6 +1,4 @@
-//! Vectors and transforms of the simulation: glam's f64 types. They are plain scalar code (no SIMD, no FMA),
-//! the same bits on every OS, except where glam calls the platform's libm (`sin_cos` in `DQuat::from_euler`
-//! and the like): rotations from angles come from `euler_xyz` instead.
+//! glam's f64 types; use `euler_xyz` for angles, since glam's `sin_cos` calls the platform libm.
 use crate::m;
 pub use glam::{DAffine3 as Affine, DQuat, DVec3 as V3, dvec3 as v3};
 

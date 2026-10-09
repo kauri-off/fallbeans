@@ -1,8 +1,4 @@
-//! The player's interface on bevy_ui: the room list, the Esc menu, the HUD, the chat
-//! and the name tags. Where the player is picks the screen (`Screen`, its tabs `HomeTab` and `MenuTab`). Each
-//! screen is built once; what changes is set in place (`Rich` texts, a button's `Look`, folds shown or not), and
-//! only lists are rebuilt, when the resource they show changes. Every button carries an `Action`; one observer
-//! turns presses into `UiAction` messages for the module that owns them.
+//! The bevy_ui interface: screens are built once and updated in place; each button's `Action` becomes a `UiAction`.
 pub mod text;
 
 mod chat;

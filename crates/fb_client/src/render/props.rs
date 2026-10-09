@@ -1,8 +1,4 @@
-//! The map's models: their materials get surfaces by material name (a flag's
-//! pennant and a mushroom's cap take the map's tint), and the props move: pennants wave as cloth
-//! (`cloth.rs`) and sway a little, fans spin, stars twirl and bob over the finish, mushroom caps squash
-//! like jelly, trees and pines near the camera sway with the wind's gusts; stars twinkle, bumpers wobble
-//! when a bean touches them.
+//! The map's models: materials get surfaces by name, and props move (pennants, fans, stars, bumpers, trees).
 use std::collections::HashMap;
 
 use bevy::ecs::system::SystemParam;
@@ -418,9 +414,7 @@ fn twinkle_stars(mut commands: Commands, stars: Query<(Entity, &Prop), Added<Pro
 /// How long a bumper wobbles after a bean touches it (s).
 const BUMP_S: f32 = 0.6;
 
-/// Bumpers squash and wobble like jelly when a bean touches them, and a ring of light flies off where it did:
-/// seen from where the beans are drawn, so the others' bumps too. Per bumper: when it was last touched (s), and
-/// whether a bean touches it now.
+/// Per bumper: last touch time (s) and whether a bean touches it now; drives its jelly squash and wobble.
 fn bumpers(
     time: Res<Time>,
     mut props: Query<(Entity, &Prop, &GlobalTransform, &mut Transform), Whole>,

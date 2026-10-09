@@ -1,8 +1,4 @@
-//! Runs the audits and prints what they found:
-//!   fb_audit [map…] [--quick] [--only a,b] [--skip a,b] [--seed n] [--metrics] [--notes] [--json]
-//! The report is also saved to .reports/audit-latest.json. Exit code 1 when there are errors.
-//!   fb_audit --baseline | --bless-baseline
-//! compares the feel of the game with `baseline.json` (exit code 1 when it moved), or records it.
+//! Runs the audits (`fb_audit [map…] [--quick] …`) or the feel baseline (`--baseline`, `--bless-baseline`).
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 

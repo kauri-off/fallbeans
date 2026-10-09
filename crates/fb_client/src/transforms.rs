@@ -1,6 +1,4 @@
-//! Transform propagation on one thread instead of Bevy's on all of the compute pool: the scene's hierarchies
-//! are small, and the parallel one waits for every pool thread it hands work to (spinning) — a frame of a
-//! loaded machine waits for the slowest of a dozen threads to be scheduled.
+//! Transform propagation on one thread: the scene is small and the parallel version spins on loaded machines.
 use bevy::ecs::schedule::ScheduleCleanupPolicy;
 use bevy::prelude::*;
 use bevy::transform::components::TransformTreeChanged;

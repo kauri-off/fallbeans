@@ -1,11 +1,6 @@
-//! NVIDIA DLSS 4.5 Super Resolution (`upscale.rs` chooses it; the `dlss` feature), through the crate Bevy's own
-//! binding is built on (`dlss_wgpu`, patched in `vendor/`). Bevy's `DlssInitPlugin` asks the Vulkan instance and
-//! device for what NGX needs; its `DlssPlugin` is left out (`add_anti_alias`): it panics on any error and can only
-//! render at a mode's own size. Here the context is made in the quality or the balanced mode (`mode`) with preset
-//! K, the first-generation transformer model (NVIDIA's pick for these modes, cheaper than DLSS 4.5's M), and fed
-//! the main pass at the setting's scale: DLSS takes any size in the range a mode gives (dynamic resolution); one
-//! outside it is brought inside. What has no motion vectors of its own is biased towards the current colour (the
-//! reactive mask, `reactive.rs`). An error falls back to FSR 1.
+//! NVIDIA DLSS 4.5 Super Resolution through `dlss_wgpu` (`vendor/`), preset K in the quality or balanced mode; an error
+//! falls back to FSR 1.
+//! Bevy's `DlssPlugin` is left out: it panics on any error and renders only at a mode's own size.
 use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::contrast_adaptive_sharpening::CasPlugin;
@@ -60,9 +55,7 @@ pub fn add_anti_alias(app: &mut App) {
     app.add_plugins((FxaaPlugin, SmaaPlugin, TemporalAntiAliasPlugin, CasPlugin));
 }
 
-/// With the feature, Bevy makes its Vulkan instance itself (`raw_vulkan_init`), whichever backend the renderer
-/// was asked for. On DX12 (`backend.rs`) that instance is made to fail with an extension no driver has, and Bevy
-/// falls back to an ordinary instance of the backends asked for.
+/// Bevy's own Vulkan instance (with the feature) fails on DX12 on purpose, so it falls back to an ordinary one.
 #[expect(unsafe_code, reason = "Bevy's Vulkan instance callbacks are unsafe to add")]
 pub fn no_vulkan_instance(app: &mut App) {
     let mut settings = app.world_mut().get_resource_or_init::<RawVulkanInitSettings>();

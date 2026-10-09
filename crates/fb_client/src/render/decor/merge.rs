@@ -33,10 +33,8 @@ fn ticked(world: &mut World, ticks: &[Tick]) -> HashSet<Entity> {
     moved
 }
 
-/// The parts nothing moves are drawn merged, one mesh per cell and material (`meshes::merge`): the set pieces
-/// are hundreds of small parts. Each merged mesh comes at two levels of detail (`Level`), and its vertices carry
-/// how much the rest of their set piece hides them from the sky (`occlusion`), which the surface shader darkens
-/// them by: no shadow map reaches this far, and without it the pieces look cut out of paper.
+/// Static parts merged per cell and material (`meshes::merge`); UV_0.y carries each vertex's sky occlusion, as no
+/// shadow map reaches here.
 pub(super) fn merge_still(world: &mut World, ticks: &[Tick], parts: &[Part], grounds: &[(u32, Entity)], base: Entity) {
     use crate::render::meshes::{self, BANDS, BandPad, LodBand};
     let moving = ticked(world, ticks);
@@ -291,9 +289,8 @@ pub(super) const SHADE_MAX: f32 = 0.55;
 /// How far above the grass of an island its darkening reaches (m).
 const GROUND_REACH: f32 = 1.2;
 
-/// How much a point (world `p`, normal `n`) of part `part` is hidden from the sky by the rest of its set piece:
-/// by each ball of its other parts as a sphere hides the sky from a point (its solid angle, by how much the
-/// point faces it), by the grass it stands close to, and a little more where it faces down. 0 to `SHADE_MAX`.
+/// Sky hidden from a point (world `p`, normal `n`) of `part` by its set piece's other parts and grass; 0 to
+/// `SHADE_MAX`.
 pub(super) fn occlusion(shade: &Shade, part: usize, p: Vec3, n: Vec3) -> f32 {
     let mut occ = 0.0;
     for &(i, c, r) in &shade.balls {
@@ -319,9 +316,8 @@ pub(super) fn occlusion(shade: &Shade, part: usize, p: Vec3, n: Vec3) -> f32 {
     (occ * 0.7).min(1.0) * SHADE_MAX
 }
 
-/// Writes the darkening of each vertex of a merged mesh into its UV_0.y (free in a mesh with frames: the
-/// frame's position takes UV_0.x and UV_1). `spans`: each piece merged, in order, as the part's index, its set
-/// piece and its vertex count.
+/// Writes each vertex's darkening into UV_0.y (the frame takes UV_0.x and UV_1); `spans`: each merged piece's part, set
+/// piece and vertex count.
 fn shade_merged(mesh: &mut Mesh, origin: Vec3, spans: &[(usize, u32, usize)], shades: &HashMap<u32, Shade>) {
     let values: Vec<f32> = {
         let (Some(VertexAttributeValues::Float32x3(pos)), Some(VertexAttributeValues::Float32x3(nrm))) = (

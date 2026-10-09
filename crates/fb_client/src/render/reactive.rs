@@ -1,12 +1,6 @@
-//! The reactive mask of the temporal upscalers (`dlss.rs`, `fsr3.rs`): where the frame shows what its motion
-//! vectors do not follow (particles, motes, portals, the auras: drawn with no prepass, over the vectors of what is
-//! behind them), they take the current colour over their history, which would leave a trail behind it.
-//!
-//! The main pass marks it in its colour target's alpha: everything opaque writes 1, and what marks the mask keeps
-//! `1 − a` of what is behind it (`MARK`, `a` its coverage or glow). Bevy's own see-through materials blend their
-//! alpha over (`a + d (1 − a)`): what they cover is unmarked as much as it is hidden. After the main pass the
-//! alpha goes into an R8 mask of the colour's size (`mask`): FSR 3.1's reactive and transparency-and-composition
-//! masks, DLSS's bias towards the current colour.
+//! Reactive mask of the temporal upscalers (`dlss.rs`, `fsr3.rs`): particles, motes, portals and auras mark where the
+//! current colour replaces the history, else they trail.
+//! Written into the main pass colour's alpha (`MARK`), then into an R8 mask after it.
 use bevy::asset::{embedded_asset, load_embedded_asset};
 use bevy::camera::MainPassResolutionOverride;
 use bevy::core_pipeline::FullscreenShader;

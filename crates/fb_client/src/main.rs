@@ -187,9 +187,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 fmt_layer,
                 ..default()
             });
-        // At most 4 compute threads (Bevy takes all the cores the IO and async pools leave): every parallel query
-        // and scope of the frame wakes them all and waits, spinning, for the last; the scene's work is small. With
-        // 12 on a 20-thread CPU the client burned ~15 ms of CPU a frame, 10 with 4, at the same frame rate.
+        // Max 4 compute threads: more spin on every parallel scope and burned ~15 ms of CPU a frame.
         let mut pools = TaskPoolOptions::default();
         pools.compute.max_threads = std::env::var("FB_COMPUTE_THREADS")
             .ok()

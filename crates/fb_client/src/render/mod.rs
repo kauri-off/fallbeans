@@ -1,6 +1,5 @@
-//! How the game is drawn: the camera's pipeline
-//! (HDR, PBR Neutral tone mapping, the grade), the sun, fog, sky and ambient light of the round's look,
-//! and the graphics settings: the hardware tier, presets and switches (`quality.rs`), the upscaler (`upscale.rs`).
+//! The camera's pipeline (HDR, tone mapping, grade), the round's sun, fog, sky and ambient light, and the graphics
+//! settings (`quality.rs`, `upscale.rs`).
 pub mod ao;
 mod cloth;
 mod decor;

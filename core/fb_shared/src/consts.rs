@@ -1,6 +1,4 @@
-/// The simulation's fingerprint: FNV-1a of `fb_arena/tests/determinism.txt`, the recorded end states of full
-/// rounds on every map. A change to the physics, a map or the bots changes a hash there (`cargo xtask check`
-/// fails until it is re-blessed), and with it this. Line endings do not count (a CRLF checkout).
+/// FNV-1a of `fb_arena/tests/determinism.txt`; changes when that file is re-blessed.
 use crate::{Rgb, rgb};
 pub const SIM_FINGERPRINT: u32 = fnv1a_lines(FNV_SEED, include_bytes!("../../fb_arena/tests/determinism.txt"));
 

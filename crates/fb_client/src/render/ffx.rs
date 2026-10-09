@@ -1,8 +1,5 @@
-//! The few pieces of the AMD FidelityFX API (FidelityFX SDK 1.1.4, MIT) that FSR 3.1 upscaling needs, written
-//! after its C headers (`ffx_api.h`, `ffx_api_types.h`, `ffx_upscale.h`, `vk/ffx_api_vk.h`): the structures
-//! field for field, the constants by value. AMD's signed `amd_fidelityfx_vk.dll` (on Linux the
-//! `libamd_fidelityfx_vk.so` xtask builds from the SDK: `packaging/fidelityfx-linux`) is loaded at run time
-//! (`libloading`), so nothing of the SDK is needed to build the game, and a game without the library runs on.
+//! The few FidelityFX API pieces FSR 3.1 needs, written from AMD's C headers (SDK 1.1.4, MIT).
+//! AMD's signed library is loaded at run time (`libloading`): the game builds without the SDK and runs without it.
 #![allow(
     unsafe_code,
     reason = "a C API: its DLL, raw Vulkan handles, pointers into descriptors"
@@ -175,9 +172,8 @@ impl Resource {
         state: 0,
     };
 
-    /// A whole 2D texture of one mip level, in `state` (one of the `STATE_` values) before and after the
-    /// dispatch, used as `usage` (the `USAGE_` values). None when it is no Vulkan texture or its format is one
-    /// FidelityFX does not take.
+    /// A texture's mip level as a resource, in `state` before and after a dispatch and `usage` (`STATE_`, `USAGE_`);
+    /// None if not a Vulkan texture or unsupported.
     pub fn texture(texture: &wgpu::Texture, usage: u32, state: u32) -> Option<Resource> {
         let format = format(texture.format())?;
         // SAFETY: reads the raw image handle only; the texture outlives the dispatch it is recorded in (the
@@ -445,11 +441,8 @@ unsafe extern "system" fn nothing() -> i32 {
     0
 }
 
-/// `vkGetDeviceProcAddr` for FidelityFX. Its backend looks up `vkGetBufferMemoryRequirements2KHR` and the
-/// debug-utils functions through the device and calls what it gets; wgpu's device (Vulkan 1.1 and up) has the
-/// first in the core under its plain name, without the extension, and the others only with validation: a null
-/// pointer, a crash in `ffxCreateContext`. A `KHR` name missing is looked up without the suffix, and a
-/// function still missing does nothing.
+/// Device proc lookup for FidelityFX: a missing `KHR` name retries without the suffix, and a function still missing
+/// does nothing (a null pointer crashes `ffxCreateContext`).
 unsafe extern "system" fn device_proc_addr(
     device: ash::vk::Device,
     name: *const c_char,
@@ -631,11 +624,10 @@ impl Upscaler {
         self.ran.push_back(ran);
     }
 
-    /// Records the upscale into `command_buffer` (a `VkCommandBuffer` being recorded, to be submitted to `queue`).
+    /// Records the upscale into `command_buffer`, a recording command buffer of this device.
     ///
     /// # Safety
-    /// `command_buffer` must be a Vulkan command buffer of this context's device in the recording state, and every
-    /// resource of `d` an image of that device in the state it names, alive until that command buffer has run.
+    /// `command_buffer` must be recording on this device; `d`'s images in their named states, alive until it runs.
     pub unsafe fn dispatch(
         &mut self,
         queue: &wgpu::Queue,

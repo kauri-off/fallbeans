@@ -118,9 +118,8 @@ impl RoundView<'_> {
         self.genre == Genre::Survival && rem <= 1 && !self.out.is_empty()
     }
 
-    /// Ranked groups, best first; players in one group tie. When a round ends early with only bots in it,
-    /// the bots still racing go by their progress (as everybody does at the time limit), and `rng` places
-    /// the bots still standing in a survival round.
+    /// Ranked groups, best first; equal groups tie. Bots still racing are ranked by progress, and `rng` orders
+    /// surviving bots.
     pub fn rank_groups(&self, rng: Option<&mut Rng>) -> Vec<Vec<PlayerId>> {
         let ids = self.in_round();
         let early = !self.time_up && self.only_bots_left();
@@ -183,9 +182,7 @@ impl RoundView<'_> {
         }
     }
 
-    /// Scores a finished round: placement points by rank (scaled to the number of players), minus
-    /// penalties for falls and shortcuts, capped.
-    /// `totals` are the game totals before this round; a total never drops below 0.
+    /// Scores a finished round; `totals` are the game totals before it, and a total never drops below 0.
     pub fn score_round(
         &self,
         stats: &BTreeMap<PlayerId, RoundStats>,

@@ -136,9 +136,8 @@ fn load(path: &Path) -> Result<Doc> {
     serde_json::from_str(&text).with_context(|| path.display().to_string())
 }
 
-/// DXC beside the built client, as the installer puts it (`backend.rs`): without it DX12 compiles with FXC, which
-/// keeps four threads busy for most of a 30 s recording (portal-panic: 63 fps against 103 with DXC). From
-/// `FB_DXC_DIR` (an unpacked DXC release, as `dist`) or the Windows SDK's bin.
+/// DXC beside the built client, as the installer puts it: without it DX12 compiles with FXC, which keeps four
+/// threads busy (63 fps against 103). From `FB_DXC_DIR` or the Windows SDK's bin.
 pub fn dxc_beside(target: &Path) {
     if !cfg!(windows) || target.join("dxcompiler.dll").is_file() {
         return;

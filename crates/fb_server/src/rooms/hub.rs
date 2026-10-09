@@ -1,7 +1,5 @@
-//! The rooms of the server and who is where.
-//! Anyone may open one room of their own (they are its host whenever they are in it) and be in one room at
-//! a time; a private room asks newcomers for its PIN. Rooms close when everybody has left. Practice rooms
-//! are separate: one player, not listed.
+//! The rooms of the server and who is where: one room at a time per player, private rooms ask for a PIN.
+//! Practice rooms are separate and not listed.
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 

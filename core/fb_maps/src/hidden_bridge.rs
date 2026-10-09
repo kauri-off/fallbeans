@@ -1,6 +1,4 @@
-//! Glass bridges with one safe pane per row. A fake pane is not solid: whoever steps on it falls straight
-//! through (it shatters for everybody to see). Panes that held light up green for everybody. Gloves punch
-//! across some rows of the later bridges.
+//! Glass bridges with one safe pane per row; a fake pane is not solid and shatters under whoever steps on it.
 use fb_shared::{rgb, rgba};
 use fb_sim::bots::{BotInput, BotView, HumanOpts, Note, Waypoint, humanize, init_bot, steer};
 use fb_sim::builder::Builder;

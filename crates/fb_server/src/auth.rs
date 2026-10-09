@@ -1,9 +1,5 @@
-//! What the server signs with its secret. The game is open to everyone:
-//!   identities     a random player id the client keeps, so a player is one person across restarts
-//!                  (one room at a time, their own room stays theirs);
-//!   connect tokens netcode's, encrypted with a key derived from the secret, the player id inside;
-//!   debug cookie   access to the production debug API, earned with the debug key.
-//! It also rate limits guessing (PINs of private rooms, the debug key). A new secret resets all of them.
+//! What the server signs with its secret: player ids, netcode connect tokens and the debug cookie.
+//! It also rate limits guessing (room PINs, debug key). A new secret resets all of them.
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -134,11 +130,8 @@ pub const GUESSES_PER_TARGET: usize = 30;
 const LOCKOUT_MS: u64 = 60_000;
 const LOCKOUT_MAX_MS: u64 = 3_600_000;
 
-/// Rate limit for wrong guesses at a target (a room's PIN, the debug key). A guesser has 5 a minute, then is
-/// locked out for a minute, two, four… (up to an hour; an hour without a miss starts over). A target takes 30
-/// misses a minute, then only from guessers without a recent miss: many addresses together cannot lock the
-/// right PIN out (the room changes its PIN at that point, `Hub::join`). Right guesses do not count, and one
-/// target's guessers cannot lock the others.
+/// Rate limit for wrong guesses (room PINs, debug key): 5 a minute per guesser, then doubling lockouts up to an hour.
+/// A target takes 30 misses a minute, so spread-out guessers cannot lock out the right PIN.
 #[derive(Default)]
 pub struct Limiter {
     /// None: guessers whose address is unknown, together.
@@ -284,9 +277,8 @@ pub fn same_key(given: &str, want: &str) -> bool {
     digest(given) == digest(want)
 }
 
-/// A player id and the address their client asked for the token from (behind a reverse proxy: `X-Real-IP`) into a
-/// connect token's user data: `uid`, NUL, the address. The token is sealed with the server's key, so the
-/// address can be trusted where the link's own cannot (a WebSocket through a reverse proxy comes from 127.0.0.1).
+/// Player id and the address the token was asked at, sealed into the token's user data (`uid`, NUL, address).
+/// Trusted where the link's address is not: a proxied WebSocket comes from 127.0.0.1.
 pub fn to_user_data(uid: &Uid, ip: Option<IpAddr>) -> [u8; 256] {
     let mut data = [0u8; 256];
     let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();

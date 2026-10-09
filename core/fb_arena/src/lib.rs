@@ -1,7 +1,4 @@
-//! The authoritative arena: pawns (players and bots), bot brains,
-//! grabs and tackles, finishes, checkpoints, falls and knockouts, bonuses, the map's own logic, the
-//! debug journal and trace, and recording for replays. The network side (inputs from packets,
-//! snapshots) stays in the server.
+//! The authoritative arena: the round's rules and state, without any network code (that stays in the server).
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

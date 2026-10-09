@@ -1,11 +1,5 @@
-//! Cloth: the flags' pennants wave in the wind. A surface material (`surface.rs`, the same fragment
-//! stage) with a vertex stage that bends the pennant by a wave running from the pole to the tip, the
-//! normals with it; the prepass does the same, so the shadows wave too. The wind is one for the whole
-//! world: gusts roll across it along `WIND` (`gust`), and the trees sway with them (`props.rs`).
-//!
-//! The cloth itself is made here (`Cut::mesh`) in place of flag.glb's pennant: one fine, two-sided sheet
-//! (the material lights its back as its front) cut as a pennant or a swallowtail, sewn into a sleeve round
-//! the pole. The wave starts flat at the sleeve's seam, so nothing of it ever reaches the pole.
+//! Flag pennants, made here in place of flag.glb's and waved in the wind (`cloth.wgsl`, prepass too).
+//! The sleeve round the pole is short of the seam, so the wave never reaches the pole.
 use std::f32::consts::TAU;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
@@ -32,9 +26,7 @@ pub fn gust(t: f32, p: Vec2) -> f32 {
     0.6 + 0.25 * (t * 0.9 - d * 0.11).sin() + 0.15 * (t * 2.3 - d * 0.31 + 1.7).sin()
 }
 
-// flag.glb (model units): the pole stands round the y axis, 0.07 in radius, up to its ball (0.16 in radius)
-// at y = 4.45. The cloth is in the frame of the model's pennant, which turns a little about the pole axis
-// (`props::animate`): the sleeve turns round the pole with it.
+// flag.glb units: the pole's axis is y; the cloth turns with the pennant about it (`props::animate`).
 const POLE_R: f32 = 0.07;
 /// The sleeve: its radius round the pole, and the seam where the cloth leaves it (local x).
 const SLEEVE_R: f32 = 0.088;
@@ -176,9 +168,7 @@ impl Geometry {
     }
 }
 
-/// The sleeve round the pole, as tall as the cloth at the seam: a tube shaped like a drop, its point the seam,
-/// closed at both ends by flat rings in to just off the pole. It never moves with the wave (it is short of
-/// the seam), only with the pennant's turn about the pole.
+/// Sleeve round the pole, as tall as the cloth at its seam; it never waves, only turns with the pennant.
 fn sleeve(g: &mut Geometry) {
     let (y0, y1) = (MID_Y - HALF_H, MID_Y + HALF_H);
     // Round the pole from the seam and back to it (x, z), counter-clockwise seen from above, with the outward

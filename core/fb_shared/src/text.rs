@@ -33,9 +33,7 @@ pub fn is_other(c: char) -> bool {
         )
 }
 
-/// Characters that draw nothing yet pass for letters or symbols (a name of them looks empty): the Hangul
-/// fillers, the blank Braille pattern, the combining grapheme joiner, Khmer's inherent vowels, Mongolian
-/// variation selectors.
+/// Invisible characters that would make a name look empty.
 fn is_filler(c: char) -> bool {
     matches!(
         c as u32,
@@ -43,9 +41,7 @@ fn is_filler(c: char) -> bool {
     )
 }
 
-/// Combining marks, drawn over or under the character before them: the blocks stacked "zalgo" text is made
-/// of, and the marks of the scripts that use them most (Cyrillic, Hebrew, Arabic, Thai, Lao). Not the
-/// variation selectors emoji need.
+/// Combining marks; variation selectors are excluded, since emoji need them.
 fn is_mark(c: char) -> bool {
     matches!(
         c as u32,
@@ -79,9 +75,7 @@ fn is_mark(c: char) -> bool {
 /// Combining marks kept on one character (more stack into text taller than the line).
 const MARKS_MAX: usize = 2;
 
-/// Drops `is_other`, `is_filler` and `drop` characters (control characters become `control`) and combining
-/// marks past MARKS_MAX on one character, but keeps a zero-width joiner between two symbols: it is what holds
-/// emoji sequences like 👨‍👩‍👧 together.
+/// Drops invisible characters and extra marks, but keeps the ZWJ that joins emoji sequences.
 fn visible(raw: &str, control: Option<char>, drop: impl Fn(char) -> bool) -> String {
     let kept: String = raw
         .chars()
