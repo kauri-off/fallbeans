@@ -296,6 +296,13 @@ fn fidelityfx_linux(sdk: &Path) -> Result<PathBuf> {
     Ok(lib)
 }
 
+/// AMD's FSR 3.1 library beside the client.
+pub const FFX_LIB: &str = if cfg!(windows) {
+    "amd_fidelityfx_vk.dll"
+} else {
+    "libamd_fidelityfx_vk.so"
+};
+
 /// The upscalers' libraries beside the client (the game falls back to FSR 1 without them): NVIDIA's DLSS
 /// (`dlss_runtime`) when the client is built with it, AMD's FidelityFX for FSR 3.1 (`fidelityfx`). With
 /// `licenses` (a package), AMD's license goes there, and a missing library fails the package.
@@ -325,12 +332,7 @@ pub fn upscalers_into(dir: &Path, licenses: Option<&Path>) -> Result<()> {
             return reported(ok && !package);
         }
     };
-    let name = if cfg!(windows) {
-        "amd_fidelityfx_vk.dll"
-    } else {
-        "libamd_fidelityfx_vk.so"
-    };
-    ok &= report(put(&lib, &dir.join(name)));
+    ok &= report(put(&lib, &dir.join(FFX_LIB)));
     if let Some(l) = licenses {
         let license = env_path("FFX_SDK").unwrap_or_default().join("docs/license.md");
         if license.is_file() {
