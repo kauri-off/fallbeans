@@ -141,6 +141,46 @@ fn grid_finds_every_collider_a_brute_force_search_finds() {
 }
 
 #[test]
+fn grid_stays_small_with_far_apart_and_huge_colliders() {
+    let mut rng = Rng::new(7);
+    let mut b = Builder::new(1, false);
+    for _ in 0..200 {
+        let x = (rng.unit() - 0.5) * 2e5;
+        let z = (rng.unit() - 0.5) * 2e5;
+        block(&mut b, x, 0.0, z, 1.0 + rng.unit() * 20.0, 1.0, 1.0 + rng.unit() * 20.0);
+    }
+    block(&mut b, 0.0, -1.0, 0.0, 1e5, 1.0, 1e5);
+    block(&mut b, 5e4, -1.0, 5e4, 300.0, 1.0, 300.0);
+    let mut world = b.world;
+    world.finalize(0.0, &NoLogic);
+    assert!(world.grid.size() <= 256 * 256, "{}", world.grid.size());
+    let mut got = Vec::new();
+    for i in 0..400 {
+        let (x, z) = if i % 2 == 0 {
+            let c = &world.colliders[rng.index(200)];
+            (
+                c.center.x + (rng.unit() - 0.5) * 30.0,
+                c.center.z + (rng.unit() - 0.5) * 30.0,
+            )
+        } else {
+            ((rng.unit() - 0.5) * 2e5, (rng.unit() - 0.5) * 2e5)
+        };
+        let r = 1.7;
+        world.query(x, z, r, &mut got);
+        let mut seen = got.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), got.len(), "a collider listed twice at ({x}, {z})");
+        for (i, c) in world.colliders.iter().enumerate() {
+            let (ex, ez) = c.extent_xz();
+            if (c.center.x - x).abs() <= ex + r && (c.center.z - z).abs() <= ez + r {
+                assert!(got.contains(&(i as u32)), "collider {i} missed at ({x}, {z})");
+            }
+        }
+    }
+}
+
+#[test]
 fn lands_walks_jumps_and_falls_off_edges() {
     let mut b = Builder::new(1, false);
     block(&mut b, 0.0, -1.0, 0.0, 10.0, 2.0, 10.0);
