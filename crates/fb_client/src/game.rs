@@ -94,6 +94,8 @@ pub struct Map {
     room: Option<String>,
     /// Built by the warm-up behind the loading screen (`render/warmup.rs`), in no room: nobody plays it.
     pub warmup: bool,
+    /// The entity of its `Round`: the server changes it there for the room's next arena.
+    source: Option<Entity>,
     /// The others as drawn at each predicted tick, and how many ticks behind the own bean: a rollback replays a
     /// tick against the same bodies, not against where they are drawn now.
     others: BTreeMap<i64, (u32, Vec<OtherBody>)>,
@@ -117,6 +119,14 @@ const OTHERS_KEPT: usize = 128;
 impl Map {
     pub fn time(&self, tick: f64) -> f64 {
         (tick - self.round.zero_tick as f64) * DT
+    }
+
+    /// The room is in another arena already, its map not built yet.
+    fn stale(&self, rounds: &Query<&Round>, session: &Session) -> bool {
+        let moved = self
+            .source
+            .is_some_and(|e| rounds.get(e).is_ok_and(|r| !r.same_arena(&self.round)));
+        !self.warmup && (moved || session.arena.as_ref().is_some_and(|a| a.id != self.round.arena))
     }
 
     /// Finished or out: the bean has left the arena.
@@ -185,6 +195,7 @@ impl Map {
             room: None,
             others: BTreeMap::new(),
             warmup: true,
+            source: None,
         };
         // (Its decorations, not its sounds: nobody is there to hear them.)
         map.take_out(out);
@@ -404,7 +415,7 @@ fn drop_map(map: Option<Res<Map>>, session: Res<Session>, mut commands: Commands
 /// tails and stars from it) are in.
 fn build_round(
     mut commands: Commands,
-    rounds: Query<&Round>,
+    rounds: Query<(Entity, &Round)>,
     map: Option<ResMut<Map>>,
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
@@ -416,8 +427,8 @@ fn build_round(
         return;
     }
     // The arena the player is in: the last one's `Round` may linger a moment beside it.
-    let in_arena = |r: &&Round| session.arena.as_ref().is_some_and(|a| a.id == r.arena);
-    let Some(round) = rounds.iter().find(in_arena) else {
+    let in_arena = |(_, r): &(Entity, &Round)| session.arena.as_ref().is_some_and(|a| a.id == r.arena);
+    let Some((source, round)) = rounds.iter().find(in_arena) else {
         return;
     };
     let mut map = map;
@@ -428,6 +439,9 @@ fn build_round(
         // The same arena with its clock moved (a dev warp or pause): no new map.
         if m.round != *round {
             m.round = round.clone();
+        }
+        if m.source != Some(source) {
+            m.source = Some(source);
         }
         return;
     }
@@ -483,6 +497,7 @@ fn build_round(
         room: session.room.clone(),
         others: BTreeMap::new(),
         warmup: false,
+        source: Some(source),
     };
     next.take_out(out);
     commands.insert_resource(next);
@@ -785,15 +800,25 @@ fn predict(
     link: Query<(), (With<Client>, With<Connected>)>,
     rollback: Option<Res<Rollback>>,
     mut cues: MessageWriter<Cue>,
+    rounds: Query<&Round>,
 ) {
     let Some(mut map) = map else { return };
     let Ok((id, mut full, state, mut ev, mut prev, mut smooth)) = own.single_mut() else {
         return;
     };
+    let frame = InputFrame::from(state.0);
+    let mut trace = trace.filter(|_| !link.is_empty());
+    // Not on the last arena's ground and clock: the bean waits as the server last had it until the map is built,
+    // and `reconcile` replays these ticks on it.
+    if map.stale(&rounds, &session) {
+        if let Some(trace) = &mut trace {
+            write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
+        }
+        return;
+    }
     let teleports = full.teleports;
     let k = map.round.arena_tick(timeline.tick());
     let t = k as f64 * DT;
-    let frame = InputFrame::from(state.0);
     let input: BodyInput = if can_move(map.round.kind, t) {
         frame.into()
     } else {
@@ -930,27 +955,29 @@ fn predict(
         ];
         cues.write_batch(said.into_iter().filter(|(on, _)| *on).map(|(_, c)| c));
     }
-    if let Some(mut trace) = trace
-        && !link.is_empty()
-    {
-        let b = &full.body;
-        if core::mem::take(&mut trace.fresh) {
-            let _ = writeln!(trace.out, "R {}", timeline.tick().0);
-        }
-        let _ = writeln!(
-            trace.out,
-            "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
-            timeline.tick().0,
-            session.room.as_deref().unwrap_or("?"),
-            id.0,
-            frame.mx,
-            frame.mz,
-            frame.buttons,
-            b.pos.x,
-            b.pos.y,
-            b.pos.z
-        );
+    if let Some(trace) = &mut trace {
+        write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
     }
+}
+
+/// The `--trace` line of the own bean at `tick`.
+fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: u32, frame: InputFrame, b: &Body) {
+    if core::mem::take(&mut trace.fresh) {
+        let _ = writeln!(trace.out, "R {}", tick.0);
+    }
+    let _ = writeln!(
+        trace.out,
+        "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
+        tick.0,
+        session.room.as_deref().unwrap_or("?"),
+        id,
+        frame.mx,
+        frame.mz,
+        frame.buttons,
+        b.pos.x,
+        b.pos.y,
+        b.pos.z
+    );
 }
 
 /// `--trace-hits` lines of predicted tick k.
