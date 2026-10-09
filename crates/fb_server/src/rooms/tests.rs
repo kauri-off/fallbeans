@@ -572,6 +572,38 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
 }
 
 #[test]
+fn dev_start_plays_the_rounds_asked_for() {
+    let mut t = Bench::new(RoomOptions {
+        min_players: 1,
+        dev: true,
+        ..opts()
+    });
+    let a = t.hello("A", "ua");
+    let mut start = |games: &[&str], rounds| {
+        let cmd = DevCmd::Start {
+            games: games.iter().map(|g| g.to_string()).collect(),
+            rounds,
+            bots: Some(3),
+        };
+        t.ctl(a, ClientMsg::Dev { q: None, cmd });
+        t.room
+            .session()
+            .unwrap()
+            .plan
+            .iter()
+            .map(|g| g.id())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(start(&["jump-club", "door-dash", "crown-peak"], Some(1)), ["jump-club"]);
+    assert_eq!(start(&["door-dash"], Some(3)), ["door-dash"; 3]);
+    assert_eq!(
+        start(&["jump-club", "door-dash"], Some(3)),
+        ["jump-club", "door-dash", "jump-club"]
+    );
+    assert_eq!(start(&["jump-club", "door-dash"], None), ["jump-club", "door-dash"]);
+}
+
+#[test]
 fn builds_the_next_round_ahead_and_it_replays_the_same() {
     let mut t = Bench::new(RoomOptions {
         min_players: 1,

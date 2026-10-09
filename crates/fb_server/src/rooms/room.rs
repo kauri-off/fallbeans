@@ -835,7 +835,10 @@ impl Room {
                 } else {
                     Playlist {
                         mode: Mode::Custom,
-                        games: games.clone(),
+                        games: match rounds {
+                            Some(n) => games.iter().cycle().take(*n as usize).cloned().collect(),
+                            None => games.clone(),
+                        },
                         rounds: rounds.unwrap_or(games.len() as u32),
                     }
                 };
