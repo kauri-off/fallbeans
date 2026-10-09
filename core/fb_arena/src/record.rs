@@ -180,7 +180,8 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Replay {
     let mut stopped = false;
     let mut k = first + 1;
     while k <= rec.end_tick && !stopped {
-        while let Some(op) = ops.next_if(|o| o.0 < k) {
+        // (Against the arena's tick: after an `Op::Skip` the ops recorded on the tick it jumped to follow.)
+        while let Some(op) = ops.next_if(|o| o.0 <= a.tick) {
             a.apply_op(&op.1);
         }
         k = a.tick + 1;
