@@ -1,8 +1,9 @@
 //! The graphics API, chosen before Bevy starts its renderer. Windows: Vulkan 1.2+, DirectX 12 when it has no
 //! Vulkan GPU. Elsewhere: Vulkan 1.2+. A real GPU wins over a software one (WARP, lavapipe) on either API. The
-//! player may force one (`--backend`, the settings). A saved one whose start drew no frame is not tried again:
-//! a marker written before the renderer starts and cleared a few frames in outlives a start that crashes or
-//! hangs, and the next start takes the automatic choice.
+//! player may force one (`--backend`, the settings), `WGPU_BACKEND` narrows the choice. A start that draws no
+//! frame is remembered: a marker written before the renderer starts and cleared a few frames in outlives a start
+//! that crashes or hangs. The next start drops a saved choice of that backend, and the automatic choice passes it
+//! over while it has another, until a start with it draws.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use crate::opts::{Backend, Opts};
 use crate::settings::Graphics;
 
-/// The marker in the profile's directory: the saved backend a start is trying.
+/// The marker in the profile's directory: the backend a start is trying.
 const TRIAL: &str = "backend-trial";
+/// The backends whose last start drew no frame, a line each.
+const SKIP: &str = "backend-skip";
 
 impl Backend {
     /// Its name in the settings.
@@ -178,6 +181,38 @@ enum Note {
     Warn(String),
 }
 
+/// The backends `WGPU_BACKEND` lets the automatic choice take: all of them without it, or when it names none of
+/// ours.
+fn allowed(env: Option<Backends>, notes: &mut Vec<Note>) -> Vec<Backend> {
+    let all = auto_order().to_vec();
+    let Some(env) = env else {
+        return all;
+    };
+    let some: Vec<Backend> = all.iter().copied().filter(|b| env.contains(b.wgpu())).collect();
+    if some.is_empty() {
+        notes.push(Note::Warn(format!(
+            "WGPU_BACKEND {env:?}: none of the game's APIs, ignored"
+        )));
+        return all;
+    }
+    some
+}
+
+/// The automatic choice's order: `allowed` without the backends that drew no frame, unless that leaves none.
+fn auto(allowed: &[Backend], skip: &[Backend], notes: &mut Vec<Note>) -> Vec<Backend> {
+    let left: Vec<Backend> = allowed.iter().copied().filter(|b| !skip.contains(b)).collect();
+    if left.is_empty() {
+        return allowed.to_vec();
+    }
+    for b in allowed.iter().filter(|b| skip.contains(b)) {
+        notes.push(Note::Warn(format!(
+            "{}: passed over, a start with it drew no frame (the settings can choose it again)",
+            b.name()
+        )));
+    }
+    left
+}
+
 /// What the player asked for.
 struct Wish {
     backend: Option<Backend>,
@@ -187,9 +222,15 @@ struct Wish {
     reset: bool,
 }
 
-/// The flag, else the saved choice unless this system cannot run it or its last start drew no frame (`failed`:
-/// the backend that start tried).
-fn wish(flag: Option<Backend>, saved: BackendSetting, failed: Option<&str>, notes: &mut Vec<Note>) -> Wish {
+/// The flag, else the saved choice unless this system cannot run it, `WGPU_BACKEND` excludes it or its last start
+/// drew no frame (`failed`: the backend that start tried).
+fn wish(
+    flag: Option<Backend>,
+    allowed: &[Backend],
+    saved: BackendSetting,
+    failed: Option<Backend>,
+    notes: &mut Vec<Note>,
+) -> Wish {
     let mut kept = saved.runnable();
     let mut reset = false;
     if let Some(b) = saved.0.filter(|_| kept.is_none()) {
@@ -199,11 +240,16 @@ fn wish(flag: Option<Backend>, saved: BackendSetting, failed: Option<&str>, note
         )));
         reset = true;
     }
-    if let Some(f) = failed {
+    if let Some(b) = kept.filter(|&b| failed == Some(b)) {
+        notes.push(Note::Warn(format!("the saved {} goes back to automatic", b.name())));
+        reset = true;
+        kept = None;
+    }
+    if let Some(b) = kept.filter(|b| !allowed.contains(b)) {
         notes.push(Note::Warn(format!(
-            "the last start with {f:?} drew no frame: automatic choice"
+            "the saved {} is not in WGPU_BACKEND: automatic choice",
+            b.name()
         )));
-        reset |= kept.is_some();
         kept = None;
     }
     match flag {
@@ -226,10 +272,28 @@ fn wish(flag: Option<Backend>, saved: BackendSetting, failed: Option<&str>, note
 }
 
 /// A marker left by a start that drew no frame: the backend it tried. Read once.
-fn take_trial(path: &Path) -> Option<String> {
+fn take_trial(path: &Path) -> Option<Backend> {
     let s = fs::read_to_string(path).ok()?;
     let _ = fs::remove_file(path);
-    Some(s.trim().to_string())
+    Backend::from_setting(s.trim())
+}
+
+fn read_skip(path: &Path) -> Vec<Backend> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| Backend::from_setting(l.trim()))
+        .collect()
+}
+
+/// The list, or no file when it is empty.
+fn write_skip(path: &Path, skip: &[Backend]) {
+    if skip.is_empty() {
+        let _ = fs::remove_file(path);
+    } else {
+        let lines: String = skip.iter().map(|b| format!("{}\n", b.setting())).collect();
+        let _ = fs::write(path, lines);
+    }
 }
 
 fn begin_trial(path: &Path, b: Backend) -> bool {
@@ -239,12 +303,31 @@ fn begin_trial(path: &Path, b: Backend) -> bool {
 /// The renderer's settings for this start (`build`, before `RenderPlugin`). Without a GPU it can draw with, the
 /// game ends here, with a message to the player.
 pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
-    let trial = crate::settings::dir(opts.profile.as_deref()).map(|d| d.join(TRIAL));
-    let failed = trial.as_deref().and_then(take_trial);
+    let dir = crate::settings::dir(opts.profile.as_deref());
+    let trial = dir.as_ref().map(|d| d.join(TRIAL));
+    let skip_path = dir.as_ref().map(|d| d.join(SKIP));
     // (The log is not up yet: what to say waits for `report`.)
     let mut notes = Vec::new();
+    let failed = trial.as_deref().and_then(take_trial);
+    let mut skip = skip_path.as_deref().map(read_skip).unwrap_or_default();
+    if let Some(f) = failed {
+        notes.push(Note::Warn(format!("the last start with {} drew no frame", f.name())));
+        if !skip.contains(&f) {
+            skip.push(f);
+            if let Some(s) = &skip_path {
+                write_skip(s, &skip);
+            }
+        }
+    }
+    let env = Backends::from_env();
+    let allowed = allowed(env, &mut notes);
     let saved = app.world().resource::<Graphics>().backend;
-    let wish = wish(opts.backend, saved, failed.as_deref(), &mut notes);
+    let wish = wish(opts.backend, &allowed, saved, failed, &mut notes);
+    let order = if wish.backend.is_none() {
+        auto(&allowed, &skip, &mut notes)
+    } else {
+        allowed.clone()
+    };
     let mut surveyed: Vec<(Backend, Vec<Found>)> = Vec::new();
     let mut look = |b: Backend| {
         if let Some((_, f)) = surveyed.iter().find(|(x, _)| *x == b) {
@@ -257,9 +340,9 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
     let chosen = match wish.backend {
         Some(b) => pick(&[b], &mut look).or_else(|| {
             notes.push(Note::Warn(format!("{}: no usable GPU: automatic choice", b.name())));
-            pick(auto_order(), &mut look)
+            pick(&order, &mut look)
         }),
-        None => pick(auto_order(), &mut look),
+        None => pick(&order, &mut look).or_else(|| pick(&allowed, &mut look)),
     };
     for (_, found) in &surveyed {
         for f in found.iter().filter(|f| !f.usable()) {
@@ -275,18 +358,22 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
     };
     let forced = wish.backend == Some(p.backend);
     let why = match (forced, wish.saved) {
+        (false, _) if env.is_some() => "automatic, WGPU_BACKEND",
         (false, _) => "automatic",
         (true, true) => "the settings",
         (true, false) => "--backend",
     };
     let soft = if p.software { ", a software device" } else { "" };
     notes.push(Note::Info(format!("{} ({why}): {}{soft}", p.backend.name(), p.adapter)));
-    if forced
-        && wish.saved
-        && let Some(t) = &trial
-        && begin_trial(t, p.backend)
-    {
-        app.insert_resource(Trial(t.clone()));
+    // (The flag's start leaves no marker: the player asked for it, and the settings stay as they are.)
+    let marker = trial.filter(|t| !(forced && !wish.saved) && begin_trial(t, p.backend));
+    let skipped = skip.contains(&p.backend);
+    if marker.is_some() || skipped {
+        app.insert_resource(Trial {
+            marker,
+            skip: skip_path.filter(|_| skipped),
+            backend: p.backend,
+        });
         app.add_systems(Last, trial_passed.run_if(resource_exists::<Trial>));
     }
     // (With the `dlss` feature Bevy makes a Vulkan instance whatever the backend: on DX12 it is made to fail.)
@@ -345,16 +432,27 @@ fn report(mut chosen: ResMut<Chosen>, mut gfx: ResMut<Graphics>, mut commands: C
     }
 }
 
-/// The marker of this start.
+/// The marker of this start, and the list it leaves when it draws.
 #[derive(Resource)]
-struct Trial(PathBuf);
+struct Trial {
+    marker: Option<PathBuf>,
+    skip: Option<PathBuf>,
+    backend: Backend,
+}
 
-/// A few frames in, the backend works: the marker goes. (The third: with pipelined rendering the render world
-/// draws a frame behind the main one.)
+/// A few frames in, the backend works: the marker goes, and the automatic choice may take it again. (The third:
+/// with pipelined rendering the render world draws a frame behind the main one.)
 fn trial_passed(mut commands: Commands, trial: Res<Trial>, mut frames: Local<u32>) {
     *frames += 1;
     if *frames >= 3 {
-        let _ = fs::remove_file(&trial.0);
+        if let Some(m) = &trial.marker {
+            let _ = fs::remove_file(m);
+        }
+        if let Some(s) = &trial.skip {
+            let mut skip = read_skip(s);
+            skip.retain(|&b| b != trial.backend);
+            write_skip(s, &skip);
+        }
         commands.remove_resource::<Trial>();
     }
 }
@@ -451,8 +549,9 @@ mod tests {
     #[test]
     fn saved_choices_that_cannot_run_are_auto() {
         let mut notes = Vec::new();
+        let all = auto_order();
         let w = |flag, saved, failed, notes: &mut Vec<Note>| {
-            let w = wish(flag, saved, failed, notes);
+            let w = wish(flag, all, saved, failed, notes);
             (w.backend, w.saved, w.reset)
         };
         let (auto, vulkan, dx12) = (
@@ -467,13 +566,22 @@ mod tests {
             assert_eq!(notes.len(), 1);
         }
         assert_eq!(w(None, vulkan, None, &mut notes), (Some(Backend::Vulkan), true, false));
-        assert_eq!(w(None, vulkan, Some("vulkan"), &mut notes), (None, false, true));
+        assert_eq!(w(None, vulkan, Some(Backend::Vulkan), &mut notes), (None, false, true));
+        assert_eq!(
+            w(None, vulkan, Some(Backend::Dx12), &mut notes),
+            (Some(Backend::Vulkan), true, false)
+        );
+        assert_eq!(
+            wish(None, &[], vulkan, None, &mut notes).backend,
+            None,
+            "WGPU_BACKEND without it"
+        );
         assert_eq!(
             w(Some(Backend::Vulkan), auto, None, &mut notes),
             (Some(Backend::Vulkan), false, false)
         );
         assert_eq!(
-            w(Some(Backend::Vulkan), vulkan, Some("vulkan"), &mut notes),
+            w(Some(Backend::Vulkan), vulkan, Some(Backend::Vulkan), &mut notes),
             (Some(Backend::Vulkan), false, true)
         );
         assert_eq!(dx12.runnable().is_some(), cfg!(target_os = "windows"));
@@ -481,12 +589,38 @@ mod tests {
     }
 
     #[test]
-    fn the_trial_marker_is_read_once() {
+    fn the_automatic_choice_passes_over_what_drew_no_frame() {
+        let mut notes = Vec::new();
+        let both = [Backend::Vulkan, Backend::Dx12];
+        assert_eq!(auto(&both, &[], &mut notes), both);
+        assert!(notes.is_empty());
+        assert_eq!(auto(&both, &[Backend::Vulkan], &mut notes), [Backend::Dx12]);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(auto(&both, &both, &mut notes), both);
+        assert_eq!(
+            auto(&[Backend::Vulkan], &[Backend::Vulkan], &mut notes),
+            [Backend::Vulkan]
+        );
+        assert_eq!(allowed(None, &mut notes), auto_order());
+        assert_eq!(allowed(Some(Backends::VULKAN), &mut notes), [Backend::Vulkan]);
+        let n = notes.len();
+        assert_eq!(allowed(Some(Backends::GL), &mut notes), auto_order());
+        assert_eq!(notes.len(), n + 1);
+    }
+
+    #[test]
+    fn the_trial_marker_is_read_once_and_the_skip_list_kept() {
         let dir = std::env::temp_dir().join(format!("fb-backend-{}", std::process::id()));
         let path = dir.join(TRIAL);
         assert!(begin_trial(&path, Backend::Vulkan));
-        assert_eq!(take_trial(&path).as_deref(), Some("vulkan"));
+        assert_eq!(take_trial(&path), Some(Backend::Vulkan));
         assert_eq!(take_trial(&path), None);
+        let skip = dir.join(SKIP);
+        assert_eq!(read_skip(&skip), []);
+        write_skip(&skip, &[Backend::Vulkan, Backend::Dx12]);
+        assert_eq!(read_skip(&skip), [Backend::Vulkan, Backend::Dx12]);
+        write_skip(&skip, &[]);
+        assert!(!skip.exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 }
