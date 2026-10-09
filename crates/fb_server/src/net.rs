@@ -117,13 +117,16 @@ fn on_link(trigger: On<Add, LinkOf>, time: Res<Time<Real>>, mut commands: Comman
         .insert((LinkedAt(time.elapsed_secs_f64()), Name::new("client")));
 }
 
+/// Links not connected yet.
+type Unconnected = (With<LinkOf>, Without<Connected>);
+
 /// Links that never connect go after LINK_CONNECT_S, and the oldest beyond MAX_PENDING_LINKS: UDP makes one
 /// per source address before any token is checked (spoofed packets, scanners), WebSocket one per finished
 /// handshake, and neither ever lets go of one that stays silent.
 fn reap_links(
     time: Res<Time<Real>>,
     opts: Res<Opts>,
-    links: Query<(Entity, &LinkedAt), (With<LinkOf>, Without<Connected>)>,
+    links: Query<(Entity, &LinkedAt), Unconnected>,
     mut pending: Local<Vec<(f64, Entity)>>,
     mut reaped: Local<(usize, f64)>,
     mut commands: Commands,
@@ -156,12 +159,12 @@ fn reap_links(
     }
 }
 
+/// Clients' links that are connected.
+type Joined = (With<ClientOf>, With<Connected>);
+
 /// A client whose packet was acked but whose messages were refused (too large, or a partial one expired):
 /// its reliable channels would never deliver again, so it goes and comes back with a fresh link.
-fn drop_broken_links(
-    links: Query<(Entity, &Transport, &RemoteId), (With<ClientOf>, With<Connected>)>,
-    mut commands: Commands,
-) {
+fn drop_broken_links(links: Query<(Entity, &Transport, &RemoteId), Joined>, mut commands: Commands) {
     for (link, transport, remote) in &links {
         if transport.receive_failed() {
             warn!("dropping {:?}: a reliable message from it was lost", remote.0);
@@ -170,11 +173,14 @@ fn drop_broken_links(
     }
 }
 
+/// Whether the server started, stopped or was unlinked (and why).
+type ServerState = (Has<Started>, Has<Stopped>, Option<&'static Unlinked>);
+
 /// The server's transports gave up: an accept error closes the WebSocket listener, and with it the one
 /// `Server` UDP is on too (every link let go of). The process exits with an error, and systemd starts it
 /// again (`Restart=always`).
 fn watch_server(
-    servers: Query<(Has<Started>, Has<Stopped>, Option<&Unlinked>), With<NetcodeServer>>,
+    servers: Query<ServerState, With<NetcodeServer>>,
     shutdown: Res<Shutdown>,
     mut started: Local<bool>,
     mut exit: MessageWriter<AppExit>,
@@ -226,10 +232,17 @@ fn shut_down(
     }
 }
 
+/// A client's link, where it is from and its connect token's data.
+type Arrival = (
+    &'static RemoteId,
+    Option<&'static PeerAddr>,
+    Option<&'static TokenUserData>,
+);
+
 /// A client is in, as the player of its connect token: the hub waits for its hello.
 fn on_connected(
     trigger: On<Add, Connected>,
-    links: Query<(&RemoteId, Option<&PeerAddr>, Option<&TokenUserData>), With<ClientOf>>,
+    links: Query<Arrival, With<ClientOf>>,
     rooms: Option<ResMut<Rooms>>,
     mut commands: Commands,
 ) {
@@ -257,10 +270,13 @@ fn on_connected(
     rooms.hub.open(conn_of(link), ip, uid);
 }
 
+/// A client's link, why it went and its last stats.
+type Departure = (&'static RemoteId, Option<&'static Disconnected>, Option<&'static Link>);
+
 /// A client is gone (it left, timed out, or was let go of).
 fn on_disconnected(
     trigger: On<Remove, Connected>,
-    links: Query<(&RemoteId, Option<&Disconnected>, Option<&Link>), With<ClientOf>>,
+    links: Query<Departure, With<ClientOf>>,
     rooms: Option<ResMut<Rooms>>,
 ) {
     if let Ok((remote, gone, link)) = links.get(trigger.entity) {

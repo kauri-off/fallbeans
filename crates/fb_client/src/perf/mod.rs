@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bevy::diagnostic::DiagnosticsStore;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::render::mesh::allocator::MeshAllocator;
@@ -295,12 +296,19 @@ fn render_end(
     }
 }
 
+/// What a frame's times are read from: when the main schedule started, the render thread's counters, the
+/// frame limiter's sleep, and the GPU's diagnostics.
+#[derive(SystemParam)]
+struct FrameSources<'w> {
+    start: Res<'w, MainStart>,
+    shared: Res<'w, RenderShared>,
+    slept: Res<'w, crate::render::quality::Slept>,
+    store: Res<'w, DiagnosticsStore>,
+}
+
 fn collect(
     time: Res<Time<Real>>,
-    start: Res<MainStart>,
-    shared: Res<RenderShared>,
-    slept: Res<crate::render::quality::Slept>,
-    store: Res<DiagnosticsStore>,
+    src: FrameSources,
     recording: Res<capture::Recording>,
     mut gpu_paths: Local<gpu::FramePaths>,
     mut perf: ResMut<Perf>,
@@ -308,10 +316,10 @@ fn collect(
     let now = Instant::now();
     let t = time.elapsed_secs();
     let counting = perf.mode == Mode::Full || recording.0.is_some();
-    shared.0.counting.store(counting, Ordering::Relaxed);
+    src.shared.0.counting.store(counting, Ordering::Relaxed);
     let cpu_on = matches!(perf.mode, Mode::Full | Mode::Cpu) || recording.0.is_some();
     let taken = profiler::take();
-    let acquire = shared.0.acquire_ns.swap(0, Ordering::Relaxed) as f32 / 1e6;
+    let acquire = src.shared.0.acquire_ns.swap(0, Ordering::Relaxed) as f32 / 1e6;
     let wait = if profiler::BUILT {
         acquire
             + taken
@@ -325,11 +333,11 @@ fn collect(
     let frame = Frame {
         t,
         frame: time.delta_secs() * 1000.0,
-        sleep: slept.0 * 1000.0,
-        main: start.0.map_or(f32::NAN, |s| (now - s).as_secs_f32() * 1000.0),
-        render: f32::from_bits(shared.0.render_ms.load(Ordering::Relaxed)),
+        sleep: src.slept.0 * 1000.0,
+        main: src.start.0.map_or(f32::NAN, |s| (now - s).as_secs_f32() * 1000.0),
+        render: f32::from_bits(src.shared.0.render_ms.load(Ordering::Relaxed)),
         wait,
-        gpu: gpu_paths.frame_ms(&store, now),
+        gpu: gpu_paths.frame_ms(&src.store, now),
     };
     perf.frames.push_back(frame);
     while perf.frames.front().is_some_and(|f| t - f.t > HISTORY_S) {

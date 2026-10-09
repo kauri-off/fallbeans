@@ -71,42 +71,82 @@ struct Seen {
     aims: [Vec3; 2],
 }
 
+type Tagged = (
+    &'static BeanId,
+    &'static GlobalTransform,
+    &'static InheritedVisibility,
+    &'static RemotePose,
+);
+
+/// The others' beans as drawn, the camera they are seen from, and the map whose walls may hide them.
+#[derive(SystemParam)]
+struct Viewed<'w, 's> {
+    beans: Query<'w, 's, Tagged, (With<BeanView>, With<Interpolated>)>,
+    camera: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainCamera>>,
+    map: Option<Res<'w, Map>>,
+}
+
+type TagNode = (
+    Entity,
+    &'static mut Tag,
+    &'static mut Node,
+    &'static ComputedNode,
+    &'static mut Visibility,
+    &'static mut ZIndex,
+    &'static mut BackgroundColor,
+    &'static mut BorderColor,
+);
+
+type Colors = (&'static mut BackgroundColor, &'static mut BorderColor);
+
+/// The tags, and the dots and texts in them.
+#[derive(SystemParam)]
+struct TagNodes<'w, 's> {
+    tags: Query<'w, 's, TagNode>,
+    children: Query<'w, 's, &'static Children>,
+    dots: Query<'w, 's, Colors, (Without<Tag>, Without<Text>)>,
+    texts: Query<'w, 's, &'static mut TextColor>,
+}
+
+/// Where tags go and what they are drawn with: their layer, the UI's scale, the fonts.
+#[derive(SystemParam)]
+struct TagLayer<'w> {
+    layers: Res<'w, Layers>,
+    scale: Res<'w, UiScale>,
+    f: Res<'w, Fonts>,
+}
+
+/// Kept from frame to frame: the frame count (walls are checked in turns), and the colliders near the line of
+/// sight and those checked.
+#[derive(Default)]
+struct Sight {
+    frame: u32,
+    near: Vec<ColId>,
+    checked: Vec<ColId>,
+}
+
 fn place_tags(
     mut commands: Commands,
-    layers: Res<Layers>,
-    beans: Query<(&BeanId, &GlobalTransform, &InheritedVisibility, &RemotePose), (With<BeanView>, With<Interpolated>)>,
-    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    mut tags: Query<(
-        Entity,
-        &mut Tag,
-        &mut Node,
-        &ComputedNode,
-        &mut Visibility,
-        &mut ZIndex,
-        &mut BackgroundColor,
-        &mut BorderColor,
-    )>,
-    children: Query<&Children>,
-    mut dots: Query<(&mut BackgroundColor, &mut BorderColor), (Without<Tag>, Without<Text>)>,
-    mut texts: Query<&mut TextColor>,
+    viewed: Viewed,
+    mut nodes: TagNodes,
+    ui: TagLayer,
+    mut sight: Local<Sight>,
     session: Res<Session>,
-    map: Option<Res<Map>>,
-    scale: Res<UiScale>,
     time: Res<Time<Real>>,
-    f: Res<Fonts>,
-    mut frame: Local<u32>,
-    mut near: Local<(Vec<ColId>, Vec<ColId>)>,
 ) {
-    let layer = layers[Layer::Tags];
-    let Ok((cam, cam_tf)) = camera.single() else { return };
+    let layer = ui.layers[Layer::Tags];
+    let Ok((cam, cam_tf)) = viewed.camera.single() else {
+        return;
+    };
     let Some(view) = cam.logical_viewport_size() else {
         return;
     };
+    let Sight { frame, near, checked } = &mut *sight;
     *frame = frame.wrapping_add(1);
     let dt = time.delta_secs().min(0.1);
     let eye = cam_tf.translation();
     let mut seen: Vec<Seen> = Vec::new();
-    for (id, tf, vis, pose) in &beans {
+    for (id, tf, vis, pose) in &viewed.beans {
         if !vis.get() || Some(id.0) == session.me {
             continue;
         }
@@ -120,7 +160,8 @@ fn place_tags(
             continue;
         }
         let Some(p) = session.player(id.0) else { continue };
-        let badge = map
+        let badge = viewed
+            .map
             .as_ref()
             .and_then(|m| m.deco.get(&id.0))
             .and_then(|d| d.badge.clone());
@@ -130,7 +171,7 @@ fn place_tags(
         };
         seen.push(Seen {
             id: id.0,
-            at: at / scale.0,
+            at: at / ui.scale.0,
             d,
             name,
             color: p.color,
@@ -139,8 +180,7 @@ fn place_tags(
     }
     seen.sort_by(|a, b| a.d.total_cmp(&b.d));
 
-    let f = &*f;
-    let (near, checked) = &mut *near;
+    let f = &*ui.f;
     // Tags already up, nearest first, with how much they want to show.
     let mut shown: Vec<(Entity, usize, f32)> = Vec::new();
     for (i, s) in seen.iter().enumerate() {
@@ -150,8 +190,8 @@ fn place_tags(
             .min_by(|a, b| (a.1 - size_at(s.d)).abs().total_cmp(&(b.1 - size_at(s.d)).abs()))
             .map_or(STEPS.len() - 1, |(k, _)| k);
         let mut look = |world: &World| s.aims.iter().all(|&to| blocked(world, eye, to, near, checked));
-        let Some((e, mut tag, mut node, ..)) = tags.iter_mut().find(|t| t.1.id == s.id) else {
-            let blocked = map.as_ref().is_some_and(|m| look(&m.world));
+        let Some((e, mut tag, mut node, ..)) = nodes.tags.iter_mut().find(|t| t.1.id == s.id) else {
+            let blocked = viewed.map.as_ref().is_some_and(|m| look(&m.world));
             commands.entity(layer).with_children(|l| {
                 l.spawn((
                     Tag {
@@ -185,7 +225,7 @@ fn place_tags(
             continue;
         };
         if (*frame).wrapping_add(s.id.0) % 4 == 0 {
-            tag.blocked = map.as_ref().is_some_and(|m| look(&m.world));
+            tag.blocked = viewed.map.as_ref().is_some_and(|m| look(&m.world));
         }
         // Change size only when clearly nearer another step: no flicker between two.
         if (size_at(s.d) - STEPS[tag.step]).abs() > 0.075 && tag.step != want_step {
@@ -216,17 +256,18 @@ fn place_tags(
         .iter()
         .filter(|(.., want)| *want > 0.0)
         .map(|&(e, i, _)| {
-            let size = tags
+            let size = nodes
+                .tags
                 .get(e)
                 .map_or(Vec2::ZERO, |t| t.3.size() * t.3.inverse_scale_factor());
             (seen[i].at, size)
         })
         .collect();
-    let mut spots = arrange(&slots, view / scale.0).into_iter();
+    let mut spots = arrange(&slots, view / ui.scale.0).into_iter();
     let ease = |k: f32| 1.0 - (-dt * k).exp();
     for &(e, i, want) in &shown {
         let s = &seen[i];
-        let Ok((_, mut tag, mut node, _, mut vis, mut z, mut bg, mut rim)) = tags.get_mut(e) else {
+        let Ok((_, mut tag, mut node, _, mut vis, mut z, mut bg, mut rim)) = nodes.tags.get_mut(e) else {
             continue;
         };
         let spot = if want > 0.0 { spots.next() } else { None };
@@ -251,23 +292,23 @@ fn place_tags(
             *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.82 * a));
             *rim = BorderColor::all(RIM.with_alpha(0.8 * a));
             let dot = suit(tag.color).with_alpha(a);
-            for c in children.iter_descendants(e) {
-                if let Ok((mut fill, mut border)) = dots.get_mut(c) {
+            for c in nodes.children.iter_descendants(e) {
+                if let Ok((mut fill, mut border)) = nodes.dots.get_mut(c) {
                     *fill = BackgroundColor(dot);
                     *border = BorderColor::all(dot_rim(dot));
                 }
-                if let Ok(mut t) = texts.get_mut(c) {
+                if let Ok(mut t) = nodes.texts.get_mut(c) {
                     t.0 = INK.with_alpha(a);
                 }
             }
         }
     }
 
-    for (e, mut tag, _, _, mut v, ..) in &mut tags {
+    for (e, mut tag, _, _, mut v, ..) in &mut nodes.tags {
         if seen.iter().any(|s| s.id == tag.id) {
             continue;
         }
-        if map.is_none() || session.player(tag.id).is_none() {
+        if viewed.map.is_none() || session.player(tag.id).is_none() {
             commands.entity(e).despawn();
         } else {
             // Back into view later: fades in where it is then.

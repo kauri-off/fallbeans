@@ -10,7 +10,7 @@ use fb_sim::math::V3;
 use lightyear::input::native::prelude::ActionState;
 use lightyear::prelude::*;
 
-use crate::game::Map;
+use crate::game::{Map, MapNow};
 use crate::stats::NetNow;
 
 /// Ticks of the own bean kept for a report (20 s).
@@ -110,18 +110,17 @@ fn record(
 /// Before a tick: where the bean is against where the last one left it (only a rollback moves it between).
 fn check(
     own: Query<&BodyFull, With<Predicted>>,
-    map: Option<Res<Map>>,
-    timeline: Res<LocalTimeline>,
+    now: MapNow,
     time: Res<Time<Real>>,
     metrics: Option<Res<PredictionMetrics>>,
     net: Res<NetNow>,
     mut recent: ResMut<Recent>,
     mut c: ResMut<Corrections>,
 ) {
-    let (Some(map), Ok(full)) = (map, own.single()) else {
+    let (Some(map), Ok(full)) = (now.map, own.single()) else {
         return;
     };
-    let tick = timeline.tick().0;
+    let tick = now.timeline.tick().0;
     let Some(last) = recent.0.back_mut() else { return };
     if last.tick.wrapping_add(1) != tick || last.arena != map.round.arena {
         return;

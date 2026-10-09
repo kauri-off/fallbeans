@@ -10,7 +10,7 @@ use fb_sim::collider::ColId;
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::props::{SpinUp, arm_contact_eta};
 use fb_sim::scene::{Palette, Tint, pal};
@@ -73,7 +73,7 @@ impl MapDef for PlateDrop {
                     continue;
                 }
                 let p = pals[((i + k) % 4) as usize];
-                let prim = b.box_(x, -0.5, z, PLATE, 1.0, PLATE, p, dynamic());
+                let prim = b.box_(v3(x, -0.5, z), v3(PLATE, 1.0, PLATE), p, dynamic());
                 plates.push(Plate {
                     x,
                     z,
@@ -85,8 +85,8 @@ impl MapDef for PlateDrop {
             }
         }
         // The centre never falls: it carries the pillar with the beams.
-        b.box_(0.0, -0.5, 0.0, PLATE, 1.0, PLATE, pal::YELLOW, o());
-        b.hub(0.0, 0.0, 0.0, 0.9);
+        b.box_(v3(0.0, -0.5, 0.0), v3(PLATE, 1.0, PLATE), pal::YELLOW, o());
+        b.hub(V3::ZERO, 0.9);
         let reach = (half + 0.5) * (PLATE + GAP);
         let dir = if b.rng.unit() < 0.5 { 1.0 } else { -1.0 };
         let low = SpinUp::new(-0.22, 0.8 + b.rng.unit() * 0.2, 0.004);
@@ -99,8 +99,8 @@ impl MapDef for PlateDrop {
             let d = t - high_at;
             -dir * (0.6 * d + 0.003 * (d * d))
         };
-        b.rotor(0.0, 0.6, 0.0, reach, 2, low_angle, 0.7);
-        b.rotor(0.0, 2.45, 0.0, reach, 1, high_angle, 0.7);
+        b.rotor(v3(0.0, 0.6, 0.0), reach, 2, low_angle, 0.7);
+        b.rotor(v3(0.0, 2.45, 0.0), reach, 1, high_angle, 0.7);
 
         // Deterministic drop order, in groups of two or three: identical everywhere, no events needed.
         let mut at = 8.0;
@@ -120,7 +120,7 @@ impl MapDef for PlateDrop {
         for r in [3.0, 7.0] {
             for a in 0..4 {
                 let a = f64::from(a);
-                b.bonus(m::cos(a * 1.57 + r) * r * 1.3, 0.0, m::sin(a * 1.57 + r) * r * 1.3);
+                b.bonus(v3(m::cos(a * 1.57 + r) * r * 1.3, 0.0, m::sin(a * 1.57 + r) * r * 1.3));
             }
         }
         let plates = Arc::new(plates);

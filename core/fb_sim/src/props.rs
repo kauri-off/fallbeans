@@ -5,7 +5,7 @@ use fb_shared::cause::Hazard;
 use crate::builder::{Builder, PrimOpts};
 use crate::collider::{ColliderOpts, Shape};
 use crate::m::{self, MinMax};
-use crate::math::V3;
+use crate::math::{V3, v3};
 use crate::nodes::ROOT;
 use crate::scene::Model;
 use crate::scene::{Palette, pal};
@@ -143,9 +143,7 @@ pub fn rolling_balls(b: &mut Builder, o: BallLaneOpts) -> Arc<BallLanes> {
             let phase = b.rng.unit() * o.period + (f64::from(k) * o.period) / f64::from(o.per_lane);
             balls.push((x, phase));
             let ball = b.sphere(
-                x,
-                o.y_top + o.radius,
-                o.z_top,
+                v3(x, o.y_top + o.radius, o.z_top),
                 o.radius,
                 o.pal.unwrap_or(palettes[(li + k as usize) % palettes.len()]),
                 PrimOpts {
@@ -237,18 +235,14 @@ pub fn glove_puncher(b: &mut Builder, o: GloveOpts) -> Glove {
             ..Default::default()
         };
         b.box_(
-            o.x + o.side * 1.4 * s,
-            post_to + h / 2.0,
-            o.z,
-            1.1,
-            h,
-            1.3,
+            v3(o.x + o.side * 1.4 * s, post_to + h / 2.0, o.z),
+            v3(1.1, h, 1.3),
             pal::ORANGE,
             deco,
         );
     }
-    let glove = b.anchor(o.x, o.y, o.z, ROOT);
-    let at = b.anchor(-o.side * 0.56 * s, 0.0, 0.0, glove);
+    let glove = b.anchor(v3(o.x, o.y, o.z), ROOT);
+    let at = b.anchor(v3(-o.side * 0.56 * s, 0.0, 0.0), glove);
     b.collider(
         at,
         Shape::Box {

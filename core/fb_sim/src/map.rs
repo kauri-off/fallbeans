@@ -231,6 +231,30 @@ impl MapLogic for Brain {
     }
 }
 
+/// Who runs map code: the server (`apply`: an event recorded is applied at once) or a client (`me`).
+#[derive(Clone, Copy, Debug)]
+pub struct Role {
+    pub server: bool,
+    pub apply: bool,
+    pub me: Option<PlayerId>,
+}
+
+impl Role {
+    pub const SERVER: Role = Role {
+        server: true,
+        apply: true,
+        me: None,
+    };
+
+    pub fn client(me: Option<PlayerId>) -> Role {
+        Role {
+            server: false,
+            apply: false,
+            me,
+        }
+    }
+}
+
 /// What map code can do besides building. On the server `MapLogic::emit` records an authoritative event,
 /// applies it right away and has it sent; on clients it does nothing, the events come from the server.
 pub struct Cx<'a> {
@@ -251,15 +275,14 @@ pub struct Cx<'a> {
 
 impl<'a> Cx<'a> {
     pub fn new(
-        server: bool,
-        apply: bool,
+        role: Role,
         t: f64,
-        me: Option<PlayerId>,
         world: &'a mut World,
         bodies: &'a mut dyn Bodies,
         scores: &'a mut BTreeMap<PlayerId, i64>,
         out: &'a mut Vec<MapOut>,
     ) -> Self {
+        let Role { server, apply, me } = role;
         Self {
             server,
             apply,

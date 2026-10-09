@@ -12,7 +12,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::scene::pal;
 
 use crate::util::o;
@@ -35,7 +35,7 @@ fn fork() -> Segment {
         let len = 30.0;
         let z1 = z0 + len;
         let bx = -5.0;
-        s.b.box_(bx, y - 1.0, z0 + len / 2.0, 3.2, 2.0, len, pal::BLUE, o());
+        s.b.box_(v3(bx, y - 1.0, z0 + len / 2.0), v3(3.2, 2.0, len), pal::BLUE, o());
         let hammers: Vec<(f64, f64, f64)> = [5.0, 12.0, 19.0, 26.0]
             .iter()
             .map(|dz| {
@@ -45,13 +45,13 @@ fn fork() -> Segment {
             })
             .collect();
         for &(z, w, ph) in &hammers {
-            s.b.hammer(bx, y + 7.4, z, w, ph, 1.12, true);
+            s.b.hammer(v3(bx, y + 7.4, z), w, ph, 1.12, true);
         }
         let head_x = move |w: f64, ph: f64, t: f64| bx + 6.0 * m::sin(m::sin(t * w + ph) * 1.12);
 
-        s.b.box_(5.0, y - 1.0, z0 + len / 2.0, 5.0, 2.0, len, pal::GREEN, o());
+        s.b.box_(v3(5.0, y - 1.0, z0 + len / 2.0), v3(5.0, 2.0, len), pal::GREEN, o());
         for sx in [2.1, 7.9] {
-            s.b.box_(sx, y + 1.2, z0 + len / 2.0, 0.8, 2.4, len, pal::PINK, o());
+            s.b.box_(v3(sx, y + 1.2, z0 + len / 2.0), v3(0.8, 2.4, len), pal::PINK, o());
         }
         let zig: Vec<(f64, f64, f64)> = [5.0, 11.5, 18.0, 24.5]
             .iter()
@@ -62,7 +62,7 @@ fn fork() -> Segment {
             })
             .collect();
         for &(z, x0, x1) in &zig {
-            s.b.box_((x0 + x1) / 2.0, y + 1.2, z, x1 - x0, 2.4, 0.8, pal::PURPLE, o());
+            s.b.box_(v3((x0 + x1) / 2.0, y + 1.2, z), v3(x1 - x0, 2.4, 0.8), pal::PURPLE, o());
         }
         let pushers: Vec<(f64, f64, f64)> = zig
             .iter()
@@ -83,11 +83,11 @@ fn fork() -> Segment {
                 },
                 ..Default::default()
             };
-            let node = s.b.box_(5.0, y + 0.8, z, 1.4, 1.6, 1.4, pal::ORANGE, opts).node;
+            let node = s.b.box_(v3(5.0, y + 0.8, z), v3(1.4, 1.6, 1.4), pal::ORANGE, opts).node;
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = pusher_x(w, ph, t));
         }
-        s.b.bonus(bx, y, z0 + 15.5);
-        s.b.box_(0.0, y - 1.0, z1 + 4.0, 18.0, 2.0, 8.0, pal::PURPLE, o());
+        s.b.bonus(v3(bx, y, z0 + 15.5));
+        s.b.box_(v3(0.0, y - 1.0, z1 + 4.0), v3(18.0, 2.0, 8.0), pal::PURPLE, o());
 
         let mut bridge = vec![Waypoint::exact(bx, z0 + 0.5)];
         for &(z, w, ph) in &hammers {

@@ -20,7 +20,9 @@ use fb_sim::beans::{self, Other, Side};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
 use fb_sim::builder::{Builder, enter_gate};
-use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapEvent, MapLogic, MapOut, MapSpec, NoBodies, NoLogic, spec_problems};
+use fb_sim::map::{
+    Bodies, Cx, MapCtx, MapDef, MapEvent, MapLogic, MapOut, MapSpec, NoBodies, NoLogic, Role, spec_problems,
+};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nav::{Nav, NavGrid};
 use fb_sim::physics::{Body, BodyInput, BodyState, Carry, OtherBody, StepEvents, StepScratch, Touch};
@@ -771,10 +773,8 @@ impl Arena {
     fn with_cx<R>(&mut self, t: f64, f: impl FnOnce(&mut dyn MapLogic, &mut Cx) -> R) -> R {
         let mut bodies = PawnBodies(&mut self.pawns);
         let mut cx = Cx::new(
-            true,
-            true,
+            Role::SERVER,
             t,
-            None,
             &mut self.world,
             &mut bodies,
             &mut self.scores,

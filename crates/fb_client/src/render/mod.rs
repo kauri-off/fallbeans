@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use bevy::asset::embedded_asset;
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::ecs::system::SystemParam;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
@@ -229,19 +230,26 @@ fn sky_uniform(look: &ResolvedLook) -> SkyUniform {
     }
 }
 
+/// What a look lights: the sky and its material, the sun, the clear colour, and the environment light with
+/// the images it is made in.
+#[derive(SystemParam)]
+struct Lighting<'w, 's> {
+    sky: Query<'w, 's, &'static MeshMaterial3d<SkyMaterial>, With<Sky>>,
+    skies: ResMut<'w, Assets<SkyMaterial>>,
+    sun: Query<'w, 's, (&'static mut DirectionalLight, &'static mut Transform), With<Sun>>,
+    clear: ResMut<'w, ClearColor>,
+    env: ResMut<'w, EnvLights>,
+    images: ResMut<'w, Assets<Image>>,
+}
+
 /// Lights and sky for the round's look: sky colours and stars, the sun's colour, strength and direction,
 /// ambient light, fog, exposure and the grade.
 fn apply_look(
     map: Option<Res<Map>>,
     mut shown: ResMut<LookShown>,
     mut commands: Commands,
-    sky: Query<&MeshMaterial3d<SkyMaterial>, With<Sky>>,
-    mut skies: ResMut<Assets<SkyMaterial>>,
-    mut sun: Query<(&mut DirectionalLight, &mut Transform), With<Sun>>,
+    mut lighting: Lighting,
     mut camera: Query<(Entity, &mut DistanceFog, &mut ColorGrading), With<MainCamera>>,
-    mut images: ResMut<Assets<Image>>,
-    mut clear: ResMut<ClearColor>,
-    mut env: ResMut<EnvLights>,
 ) {
     let Some(map) = map else { return };
     if shown.0 == Some(map.generation) {
@@ -250,12 +258,12 @@ fn apply_look(
     shown.0 = Some(map.generation);
     let look = &map.look;
     let l = look.look;
-    if let Ok(h) = sky.single()
-        && let Some(mut m) = skies.get_mut(&h.0)
+    if let Ok(h) = lighting.sky.single()
+        && let Some(mut m) = lighting.skies.get_mut(&h.0)
     {
         m.u = sky_uniform(look);
     }
-    if let Ok((mut light, mut tf)) = sun.single_mut() {
+    if let Ok((mut light, mut tf)) = lighting.sun.single_mut() {
         light.color = crate::view::color(l.sun.color);
         light.illuminance = l.sun.intensity as f32 * LUX;
         *tf = Transform::from_translation(sun_dir(look) * SUN_DISTANCE).looking_at(Vec3::ZERO, Vec3::Y);
@@ -270,8 +278,8 @@ fn apply_look(
         post_saturation: l.saturation as f32,
         ..default()
     };
-    clear.0 = crate::view::color(l.sky.horizon);
-    commands.entity(cam).insert(env.of(l, &mut images));
+    lighting.clear.0 = crate::view::color(l.sky.horizon);
+    commands.entity(cam).insert(lighting.env.of(l, &mut lighting.images));
 }
 
 /// The looks' ambient light (`env.rs`), made once per look (≈70 KB each) and kept: a round of a look seen

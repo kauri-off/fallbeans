@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_net::PROTOCOL_VERSION;
 use fb_proto::{Phase, SessionReply, SessionRequest, TransportKind};
@@ -29,6 +30,23 @@ pub const UDP_TRY_S: f32 = 2.0;
 const PROBE_EVERY_S: f32 = 60.0;
 /// Wait before asking the HTTP API again after a failed request.
 const RETRY_S: f32 = 2.0;
+
+/// The connection, and the links (one while there is a connection attempt).
+#[derive(SystemParam)]
+pub struct Connection<'w, 's> {
+    pub conn: Option<Res<'w, Conn>>,
+    pub links: Query<'w, 's, &'static Link>,
+}
+
+impl Connection<'_, '_> {
+    /// The connection's link.
+    pub fn link(&self) -> Option<&Link> {
+        self.conn
+            .as_ref()
+            .and_then(|c| c.entity)
+            .and_then(|e| self.links.get(e).ok())
+    }
+}
 
 #[derive(Resource)]
 pub struct Conn {

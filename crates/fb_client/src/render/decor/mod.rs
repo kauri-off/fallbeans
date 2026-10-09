@@ -19,7 +19,7 @@ use fb_sim::scene::SceneryRequest;
 use super::props::Prop;
 use super::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
 use crate::game::Map;
-use crate::view::{MapRoot, color, frame_tick};
+use crate::view::{FrameClock, MapRoot, color};
 
 mod buildings;
 mod fancy;
@@ -603,15 +603,14 @@ fn build(world: &mut World) {
 fn animate(
     ticks: Res<Ticks>,
     map: Option<Res<Map>>,
-    timeline: Res<lightyear::prelude::LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
     mut q: Query<(&'static mut Transform, &'static mut Visibility), With<Decor>>,
+    clock: FrameClock,
 ) {
     let Some(map) = map else { return };
     if ticks.generation != Some(map.generation) {
         return;
     }
-    let t = map.time(frame_tick(&timeline, &fixed)) as f32;
+    let t = map.time(clock.tick()) as f32;
     let mut tx = Tx { q: &mut q };
     for f in &ticks.list {
         f(t, &mut tx);

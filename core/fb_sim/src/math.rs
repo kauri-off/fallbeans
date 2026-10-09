@@ -2,7 +2,7 @@
 //! the same bits on every OS, except where glam calls the platform's libm (`sin_cos` in `DQuat::from_euler`
 //! and the like): rotations from angles come from `euler_xyz` instead.
 use crate::m;
-pub use glam::{DAffine3 as Affine, DQuat, DVec3 as V3};
+pub use glam::{DAffine3 as Affine, DQuat, DVec3 as V3, dvec3 as v3};
 
 /// Rotation by Euler angles about x, then y, then z (each about the axes already turned).
 pub fn euler_xyz(r: V3) -> DQuat {

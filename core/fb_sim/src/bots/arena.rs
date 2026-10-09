@@ -1,11 +1,14 @@
 //! The arena brain: hold ground, hunt beans, keep off the edges.
 use super::*;
 
+/// Is (x, z) a place to stand at time t?
+pub type GroundTest = Box<dyn Fn(f64, f64, f64) -> bool + Send + Sync>;
+
 pub struct ArenaOpts {
     pub x: f64,
     pub z: f64,
     pub radius: f64,
-    pub safe: Option<Box<dyn Fn(f64, f64, f64) -> bool + Send + Sync>>,
+    pub safe: Option<GroundTest>,
     pub jump_when: Option<BotTest>,
     /// Seconds before a bot picks another spot (plus up to 2.5 at random).
     pub retarget: f64,
@@ -16,7 +19,7 @@ pub struct ArenaOpts {
     /// The floor moves or drops (not in the navigation grid): only `safe` decides where to stand.
     pub ignore_nav: bool,
     /// Is there ground to stand on at (x, z) at time t? Bots steer round holes (with `ignore_nav`).
-    pub floor: Option<Box<dyn Fn(f64, f64, f64) -> bool + Send + Sync>>,
+    pub floor: Option<GroundTest>,
 }
 
 impl Default for ArenaOpts {

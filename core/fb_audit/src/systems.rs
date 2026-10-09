@@ -13,7 +13,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::map::MapId;
 use fb_sim::map::NoLogic;
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::physics::{Body, BodyInput, BodyState, RUN_SPEED, StepEvents};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
@@ -46,9 +46,14 @@ const LEDGES: [f64; 10] = [0.2, 0.35, 0.5, 0.65, 0.8, 1.0, 1.3, 1.6, 2.0, 2.4];
 fn test_world() -> World {
     let mut b = Builder::new(1, false);
     let o = PrimOpts::default;
-    b.box_(0.0, -1.0, 0.0, 400.0, 2.0, 400.0, pal::BLUE, o());
+    b.box_(v3(0.0, -1.0, 0.0), v3(400.0, 2.0, 400.0), pal::BLUE, o());
     for (i, h) in LEDGES.into_iter().enumerate() {
-        b.box_(-100.0 - i as f64 * 20.0, h / 2.0, 0.0, 6.0, h, 6.0, pal::BLUE, o());
+        b.box_(
+            v3(-100.0 - i as f64 * 20.0, h / 2.0, 0.0),
+            v3(6.0, h, 6.0),
+            pal::BLUE,
+            o(),
+        );
     }
     let ice = PrimOpts {
         col: ColliderOpts {
@@ -57,7 +62,7 @@ fn test_world() -> World {
         },
         ..Default::default()
     };
-    b.box_(100.0, 0.1, 0.0, 40.0, 0.2, 40.0, pal::BLUE, ice);
+    b.box_(v3(100.0, 0.1, 0.0), v3(40.0, 0.2, 40.0), pal::BLUE, ice);
     b.world.finalize(0.0, &NoLogic);
     b.world
 }

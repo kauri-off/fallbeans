@@ -12,7 +12,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
 use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapId, MapSfx, MapSpec, SegEvent, Steer};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
 use fb_sim::props::{Glove, GloveOpts, glove_puncher};
@@ -314,7 +314,7 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
                 let x = (k as f64 - (cols as f64 - 1.0) / 2.0) * dx;
                 let zz = z0 + r as f64 * dz;
                 let real = k as i64 == c;
-                let at = s.b.anchor(x, y - THICK / 2.0, zz, ROOT);
+                let at = s.b.anchor(v3(x, y - THICK / 2.0, zz), ROOT);
                 let collider = s.b.collider(
                     at,
                     Shape::Box {
@@ -348,7 +348,7 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             s.b.watch_touch(tile.collider);
         }
         let end = z0 + (rows as f64 - 1.0) * dz + PANE / 2.0;
-        s.b.box_(0.0, y - 1.0, s.z + 0.65, 16.0, 2.0, 1.3, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 0.65), v3(16.0, 2.0, 1.3), pal::PURPLE, o());
         let half = ((cols as f64 - 1.0) / 2.0) * dx + PANE / 2.0 + 1.1;
         let gloves: Vec<(usize, Glove, f64)> = glove_rows
             .iter()
@@ -404,18 +404,14 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             for sx in [-1.0, 1.0] {
                 let l = end - z0 + PANE + 1.2;
                 s.b.box_(
-                    sx * half,
-                    y - 1.1,
-                    (z0 - PANE / 2.0 + end) / 2.0,
-                    0.5,
-                    0.7,
-                    l,
+                    v3(sx * half, y - 1.1, (z0 - PANE / 2.0 + end) / 2.0),
+                    v3(0.5, 0.7, l),
                     pal::solid(rgb(0x7d86ad)),
                     deco(),
                 );
             }
         }
-        s.b.box_(0.0, y - 1.0, end + 0.1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, end + 0.1 + 3.0), v3(16.0, 2.0, 6.0), pal::PURPLE, o());
 
         let (k_col, k_row, k_wait): (Note<usize>, Note<usize>, Note<f64>) = (s.b.note(), s.b.note(), s.b.note());
         let hook = s.b.hook();

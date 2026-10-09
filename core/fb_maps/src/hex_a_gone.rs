@@ -9,7 +9,7 @@ use fb_sim::collider::{ColId, ColliderOpts, Shape};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
 use fb_sim::scene::Surface;
@@ -82,14 +82,17 @@ fn floor_of(y: f64) -> usize {
     best
 }
 
+/// A tile's floor and position (x, y, z).
+type Spot = (u8, f64, f64, f64);
+
 /// The floors' tiles and when they drop.
 struct Floors {
     tiles: Tiles,
     /// When each tile drops (None: still there), by tile index.
     falls: Vec<Option<f64>>,
     heading: Note<f64>,
-    /// Client: the tiles' special, and where each tile is (floor, x, y, z).
-    look: Option<(Hook, Vec<(u8, f64, f64, f64)>)>,
+    /// Client: the tiles' special, and where each tile is.
+    look: Option<(Hook, Vec<Spot>)>,
 }
 
 impl MapLogic for Floors {
@@ -248,7 +251,7 @@ impl MapDef for HexAGone {
                     let z = SIZE * 1.5 * r as f64;
                     let i = tiles.cols.len();
                     spots.push((u8::try_from(floor).expect("fewer than 256 floors"), x, y, z));
-                    let at = b.anchor(x, y - THICK / 2.0, z, ROOT);
+                    let at = b.anchor(v3(x, y - THICK / 2.0, z), ROOT);
                     let col = b.collider(
                         at,
                         Shape::Cyl {
@@ -269,7 +272,7 @@ impl MapDef for HexAGone {
         for &fy in &FLOORS[..2] {
             for k in 0..3 {
                 let a = (f64::from(k) / 3.0) * m::PI * 2.0 + fy;
-                b.bonus(m::cos(a) * 7.0, fy, m::sin(a) * 7.0);
+                b.bonus(v3(m::cos(a) * 7.0, fy, m::sin(a) * 7.0));
             }
         }
         let look = (!b.server()).then(|| {

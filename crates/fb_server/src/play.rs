@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::Duration;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_real_timer;
 use fb_arena::PawnStatus;
@@ -84,16 +85,12 @@ struct FarInputs {
     log: Backoff,
 }
 
+type InputReceiver = MessageReceiver<InputMessage<NativeStateSequence<FbInput>>>;
+
 fn count_far_inputs(
     timeline: Res<LocalTimeline>,
     mut far: ResMut<FarInputs>,
-    mut receivers: Query<
-        (
-            &RemoteId,
-            &mut MessageReceiver<InputMessage<NativeStateSequence<FbInput>>>,
-        ),
-        With<Connected>,
-    >,
+    mut receivers: Query<(&RemoteId, &mut InputReceiver), With<Connected>>,
 ) {
     let tick = timeline.tick();
     let far = &mut *far;
@@ -375,21 +372,44 @@ type Bodies = (
     &'static mut RemotePose,
     &'static mut Hold,
 );
+/// The clients' links: who they are, how far behind they see, and their senders.
+#[derive(SystemParam)]
+struct Links<'w, 's> {
+    remotes: Query<'w, 's, &'static RemoteId, With<ClientOf>>,
+    delays: Query<'w, 's, (Entity, &'static InterpolationDelay), With<ClientOf>>,
+    control: Query<'w, 's, &'static mut MessageSender<ServerMsg>>,
+    events: Query<'w, 's, &'static mut MessageSender<MapEventMsg>>,
+}
+
+/// The pawns' inputs and bodies, and the round entities.
+#[derive(SystemParam)]
+struct PawnsMut<'w, 's> {
+    inputs: Query<'w, 's, (Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
+    bodies: Query<'w, 's, Bodies>,
+    rounds: Query<'w, 's, &'static mut Round>,
+}
+
+/// The dev server's traces, when asked for.
+#[derive(SystemParam)]
+struct Traces<'w> {
+    ticks: Option<ResMut<'w, Trace>>,
+    hits: Option<ResMut<'w, HitTrace>>,
+}
+
 fn tick_rooms(
     timeline: Res<LocalTimeline>,
+    time: Res<Time<Real>>,
     mut rooms: ResMut<Rooms>,
     mut commands: Commands,
-    mut control: Query<&mut MessageSender<ServerMsg>>,
-    mut events: Query<&mut MessageSender<MapEventMsg>>,
-    mut inputs: Query<(Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
-    mut bodies: Query<Bodies>,
-    mut round_q: Query<&mut Round>,
-    remotes: Query<&RemoteId, With<ClientOf>>,
-    delays: Query<(Entity, &InterpolationDelay), With<ClientOf>>,
-    time: Res<Time<Real>>,
-    trace: Option<ResMut<Trace>>,
-    hit_trace: Option<ResMut<HitTrace>>,
+    mut links: Links,
+    pawns: PawnsMut,
+    traces: Traces,
 ) {
+    let PawnsMut {
+        mut inputs,
+        mut bodies,
+        mut rounds,
+    } = pawns;
     let tick = timeline.tick();
     let rooms = &mut *rooms;
     let owners: BTreeMap<ConnId, Entity> = rooms
@@ -402,7 +422,8 @@ fn tick_rooms(
         clippy::cast_sign_loss,
         reason = "milliseconds of delay"
     )]
-    let views: BTreeMap<ConnId, u32> = delays
+    let views: BTreeMap<ConnId, u32> = links
+        .delays
         .iter()
         .map(|(link, d)| (conn_of(link), d.delay.value.to_num::<f64>().round() as u32))
         .collect();
@@ -415,10 +436,10 @@ fn tick_rooms(
             views: &views,
         },
     );
-    if let Some(mut trace) = trace {
+    if let Some(mut trace) = traces.ticks {
         write_trace(&mut trace, rooms, &mut inputs, tick);
     }
-    if let Some(mut out) = hit_trace {
+    if let Some(mut out) = traces.hits {
         for room in rooms.hub.rooms.values_mut() {
             let hits = room.hits.get_or_insert_default();
             for l in hits.drain(..) {
@@ -431,12 +452,12 @@ fn tick_rooms(
     for out in rooms.hub.take_out() {
         match out {
             Out::Msg(c, m) => {
-                if let Ok(mut s) = control.get_mut(link_of(c)) {
+                if let Ok(mut s) = links.control.get_mut(link_of(c)) {
                     s.send::<ControlChannel>(m);
                 }
             }
             Out::Event(c, e) => {
-                if let Ok(mut s) = events.get_mut(link_of(c)) {
+                if let Ok(mut s) = links.events.get_mut(link_of(c)) {
                     s.send::<MapEventsChannel>(e);
                 }
             }
@@ -447,7 +468,7 @@ fn tick_rooms(
             }
         }
     }
-    publish(rooms, &mut commands, &mut bodies, &mut round_q, &remotes, tick);
+    publish(rooms, &mut commands, &mut bodies, &mut rounds, &links.remotes, tick);
 }
 
 fn receive(mut rooms: ResMut<Rooms>, mut receivers: Query<(Entity, &mut MessageReceiver<ClientMsg>), With<ClientOf>>) {

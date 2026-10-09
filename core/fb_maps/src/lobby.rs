@@ -13,7 +13,7 @@ use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::Pattern;
 use fb_sim::m;
 use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapId, MapLogic, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
 use fb_sim::scene::Surface;
@@ -65,12 +65,8 @@ fn slide(b: &mut Builder, x0: f64, y0: f64, x1: f64, y1: f64, z: f64, width: f64
         ..Default::default()
     };
     b.box_(
-        (x0 + x1) / 2.0,
-        (y0 + y1) / 2.0 - thick / 2.0 / m::cos(ang),
-        z,
-        len,
-        thick,
-        width,
+        v3((x0 + x1) / 2.0, (y0 + y1) / 2.0 - thick / 2.0 / m::cos(ang), z),
+        v3(len, thick, width),
         pal::TEAL,
         opts,
     );
@@ -85,7 +81,7 @@ fn path(b: &mut Builder, x0: f64, z0: f64, x1: f64, z1: f64, p: Palette) {
         rot: Some(V3::new(0.0, m::atan2(x1 - x0, z1 - z0), 0.0)),
         ..Default::default()
     };
-    b.box_((x0 + x1) / 2.0, 0.03, (z0 + z1) / 2.0, 2.2, 0.06, len, p, opts);
+    b.box_(v3((x0 + x1) / 2.0, 0.03, (z0 + z1) / 2.0), v3(2.2, 0.06, len), p, opts);
 }
 
 /// The models the lobby makes solid.
@@ -112,10 +108,10 @@ impl Solid {
 
 /// A decorative model that is also solid: colliders following the model's shape; mushroom caps bounce.
 fn solid(b: &mut Builder, name: Solid, x: f64, y: f64, z: f64, o: PropOpts) {
-    b.prop(name.model(), x, y, z, o);
+    b.prop(name.model(), v3(x, y, z), o);
     let s = o.scale;
     let cyl = |b: &mut Builder, r: f64, h: f64, cy: f64, pad: f64| {
-        let at = b.anchor(x, y + cy * s, z, ROOT);
+        let at = b.anchor(v3(x, y + cy * s, z), ROOT);
         b.collider(
             at,
             Shape::Cyl {
@@ -132,7 +128,7 @@ fn solid(b: &mut Builder, name: Solid, x: f64, y: f64, z: f64, o: PropOpts) {
     match name {
         Solid::Tree => {
             cyl(b, 0.34, 3.2, 1.6, 0.0);
-            let at = b.anchor(x, y + 3.7 * s, z, ROOT);
+            let at = b.anchor(v3(x, y + 3.7 * s, z), ROOT);
             let ball = ColliderOpts {
                 is_static: true,
                 ..Default::default()
@@ -163,12 +159,12 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
         surface: Some(Surface::Wood),
         ..Default::default()
     };
-    b.box_(x, 1.25, z, 0.22, 2.5, 0.22, wood, post);
+    b.box_(v3(x, 1.25, z), v3(0.22, 2.5, 0.22), wood, post);
     let board = PrimOpts {
         rot: Some(V3::new(0.0, yaw, 0.0)),
         ..post
     };
-    let node = b.box_(x, 3.05, z, 1.5, 1.5, 0.1, wood, board).node;
+    let node = b.box_(v3(x, 3.05, z), v3(1.5, 1.5, 0.1), wood, board).node;
     let face = [Part::new(Form::Label(1.4, 1.4, emoji), bg, Finish::Matte)];
     let sides = vec![
         Piece::at(0, 0.0, 0.0, 0.06),
@@ -224,23 +220,23 @@ impl MapDef for Lobby {
             freq: Some(0.3),
             ..Default::default()
         };
-        b.cyl(0.0, -1.0, 0.0, FLOOR_R, 2.0, pal::BLUE, floor);
+        b.cyl(v3(0.0, -1.0, 0.0), FLOOR_R, 2.0, pal::BLUE, floor);
         let plaza = PrimOpts {
             pattern: Some(Pattern::Waves),
             ..deco()
         };
-        b.cyl(0.0, 0.05, 0.0, 7.5, 0.1, pal::YELLOW, plaza);
+        b.cyl(v3(0.0, 0.05, 0.0), 7.5, 0.1, pal::YELLOW, plaza);
         // Fountain: a basin with water.
         let tile = PrimOpts {
             surface: Some(Surface::Tile),
             ..Default::default()
         };
-        b.cyl(0.0, 0.35, 0.0, 1.6, 0.7, pal::WHITE, tile);
+        b.cyl(v3(0.0, 0.35, 0.0), 1.6, 0.7, pal::WHITE, tile);
         let water = PrimOpts {
             surface: Some(Surface::Glossy),
             ..deco()
         };
-        b.cyl(0.0, 0.72, 0.0, 1.35, 0.06, pal::TEAL, water);
+        b.cyl(v3(0.0, 0.72, 0.0), 1.35, 0.06, pal::TEAL, water);
         // Flags on little posts round the plaza (between the paths that lead out of it).
         let flag_cols = [rgb(0xff5fa2), rgb(0x3fa9ff), rgb(0xffd23f), rgb(0x4fdc6a)];
         for (k, tint) in flag_cols.into_iter().enumerate() {
@@ -251,7 +247,7 @@ impl MapDef for Lobby {
                 seg: 16,
                 ..Default::default()
             };
-            b.cyl(x, 0.15, z, 0.35, 0.3, pal::PURPLE, post);
+            b.cyl(v3(x, 0.15, z), 0.35, 0.3, pal::PURPLE, post);
             let flag = PropOpts {
                 tint: Some(tint),
                 yaw: -a,
@@ -266,7 +262,12 @@ impl MapDef for Lobby {
             pattern: Some(Pattern::Stripes),
             ..Default::default()
         };
-        b.box_(tx, top / 2.0, tz, half * 2.0, top, half * 2.0, pal::PURPLE, stripes);
+        b.box_(
+            v3(tx, top / 2.0, tz),
+            v3(half * 2.0, top, half * 2.0),
+            pal::PURPLE,
+            stripes,
+        );
         // Pillars spiral up round the west side: 1 m higher each, the last one a jump from the top.
         let pillar_pals = [pal::GREEN, pal::YELLOW, pal::ORANGE, pal::PINK, pal::RED];
         for (k, p) in pillar_pals.into_iter().enumerate() {
@@ -276,7 +277,7 @@ impl MapDef for Lobby {
                 seg: 32,
                 ..Default::default()
             };
-            b.cyl(tx + m::cos(a) * 5.0, h / 2.0, tz + m::sin(a) * 5.0, 1.1, h, p, seg);
+            b.cyl(v3(tx + m::cos(a) * 5.0, h / 2.0, tz + m::sin(a) * 5.0), 1.1, h, p, seg);
         }
         // The bell hangs in a frame on top, high enough to walk under.
         let metal = PrimOpts {
@@ -285,18 +286,18 @@ impl MapDef for Lobby {
         };
         for sx in [-1.0, 1.0] {
             let y = top + BELL_HANG / 2.0;
-            b.box_(tx + sx * 1.75, y, tz, 0.3, BELL_HANG, 0.3, pal::WHITE, metal);
+            b.box_(v3(tx + sx * 1.75, y, tz), v3(0.3, BELL_HANG, 0.3), pal::WHITE, metal);
         }
-        b.box_(tx, top + BELL_HANG + 0.15, tz, 3.8, 0.3, 0.3, pal::WHITE, metal);
+        b.box_(v3(tx, top + BELL_HANG + 0.15, tz), v3(3.8, 0.3, 0.3), pal::WHITE, metal);
         // (The bell swings a little: a still collider round where it hangs.)
-        let at = b.anchor(tx, top + BELL_HANG - 0.85, tz, ROOT);
+        let at = b.anchor(v3(tx, top + BELL_HANG - 0.85, tz), ROOT);
         let still = ColliderOpts {
             is_static: true,
             ..Default::default()
         };
         b.collider(at, Shape::Cyl { r: 0.75, hh: 0.8 }, still);
         if !b.server() {
-            let bell = b.anchor(tx, top + BELL_HANG, tz, ROOT);
+            let bell = b.anchor(v3(tx, top + BELL_HANG, tz), ROOT);
             let parts = [
                 Part::new(Form::Cyl([0.75, 1.0, 32.0]), rgb(0xffcf3f), Finish::Metal).on(Surface::Gold),
                 Part::new(Form::Sphere(0.5), rgb(0xffcf3f), Finish::Metal).on(Surface::Gold),
@@ -323,10 +324,10 @@ impl MapDef for Lobby {
 
         // ---------------------------------------------------------------- trampolines and the high platform (east)
         for (x, z) in TRAMPS {
-            b.trampoline(x, 0.0, z, 1.8, 21.0);
+            b.trampoline(v3(x, 0.0, z), 1.8, 21.0);
         }
         let (px, pz, ptop) = PLATFORM;
-        b.box_(px, ptop - 0.4, pz, 4.0, 0.8, 4.5, pal::ORANGE, o());
+        b.box_(v3(px, ptop - 0.4, pz), v3(4.0, 0.8, 4.5), pal::ORANGE, o());
         let flag = PropOpts {
             tint: Some(rgb(0xff8a3d)),
             yaw: -m::PI / 2.0,
@@ -362,9 +363,9 @@ impl MapDef for Lobby {
             surface: Some(Surface::Ice),
             ..Default::default()
         };
-        b.cyl(rx, 0.06, rz, rr, 0.12, pal::WHITE, ice);
-        b.bumper(rx - 1.6, 0.12, rz - 1.4, 0.8, 11.0);
-        b.bumper(rx + 2.0, 0.12, rz + 1.5, 0.8, 11.0);
+        b.cyl(v3(rx, 0.06, rz), rr, 0.12, pal::WHITE, ice);
+        b.bumper(v3(rx - 1.6, 0.12, rz - 1.4), 0.8, 11.0);
+        b.bumper(v3(rx + 2.0, 0.12, rz + 1.5), 0.8, 11.0);
         for k in 0..10 {
             let a = (f64::from(k) / 10.0) * m::PI * 2.0;
             let cone = PropOpts {
@@ -404,7 +405,7 @@ impl MapDef for Lobby {
                 pattern: Some(Pattern::Checker),
                 ..Default::default()
             };
-            b.box_(x, h / 2.0, z, 2.2, h, 2.2, block_pals[i], checker);
+            b.box_(v3(x, h / 2.0, z), v3(2.2, h, 2.2), block_pals[i], checker);
         }
 
         // ---------------------------------------------------------------- the spinner (west)
@@ -413,13 +414,13 @@ impl MapDef for Lobby {
             pattern: Some(Pattern::Stripes),
             ..Default::default()
         };
-        b.cyl(sx, 0.25, sz, sr, 0.5, pal::PINK, stripes);
-        b.hub(sx, 0.5, sz, 0.9);
-        b.rotor(sx, 1.1, sz, 5.2, 2, |t| t * 0.8, 0.6);
+        b.cyl(v3(sx, 0.25, sz), sr, 0.5, pal::PINK, stripes);
+        b.hub(v3(sx, 0.5, sz), 0.9);
+        b.rotor(v3(sx, 1.1, sz), 5.2, 2, |t| t * 0.8, 0.6);
 
         // ---------------------------------------------------------------- launch pad (north-west)
         let (padx, padz) = PAD;
-        b.pad(padx, 0.0, padz, 1.3, 16.0, None);
+        b.pad(v3(padx, 0.0, padz), 1.3, 16.0, None);
         let mush = |s| PropOpts {
             scale: s,
             ..Default::default()
@@ -454,7 +455,7 @@ impl MapDef for Lobby {
                 seg: 24,
                 ..Default::default()
             };
-            b.cyl(x, 0.4, z, 0.9, 0.8, pal::GREEN, grass);
+            b.cyl(v3(x, 0.4, z), 0.9, 0.8, pal::GREEN, grass);
             let o = PropOpts {
                 scale: 0.8 + ((k * 37) % 5) as f64 * 0.1,
                 yaw: k as f64 * 1.7,

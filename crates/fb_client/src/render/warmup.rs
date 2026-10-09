@@ -33,12 +33,13 @@ use lightyear::prelude::LocalTimeline;
 use super::EnvLights;
 use super::ao::BakedAo;
 use super::lod::ModelLods;
+use super::quality::Wanted;
 use super::quality::{Preset, Quality};
 use super::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
 use super::upscale::{Upscaler, Upscaling};
 use crate::face::{FaceKit, FaceSource};
 use crate::game::{Generations, Map};
-use crate::outfit::{Wardrobe, make_glasses, make_hat};
+use crate::outfit::{Tailor, make_glasses, make_hat};
 use crate::session::Session;
 use crate::settings::Graphics;
 use crate::ui::text;
@@ -362,24 +363,35 @@ impl Kit<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What the warm-up watches and leaves behind: the meshes drawn, the maps' roots, what it keeps from being culled,
+/// the pipelines compiling, and the beans that wait for the face kit.
+#[derive(SystemParam)]
+struct WarmScene<'w, 's> {
+    drawn: Query<'w, 's, (), With<Mesh3d>>,
+    roots: Query<'w, 's, Entity, With<MapRoot>>,
+    culled: Query<'w, 's, Entity, With<Culled>>,
+    compiling: Res<'w, Compiling>,
+    faces: Query<'w, 's, Entity, (With<WarmBean>, With<FaceSource>)>,
+    face_kit: Option<Res<'w, FaceKit>>,
+}
+
+/// The map shown, whether a room has come, the predicted timeline, and the maps' generations.
+#[derive(SystemParam)]
+struct Rounds<'w> {
+    map: Option<ResMut<'w, Map>>,
+    session: Res<'w, Session>,
+    timeline: Res<'w, LocalTimeline>,
+    generations: ResMut<'w, Generations>,
+}
+
 fn drive(
     mut commands: Commands,
     mut warm: ResMut<Warmup>,
     time: Res<Time<Real>>,
     mut kit: Kit,
-    mut map: Option<ResMut<Map>>,
-    session: Res<Session>,
-    timeline: Res<LocalTimeline>,
-    mut generations: ResMut<Generations>,
-    compiling: Res<Compiling>,
-    drawn: Query<(), With<Mesh3d>>,
-    roots: Query<Entity, With<MapRoot>>,
-    culled: Query<Entity, With<Culled>>,
-    faces: Query<Entity, (With<WarmBean>, With<FaceSource>)>,
-    face_kit: Option<Res<FaceKit>>,
-    g: Res<Graphics>,
-    up: Res<Upscaling>,
+    mut rounds: Rounds,
+    scene: WarmScene,
+    wanted: Wanted,
 ) {
     let w = &mut *warm;
     let now = time.elapsed_secs();
@@ -427,7 +439,7 @@ fn drive(
                 "warm-up: models, textures or levels of detail not ready after {ASSETS_MAX_S} s ({models_in} of {all} models)"
             );
         }
-        let key = Key::of(&g, &up);
+        let key = Key::of(&wanted.g, &wanted.up);
         w.start(Stage::Maps, key, now);
         w.began = Some(began);
         return;
@@ -439,8 +451,8 @@ fn drive(
     }
     // The face kit is made from a bean model: once it is, one of the beans wears it.
     if !w.face
-        && let Some(face_kit) = &face_kit
-        && let Some(bean) = faces.iter().next()
+        && let Some(face_kit) = &scene.face_kit
+        && let Some(bean) = scene.faces.iter().next()
     {
         for (mesh, mat) in face_kit.sample() {
             commands.spawn((
@@ -453,10 +465,10 @@ fn drive(
         }
         w.face = true;
     }
-    let count = drawn.iter().count();
+    let count = scene.drawn.iter().count();
     let still = count == w.meshes;
     w.meshes = count;
-    let idle = still && compiling.now() == 0 && kit.surfaces.pending() == 0 && kit.lods.making() == 0;
+    let idle = still && scene.compiling.now() == 0 && kit.surfaces.pending() == 0 && kit.lods.making() == 0;
     let (scrub, quiet) = if w.first {
         (SCRUB_FRAMES, QUIET_FRAMES)
     } else {
@@ -469,10 +481,8 @@ fn drive(
             finish(
                 &mut commands,
                 w,
-                map.as_deref(),
-                &roots,
-                &culled,
-                &compiling,
+                rounds.map.as_deref(),
+                &scene,
                 kit.images.len(),
                 now,
                 true,
@@ -483,8 +493,8 @@ fn drive(
     // Maps.
     if w.shown.is_none() {
         // (A room entered meanwhile: its map comes, there is no more room for the warm-up's.)
-        let Some(&(def, kind, look)) = w.plan.get(w.next).filter(|_| session.room.is_none()) else {
-            let done = session.room.is_none();
+        let Some(&(def, kind, look)) = w.plan.get(w.next).filter(|_| rounds.session.room.is_none()) else {
+            let done = rounds.session.room.is_none();
             // (The maps' occlusion is baked in the background: a round should find its map's ready.)
             let since = *w.tail.get_or_insert(now);
             if done && kit.ao.baking() > 0 && now - since < AO_MAX_S {
@@ -493,20 +503,24 @@ fn drive(
             finish(
                 &mut commands,
                 w,
-                map.as_deref(),
-                &roots,
-                &culled,
-                &compiling,
+                rounds.map.as_deref(),
+                &scene,
                 kit.images.len(),
                 now,
                 done,
             );
             return;
         };
-        let generation = generations.next();
+        let generation = rounds.generations.next();
         let pattern = look.patterns.first().copied().unwrap_or(Pattern::Stripes);
         let look = fb_sim::looks::resolve(look, 0.0, pattern);
-        commands.insert_resource(Map::warmup(def, kind, look, generation, i64::from(timeline.tick().0)));
+        commands.insert_resource(Map::warmup(
+            def,
+            kind,
+            look,
+            generation,
+            i64::from(rounds.timeline.tick().0),
+        ));
         w.shown = Some(Shown {
             generation,
             frames: 0,
@@ -519,14 +533,16 @@ fn drive(
     }
     let Some(shown) = w.shown.as_mut() else { return };
     // Someone else's map now (a room entered meanwhile): the pass ends without it.
-    let Some(m) = map.as_mut().filter(|m| m.warmup && m.generation == shown.generation) else {
+    let Some(m) = rounds
+        .map
+        .as_mut()
+        .filter(|m| m.warmup && m.generation == shown.generation)
+    else {
         finish(
             &mut commands,
             w,
-            map.as_deref(),
-            &roots,
-            &culled,
-            &compiling,
+            rounds.map.as_deref(),
+            &scene,
             kit.images.len(),
             now,
             false,
@@ -536,7 +552,7 @@ fn drive(
     shown.frames += 1;
     if shown.frames <= scrub {
         let t = shown.duration * f64::from(shown.frames) / f64::from(scrub);
-        m.round.zero_tick = i64::from(timeline.tick().0) - (t / DT).round() as i64;
+        m.round.zero_tick = i64::from(rounds.timeline.tick().0) - (t / DT).round() as i64;
     }
     w.quiet = if idle && shown.frames > scrub { w.quiet + 1 } else { 0 };
     let late = now - shown.since > MAP_MAX_S;
@@ -557,14 +573,11 @@ fn drive(
 
 /// The pass is over (`done`: all of it; else a room's map came in the middle): what it spawned goes, and what it
 /// made for nothing else.
-#[allow(clippy::too_many_arguments)]
 fn finish(
     commands: &mut Commands,
     w: &mut Warmup,
     map: Option<&Map>,
-    roots: &Query<Entity, With<MapRoot>>,
-    culled: &Query<Entity, With<Culled>>,
-    compiling: &Compiling,
+    scene: &WarmScene,
     textures: usize,
     now: f32,
     done: bool,
@@ -578,12 +591,12 @@ fn finish(
             commands.remove_resource::<Map>();
         }
         if w.stage == Stage::Maps {
-            for e in roots {
+            for e in &scene.roots {
                 commands.entity(e).try_despawn();
             }
         }
     }
-    for e in culled {
+    for e in &scene.culled {
         commands.entity(e).try_remove::<(NoFrustumCulling, Culled)>();
     }
     let secs = now - w.began.unwrap_or(now);
@@ -600,7 +613,7 @@ fn finish(
     let why = if done { "" } else { ", cut short by a room" };
     info!(
         "warm-up: {} pipelines, {textures} textures in {secs:.1} s{maps}{late}{why}",
-        compiling.made()
+        scene.compiling.made()
     );
     if done {
         if w.stage == Stage::Maps {
@@ -697,18 +710,13 @@ fn spawn_own(commands: &mut Commands, kit: &mut Kit) -> Entity {
 
 /// A warm-up bean's model is in: the suit as `beans::dress_beans` paints it (its clearcoat above Low), the hat,
 /// glasses and crown as players wear them; and the face kit may be made from it (`face.rs`).
-#[allow(clippy::too_many_arguments)]
 fn dress_bean(
     ready: On<WorldInstanceReady>,
     beans: Query<&WarmBean>,
     children: Query<&Children>,
     mats: Query<(&GltfMaterialName, &MeshMaterial3d<StandardMaterial>)>,
     mut commands: Commands,
-    mut standard: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut wardrobe: ResMut<Wardrobe>,
-    assets: Res<AssetServer>,
-    quality: Option<Res<Quality>>,
+    mut tailor: Tailor,
 ) {
     let model = ready.entity;
     let Ok(bean) = beans.get(model) else { return };
@@ -722,31 +730,26 @@ fn dress_bean(
             template = Some(mat.0.clone());
         }
     }
-    let coat = quality.is_none_or(|q| q.preset != Preset::Low);
-    let original = template.and_then(|h| standard.get(&h));
+    let coat = tailor.coat();
+    let original = template.and_then(|h| tailor.materials.get(&h));
     let suit = crate::beans::plain_part(original, original.map_or(Color::WHITE, |m| m.base_color), 0.5, coat);
-    let suit = standard.add(suit);
+    let suit = tailor.materials.add(suit);
     for e in body {
         commands.entity(e).insert(MeshMaterial3d(suit.clone()));
     }
     let mut wiggles = Vec::new();
     for (acc, shadows) in [(make_hat(bean.hat, None), true), (make_glasses(bean.glasses), false)] {
         if let Some(a) = acc {
-            wardrobe.spawn(
-                &mut commands,
-                model,
-                &a.root,
-                &suit,
-                shadows,
-                &mut wiggles,
-                &mut meshes,
-                &mut standard,
-            );
+            tailor.spawn(&mut commands, model, &a.root, &suit, shadows, &mut wiggles);
         }
     }
     if bean.crown {
         commands.spawn((
-            WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb"))),
+            WorldAssetRoot(
+                tailor
+                    .assets
+                    .load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb")),
+            ),
             Transform::from_xyz(0.0, 1.465, -0.01).with_scale(Vec3::splat(0.62)),
             Visibility::default(),
             ChildOf(model),

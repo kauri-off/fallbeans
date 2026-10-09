@@ -79,12 +79,16 @@ fn spans(t: &mut ChildSpawnerCommands, f: &Fonts, s: &str, font: &TextFont, colo
     }
 }
 
+type RichText = (
+    Entity,
+    Ref<'static, Rich>,
+    &'static TextFont,
+    &'static TextColor,
+    Option<&'static Pickable>,
+);
+
 /// A `Rich` text set to something else gets its spans anew.
-pub(super) fn respan(
-    texts: Query<(Entity, Ref<Rich>, &TextFont, &TextColor, Option<&Pickable>), Changed<Rich>>,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
+pub(super) fn respan(texts: Query<RichText, Changed<Rich>>, f: Res<Fonts>, mut commands: Commands) {
     for (e, rich, font, color, pick) in &texts {
         if rich.is_added() {
             continue;
@@ -96,12 +100,21 @@ pub(super) fn respan(
     }
 }
 
-/// Sets the first `Rich` text inside `e` (a button's label).
-pub fn relabel(e: Entity, s: &str, children: &Query<&Children>, texts: &mut Query<&mut Rich>) {
-    if let Some(c) = children.iter_descendants(e).find(|c| texts.contains(*c))
-        && let Ok(mut t) = texts.get_mut(c)
-    {
-        t.set(s);
+/// The `Rich` texts, and the nodes they are inside of.
+#[derive(SystemParam)]
+pub struct Labels<'w, 's> {
+    pub children: Query<'w, 's, &'static Children>,
+    pub texts: Query<'w, 's, &'static mut Rich>,
+}
+
+impl Labels<'_, '_> {
+    /// Sets the first `Rich` text inside `e` (a button's label).
+    pub fn set(&mut self, e: Entity, s: &str) {
+        if let Some(c) = self.children.iter_descendants(e).find(|c| self.texts.contains(*c))
+            && let Ok(mut t) = self.texts.get_mut(c)
+        {
+            t.set(s);
+        }
     }
 }
 
@@ -640,15 +653,14 @@ pub(super) fn sync_folds(
     folds: Res<Folds>,
     mut bodies: Query<(&FoldBody, &mut Node)>,
     titles: Query<(Entity, &Act, &FoldTitle)>,
-    children: Query<&Children>,
-    mut texts: Query<&mut Rich>,
+    mut labels: Labels,
 ) {
     for (b, mut node) in &mut bodies {
         show(&mut node, folds.open(b.0));
     }
     for (e, act, title) in &titles {
         if let Action::Fold(k) = act.0 {
-            relabel(e, &fold_title(title.0, folds.open(k)), &children, &mut texts);
+            labels.set(e, &fold_title(title.0, folds.open(k)));
         }
     }
 }

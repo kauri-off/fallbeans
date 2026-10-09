@@ -1,6 +1,7 @@
 //! The camera: a third-person orbit that pulls in
 //! instead of going through walls (the arm stops at `fb_sim` colliders), shakes from hits and hard
 //! landings, flies over the course during a round's intro and circles the podium.
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
@@ -15,7 +16,7 @@ use crate::beans::BeanView;
 use crate::game::{CameraAngles, Cue, Map};
 use crate::session::Session;
 use crate::settings::{Controls, Display};
-use crate::view::{MainCamera, Spectate, frame_tick};
+use crate::view::{FrameClock, MainCamera, Spectate};
 
 /// The final pose follows its target this fast (1/s): barely a frame of lag, but one uneven frame (a
 /// prediction correction, mouse input bunched into a frame) does not show as a jolt.
@@ -250,23 +251,35 @@ fn fov(display: Res<Display>, mut q: Query<&mut Projection, With<MainCamera>>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The camera: its rig, angles and transform, and a fixed one a tool may set instead.
+#[derive(SystemParam)]
+pub struct Shot<'w, 's> {
+    rig: ResMut<'w, Rig>,
+    cam: ResMut<'w, CameraAngles>,
+    camera: Query<'w, 's, &'static mut Transform, With<MainCamera>>,
+    fixed: Option<Res<'w, CameraOverride>>,
+}
+
+/// The beans the camera may follow, as drawn: the own one, or the one spectated.
+#[derive(SystemParam)]
+pub struct Followed<'w, 's> {
+    own: Query<'w, 's, (&'static Transform, &'static BodyFull), (With<Predicted>, Drawn)>,
+    others: Query<'w, 's, (&'static BeanId, &'static Transform), (With<Interpolated>, Drawn)>,
+    spectate: Res<'w, Spectate>,
+}
+
+type Drawn = (With<BeanView>, Without<MainCamera>);
+
 pub fn place_camera(
-    mut rig: ResMut<Rig>,
-    mut cam: ResMut<CameraAngles>,
+    mut shot: Shot,
+    followed: Followed,
     map: Option<Res<Map>>,
     session: Res<Session>,
-    spectate: Res<Spectate>,
-    timeline: Res<LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
-    own: Query<(&Transform, &BodyFull), (With<Predicted>, With<BeanView>, Without<MainCamera>)>,
-    others: Query<(&BeanId, &Transform), (With<Interpolated>, With<BeanView>, Without<MainCamera>)>,
-    mut camera: Query<&mut Transform, With<MainCamera>>,
-    fixed_cam: Option<Res<CameraOverride>>,
+    clock: FrameClock,
 ) {
-    let Ok(mut tf) = camera.single_mut() else { return };
-    if let Some(o) = fixed_cam {
+    let Ok(mut tf) = shot.camera.single_mut() else { return };
+    if let Some(o) = shot.fixed {
         *tf = Transform::from_translation(o.eye).looking_at(o.look, Vec3::Y);
         return;
     }
@@ -274,8 +287,8 @@ pub fn place_camera(
     let Some(map) = map else {
         return;
     };
-    let rig = &mut *rig;
-    let own = own.single().ok();
+    let rig = &mut *shot.rig;
+    let own = followed.own.single().ok();
     // A new arena: down the course in races, towards the middle in arenas.
     if rig.generation != Some(map.generation) {
         rig.generation = Some(map.generation);
@@ -284,9 +297,9 @@ pub fn place_camera(
             Some(p) if map.spec.face_center && map.spec.finish.is_none() => (-p.x).atan2(-p.z) as f32,
             _ => 0.0,
         };
-        cam.yaw = yaw;
+        shot.cam.yaw = yaw;
         rig.start_yaw = yaw;
-        cam.pitch = START_PITCH;
+        shot.cam.pitch = START_PITCH;
         rig.snap();
         rig.teleports = own.map_or(0, |(_, f)| f.teleports);
     }
@@ -295,8 +308,8 @@ pub fn place_camera(
         && f.teleports != rig.teleports
     {
         rig.teleports = f.teleports;
-        cam.yaw = f.body.yaw as f32;
-        rig.start_yaw = cam.yaw;
+        shot.cam.yaw = f.body.yaw as f32;
+        rig.start_yaw = shot.cam.yaw;
         rig.snap();
     }
     let focus = match own {
@@ -305,20 +318,21 @@ pub fn place_camera(
             t.translation
         }
         None => {
-            if rig.watching != spectate.target {
-                rig.watching = spectate.target;
+            if rig.watching != followed.spectate.target {
+                rig.watching = followed.spectate.target;
                 // A new target: cut to it instead of sliding the camera across the map.
                 rig.snap();
             }
-            spectate
+            followed
+                .spectate
                 .target
-                .and_then(|id| others.iter().find(|(p, _)| p.0 == id))
+                .and_then(|id| followed.others.iter().find(|(p, _)| p.0 == id))
                 .map(|(_, t)| t.translation)
                 .or_else(|| map.spec.view.map(|v| v.as_vec3()))
                 .unwrap_or(Vec3::ZERO)
         }
     };
-    let t = map.time(frame_tick(&timeline, &fixed)) as f32;
+    let t = map.time(clock.tick()) as f32;
     let cut = rig.cut_arena != Some(map.round.arena);
     let late = session
         .arena
@@ -331,20 +345,20 @@ pub fn place_camera(
         rig.cinematic(eye, Vec3::new(0.0, 2.6, 0.0), dt, cut)
     } else if map.round.kind == ArenaKind::Round && !late && t <= -INTRO_HANDOVER {
         rig.cut_arena = Some(map.round.arena);
-        cam.yaw = rig.start_yaw;
-        cam.pitch = START_PITCH;
+        shot.cam.yaw = rig.start_yaw;
+        shot.cam.pitch = START_PITCH;
         let (mut eye, mut look) = intro_shot(&map, &session, t);
         if let Some((tf, _)) = own {
             let h = smoothstep(t, -INTRO_HANDOVER - INTRO_BLEND, -INTRO_HANDOVER);
             if h > 0.0 {
-                let (fe, fl) = Rig::follow_pose(&cam, tf.translation);
+                let (fe, fl) = Rig::follow_pose(&shot.cam, tf.translation);
                 eye = eye.lerp(fe, h);
                 look = look.lerp(fl, h);
             }
         }
         rig.cinematic(eye, look, dt, cut)
     } else {
-        rig.follow(&cam, focus, dt, Some(&map.world))
+        rig.follow(&shot.cam, focus, dt, Some(&map.world))
     };
     rig.pos = eye;
     rig.look = look;

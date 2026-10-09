@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
+use bevy::ecs::system::SystemParam;
 use bevy::mesh::{Indices, MeshVertexAttribute, PrimitiveTopology, VertexAttributeValues, VertexFormat};
 use bevy::prelude::*;
 use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -446,14 +447,27 @@ pub fn lod_k(fov_deg: f32, preset: Option<super::quality::Preset>) -> f32 {
     1.0 / ((fov_deg.to_radians() / 2.0).tan() * bias)
 }
 
+/// The field of view and the preset, which the levels of detail switch by.
+#[derive(SystemParam)]
+pub struct LodScale<'w> {
+    display: Res<'w, crate::settings::Display>,
+    quality: Option<Res<'w, super::quality::Quality>>,
+}
+
+impl LodScale<'_> {
+    /// `lod_k` of the current settings.
+    pub fn k(&self) -> f32 {
+        lod_k(self.display.fov, self.quality.as_ref().map(|q| q.preset))
+    }
+}
+
 /// When the field of view or the preset changes, the levels of detail placed so far move to its distances.
 pub fn refresh_bands(
-    display: Res<crate::settings::Display>,
-    quality: Option<Res<super::quality::Quality>>,
+    scale: LodScale,
     mut last: Local<Option<f32>>,
     mut bands: Query<(&LodBand, Option<&BandPad>, &mut VisibilityRange)>,
 ) {
-    let k = lod_k(display.fov, quality.map(|q| q.preset));
+    let k = scale.k();
     if *last == Some(k) {
         return;
     }

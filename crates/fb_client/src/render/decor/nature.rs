@@ -298,7 +298,18 @@ pub(super) fn volcano(k: &mut Kit, g: Entity) {
         s.color.alpha = 0.6;
         s.alpha = AlphaMode::Blend;
     });
-    puffs(k, g, &smoke, 3.4, 7.0, Vec3::new(2.0, 0.0, -1.0), (0.8, 2.2), 0.18);
+    puffs(
+        k,
+        g,
+        &smoke,
+        Smoke {
+            y0: 3.4,
+            rise: 7.0,
+            drift: Vec3::new(2.0, 0.0, -1.0),
+            size: (0.8, 2.2),
+            rate: 0.18,
+        },
+    );
 }
 
 pub(super) fn rocks(k: &mut Kit, g: Entity) {

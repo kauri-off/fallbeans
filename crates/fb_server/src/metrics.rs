@@ -4,6 +4,7 @@
 //! core over the window) and resident memory.
 use std::time::Instant;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_net::NetStats;
 use serde::Serialize;
@@ -109,6 +110,14 @@ fn end_tick(mut t: ResMut<TickTimes>) {
     }
 }
 
+/// What the report counts: traffic, rooms and missed inputs.
+#[derive(SystemParam)]
+struct Load<'w, 's> {
+    stats: Res<'w, NetStats>,
+    rooms: Option<Res<'w, Rooms>>,
+    pawns: Query<'w, 's, &'static mut InputState, With<Pawn>>,
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -118,10 +127,8 @@ fn report(
     opts: Res<Opts>,
     time: Res<Time<Real>>,
     mut t: ResMut<TickTimes>,
-    stats: Res<NetStats>,
+    mut load: Load,
     mut usage: ResMut<Usage>,
-    mut pawns: Query<&mut InputState, With<Pawn>>,
-    rooms: Option<Res<Rooms>>,
     shared: Res<HttpShared>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -129,7 +136,7 @@ fn report(
     if opts.metrics_every <= 0.0 || opts.metrics_every.is_nan() {
         // Off: nothing reads the samples, which would otherwise pile up (120 a second, for good).
         t.us.clear();
-        for mut st in &mut pawns {
+        for mut st in &mut load.pawns {
             st.missed = 0;
         }
         return;
@@ -146,17 +153,17 @@ fn report(
             .unwrap_or(0)
     };
     let mean = us.iter().map(|&u| f64::from(u)).sum::<f64>() / us.len().max(1) as f64;
-    let bytes = (stats.bytes_out - t.last_bytes) as f64 / span;
-    let packets = (stats.packets_out - t.last_packets) as f64 / span;
-    (t.last_bytes, t.last_packets) = (stats.bytes_out, stats.packets_out);
+    let bytes = (load.stats.bytes_out - t.last_bytes) as f64 / span;
+    let packets = (load.stats.packets_out - t.last_packets) as f64 / span;
+    (t.last_bytes, t.last_packets) = (load.stats.bytes_out, load.stats.packets_out);
     let (mut players, mut bots, mut open) = (0, 0, 0);
-    for room in rooms.iter().flat_map(|r| r.hub.rooms.values()) {
+    for room in load.rooms.iter().flat_map(|r| r.hub.rooms.values()) {
         open += 1;
         players += room.players.iter().filter(|p| p.conn().is_some()).count();
         bots += room.players.iter().filter(|p| p.is_bot()).count();
     }
     let (mut missed, mut missed_max) = (0, 0);
-    for mut st in &mut pawns {
+    for mut st in &mut load.pawns {
         missed += st.missed;
         missed_max = missed_max.max(core::mem::take(&mut st.missed));
     }

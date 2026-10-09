@@ -12,7 +12,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::{Palette, pal};
 
@@ -29,21 +29,27 @@ static META: GameMeta = GameMeta::new(
     140.0,
 );
 
-/// A drum along x (rolling you forwards or back) or along z (a log rolling you sideways), turned by
-/// `angle(t)`. Pegs (boxes on the surface) knock over whoever they catch.
-fn drum(
-    b: &mut Builder,
-    x: f64,
-    top: f64,
-    z: f64,
+/// A drum of radius `r` whose top is at `top`: along x (rolling you forwards or back) or along z (a log rolling
+/// you sideways). Pegs (boxes on the surface) knock over whoever they catch.
+#[derive(Clone, Copy)]
+struct Drum {
+    top: V3,
     r: f64,
     len: f64,
-    angle: impl Fn(f64) -> f64 + Send + Sync + 'static,
-    p: Palette,
     along_z: bool,
     pegs: u32,
-) {
-    let axis = b.anchor(x, top - r, z, ROOT);
+}
+
+/// Builds `drum`, turned by `angle(t)`.
+fn drum(b: &mut Builder, drum: Drum, angle: impl Fn(f64) -> f64 + Send + Sync + 'static, p: Palette) {
+    let Drum {
+        top,
+        r,
+        len,
+        along_z,
+        pegs,
+    } = drum;
+    let axis = b.anchor(v3(top.x, top.y - r, top.z), ROOT);
     if along_z {
         b.world.nodes.get_mut(axis).rot.y = m::PI / 2.0;
     }
@@ -58,7 +64,7 @@ fn drum(
         },
         ..Default::default()
     };
-    let d = b.cyl(0.0, 0.0, 0.0, r, len, p, opts).node;
+    let d = b.cyl(V3::ZERO, r, len, p, opts).node;
     for k in 0..8 {
         let a = (f64::from(k) / 8.0) * m::PI * 2.0;
         let stripe = PrimOpts {
@@ -66,12 +72,8 @@ fn drum(
             ..deco()
         };
         b.box_(
-            m::cos(a) * r,
-            0.0,
-            m::sin(a) * r,
-            0.16,
-            len - 0.2,
-            0.32,
+            v3(m::cos(a) * r, 0.0, m::sin(a) * r),
+            v3(0.16, len - 0.2, 0.32),
             pal::solid(rgb(0xffffff)),
             stripe,
         );
@@ -91,12 +93,8 @@ fn drum(
             ..Default::default()
         };
         b.box_(
-            m::cos(a) * (r + 0.2),
-            0.0,
-            m::sin(a) * (r + 0.2),
-            0.4,
-            len - 1.2,
-            0.4,
+            v3(m::cos(a) * (r + 0.2), 0.0, m::sin(a) * (r + 0.2)),
+            v3(0.4, len - 1.2, 0.4),
             pal::RED,
             opts,
         );
@@ -127,7 +125,7 @@ const PALS: [Palette; 4] = [pal::ORANGE, pal::TEAL, pal::PINK, pal::GREEN];
 fn drum_stairs() -> Segment {
     Box::new(|s| {
         let y = s.y;
-        s.b.box_(0.0, y - 1.0, s.z + 2.0, 16.0, 2.0, 4.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 2.0), v3(16.0, 2.0, 4.0), pal::PURPLE, o());
         let r = 1.4;
         let stairs: Vec<(f64, f64, f64, Pulse)> = (0..6)
             .map(|i| {
@@ -145,30 +143,33 @@ fn drum_stairs() -> Segment {
             })
             .collect();
         for (i, &(x, z, top, spin)) in stairs.iter().enumerate() {
-            drum(s.b, x, top, z, r, 5.0, move |t| spin.angle(t), PALS[i % 4], false, 0);
+            let d = Drum {
+                top: v3(x, top, z),
+                r,
+                len: 5.0,
+                along_z: false,
+                pegs: 0,
+            };
+            drum(s.b, d, move |t| spin.angle(t), PALS[i % 4]);
         }
         let (_, last_z, last_top, _) = stairs[5];
         let end_z = last_z + r + 0.05;
         let end_y = last_top - 0.45;
-        s.b.box_(0.0, end_y - 1.0, end_z + 3.0, 23.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, end_y - 1.0, end_z + 3.0), v3(23.0, 2.0, 6.0), pal::PURPLE, o());
         // The walkway: launch pads at the sides, up to a narrow beam over the drums.
         for sx in [-1.0, 1.0] {
-            s.b.box_(sx * 9.5, y - 1.0, s.z + 3.5, 3.5, 2.0, 3.0, pal::YELLOW, o());
-            s.b.pad(sx * 9.5, y, s.z + 3.4, 1.1, 17.0, None);
+            s.b.box_(v3(sx * 9.5, y - 1.0, s.z + 3.5), v3(3.5, 2.0, 3.0), pal::YELLOW, o());
+            s.b.pad(v3(sx * 9.5, y, s.z + 3.4), 1.1, 17.0, None);
         }
         let beam_y = y + 3.5;
         let beam_z0 = s.z + 5.5;
         s.b.box_(
-            9.5,
-            beam_y,
-            (beam_z0 + end_z) / 2.0,
-            2.2,
-            1.0,
-            end_z - beam_z0,
+            v3(9.5, beam_y, (beam_z0 + end_z) / 2.0),
+            v3(2.2, 1.0, end_z - beam_z0),
             pal::PINK,
             o(),
         );
-        s.b.bonus(9.5, beam_y + 0.5, (beam_z0 + end_z) / 2.0);
+        s.b.bonus(v3(9.5, beam_y + 0.5, (beam_z0 + end_z) / 2.0));
 
         let z0 = s.z;
         let stairs_route = || {
@@ -213,7 +214,7 @@ fn log_run(n: u32) -> Segment {
         let r = 1.8;
         let l = 9.0;
         let mut zz = s.z + 2.0;
-        s.b.box_(0.0, y - 1.0, s.z + 1.0, 12.0, 2.0, 2.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.0), v3(12.0, 2.0, 2.0), pal::PURPLE, o());
         let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         let mut edge = s.z + 2.0;
         for i in 0..n {
@@ -236,18 +237,14 @@ fn log_run(n: u32) -> Segment {
                     ph,
                 }
             };
-            drum(
-                s.b,
-                0.0,
-                y,
-                c,
+            let d = Drum {
+                top: v3(0.0, y, c),
                 r,
-                l,
-                move |t| sp.angle(t),
-                PALS[(i as usize + 2) % 4],
-                true,
-                0,
-            );
+                len: l,
+                along_z: true,
+                pegs: 0,
+            };
+            drum(s.b, d, move |t| sp.angle(t), PALS[(i as usize + 2) % 4]);
             let e = edge;
             route.push(
                 Waypoint::spread(0.0, c - l / 2.0 + 1.2, 0.1)
@@ -257,9 +254,9 @@ fn log_run(n: u32) -> Segment {
             edge = c + l / 2.0;
             zz = c + l / 2.0;
         }
-        s.b.bonus(0.0, y + 0.1, s.z + 2.0 + 1.4 + l + 1.4 + l / 2.0);
+        s.b.bonus(v3(0.0, y + 0.1, s.z + 2.0 + 1.4 + l + 1.4 + l / 2.0));
         zz += 1.4;
-        s.b.box_(0.0, y - 1.0, zz + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, zz + 3.0), v3(14.0, 2.0, 6.0), pal::PURPLE, o());
         let e = edge;
         route.push(
             Waypoint::spread(0.0, zz + 3.0, 1.0)
@@ -281,7 +278,7 @@ fn peg_drums(n: u32) -> Segment {
         let y = s.y;
         let r = 2.2;
         let mut zz = s.z + 2.0;
-        s.b.box_(0.0, y - 1.0, s.z + 1.0, 12.0, 2.0, 2.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.0), v3(12.0, 2.0, 2.0), pal::PURPLE, o());
         let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         for i in 0..n {
             // Room for the pegs (they stand 0.4 m proud) between drums and platforms.
@@ -290,7 +287,14 @@ fn peg_drums(n: u32) -> Segment {
             let ph = s.rng() * 6.0;
             let pegs = 3;
             let ang = move |t: f64| ph + t.at_least(0.0) * w;
-            drum(s.b, 0.0, y + 0.2, c, r, 9.0, ang, PALS[i as usize % 4], false, pegs);
+            let d = Drum {
+                top: v3(0.0, y + 0.2, c),
+                r,
+                len: 9.0,
+                along_z: false,
+                pegs,
+            };
+            drum(s.b, d, ang, PALS[i as usize % 4]);
             // Pegs sit at angle β = offset + ang(t) on the drum (β = 0 on top, growing towards +z) and
             // come round to the bot at |w| rad/s: jump just before one reaches it.
             let axis_y = y + 0.2 - r;
@@ -321,7 +325,7 @@ fn peg_drums(n: u32) -> Segment {
             route.push(Waypoint::spread(0.0, c + r - 0.3, 0.2).jump_shared(&jump_when));
             zz = c + r + 0.55;
         }
-        s.b.box_(0.0, y - 1.0, zz + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, zz + 3.0), v3(14.0, 2.0, 6.0), pal::PURPLE, o());
         route.push(Waypoint::spread(0.0, zz + 3.0, 1.0).jump_when(edge_jump(zz, 1.2)));
         SegOut {
             z: zz + 6.0,
@@ -339,28 +343,24 @@ fn roller_bridge(n: u32) -> Segment {
         let y = s.y;
         let r = 0.55;
         let pitch = 1.3;
-        s.b.box_(0.0, y - 1.0, s.z + 1.0, 10.0, 2.0, 2.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.0), v3(10.0, 2.0, 2.0), pal::PURPLE, o());
         for i in 0..n {
             let c = s.z + 2.0 + r + f64::from(i) * pitch;
             let sp = (if i % 2 == 1 { 1.0 } else { -1.0 }) * (2.0 + s.rng() * 2.0);
-            drum(
-                s.b,
-                0.0,
-                y,
-                c,
+            let d = Drum {
+                top: v3(0.0, y, c),
                 r,
-                7.0,
-                move |t| t.at_least(0.0) * sp,
-                PALS[i as usize % 4],
-                false,
-                0,
-            );
+                len: 7.0,
+                along_z: false,
+                pegs: 0,
+            };
+            drum(s.b, d, move |t| t.at_least(0.0) * sp, PALS[i as usize % 4]);
         }
         let end = s.z + 2.0 + f64::from(n) * pitch + 0.2;
         for (x, f) in [(-2.0, 0.3), (2.0, 0.65)] {
-            s.b.bumper(x, y + 0.2, s.z + 2.0 + f64::from(n) * pitch * f, 0.7, 9.0);
+            s.b.bumper(v3(x, y + 0.2, s.z + 2.0 + f64::from(n) * pitch * f), 0.7, 9.0);
         }
-        s.b.box_(0.0, y - 1.0, end + 3.0, 14.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, end + 3.0), v3(14.0, 2.0, 6.0), pal::PURPLE, o());
         SegOut {
             z: end + 6.0,
             y,

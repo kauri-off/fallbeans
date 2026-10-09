@@ -5,7 +5,7 @@ use std::sync::Arc;
 use fb_shared::NEVER;
 use fb_shared::rgb;
 use fb_sim::bots::{BotInput, BotView, Note, SharedTest, Waypoint, follow, steer};
-use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::builder::{Builder, PrimOpts, Ramp};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, moving_platforms, pick_sections, race_course, seesaws, with_rests,
@@ -13,7 +13,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::physics::BodyState;
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::Surface;
@@ -50,20 +50,28 @@ fn ice_slope(drop: f64, len: f64) -> Segment {
     Box::new(move |s| {
         let w = 12.0;
         let y0 = s.y;
-        s.b.box_(0.0, y0 - 1.0, s.z + 2.0, w, 2.0, 4.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y0 - 1.0, s.z + 2.0), v3(w, 2.0, 4.0), pal::PURPLE, o());
         let z0 = s.z + 4.0;
         let z1 = z0 + len;
         let y1 = y0 - drop;
-        s.b.ramp(0.0, z0, y0, z1, y1, w, ICE_PAL, 1.0, ice(0.9));
+        s.b.ramp(
+            Ramp {
+                x: 0.0,
+                z0,
+                y0,
+                z1,
+                y1,
+                width: w,
+                thick: 1.0,
+            },
+            ICE_PAL,
+            ice(0.9),
+        );
         let ang = m::atan2(drop, len);
         for sx in [-1.0, 1.0] {
             s.b.box_(
-                sx * (w / 2.0 + 0.4),
-                (y0 + y1) / 2.0 + 0.6,
-                (z0 + z1) / 2.0,
-                0.8,
-                1.2,
-                m::hypot(len, drop),
+                v3(sx * (w / 2.0 + 0.4), (y0 + y1) / 2.0 + 0.6, (z0 + z1) / 2.0),
+                v3(0.8, 1.2, m::hypot(len, drop)),
                 pal::PINK,
                 rot(ang, 0.0, 0.0),
             );
@@ -72,11 +80,11 @@ fn ice_slope(drop: f64, len: f64) -> Segment {
         for k in 0..4 {
             let bz = z0 + 5.0 + f64::from(k) * 5.5;
             let x = (if k % 2 == 1 { 1.0 } else { -1.0 }) * (1.2 + s.rng() * 2.8);
-            s.b.bumper(x, y_at(bz) - 0.1, bz, 0.8, 9.0);
+            s.b.bumper(v3(x, y_at(bz) - 0.1, bz), 0.8, 9.0);
         }
-        s.b.box_(0.0, y1 - 1.0, z1 + 3.0, w, 2.0, 6.0, ICE_PAL, ice(0.9));
+        s.b.box_(v3(0.0, y1 - 1.0, z1 + 3.0), v3(w, 2.0, 6.0), ICE_PAL, ice(0.9));
         s.b.rails(z1, z1 + 6.0, w / 2.0, y1, pal::PINK);
-        s.b.bonus(0.0, y1, z1 + 3.0);
+        s.b.bonus(v3(0.0, y1, z1 + 3.0));
         SegOut {
             z: z1 + 6.0,
             y: y1,
@@ -101,9 +109,14 @@ fn dive_gaps(n: u32, gap: f64) -> Segment {
         let mut z = s.z;
         for k in 0..=n {
             let p = if k % 2 == 1 { pal::TEAL } else { pal::BLUE };
-            s.b.box_(0.0, y - 1.0, z + len / 2.0, 9.0, 2.0, len, p, o());
+            s.b.box_(v3(0.0, y - 1.0, z + len / 2.0), v3(9.0, 2.0, len), p, o());
             // Take-off line near the edge.
-            s.b.box_(0.0, y + 0.01, z + len - 0.6, 9.0, 0.02, 0.35, pal::YELLOW, deco());
+            s.b.box_(
+                v3(0.0, y + 0.01, z + len - 0.6),
+                v3(9.0, 0.02, 0.35),
+                pal::YELLOW,
+                deco(),
+            );
             if k == n {
                 break;
             }
@@ -148,16 +161,16 @@ fn dive_bars(n: u32) -> Segment {
         let y = s.y;
         let z0 = s.z;
         let len = f64::from(n) * gap_z + 4.0;
-        s.b.box_(0.0, y - 1.0, z0 + len / 2.0, w, 2.0, len, ICE_PAL, ice(0.5));
+        s.b.box_(v3(0.0, y - 1.0, z0 + len / 2.0), v3(w, 2.0, len), ICE_PAL, ice(0.5));
         s.b.rails(z0, z0 + len, w / 2.0, y, pal::PINK);
         let mut route = Vec::new();
         for k in 0..n {
             let bz = z0 + 9.0 + f64::from(k) * gap_z;
             let p = if k % 2 == 1 { pal::ORANGE } else { pal::PURPLE };
-            s.b.box_(0.0, y + 1.2 + 1.5, bz, w + 1.6, 3.0, 0.8, p, o());
+            s.b.box_(v3(0.0, y + 1.2 + 1.5, bz), v3(w + 1.6, 3.0, 0.8), p, o());
             // Where to dive from.
             for dz in [7.0, 5.5] {
-                s.b.box_(0.0, y + 0.01, bz - dz, w, 0.02, 0.4, pal::YELLOW, deco());
+                s.b.box_(v3(0.0, y + 0.01, bz - dz), v3(w, 0.02, 0.4), pal::YELLOW, deco());
             }
             let key: Note<f64> = s.b.note();
             route.push(Waypoint::exact(0.0, bz + 2.5).drive(move |bot, out| {
@@ -210,21 +223,17 @@ fn ice_rotors(n: u32) -> Segment {
             let r = 5.8 + s.rng();
             let c = zz + 4.0 + r;
             s.b.box_(
-                0.0,
-                y - 1.0,
-                (zz + c - r + 0.3) / 2.0,
-                3.6,
-                2.0,
-                c - r + 0.3 - zz,
+                v3(0.0, y - 1.0, (zz + c - r + 0.3) / 2.0),
+                v3(3.6, 2.0, c - r + 0.3 - zz),
                 pal::YELLOW,
                 o(),
             );
-            s.b.cyl(0.0, y - 1.0, c, r + 0.3, 2.0, ICE_PAL, ice(0.35));
-            s.b.hub(0.0, y, c, 1.0);
+            s.b.cyl(v3(0.0, y - 1.0, c), r + 0.3, 2.0, ICE_PAL, ice(0.35));
+            s.b.hub(v3(0.0, y, c), 1.0);
             let sp = (0.9 + s.rng() * 0.4) * if s.rng() < 0.5 { -1.0 } else { 1.0 };
             let ph = s.rng() * 6.0;
             let ang = move |t: f64| if t <= 0.0 { ph } else { ph + t * sp };
-            s.b.rotor(0.0, y + 0.6, c, r, 2, ang, 0.45);
+            s.b.rotor(v3(0.0, y + 0.6, c), r, 2, ang, 0.45);
             let jump_when: SharedTest = Arc::new(move |bot: &mut BotView| {
                 let p = bot.body.pos;
                 if bot.t <= 0.0 || m::hypot(p.x, p.z - c) < 1.2 || m::hypot(p.x, p.z - c) > r + 1.0 {
@@ -242,7 +251,7 @@ fn ice_rotors(n: u32) -> Segment {
             ]);
             zz = c + r - 0.3;
         }
-        s.b.box_(0.0, y - 1.0, zz + 2.0, 3.6, 2.0, 4.0, pal::YELLOW, o());
+        s.b.box_(v3(0.0, y - 1.0, zz + 2.0), v3(3.6, 2.0, 4.0), pal::YELLOW, o());
         SegOut {
             z: zz + 4.0,
             y,
@@ -378,7 +387,7 @@ fn sky_shuttles() -> Segment {
         let size = 4.4;
         let gap = 16.0;
         let y = s.y;
-        s.b.box_(0.0, y - 1.0, s.z + 3.0, w, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(w, 2.0, 6.0), pal::PURPLE, o());
         let legs = [(s.z + 6.0, y, y + 2.0), (s.z + 6.0 + gap + 6.0, y + 2.0, y + 4.0)];
         let mut route = vec![Waypoint::spread(0.0, s.z + 2.5, 1.0)];
         let dwell = 1.8;
@@ -403,7 +412,7 @@ fn sky_shuttles() -> Segment {
                         phase: ph + i as f64 * (dwell + travel),
                     };
                     let p = if i == 1 { pal::ORANGE } else { pal::GREEN };
-                    let node = s.b.box_(x, y0 - 0.5, za, size, 1.0, size, p, dynamic()).node;
+                    let node = s.b.box_(v3(x, y0 - 0.5, za), v3(size, 1.0, size), p, dynamic()).node;
                     let pod = PrimOpts {
                         parent: Some(node),
                         no_collide: true,
@@ -411,14 +420,14 @@ fn sky_shuttles() -> Segment {
                         seg: 20,
                         ..Default::default()
                     };
-                    s.b.cyl(0.0, -0.8, 0.0, 1.1, 0.7, pal::solid(rgb(0x39406b)), pod);
+                    s.b.cyl(v3(0.0, -0.8, 0.0), 1.1, 0.7, pal::solid(rgb(0x39406b)), pod);
                     s.b.mover(move |t, ctx| ctx.node(node).pos = sh.pos(t));
                     sh
                 })
                 .collect();
             let len = if k == legs.len() - 1 { 7.0 } else { 6.0 };
             let p = if k == 1 { pal::PINK } else { pal::TEAL };
-            s.b.box_(0.0, y1 - 1.0, far + len / 2.0, w, 2.0, len, p, o());
+            s.b.box_(v3(0.0, y1 - 1.0, far + len / 2.0), v3(w, 2.0, len), p, o());
             route.push(Waypoint::spread(0.0, far + 2.5, 0.5).drive(ride_drive(ferries, near, far, y1)));
         }
         let end = legs[1].0 + gap + 7.0;

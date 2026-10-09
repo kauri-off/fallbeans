@@ -3,10 +3,12 @@
 use core::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::collections::HashMap;
 
+use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use fb_shared::outfit::{Glasses, Hat};
 
+use crate::render::quality::{Preset, Quality};
 use crate::shapes;
 
 /// Tipped back a little so that the front of a hat clears the visor.
@@ -604,6 +606,24 @@ impl Wardrobe {
             })
             .clone()
     }
+}
+
+/// What beans are dressed with: the accessories' meshes and materials, the assets they are made in, and the
+/// quality (no clearcoat on Low).
+#[derive(SystemParam)]
+pub struct Tailor<'w> {
+    pub assets: Res<'w, AssetServer>,
+    pub wardrobe: ResMut<'w, Wardrobe>,
+    pub meshes: ResMut<'w, Assets<Mesh>>,
+    pub materials: ResMut<'w, Assets<StandardMaterial>>,
+    quality: Option<Res<'w, Quality>>,
+}
+
+impl Tailor<'_> {
+    /// Suits get a faint clearcoat (a second specular layer in every bean pixel), except on Low.
+    pub fn coat(&self) -> bool {
+        self.quality.as_ref().is_none_or(|q| q.preset != Preset::Low)
+    }
 
     /// Spawns `part` under `parent`; `suit` stands in for materials that take the bean's suit.
     pub fn spawn(
@@ -614,17 +634,18 @@ impl Wardrobe {
         suit: &Handle<StandardMaterial>,
         shadows: bool,
         wiggles: &mut Vec<Entity>,
-        meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
     ) -> Entity {
         let mut e = commands.spawn((part.tf, Visibility::default(), ChildOf(parent)));
         if let Some((shape, m)) = &part.look {
             let mat = if m.suit {
                 suit.clone()
             } else {
-                self.material(m, materials)
+                self.wardrobe.material(m, &mut self.materials)
             };
-            e.insert((Mesh3d(self.mesh(*shape, meshes)), MeshMaterial3d(mat)));
+            e.insert((
+                Mesh3d(self.wardrobe.mesh(*shape, &mut self.meshes)),
+                MeshMaterial3d(mat),
+            ));
             if !shadows {
                 e.insert(NotShadowCaster);
             }
@@ -635,7 +656,7 @@ impl Wardrobe {
         }
         let id = e.id();
         for k in &part.kids {
-            self.spawn(commands, id, k, suit, shadows, wiggles, meshes, materials);
+            self.spawn(commands, id, k, suit, shadows, wiggles);
         }
         id
     }

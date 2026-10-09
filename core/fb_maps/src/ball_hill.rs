@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
-use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::builder::{Builder, PrimOpts, Ramp};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, glove_alley, pick_sections, pistons, race_course, sliding_gates, tipping_bridge,
@@ -13,7 +13,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, rolling_balls, y_on_ramp};
 use fb_sim::scene::Surface;
@@ -40,7 +40,7 @@ fn ice_slope() -> Segment {
         let (a1z, a1y) = (s.z + 42.0, y + 10.0);
         let w = 20.0;
         let ya = move |zz: f64| y_on_ramp(zz, a0z, a0y, a1z, a1y);
-        s.b.box_(0.0, y - 1.0, s.z + 1.0, 18.0, 2.0, 2.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.0), v3(18.0, 2.0, 2.0), pal::PURPLE, o());
         let ang = m::atan2(a1y - a0y, a1z - a0z);
         let cos_a = m::cos(ang);
         let ice = PrimOpts {
@@ -51,17 +51,25 @@ fn ice_slope() -> Segment {
             surface: Some(Surface::Ice),
             ..Default::default()
         };
-        s.b.ramp(0.0, a0z, a0y, a1z, a1y, w, pal::BLUE, 1.0, ice);
+        s.b.ramp(
+            Ramp {
+                x: 0.0,
+                z0: a0z,
+                y0: a0y,
+                z1: a1z,
+                y1: a1y,
+                width: w,
+                thick: 1.0,
+            },
+            pal::BLUE,
+            ice,
+        );
         let len_a = m::hypot(a1z - a0z, a1y - a0y);
         for sx in [-1.0, 1.0] {
             let x = sx * (w / 2.0 + 0.4);
             s.b.box_(
-                x,
-                (a0y + a1y) / 2.0 + 0.6,
-                (a0z + a1z) / 2.0,
-                0.8,
-                1.2,
-                len_a,
+                v3(x, (a0y + a1y) / 2.0 + 0.6, (a0z + a1z) / 2.0),
+                v3(0.8, 1.2, len_a),
                 pal::PINK,
                 rot(-ang, 0.0, 0.0),
             );
@@ -91,7 +99,7 @@ fn ice_slope() -> Segment {
                 surface: Some(Surface::Carpet),
                 ..Default::default()
             };
-            s.b.box_((x0 + x1) / 2.0, ya(cz) + 0.1 / cos_a, cz, cw, 0.2, len, p, opts);
+            s.b.box_(v3((x0 + x1) / 2.0, ya(cz) + 0.1 / cos_a, cz), v3(cw, 0.2, len), p, opts);
         }
         let lanes = [-5.5, 0.0, 5.5];
         let period = 4.0 + s.rng() * 1.0;
@@ -121,7 +129,7 @@ fn ice_slope() -> Segment {
             .collect();
         let block_x = move |bw: f64, ph: f64, t: f64| m::sin(t * bw + ph) * (w / 2.0 - 1.6);
         for &(bz, bw, ph) in &blocks {
-            let anchor = s.b.anchor(0.0, ya(bz), bz, ROOT);
+            let anchor = s.b.anchor(v3(0.0, ya(bz), bz), ROOT);
             s.b.world.nodes.get_mut(anchor).rot.x = -ang;
             let opts = PrimOpts {
                 parent: Some(anchor),
@@ -134,12 +142,12 @@ fn ice_slope() -> Segment {
                 ..Default::default()
             };
             let node =
-                s.b.box_(0.0, 0.25 + 0.2 + 0.8, 0.0, 1.8, 1.6, 1.8, pal::ORANGE, opts)
+                s.b.box_(v3(0.0, 0.25 + 0.2 + 0.8, 0.0), v3(1.8, 1.6, 1.8), pal::ORANGE, opts)
                     .node;
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = block_x(bw, ph, t));
         }
-        s.b.bonus(0.0, ya(a0z + 20.0), a0z + 20.0);
-        s.b.box_(0.0, a1y - 1.0, a1z + 4.0, w, 2.0, 8.0, pal::PURPLE, o());
+        s.b.bonus(v3(0.0, ya(a0z + 20.0), a0z + 20.0));
+        s.b.box_(v3(0.0, a1y - 1.0, a1z + 4.0), v3(w, 2.0, 8.0), pal::PURPLE, o());
 
         let mut path = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
         type Clear = Box<dyn Fn(f64) -> bool + Send + Sync>;
@@ -205,17 +213,25 @@ fn ball_ramp(rise: f64) -> Segment {
         let len = 28.0;
         let z1 = z0 + len;
         let yr = move |zz: f64| y_on_ramp(zz, z0, y, z1, y + rise);
-        s.b.ramp(0.0, z0, y, z1, y + rise, 9.0, pal::BLUE, 1.0, o());
+        s.b.ramp(
+            Ramp {
+                x: 0.0,
+                z0,
+                y0: y,
+                z1,
+                y1: y + rise,
+                width: 9.0,
+                thick: 1.0,
+            },
+            pal::BLUE,
+            o(),
+        );
         let ang = m::atan2(rise, len);
         for sx in [-1.0, 1.0] {
             let l = m::hypot(len, rise);
             s.b.box_(
-                sx * 4.9,
-                y + rise / 2.0 + 0.6,
-                (z0 + z1) / 2.0,
-                0.8,
-                1.2,
-                l,
+                v3(sx * 4.9, y + rise / 2.0 + 0.6, (z0 + z1) / 2.0),
+                v3(0.8, 1.2, l),
                 pal::PINK,
                 rot(-ang, 0.0, 0.0),
             );
@@ -239,9 +255,9 @@ fn ball_ramp(rise: f64) -> Segment {
         let blocks = [z0 + 7.0, z0 + 14.0, z0 + 21.0];
         for (i, &zb) in blocks.iter().enumerate() {
             let p = if i % 2 == 1 { pal::ORANGE } else { pal::YELLOW };
-            s.b.box_(0.0, yr(zb) + 0.6, zb, 1.8, 1.8, 1.4, p, rot(-ang, 0.0, 0.0));
+            s.b.box_(v3(0.0, yr(zb) + 0.6, zb), v3(1.8, 1.8, 1.4), p, rot(-ang, 0.0, 0.0));
         }
-        s.b.box_(0.0, y + rise - 1.0, z1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y + rise - 1.0, z1 + 3.0), v3(16.0, 2.0, 6.0), pal::PURPLE, o());
         let mut pts = vec![Waypoint::exact(0.0, z0 + 0.5)];
         for (i, &zb) in blocks.iter().enumerate() {
             let lx = (if i % 2 == 1 { 1.0 } else { -1.0 }) * 1.55;

@@ -24,6 +24,7 @@ use std::collections::BTreeSet;
 
 use bevy::asset::AssetId;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -567,8 +568,16 @@ fn knob_values(
     }
 }
 
+type ButtonState = (
+    &'static Look,
+    &'static Hovered,
+    Has<Pressed>,
+    Has<InteractionDisabled>,
+    &'static Face,
+);
+
 fn style_buttons(
-    q: Query<(&Look, &Hovered, Has<Pressed>, Has<InteractionDisabled>, &Face), With<bevy::ui_widgets::Button>>,
+    q: Query<ButtonState, With<bevy::ui_widgets::Button>>,
     mut faces: Query<(&mut BackgroundColor, &mut UiTransform)>,
 ) {
     for (look, hovered, pressed, disabled, face) in &q {
@@ -640,33 +649,45 @@ fn last_device(
     }
 }
 
+/// The settings the interface toggles.
+#[derive(SystemParam)]
+struct SettingsMut<'w> {
+    controls: ResMut<'w, Controls>,
+    display: ResMut<'w, Display>,
+    binds: ResMut<'w, Bindings>,
+    gfx: ResMut<'w, Graphics>,
+}
+
+/// Which tabs and folds are open.
+#[derive(SystemParam)]
+struct Tabs<'w> {
+    folds: ResMut<'w, Folds>,
+    home_tab: ResMut<'w, NextState<HomeTab>>,
+    menu_tab: ResMut<'w, NextState<MenuTab>>,
+}
+
 /// Actions every screen shares: tabs, folds, settings toggles, quitting.
 fn ui_actions(
     mut actions: MessageReader<UiAction>,
     mut ui: ResMut<Ui>,
-    mut folds: ResMut<Folds>,
-    mut home_tab: ResMut<NextState<HomeTab>>,
-    mut menu_tab: ResMut<NextState<MenuTab>>,
-    mut controls: ResMut<Controls>,
-    mut display: ResMut<Display>,
-    mut binds: ResMut<Bindings>,
-    mut gfx: ResMut<Graphics>,
+    mut tabs: Tabs,
+    mut settings: SettingsMut,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     for UiAction(a) in actions.read() {
         match a {
-            Action::HomeTab(t) => home_tab.set(*t),
-            Action::MenuTab(t) => menu_tab.set(*t),
-            Action::Fold(k) => folds.toggle(*k),
+            Action::HomeTab(t) => tabs.home_tab.set(*t),
+            Action::MenuTab(t) => tabs.menu_tab.set(*t),
+            Action::Fold(k) => tabs.folds.toggle(*k),
             Action::Set(t) => {
                 match t {
-                    Toggle::InvertMouse => controls.invert_mouse_y ^= true,
-                    Toggle::InvertStick => controls.invert_stick_y ^= true,
-                    Toggle::Shake => controls.camera_shake ^= true,
-                    Toggle::ShowFps => display.show_fps ^= true,
-                    Toggle::Fullscreen => display.fullscreen ^= true,
-                    Toggle::Vsync => gfx.vsync ^= true,
+                    Toggle::InvertMouse => settings.controls.invert_mouse_y ^= true,
+                    Toggle::InvertStick => settings.controls.invert_stick_y ^= true,
+                    Toggle::Shake => settings.controls.camera_shake ^= true,
+                    Toggle::ShowFps => settings.display.show_fps ^= true,
+                    Toggle::Fullscreen => settings.display.fullscreen ^= true,
+                    Toggle::Vsync => settings.gfx.vsync ^= true,
                 }
                 crate::settings::save_soon(&mut commands);
             }
@@ -675,17 +696,17 @@ fn ui_actions(
             }
             Action::Gfx(pick) => {
                 match *pick {
-                    GfxPick::Preset(p) => gfx.preset = p,
-                    GfxPick::Fps(n) => gfx.fps_limit = n,
-                    GfxPick::Backend(b) => gfx.backend = crate::backend::BackendSetting(b),
-                    GfxPick::Upscaler(u) => gfx.upscaler = crate::render::upscale::UpscalerSetting(u),
-                    GfxPick::Upscale(m) => gfx.upscale = m,
+                    GfxPick::Preset(p) => settings.gfx.preset = p,
+                    GfxPick::Fps(n) => settings.gfx.fps_limit = n,
+                    GfxPick::Backend(b) => settings.gfx.backend = crate::backend::BackendSetting(b),
+                    GfxPick::Upscaler(u) => settings.gfx.upscaler = crate::render::upscale::UpscalerSetting(u),
+                    GfxPick::Upscale(m) => settings.gfx.upscale = m,
                 }
                 crate::settings::save_soon(&mut commands);
             }
             Action::Rebind(b) => ui.rebinding = Some(*b),
             Action::ResetKeys => {
-                *binds = Bindings::default();
+                *settings.binds = Bindings::default();
                 ui.rebinding = None;
                 crate::settings::save_soon(&mut commands);
             }

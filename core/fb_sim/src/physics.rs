@@ -1,7 +1,6 @@
 //! The bean: a kinematic character of two spheres with a small state machine.
-use fb_shared::NEVER;
-use fb_shared::PlayerId;
 use fb_shared::cause::Hazard;
+use fb_shared::{DT, NEVER, PlayerId};
 use serde::{Deserialize, Serialize};
 
 use crate::beans::Note;
@@ -510,12 +509,12 @@ impl Body {
         &mut self,
         scratch: &mut StepScratch,
         ev: &mut StepEvents,
-        dt: f64,
         input: BodyInput,
         world: &mut World,
         t: f64,
         touch: &mut OnTouch,
     ) {
+        let dt = DT;
         if self.state == BodyState::Portal {
             return self.portal_step(ev, dt);
         }

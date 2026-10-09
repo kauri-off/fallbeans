@@ -10,11 +10,11 @@ use fb_shared::rgb;
 use fb_shared::rng::{Rng, shuffle};
 
 use crate::bots::{BOT_DT, BotInput, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
-use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
+use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, Ramp};
 use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::m::{self, MinMax};
 use crate::map::{Checkpoint, Cx, Finish, Hook, MapCtx, MapEvent, MapLogic, MapSfx, MapSpec, SegEvent, Steer};
-use crate::math::V3;
+use crate::math::{V3, v3};
 use crate::nodes::{NodeId, ROOT};
 use crate::physics::{Body, StepEvents, Touch};
 use crate::props::{GloveOpts, arm_contact_eta, glove_puncher};
@@ -160,7 +160,7 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         p: V3::new(0.0, 0.1, 10.0),
     }];
     // Out of the start pen onto a platform (the first respawn point is on it).
-    b.box_(0.0, -1.0, 10.0, 18.0, 2.0, 6.0, pal::PURPLE, d());
+    b.box_(v3(0.0, -1.0, 10.0), v3(18.0, 2.0, 6.0), pal::PURPLE, d());
     let mut zz = 13.0;
     let mut y = 0.0;
     let mut min_y: f64 = 0.0;
@@ -195,9 +195,9 @@ pub fn race_course(b: &mut Builder, ctx: &MapCtx, o: CourseOpts) -> MapSpec {
         finish
     } else {
         let len = 16.0;
-        b.box_(0.0, y - 1.0, zz + len / 2.0, 18.0, 2.0, len, pal::YELLOW, d());
+        b.box_(v3(0.0, y - 1.0, zz + len / 2.0), v3(18.0, 2.0, len), pal::YELLOW, d());
         let finish_z = zz + 3.0;
-        b.finish(0.0, y, finish_z);
+        b.finish(v3(0.0, y, finish_z));
         routes.push(vec![vec![
             Waypoint::spread(0.0, finish_z - 1.0, 2.0),
             Waypoint::spread(0.0, finish_z + 5.0, 3.0),
@@ -303,7 +303,7 @@ impl MapLogic for Course {
 /// A plain platform (a checkpoint).
 pub fn rest(len: f64, w: f64, p: Palette) -> Segment {
     Box::new(move |s| {
-        s.b.box_(0.0, s.y - 1.0, s.z + len / 2.0, w, 2.0, len, p, d());
+        s.b.box_(v3(0.0, s.y - 1.0, s.z + len / 2.0), v3(w, 2.0, len), p, d());
         SegOut {
             z: s.z + len,
             y: s.y,
@@ -316,7 +316,12 @@ pub fn rest(len: f64, w: f64, p: Palette) -> Segment {
 
 /// A narrow bridge (connector).
 fn bridge(b: &mut Builder, z0: f64, z1: f64, y: f64) {
-    b.box_(0.0, y - 1.0, (z0 + z1) / 2.0, 3.6, 2.0, z1 - z0, pal::YELLOW, d());
+    b.box_(
+        v3(0.0, y - 1.0, (z0 + z1) / 2.0),
+        v3(3.6, 2.0, z1 - z0),
+        pal::YELLOW,
+        d(),
+    );
 }
 
 fn shared(f: impl Fn(&mut BotView) -> bool + Send + Sync + 'static) -> SharedTest {
@@ -339,21 +344,21 @@ pub fn rotor_decks(n: u32) -> Segment {
                 freq: Some(0.35),
                 ..Default::default()
             };
-            s.b.cyl(0.0, y - 1.0, c, r + 0.3, 2.0, deck_pal, o);
-            s.b.hub(0.0, y, c, 1.0);
+            s.b.cyl(v3(0.0, y - 1.0, c), r + 0.3, 2.0, deck_pal, o);
+            s.b.hub(v3(0.0, y, c), 1.0);
             let arms = if s.rng() < 0.5 { 2 } else { 3 };
             let sp = (1.1 + s.rng() * 0.8) * if s.rng() < 0.5 { -1.0 } else { 1.0 };
             let ph = s.rng() * 6.0;
             let low = move |t: f64| if t <= 0.0 { ph } else { ph + t * sp };
-            s.b.rotor(0.0, y + 0.6, c, r, arms, low, 0.45);
+            s.b.rotor(v3(0.0, y + 0.6, c), r, arms, low, 0.45);
             let high = s.rng() < 0.55;
             let hsp = -m::sign(sp) * (0.8 + s.rng() * 0.5);
             let high_ang = move |t: f64| if t <= 0.0 { ph + 1.3 } else { ph + 1.3 + t * hsp };
             if high {
-                s.b.rotor(0.0, y + 2.45, c, r, 1, high_ang, 0.45);
+                s.b.rotor(v3(0.0, y + 2.45, c), r, 1, high_ang, 0.45);
             }
             if i == 0 {
-                s.b.bonus(-r * 0.55, y, c);
+                s.b.bonus(v3(-r * 0.55, y, c));
             }
             let jump_when = shared(move |bot| {
                 let p = bot.body.pos;
@@ -397,7 +402,7 @@ pub fn rotor_decks(n: u32) -> Segment {
 pub fn moving_platforms(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
-        s.b.box_(0.0, y - 1.0, s.z + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(10.0, 2.0, 6.0), pal::PURPLE, d());
         let mut zz = s.z + 6.0;
         let mut route = vec![Waypoint::spread(0.0, s.z + 4.0, 0.2)];
         let mut edge = zz;
@@ -416,14 +421,14 @@ pub fn moving_platforms(n: u32) -> Segment {
                 }
             };
             let p = if i % 2 == 1 { pal::ORANGE } else { pal::GREEN };
-            let node = s.b.box_(0.0, y - 0.5, c, 4.5, 1.0, 4.5, p, dynamic()).node;
+            let node = s.b.box_(v3(0.0, y - 0.5, c), v3(4.5, 1.0, 4.5), p, dynamic()).node;
             s.b.mover(move |t, ctx| {
                 let n = ctx.node(node);
                 n.pos.x = fx(t);
                 n.pos.y = y - 0.5 + fy(t);
             });
             if i == n / 2 {
-                s.b.bonus(0.0, y, c);
+                s.b.bonus(v3(0.0, y, c));
             }
             route.push(
                 Waypoint::moving(fx, c)
@@ -434,7 +439,7 @@ pub fn moving_platforms(n: u32) -> Segment {
             zz = c + 2.25;
         }
         zz += 2.0;
-        s.b.box_(0.0, y - 1.0, zz + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, zz + 3.0), v3(10.0, 2.0, 6.0), pal::PURPLE, d());
         route.push(Waypoint::spread(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.0)));
         SegOut {
             z: zz + 6.0,
@@ -454,14 +459,14 @@ pub fn hammer_bridges(n: u32) -> Segment {
         let mut routes = Vec::new();
         for bx in [-4.5, 4.5] {
             let p = if bx < 0.0 { pal::BLUE } else { pal::TEAL };
-            s.b.box_(bx, y - 1.0, s.z + len / 2.0, 3.2, 2.0, len, p, d());
+            s.b.box_(v3(bx, y - 1.0, s.z + len / 2.0), v3(3.2, 2.0, len), p, d());
             let mut route = vec![Waypoint::exact(bx, s.z + 0.8)];
             for k in 0..n {
                 // The two bridges' hammers are staggered (their heads swing over the other bridge).
                 let hz = s.z + 3.5 + f64::from(k) * 7.0 + if bx > 0.0 { 3.5 } else { 0.0 };
                 let w = 1.7 + s.rng() * 0.9;
                 let ph = s.rng() * m::TAU;
-                s.b.hammer(bx, y + 7.4, hz, w, ph, 1.12, true);
+                s.b.hammer(v3(bx, y + 7.4, hz), w, ph, 1.12, true);
                 let head_x = move |t: f64| bx + 6.0 * m::sin(m::sin(t * w + ph) * 1.12);
                 route.push(Waypoint::exact(bx, hz - 2.6));
                 route.push(Waypoint::exact(bx, hz + 2.0).wait(move |bot| {
@@ -474,7 +479,7 @@ pub fn hammer_bridges(n: u32) -> Segment {
             routes.push(route);
         }
         let (z0, z_end) = (s.z, s.z + len);
-        s.b.box_(0.0, y - 1.0, z_end + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, z_end + 3.0), v3(16.0, 2.0, 6.0), pal::PURPLE, d());
         SegOut {
             z: z_end + 6.0,
             y,
@@ -505,8 +510,8 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
         let y = s.y;
         let gap_z = 7.0;
         let len = f64::from(rows) * gap_z + 2.0;
-        s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
-        s.b.fence(s.z, s.z + len, w / 2.0, y, DOOR_FENCE, true, pal::PINK);
+        s.b.box_(v3(0.0, y - 1.0, s.z + len / 2.0), v3(w, 2.0, len), pal::BLUE, d());
+        s.b.fence(s.z..s.z + len, w / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let mut routes: Vec<Vec<Waypoint>> = vec![Vec::new(), Vec::new()];
         let door_w = 3.2;
         for r in 0..rows {
@@ -533,9 +538,9 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
             for k in (0..edges.len()).step_by(2) {
                 let (a, c) = (edges[k], edges[k + 1]);
                 let p = if r % 2 == 1 { pal::ORANGE } else { pal::PURPLE };
-                s.b.box_((a + c) / 2.0, y + 1.6, wz, c - a, 3.2, 0.8, p, d());
+                s.b.box_(v3((a + c) / 2.0, y + 1.6, wz), v3(c - a, 3.2, 0.8), p, d());
             }
-            s.b.box_(0.0, y + 3.5, wz, w, 0.6, 0.9, pal::YELLOW, d());
+            s.b.box_(v3(0.0, y + 3.5, wz), v3(w, 0.6, 0.9), pal::YELLOW, d());
             for (di, &[x, period, phase, share]) in doors.iter().enumerate() {
                 for side in [-1.0, 1.0] {
                     let o = PrimOpts {
@@ -548,12 +553,8 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
                         ..Default::default()
                     };
                     let leaf = s.b.box_(
-                        x + side * door_w / 4.0,
-                        y + 1.6,
-                        wz,
-                        door_w / 2.0,
-                        3.2,
-                        0.4,
+                        v3(x + side * door_w / 4.0, y + 1.6, wz),
+                        v3(door_w / 2.0, 3.2, 0.4),
                         pal::YELLOW,
                         o,
                     );
@@ -570,7 +571,7 @@ pub fn timed_doors(rows: u32, w: f64) -> Segment {
                 );
             }
         }
-        s.b.bonus(0.0, y, s.z + 4.0 + gap_z / 2.0);
+        s.b.bonus(v3(0.0, y, s.z + 4.0 + gap_z / 2.0));
         for r in &mut routes {
             r.push(Waypoint::spread(0.0, s.z + len + 0.5, 1.0));
         }
@@ -778,8 +779,8 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
         let y = s.y;
         let gap_z = 9.0;
         let len = f64::from(rows) * gap_z + 3.0;
-        s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w + 1.0, 2.0, len, pal::BLUE, d());
-        s.b.fence(s.z, s.z + len, (w + 1.0) / 2.0, y, DOOR_FENCE, true, pal::PINK);
+        s.b.box_(v3(0.0, y - 1.0, s.z + len / 2.0), v3(w + 1.0, 2.0, len), pal::BLUE, d());
+        s.b.fence(s.z..s.z + len, (w + 1.0) / 2.0, y, DOOR_FENCE, true, pal::PINK);
         let n = 5;
         let dw = w / n as f64;
         let mut doors: Vec<Door> = Vec::new();
@@ -800,7 +801,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                 nd.scale.x = dw / 3.1;
                 nd.rot.y = m::PI;
                 let id = doors.len();
-                let at = s.b.anchor(x, y + 1.6, wz, ROOT);
+                let at = s.b.anchor(v3(x, y + 1.6, wz), ROOT);
                 let col = s.b.collider(
                     at,
                     Shape::Box {
@@ -829,7 +830,7 @@ pub fn door_rows(rows: u32, w: f64) -> Segment {
                     row: r,
                 });
             }
-            s.b.box_(0.0, y + 3.6, wz, w + 0.4, 0.8, 1.0, pal::YELLOW, d());
+            s.b.box_(v3(0.0, y + 3.6, wz), v3(w + 0.4, 0.8, 1.0), pal::YELLOW, d());
         }
         let notes = s.notes;
         let mut route = Vec::new();
@@ -872,7 +873,19 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
         let z0 = s.z;
         let z1 = s.z + len;
         let w = 12.0;
-        s.b.ramp(0.0, z0, y, z1, y + rise, w, pal::BLUE, 1.0, d());
+        s.b.ramp(
+            Ramp {
+                x: 0.0,
+                z0,
+                y0: y,
+                z1,
+                y1: y + rise,
+                width: w,
+                thick: 1.0,
+            },
+            pal::BLUE,
+            d(),
+        );
         let ang = m::atan2(rise, len);
         let y_at = |zz: f64| y + ((zz - z0) / len) * rise;
         for sx in [-1.0, 1.0] {
@@ -881,12 +894,8 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
                 ..Default::default()
             };
             s.b.box_(
-                sx * (w / 2.0 + 0.4),
-                (y * 2.0 + rise) / 2.0 + 0.6,
-                (z0 + z1) / 2.0,
-                0.8,
-                1.2,
-                len + 0.4,
+                v3(sx * (w / 2.0 + 0.4), (y * 2.0 + rise) / 2.0 + 0.6, (z0 + z1) / 2.0),
+                v3(0.8, 1.2, len + 0.4),
                 pal::PINK,
                 o,
             );
@@ -894,7 +903,7 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
         for k in 0..5 {
             let bz = z0 + 4.0 + f64::from(k) * ((len - 7.0) / 4.0);
             let bx = (if k % 2 == 1 { 1.0 } else { -1.0 }) * (1.5 + s.rng() * 2.5);
-            s.b.bumper(bx, y_at(bz) - 0.1, bz, 0.9, 11.0);
+            s.b.bumper(v3(bx, y_at(bz) - 0.1, bz), 0.9, 11.0);
         }
         for (f, side) in [(0.3, -1.0), (0.62, 1.0)] {
             let gz = z0 + len * f;
@@ -915,7 +924,7 @@ pub fn bumper_ramp(rise: f64, len: f64) -> Segment {
                 },
             );
         }
-        s.b.box_(0.0, y + rise - 1.0, z1 + 2.0, 14.0, 2.0, 4.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y + rise - 1.0, z1 + 2.0), v3(14.0, 2.0, 4.0), pal::PURPLE, d());
         SegOut {
             z: z1 + 4.0,
             y: y + rise,
@@ -935,7 +944,7 @@ pub fn seesaws(n: u32) -> Segment {
         let y = s.y;
         let mut zz = s.z + 3.0;
         let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 1.0)];
-        s.b.box_(0.0, y - 1.0, s.z + 1.5, 12.0, 2.0, 3.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.5), v3(12.0, 2.0, 3.0), pal::PURPLE, d());
         let mut edge = s.z + 3.0;
         for i in 0..n {
             let x = (if i % 2 == 1 { 1.0 } else { -1.0 }) * 2.5;
@@ -943,7 +952,7 @@ pub fn seesaws(n: u32) -> Segment {
             let w1 = 1.0 + s.rng() * 0.5;
             let ph = s.rng() * 6.0;
             let p = if i % 2 == 1 { pal::PINK } else { pal::TEAL };
-            let node = s.b.box_(x, y - 0.5, c, 7.5, 1.0, 7.5, p, dynamic()).node;
+            let node = s.b.box_(v3(x, y - 0.5, c), v3(7.5, 1.0, 7.5), p, dynamic()).node;
             s.b.mover(move |t, ctx| {
                 let n = ctx.node(node);
                 n.rot.z = m::sin(t * w1 + ph) * 0.36;
@@ -954,7 +963,7 @@ pub fn seesaws(n: u32) -> Segment {
             zz = c + 3.75;
         }
         zz += 2.0;
-        s.b.box_(0.0, y - 1.0, zz + 3.0, 12.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, zz + 3.0), v3(12.0, 2.0, 6.0), pal::PURPLE, d());
         route.push(Waypoint::spread(0.0, zz + 3.0, 0.5).jump_when(edge_jump(edge, 1.1)));
         SegOut {
             z: zz + 6.0,
@@ -985,9 +994,9 @@ pub fn conveyor(len: f64) -> Segment {
             surface: Some(Surface::Rubber),
             ..Default::default()
         };
-        s.b.box_(0.0, y - 1.0, cz, 9.0, 2.0, len, pal::WHITE, belt);
+        s.b.box_(v3(0.0, y - 1.0, cz), v3(9.0, 2.0, len), pal::WHITE, belt);
         for sx in [-1.0, 1.0] {
-            s.b.box_(sx * 4.9, y + 0.6, cz, 0.8, 1.2, len, pal::YELLOW, d());
+            s.b.box_(v3(sx * 4.9, y + 0.6, cz), v3(0.8, 1.2, len), pal::YELLOW, d());
         }
         let mut route = Vec::new();
         let punches = (len / 9.0).floor() as u32;
@@ -1007,16 +1016,16 @@ pub fn conveyor(len: f64) -> Segment {
                 },
                 ..Default::default()
             };
-            let node = s.b.box_(0.0, y + 0.9, pz, 3.4, 1.8, 1.2, pal::ORANGE, o).node;
+            let node = s.b.box_(v3(0.0, y + 0.9, pz), v3(3.4, 1.8, 1.2), pal::ORANGE, o).node;
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = px(t));
-            s.b.bumper(-side * 2.9, y, pz + 4.0, 0.75, 10.0);
+            s.b.bumper(v3(-side * 2.9, y, pz + 4.0), 0.75, 10.0);
             let lane = -side * 1.9;
             route.push(Waypoint::exact(lane, pz - 2.0));
             route.push(
                 Waypoint::exact(lane, pz + 1.5).wait(move |bot| px(bot.t + 0.4).abs() > 3.4 || side * lane < 0.0),
             );
         }
-        s.b.bonus(0.0, y, s.z + len * 0.5);
+        s.b.bonus(v3(0.0, y, s.z + len * 0.5));
         route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
         let z0 = s.z;
         SegOut {
@@ -1038,36 +1047,28 @@ pub fn trampoline_gap() -> Segment {
         let rise = 2.0;
         let basin_y = y - 3.0;
         let gap = 9.0;
-        s.b.box_(0.0, y - 1.0, s.z + 2.0, 12.0, 2.0, 4.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 2.0), v3(12.0, 2.0, 4.0), pal::PURPLE, d());
         // A basin under the gap (with a rim), and the trampoline in it.
         s.b.box_(
-            0.0,
-            basin_y - 1.0,
-            s.z + 4.0 + gap / 2.0,
-            12.0,
-            2.0,
-            gap,
+            v3(0.0, basin_y - 1.0, s.z + 4.0 + gap / 2.0),
+            v3(12.0, 2.0, gap),
             pal::BLUE,
             d(),
         );
         for sx in [-1.0, 1.0] {
             s.b.box_(
-                sx * 6.4,
-                basin_y + 1.0,
-                s.z + 4.0 + gap / 2.0,
-                0.8,
-                4.0,
-                gap,
+                v3(sx * 6.4, basin_y + 1.0, s.z + 4.0 + gap / 2.0),
+                v3(0.8, 4.0, gap),
                 pal::PINK,
                 d(),
             );
         }
         let tz = s.z + 4.0 + gap * 0.42;
         for tx in [-2.8, 2.8] {
-            s.b.trampoline(tx, basin_y, tz, 1.9, 19.5);
+            s.b.trampoline(v3(tx, basin_y, tz), 1.9, 19.5);
         }
         let far = s.z + 4.0 + gap;
-        s.b.box_(0.0, y + rise - 2.5, far + 4.0, 12.0, 5.0, 8.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y + rise - 2.5, far + 4.0), v3(12.0, 5.0, 8.0), pal::PURPLE, d());
         let routes = [-2.8, 2.8]
             .iter()
             .map(|&tx| {
@@ -1101,21 +1102,17 @@ pub fn portal_fork() -> Segment {
         let y = s.y;
         let len = 26.0;
         // Right: the long zig-zag.
-        s.b.box_(4.5, y - 1.0, s.z + len / 2.0, 7.0, 2.0, len, pal::GREEN, d());
+        s.b.box_(v3(4.5, y - 1.0, s.z + len / 2.0), v3(7.0, 2.0, len), pal::GREEN, d());
         for sx in [1.0, 8.0] {
-            s.b.box_(sx, y + 1.2, s.z + len / 2.0, 0.8, 2.4, len, pal::PINK, d());
+            s.b.box_(v3(sx, y + 1.2, s.z + len / 2.0), v3(0.8, 2.4, len), pal::PINK, d());
         }
         let mut zig = vec![Waypoint::exact(4.5, s.z + 1.0)];
         for k in 0..4 {
             let wz = s.z + 4.0 + f64::from(k) * 5.5;
             let left = k % 2 == 0;
             s.b.box_(
-                if left { 3.5 } else { 5.5 },
-                y + 1.2,
-                wz,
-                4.2,
-                2.4,
-                0.8,
+                v3(if left { 3.5 } else { 5.5 }, y + 1.2, wz),
+                v3(4.2, 2.4, 0.8),
                 pal::PURPLE,
                 d(),
             );
@@ -1125,11 +1122,11 @@ pub fn portal_fork() -> Segment {
         }
         zig.push(Waypoint::exact(4.5, s.z + len + 1.0));
         // Left: a short run, a gap, the portal.
-        s.b.box_(-4.5, y - 1.0, s.z + 4.0, 6.0, 2.0, 8.0, pal::BLUE, d());
+        s.b.box_(v3(-4.5, y - 1.0, s.z + 4.0), v3(6.0, 2.0, 8.0), pal::BLUE, d());
         let gap_end = s.z + 8.0 + 3.0 + s.rng() * 0.6;
-        s.b.box_(-4.5, y - 1.0, gap_end + 2.0, 5.0, 2.0, 4.0, pal::BLUE, d());
+        s.b.box_(v3(-4.5, y - 1.0, gap_end + 2.0), v3(5.0, 2.0, 4.0), pal::BLUE, d());
         let pz = gap_end + 2.4;
-        s.b.box_(0.0, y - 1.0, s.z + len + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + len + 3.0), v3(16.0, 2.0, 6.0), pal::PURPLE, d());
         s.b.portal(
             PortalEnd {
                 x: -4.5,
@@ -1146,7 +1143,7 @@ pub fn portal_fork() -> Segment {
             rgb(0x39e0d0),
             PortalOpts::default(),
         );
-        s.b.bonus(-4.5, y, s.z + 5.0);
+        s.b.bonus(v3(-4.5, y, s.z + 5.0));
         let hop = vec![
             Waypoint::exact(-4.5, s.z + 5.0),
             Waypoint::exact(-4.5, gap_end + 1.2).jump_when(edge_jump(s.z + 8.0, 1.1)),
@@ -1173,7 +1170,7 @@ pub fn glove_alley(n: u32) -> Segment {
         let y = s.y;
         let len = f64::from(n) * 5.0 + 4.0;
         let w = 7.0;
-        s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::TEAL, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + len / 2.0), v3(w, 2.0, len), pal::TEAL, d());
         let mut route = vec![Waypoint::exact(0.0, s.z + 1.0)];
         for k in 0..n {
             let gz = s.z + 3.0 + f64::from(k) * 5.0;
@@ -1221,7 +1218,19 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
         let z0 = s.z;
         let z1 = s.z + len;
         let y_at = move |zz: f64| y + ((zz - z0) / len) * rise;
-        s.b.ramp(0.0, z0, y, z1, y + rise, w, pal::TEAL, 1.0, d());
+        s.b.ramp(
+            Ramp {
+                x: 0.0,
+                z0,
+                y0: y,
+                z1,
+                y1: y + rise,
+                width: w,
+                thick: 1.0,
+            },
+            pal::TEAL,
+            d(),
+        );
         let ang = m::atan2(rise, len);
         for sx in [-1.0, 1.0] {
             let o = PrimOpts {
@@ -1230,12 +1239,8 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
             };
             let l = m::hypot(len, rise);
             s.b.box_(
-                sx * (w / 2.0 + 0.4),
-                (2.0 * y + rise) / 2.0 + 0.6,
-                (z0 + z1) / 2.0,
-                0.8,
-                1.2,
-                l,
+                v3(sx * (w / 2.0 + 0.4), (2.0 * y + rise) / 2.0 + 0.6, (z0 + z1) / 2.0),
+                v3(0.8, 1.2, l),
                 pal::PINK,
                 o,
             );
@@ -1247,7 +1252,7 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
             let ph = s.rng() * 6.0;
             let gap = 3.6 - f64::from(k) * 0.15;
             let gx = move |t: f64| m::sin(t * gw + ph) * (w / 2.0 - gap / 2.0 - 0.4);
-            let gate = s.b.anchor(0.0, y_at(gz), gz, ROOT);
+            let gate = s.b.anchor(v3(0.0, y_at(gz), gz), ROOT);
             for side in [-1.0, 1.0] {
                 let o = PrimOpts {
                     parent: Some(gate),
@@ -1259,14 +1264,14 @@ pub fn sliding_gates(n: u32, rise: f64) -> Segment {
                     ..Default::default()
                 };
                 let p = if k % 2 == 1 { pal::ORANGE } else { pal::PURPLE };
-                s.b.box_(side * (gap / 2.0 + w / 2.0), 1.4, 0.0, w, 3.4, 0.8, p, o);
+                s.b.box_(v3(side * (gap / 2.0 + w / 2.0), 1.4, 0.0), v3(w, 3.4, 0.8), p, o);
             }
             s.b.mover(move |t, ctx| ctx.node(gate).pos.x = gx(t));
             route.push(Waypoint::spread(0.0, gz - 3.0, 0.5));
             route.push(Waypoint::moving(gx, gz + 1.2).wait(move |bot| (gx(bot.t + 0.45) - bot.body.pos.x).abs() < 1.2));
             route.push(Waypoint::moving(gx, gz + 2.5));
         }
-        s.b.box_(0.0, y + rise - 1.0, z1 + 3.0, 16.0, 2.0, 6.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y + rise - 1.0, z1 + 3.0), v3(16.0, 2.0, 6.0), pal::PURPLE, d());
         route.push(Waypoint::spread(0.0, z1 + 3.0, 1.0));
         SegOut {
             z: z1 + 6.0,
@@ -1285,7 +1290,7 @@ pub fn tipping_bridge(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let flap = 3.0;
-        s.b.box_(0.0, y - 1.0, s.z + 1.0, 6.0, 2.0, 2.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 1.0), v3(6.0, 2.0, 2.0), pal::PURPLE, d());
         let mut route = vec![Waypoint::exact(0.0, s.z + 1.0)];
         let mut zz = s.z + 2.0;
         for k in 0..n {
@@ -1300,14 +1305,14 @@ pub fn tipping_bridge(n: u32) -> Segment {
                 let f = (((t + ph) % period) + period) % period;
                 if f < 0.9 { m::sin((f / 0.9) * m::PI) } else { 0.0 }
             };
-            let pivot = s.b.anchor(0.0, y - 0.25, c, ROOT);
+            let pivot = s.b.anchor(v3(0.0, y - 0.25, c), ROOT);
             let o = PrimOpts {
                 parent: Some(pivot),
                 dynamic: true,
                 ..Default::default()
             };
             let p = if k % 2 == 1 { pal::ORANGE } else { pal::YELLOW };
-            s.b.box_(0.0, 0.0, 0.0, 3.4, 0.5, flap, p, o);
+            s.b.box_(V3::ZERO, v3(3.4, 0.5, flap), p, o);
             let dir = if s.rng() < 0.5 { -1.0 } else { 1.0 };
             s.b.mover(move |t, ctx| ctx.node(pivot).rot.z = dir * tip(t) * 1.35);
             route.push(
@@ -1316,7 +1321,7 @@ pub fn tipping_bridge(n: u32) -> Segment {
             );
             zz += flap + 0.3;
         }
-        s.b.box_(0.0, y - 1.0, zz + 2.0, 12.0, 2.0, 4.0, pal::PURPLE, d());
+        s.b.box_(v3(0.0, y - 1.0, zz + 2.0), v3(12.0, 2.0, 4.0), pal::PURPLE, d());
         route.push(Waypoint::spread(0.0, zz + 2.0, 0.5));
         SegOut {
             z: zz + 4.0,
@@ -1334,7 +1339,7 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
         let y = s.y;
         let gap_z = 5.0;
         let len = f64::from(rows) * gap_z + 4.0;
-        s.b.box_(0.0, y - 1.0, s.z + len / 2.0, w, 2.0, len, pal::BLUE, d());
+        s.b.box_(v3(0.0, y - 1.0, s.z + len / 2.0), v3(w, 2.0, len), pal::BLUE, d());
         let mut route = vec![Waypoint::spread(0.0, s.z + 1.0, 0.5)];
         for k in 0..rows {
             let pz = s.z + 3.0 + f64::from(k) * gap_z;
@@ -1361,7 +1366,12 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                     no_collide: true,
                     ..Default::default()
                 };
-                s.b.box_(side * (w / 2.0 + 1.5), y + 1.0, pz, 3.0, 2.4, 2.2, pal::PURPLE, deco);
+                s.b.box_(
+                    v3(side * (w / 2.0 + 1.5), y + 1.0, pz),
+                    v3(3.0, 2.4, 2.2),
+                    pal::PURPLE,
+                    deco,
+                );
                 let o = PrimOpts {
                     dynamic: true,
                     col: ColliderOpts {
@@ -1374,12 +1384,8 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                 };
                 let node =
                     s.b.box_(
-                        side * (w / 2.0 + 1.5),
-                        y + 0.8,
-                        pz,
-                        w / 2.0 + 0.5,
-                        1.6,
-                        1.8,
+                        v3(side * (w / 2.0 + 1.5), y + 0.8, pz),
+                        v3(w / 2.0 + 0.5, 1.6, 1.8),
                         pal::ORANGE,
                         o,
                     )
@@ -1395,7 +1401,7 @@ pub fn pistons(rows: u32, w: f64) -> Segment {
                     .wait(move |bot| out(bot.t + 0.1) < 0.02 && out(bot.t + 0.45) < 0.02),
             );
         }
-        s.b.bonus(w / 2.0 - 2.0, y, s.z + 3.0 + gap_z * 1.5);
+        s.b.bonus(v3(w / 2.0 - 2.0, y, s.z + 3.0 + gap_z * 1.5));
         route.push(Waypoint::spread(0.0, s.z + len + 0.5, 0.5));
         SegOut {
             z: s.z + len,

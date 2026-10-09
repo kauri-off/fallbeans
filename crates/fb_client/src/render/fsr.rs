@@ -83,14 +83,17 @@ impl Plugin for FsrPlugin {
     }
 }
 
+/// A camera, the main pass's resolution if overridden, and whether FSR 1 is on.
+type Resolution = (
+    Entity,
+    &'static Camera,
+    Option<&'static MainPassResolutionOverride>,
+    Has<Fsr>,
+);
+
 /// The main pass's resolution as the setting asks (for every upscaler), and FSR 1 with its sharpening when it is
 /// the one in use (a temporal upscaler is the anti-aliasing and sharpens itself: no EASU, no CAS on top).
-fn resolution(
-    mut commands: Commands,
-    g: Res<Graphics>,
-    up: Res<Upscaling>,
-    cams: Query<(Entity, &Camera, Option<&MainPassResolutionOverride>, Has<Fsr>), With<MainCamera>>,
-) {
+fn resolution(mut commands: Commands, g: Res<Graphics>, up: Res<Upscaling>, cams: Query<Resolution, With<MainCamera>>) {
     let scale = g.upscale.scale();
     let fsr1 = up.active == Upscaler::Fsr1;
     for (e, cam, now, has) in &cams {

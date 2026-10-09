@@ -336,10 +336,12 @@ pub struct LookOut {
     pub tints: Vec<Tint>,
 }
 
+pub type LookFn = Arc<dyn Fn(&World, f64, &mut LookOut) + Send + Sync>;
+
 /// Fills a special's pieces for sim time t (client only, every frame), from the world or the map's logic.
 #[derive(Clone)]
 pub enum Look {
-    Fn(Arc<dyn Fn(&World, f64, &mut LookOut) + Send + Sync>),
+    Fn(LookFn),
     Map(Hook),
 }
 

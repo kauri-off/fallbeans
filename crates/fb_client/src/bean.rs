@@ -134,6 +134,17 @@ pub struct Frame {
     pub pose: Option<Podium>,
 }
 
+/// How the bean moves, in its own frame: ground speed, its forward and sideways parts, vertical speed, and the
+/// forward acceleration.
+#[derive(Clone, Copy)]
+struct Motion {
+    speed: f32,
+    fwd: f32,
+    side: f32,
+    vy: f32,
+    a_fwd: f32,
+}
+
 #[derive(Clone, Copy)]
 struct Targets {
     arm_lx: f32,
@@ -455,7 +466,16 @@ impl BeanAnim {
 
         let mut tg = match f.pose {
             Some(p) if a == Anim::Idle && speed < 1.2 => podium(p, t),
-            _ => self.pick_pose(a, t, dt, speed, fwd, side, f.vel.y, a_fwd),
+            _ => {
+                let m = Motion {
+                    speed,
+                    fwd,
+                    side,
+                    vy: f.vel.y,
+                    a_fwd,
+                };
+                self.pick_pose(a, t, dt, m)
+            }
         };
 
         // Secondary motion: limbs are thrown against the body's acceleration (strongest when loose).
@@ -644,7 +664,14 @@ impl BeanAnim {
         out
     }
 
-    fn pick_pose(&mut self, a: Anim, t: f32, dt: f32, speed: f32, fwd: f32, side: f32, vy: f32, a_fwd: f32) -> Targets {
+    fn pick_pose(&mut self, a: Anim, t: f32, dt: f32, m: Motion) -> Targets {
+        let Motion {
+            speed,
+            fwd,
+            side,
+            vy,
+            a_fwd,
+        } = m;
         let mut tg = Targets::default();
         let w = t + self.seed;
         match a {

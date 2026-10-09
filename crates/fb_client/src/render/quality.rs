@@ -11,6 +11,7 @@ use bevy::core_pipeline::prepass::background_motion_vectors::{
     BackgroundMotionVectorsBindGroup, BackgroundMotionVectorsPipelineId,
 };
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
+use bevy::ecs::system::SystemParam;
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::post_process::bloom::Bloom;
@@ -180,29 +181,40 @@ fn detect(mut commands: Commands, info: Option<Res<RenderAdapterInfo>>) {
     });
 }
 
+/// What a preset changes: the main camera and its grade, the sun, the window.
+#[derive(SystemParam)]
+struct Presented<'w, 's> {
+    camera: Query<'w, 's, Entity, With<MainCamera>>,
+    grade: Query<'w, 's, &'static mut ColorGrading, With<MainCamera>>,
+    sun: Query<'w, 's, (Entity, &'static mut DirectionalLight), With<Sun>>,
+    windows: Query<'w, 's, &'static mut Window, With<PrimaryWindow>>,
+}
+
+/// The graphics settings, and the upscaler that serves them.
+#[derive(SystemParam)]
+pub struct Wanted<'w> {
+    pub g: Res<'w, Graphics>,
+    pub up: Res<'w, Upscaling>,
+}
+
 /// The camera, the sun and the window as the preset and switches say.
 fn apply(
-    g: Res<Graphics>,
-    up: Res<Upscaling>,
+    wanted: Wanted,
+    mut presented: Presented,
+    mut surfaces: super::surface::SurfaceKit,
     q: Option<ResMut<Quality>>,
     mut commands: Commands,
-    camera: Query<Entity, With<MainCamera>>,
-    mut grade: Query<&mut ColorGrading, With<MainCamera>>,
-    mut sun: Query<(Entity, &mut DirectionalLight), With<Sun>>,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
     map: Option<Res<crate::game::Map>>,
-    mut surfaces: ResMut<super::surface::Surfaces>,
-    mut surface_mats: ResMut<Assets<super::surface::SurfaceMaterial>>,
     mut done: Local<Option<(Preset, Upscaler, Graphics)>>,
 ) {
     let Some(mut q) = q else { return };
-    let preset = g.preset;
+    let preset = wanted.g.preset;
     if q.preset != preset {
         q.preset = preset;
     }
     // (The grade's saturation comes with the look: kept off when switched off.)
-    if let Ok(mut c) = grade.single_mut() {
-        let sat = if g.grade {
+    if let Ok(mut c) = presented.grade.single_mut() {
+        let sat = if wanted.g.grade {
             map.as_ref().map_or(1.0, |m| m.look.look.saturation as f32)
         } else {
             1.0
@@ -212,26 +224,28 @@ fn apply(
         }
     }
     // (The settings are compared, and cloned, only when something may have changed them.)
-    let upscaler = up.active;
-    if !g.is_changed() && done.as_ref().is_some_and(|(p, u, _)| *p == preset && *u == upscaler) {
+    let upscaler = wanted.up.active;
+    if !wanted.g.is_changed() && done.as_ref().is_some_and(|(p, u, _)| *p == preset && *u == upscaler) {
         return;
     }
     if done
         .as_ref()
-        .is_some_and(|(p, u, d)| *p == preset && *u == upscaler && *d == *g)
+        .is_some_and(|(p, u, d)| *p == preset && *u == upscaler && *d == *wanted.g)
     {
         return;
     }
-    *done = Some((preset, upscaler, g.clone()));
+    *done = Some((preset, upscaler, wanted.g.clone()));
     // (A temporal upscaler is the anti-aliasing, and its prepasses, jitter and mip bias are `upscale.rs`'s.)
-    let temporal = up.temporal(&g);
-    surfaces.set_plain(preset == Preset::Low, &mut surface_mats);
+    let temporal = wanted.up.temporal(&wanted.g);
+    surfaces
+        .surfaces
+        .set_plain(preset == Preset::Low, &mut surfaces.materials);
     // (Low draws no detail texture.)
-    surfaces.anisotropy = match preset {
+    surfaces.surfaces.anisotropy = match preset {
         Preset::Low => 1,
         Preset::High => 16,
     };
-    let Ok(cam) = camera.single() else { return };
+    let Ok(cam) = presented.camera.single() else { return };
     let mut e = commands.entity(cam);
     // (What an older preset may have left on the camera: TAA and SSAO with what they bring along. Left behind,
     // the prepasses would keep running and TAA's texture LOD bias of −1 would make every texture shimmer.)
@@ -251,7 +265,7 @@ fn apply(
     // (The main pass is always upscaled (`fsr.rs`), and Bevy 0.19's TAA and SSAO work on the whole target, not
     // on the smaller main pass (`MainPassResolutionOverride` is only for DLSS): with FSR 1, SMAA before the
     // upscale instead, and no SSAO; DLSS and FSR 3.1 do their own anti-aliasing.)
-    if g.aa && !temporal {
+    if wanted.g.aa && !temporal {
         match preset {
             Preset::High => {
                 e.insert(Smaa {
@@ -263,7 +277,7 @@ fn apply(
             }
         }
     }
-    if g.grade && preset == Preset::High {
+    if wanted.g.grade && preset == Preset::High {
         e.insert(Vignette {
             intensity: 0.22,
             radius: 0.9,
@@ -296,8 +310,8 @@ fn apply(
         Preset::Low => (1024, 1, 30.0),
     };
     commands.insert_resource(DirectionalLightShadowMap { size });
-    if let Ok((sun_e, mut light)) = sun.single_mut() {
-        light.shadow_maps_enabled = g.shadows;
+    if let Ok((sun_e, mut light)) = presented.sun.single_mut() {
+        light.shadow_maps_enabled = wanted.g.shadows;
         commands.entity(sun_e).insert(
             CascadeShadowConfigBuilder {
                 num_cascades: cascades,
@@ -309,8 +323,8 @@ fn apply(
             .build(),
         );
     }
-    if let Ok(mut w) = windows.single_mut() {
-        let mode = if g.vsync {
+    if let Ok(mut w) = presented.windows.single_mut() {
+        let mode = if wanted.g.vsync {
             PresentMode::AutoVsync
         } else {
             PresentMode::AutoNoVsync
@@ -319,7 +333,7 @@ fn apply(
             w.present_mode = mode;
         }
     }
-    info!("graphics: preset {preset:?}, {}, {:?}", upscaler.name(), *g);
+    info!("graphics: preset {preset:?}, {}, {:?}", upscaler.name(), *wanted.g);
 }
 
 /// How long the frame limit slept at the end of the last frame (s).

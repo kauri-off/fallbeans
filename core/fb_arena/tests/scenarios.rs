@@ -6,10 +6,10 @@ use fb_arena::{Stepper, tick_plain};
 use fb_shared::input::InputFrame;
 use fb_shared::rgb;
 use fb_shared::{DT, PlayerId, m};
-use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
+use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, Ramp};
 use fb_sim::collider::ColliderOpts;
 use fb_sim::map::NoLogic;
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::physics::{Body, Power, StepEvents};
 use fb_sim::scene::pal;
 
@@ -189,11 +189,11 @@ fn script(name: &str) -> (i64, Vec<Bean>) {
 }
 
 fn floor(b: &mut Builder) {
-    b.box_(0.0, -1.0, 0.0, 40.0, 2.0, 40.0, pal::BLUE, PrimOpts::default());
+    b.box_(v3(0.0, -1.0, 0.0), v3(40.0, 2.0, 40.0), pal::BLUE, PrimOpts::default());
 }
 
 fn wall(b: &mut Builder, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64) {
-    b.box_(x, y, z, sx, sy, sz, pal::BLUE, PrimOpts::default());
+    b.box_(v3(x, y, z), v3(sx, sy, sz), pal::BLUE, PrimOpts::default());
 }
 
 fn dynamic() -> PrimOpts {
@@ -220,50 +220,86 @@ fn build(name: &str, b: &mut Builder) {
         "push" => floor(b),
         "slopes" => {
             floor(b);
-            b.ramp(-6.0, 2.0, 0.0, 14.0, 4.0, 6.0, pal::BLUE, 1.0, PrimOpts::default());
-            b.ramp(6.0, 2.0, 0.0, 5.0, 4.5, 6.0, pal::BLUE, 1.0, PrimOpts::default());
+            b.ramp(
+                Ramp {
+                    x: -6.0,
+                    z0: 2.0,
+                    y0: 0.0,
+                    z1: 14.0,
+                    y1: 4.0,
+                    width: 6.0,
+                    thick: 1.0,
+                },
+                pal::BLUE,
+                PrimOpts::default(),
+            );
+            b.ramp(
+                Ramp {
+                    x: 6.0,
+                    z0: 2.0,
+                    y0: 0.0,
+                    z1: 5.0,
+                    y1: 4.5,
+                    width: 6.0,
+                    thick: 1.0,
+                },
+                pal::BLUE,
+                PrimOpts::default(),
+            );
             let ice = surface(ColliderOpts {
                 slip: 0.9,
                 ..Default::default()
             });
-            b.ramp(-15.0, 5.0, 0.0, 15.0, 4.0, 6.0, pal::WHITE, 1.0, ice);
+            b.ramp(
+                Ramp {
+                    x: -15.0,
+                    z0: 5.0,
+                    y0: 0.0,
+                    z1: 15.0,
+                    y1: 4.0,
+                    width: 6.0,
+                    thick: 1.0,
+                },
+                pal::WHITE,
+                ice,
+            );
         }
         "surfaces" => {
             let ice = surface(ColliderOpts {
                 slip: 0.9,
                 ..Default::default()
             });
-            b.box_(-6.0, -1.0, 0.0, 8.0, 2.0, 40.0, pal::WHITE, ice);
+            b.box_(v3(-6.0, -1.0, 0.0), v3(8.0, 2.0, 40.0), pal::WHITE, ice);
             wall(b, 0.0, -1.0, 0.0, 4.0, 2.0, 40.0);
             let belt = surface(ColliderOpts {
                 conveyor: Some(V3::new(0.0, 0.0, -4.0)),
                 ..Default::default()
             });
-            b.box_(6.0, -1.0, 0.0, 8.0, 2.0, 40.0, pal::WHITE, belt);
+            b.box_(v3(6.0, -1.0, 0.0), v3(8.0, 2.0, 40.0), pal::WHITE, belt);
         }
         "rotor" => {
             floor(b);
-            b.rotor(0.0, 0.6, 0.0, 8.0, 1, |t| t * 1.2, 1.0);
+            b.rotor(v3(0.0, 0.6, 0.0), 8.0, 1, |t| t * 1.2, 1.0);
         }
         "hammer" => {
             floor(b);
-            b.hammer(0.0, 7.0, 0.0, 2.2, m::PI / 2.0, 1.05, true);
+            b.hammer(v3(0.0, 7.0, 0.0), 2.2, m::PI / 2.0, 1.05, true);
         }
         "bounce" => {
             floor(b);
-            b.bumper(0.0, 0.0, 5.0, 1.0, 13.0);
-            b.pad(6.0, 0.0, 5.0, 1.4, 17.0, None);
-            b.pad(-6.0, 0.0, 5.0, 1.4, 16.0, Some((0.0, 8.0)));
-            b.trampoline(12.0, 0.0, 5.0, 1.8, 19.0);
-            b.mushroom(-12.0, 0.0, 5.0, 1.5, 17.0, None);
+            b.bumper(v3(0.0, 0.0, 5.0), 1.0, 13.0);
+            b.pad(v3(6.0, 0.0, 5.0), 1.4, 17.0, None);
+            b.pad(v3(-6.0, 0.0, 5.0), 1.4, 16.0, Some((0.0, 8.0)));
+            b.trampoline(v3(12.0, 0.0, 5.0), 1.8, 19.0);
+            b.mushroom(v3(-12.0, 0.0, 5.0), 1.5, 17.0, None);
         }
         "platforms" => {
             floor(b);
-            let slider = b.box_(-6.0, 1.0, 0.0, 4.0, 0.6, 4.0, pal::BLUE, dynamic()).node;
+            let slider = b.box_(v3(-6.0, 1.0, 0.0), v3(4.0, 0.6, 4.0), pal::BLUE, dynamic()).node;
             b.mover(move |t, ctx| ctx.node(slider).pos.x = -6.0 + m::sin(t * 1.5) * 3.0);
-            let disc = b.cyl(6.0, 1.0, 0.0, 3.0, 0.6, pal::PURPLE, dynamic()).node;
+            let disc = b.cyl(v3(6.0, 1.0, 0.0), 3.0, 0.6, pal::PURPLE, dynamic()).node;
             b.mover(move |t, ctx| ctx.node(disc).rot.y = t * 1.2);
-            let lift = b.box_(0.0, 2.0, 8.0, 3.0, 0.6, 3.0, pal::BLUE, dynamic()).node;
+            let lift = b.box_(v3(0.0, 2.0, 8.0), v3(3.0, 0.6, 3.0), pal::BLUE, dynamic()).node;
             b.mover(move |t, ctx| ctx.node(lift).pos.y = 2.0 + m::sin(t * 1.3) * 1.2);
         }
         "climb" => {
@@ -276,7 +312,7 @@ fn build(name: &str, b: &mut Builder) {
             b.ladder(-16.0, 0.0, 4.0, 5.0, m::PI, rgb(0xffb347));
         }
         "portal" => {
-            b.box_(0.0, -1.0, 0.0, 60.0, 2.0, 60.0, pal::BLUE, PrimOpts::default());
+            b.box_(v3(0.0, -1.0, 0.0), v3(60.0, 2.0, 60.0), pal::BLUE, PrimOpts::default());
             let end = |x, z, yaw| PortalEnd { x, y: 0.0, z, yaw };
             b.portal(
                 end(0.0, 5.0, m::PI),

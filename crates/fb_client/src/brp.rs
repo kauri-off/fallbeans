@@ -9,8 +9,8 @@ use lightyear::prelude::*;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::game::{Map, ProbeInput, Stats};
-use crate::net::Conn;
+use crate::game::{MapNow, Others, PredictionStats, ProbeInput};
+use crate::net::Connection;
 use crate::session::{Session, send};
 use crate::ui::{Fold, Folds, HomeTab, MenuTab, Ui};
 
@@ -47,18 +47,14 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Option<Value>) -> Result<T, BrpEr
     serde_json::from_value(params.ok_or_else(|| bad("params required"))?).map_err(|e| bad(e.to_string()))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn state(
     In(_): In<Option<Value>>,
-    conn: Option<Res<Conn>>,
+    connection: Connection,
+    now: MapNow,
+    counts: PredictionStats,
     session: Res<Session>,
-    map: Option<Res<Map>>,
-    stats: Res<Stats>,
-    timeline: Res<LocalTimeline>,
-    links: Query<&Link>,
     own: Query<(&BeanId, &BodyFull), With<Predicted>>,
-    others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
-    metrics: Option<Res<PredictionMetrics>>,
+    others: Query<(&BeanId, &RemotePose), Others>,
 ) -> BrpResult {
     let lobby = session.lobby.as_ref().map(|l| {
         json!({
@@ -69,14 +65,14 @@ fn state(
             })).collect::<Vec<_>>(),
         })
     });
-    let arena = map.as_ref().map(|m| {
+    let arena = now.map.as_ref().map(|m| {
         let a = session.arena.as_ref().filter(|a| a.id == m.round.arena);
         json!({
             "id": m.round.arena,
             "map": m.round.map,
             "kind": m.round.kind,
             "seed": m.round.seed,
-            "t": m.time(f64::from(timeline.tick().0)),
+            "t": m.time(f64::from(now.timeline.tick().0)),
             "index": a.map(|a| a.index),
             "total": a.map(|a| a.total),
             "participants": m.info.participants,
@@ -101,7 +97,7 @@ fn state(
         .map(|(id, p)| json!({ "id": id.0, "pos": [p.pos.x, p.pos.y, p.pos.z], "anim": format!("{:?}", p.anim) }))
         .collect();
     others.sort_by_key(|o| o["id"].as_u64());
-    let status = match (&map, &own) {
+    let status = match (&now.map, &own) {
         (None, _) => "none",
         (Some(_), Some(_)) => "play",
         (Some(m), None) => match session.me {
@@ -111,10 +107,10 @@ fn state(
         },
     };
     Ok(json!({
-        "connected": conn.as_ref().is_some_and(|c| c.connected),
-        "transport": conn.as_ref().map(|c| format!("{:?}", c.transport)),
-        "rtt_ms": links.iter().next().map(|l| l.stats.rtt.as_secs_f64() * 1000.0),
-        "tick": timeline.tick().0,
+        "connected": connection.conn.as_ref().is_some_and(|c| c.connected),
+        "transport": connection.conn.as_ref().map(|c| format!("{:?}", c.transport)),
+        "rtt_ms": connection.links.iter().next().map(|l| l.stats.rtt.as_secs_f64() * 1000.0),
+        "tick": now.timeline.tick().0,
         "me": session.me,
         "room": session.room,
         "dev": session.dev,
@@ -124,10 +120,10 @@ fn state(
         "own": own,
         "others": others,
         "scores": session.scores,
-        "rollbacks": metrics.map(|m| m.rollbacks),
-        "predicted_ticks": stats.ticks,
-        "map_events": stats.map_events,
-        "hash_mismatch": stats.hash_mismatch,
+        "rollbacks": counts.metrics.map(|m| m.rollbacks),
+        "predicted_ticks": counts.stats.ticks,
+        "map_events": counts.stats.map_events,
+        "hash_mismatch": counts.stats.hash_mismatch,
     }))
 }
 

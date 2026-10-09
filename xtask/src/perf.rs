@@ -760,6 +760,9 @@ fn cpu_keys(d: &Doc) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// One number of a stat (a quantile, the mean).
+type StatOf = fn(&Stat) -> Option<f64>;
+
 fn compare(b: &Doc, n: &Doc) -> String {
     let first = |d: &Doc| head(d).lines().next().unwrap_or("").to_string();
     let mut t = format!(
@@ -786,7 +789,7 @@ fn compare(b: &Doc, n: &Doc) -> String {
     compare_row(&mut t, "fps", bs.fps, ns.fps);
     compare_row(&mut t, "1% low fps", bs.fps_low1, ns.fps_low1);
     compare_row(&mut t, "stutters", Some(bs.stutters as f64), Some(ns.stutters as f64));
-    let quantiles: [(&str, fn(&Stat) -> Option<f64>); 3] = [("avg", |s| s.avg), ("p50", |s| s.p50), ("p99", |s| s.p99)];
+    let quantiles: [(&str, StatOf); 3] = [("avg", |s| s.avg), ("p50", |s| s.p50), ("p99", |s| s.p99)];
     for ((k, bstat), (_, nstat)) in bs
         .stats()
         .into_iter()

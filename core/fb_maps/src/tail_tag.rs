@@ -13,7 +13,7 @@ use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSfx, MapSpec};
-use fb_sim::math::{V3, dist_xz};
+use fb_sim::math::{V3, dist_xz, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::Body;
 use fb_sim::scene::Model;
@@ -355,17 +355,17 @@ impl MapDef for TailTag {
         let flee_z: Note<f64> = b.note();
         let flee_at: Note<f64> = b.note();
         let fled_at: Note<f64> = b.note();
-        b.cyl(0.0, -1.0, 0.0, ARENA_R, 2.0, pal::TEAL, freq(0.3));
-        b.cyl(0.0, 0.03, 0.0, ARENA_R + 0.05, 0.1, pal::YELLOW, deco());
+        b.cyl(v3(0.0, -1.0, 0.0), ARENA_R, 2.0, pal::TEAL, freq(0.3));
+        b.cyl(v3(0.0, 0.03, 0.0), ARENA_R + 0.05, 0.1, pal::YELLOW, deco());
         // A raised island with ramps, and a few bumpers to dodge around.
-        b.box_(0.0, 0.75, 0.0, 6.0, 1.5, 6.0, pal::PURPLE, o());
+        b.box_(v3(0.0, 0.75, 0.0), v3(6.0, 1.5, 6.0), pal::PURPLE, o());
         for (x, z, ry) in [
             (0.0, 5.0, 0.0),
             (0.0, -5.0, m::PI),
             (5.0, 0.0, m::PI / 2.0),
             (-5.0, 0.0, -m::PI / 2.0),
         ] {
-            let ramp = b.anchor(x, 0.0, z, ROOT);
+            let ramp = b.anchor(v3(x, 0.0, z), ROOT);
             b.world.nodes.get_mut(ramp).rot.y = ry;
             // From the island's top edge (1.5 m) down to the floor 4 m further out.
             let opts = PrimOpts {
@@ -373,28 +373,28 @@ impl MapDef for TailTag {
                 rot: Some(V3::new(m::atan2(1.5, 4.0), 0.0, 0.0)),
                 ..Default::default()
             };
-            b.box_(0.0, 0.47, 0.0, 4.0, 0.6, 4.5, pal::PINK, opts);
+            b.box_(v3(0.0, 0.47, 0.0), v3(4.0, 0.6, 4.5), pal::PINK, opts);
         }
         // Between the spawn points, never on top of one: two small sweepers, trampolines up to floating
         // islands, a pair of portals.
         for sz in [-1.0, 1.0] {
-            b.hub(0.0, 0.0, sz * 11.6, 0.6);
+            b.hub(v3(0.0, 0.0, sz * 11.6), 0.6);
             let angle = move |t: f64| if t <= 0.0 { sz * 0.8 } else { sz * (0.8 + t * 1.1) };
-            b.rotor(0.0, 0.6, sz * 11.6, 2.9, 2, angle, 0.7);
+            b.rotor(v3(0.0, 0.6, sz * 11.6), 2.9, 2, angle, 0.7);
         }
         for sx in [-1.0, 1.0] {
-            b.trampoline(sx * 12.3, 0.0, 0.0, 1.5, 18.0);
+            b.trampoline(v3(sx * 12.3, 0.0, 0.0), 1.5, 18.0);
             // A floating island beyond the rim (a refuge, until someone bounces after you).
             let grass = PrimOpts {
                 surface: Some(Surface::Grass),
                 ..Default::default()
             };
-            b.cyl(sx * 18.2, 3.2, 0.0, 3.0, 1.2, pal::GREEN, grass);
+            b.cyl(v3(sx * 18.2, 3.2, 0.0), 3.0, 1.2, pal::GREEN, grass);
             let mush = PropOpts {
                 scale: 0.8,
                 ..Default::default()
             };
-            b.prop(Model::Mushroom, sx * 19.0, 3.8, 1.2, mush);
+            b.prop(Model::Mushroom, v3(sx * 19.0, 3.8, 1.2), mush);
         }
         let flip = if b.rng.unit() < 0.5 { 1.0 } else { -1.0 };
         b.portal(
@@ -417,7 +417,7 @@ impl MapDef for TailTag {
         let orbit = 0.22 + b.rng.unit() * 0.08;
         for k in 0..2 {
             let p = if k == 1 { pal::ORANGE } else { pal::PINK };
-            let node = b.box_(0.0, -0.5, 0.0, 3.2, 1.0, 3.2, p, dynamic()).node;
+            let node = b.box_(v3(0.0, -0.5, 0.0), v3(3.2, 1.0, 3.2), p, dynamic()).node;
             let ph = f64::from(k) * m::PI + b.rng.unit();
             b.mover(move |t, ctx| {
                 let a = ph + t.at_least(0.0) * orbit;
@@ -427,7 +427,7 @@ impl MapDef for TailTag {
             });
         }
         for (x, z) in [(0.0, 0.0), (7.0, -4.0), (-7.0, 4.0)] {
-            b.bonus(x, if x != 0.0 { 0.0 } else { 1.5 }, z);
+            b.bonus(v3(x, if x != 0.0 { 0.0 } else { 1.5 }, z));
         }
         b.clouds(0.0, 0.0, 45.0);
 

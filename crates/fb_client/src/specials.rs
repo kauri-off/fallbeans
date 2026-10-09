@@ -2,6 +2,7 @@
 //! every frame, and the map's primitives they tint. Lit pieces are drawn on surfaces, as the map.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::Face;
@@ -9,13 +10,12 @@ use bevy::world_serialization::WorldAssetRoot;
 use fb_shared::Rgb;
 use fb_sim::looks::ResolvedLook;
 use fb_sim::scene::{Finish, Form, LookOut, Part, SceneItem, Tint};
-use lightyear::prelude::*;
 
 use crate::game::Map;
 use crate::render::meshes::{soft_box, soft_cylinder};
 use crate::render::portal::PortalMaterial;
-use crate::render::surface::{Kind, Spec, SurfaceMaterial, Surfaces};
-use crate::view::{color, frame_tick};
+use crate::render::surface::{Kind, ModelKit, Spec, SurfaceMaterial};
+use crate::view::{FrameClock, color};
 
 /// Tone and opacity are drawn in steps of 1/STEPS (one material per step).
 const STEPS: f32 = 16.0;
@@ -194,36 +194,48 @@ fn portal_disc(part: &Part, tone: i8, alpha: i8) -> Option<PortalMaterial> {
     ))
 }
 
-type Pieces<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static mut Transform,
-        &'static mut Visibility,
-        Option<&'static mut MeshMaterial3d<StandardMaterial>>,
-        Option<&'static mut MeshMaterial3d<SurfaceMaterial>>,
-        Option<&'static mut MeshMaterial3d<PortalMaterial>>,
-    ),
-    (With<SpecialPiece>, Without<SpecialRoot>),
->;
+type Piece = (
+    &'static mut Transform,
+    &'static mut Visibility,
+    Option<&'static mut MeshMaterial3d<StandardMaterial>>,
+    Option<&'static mut MeshMaterial3d<SurfaceMaterial>>,
+    Option<&'static mut MeshMaterial3d<PortalMaterial>>,
+);
 
-#[allow(clippy::too_many_arguments)]
+/// The specials and their pieces.
+#[derive(SystemParam)]
+pub struct Specials<'w, 's> {
+    roots: Query<'w, 's, (Entity, &'static mut SpecialRoot)>,
+    pieces: Query<'w, 's, Piece, (With<SpecialPiece>, Without<SpecialRoot>)>,
+}
+
+/// What special pieces are made with.
+#[derive(SystemParam)]
+pub struct PieceKit<'w> {
+    model: ModelKit<'w>,
+    portals: ResMut<'w, Assets<PortalMaterial>>,
+}
+
+/// The map's primitives (a look may tint them), and their levels' materials.
+#[derive(SystemParam)]
+pub struct MapPrims<'w, 's> {
+    prims: Query<'w, 's, (&'static crate::view::MapPiece, &'static MapPrim, &'static Children), Without<SpecialPiece>>,
+    levels: Query<
+        'w,
+        's,
+        &'static mut MeshMaterial3d<SurfaceMaterial>,
+        (With<crate::view::PrimLevel>, Without<SpecialPiece>),
+    >,
+}
+
 pub fn pose_specials(
     mut commands: Commands,
     map: Option<Res<Map>>,
-    timeline: Res<LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
-    assets: Res<AssetServer>,
     mut cache: ResMut<SpecialCache>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    (mut materials, mut portals): (ResMut<Assets<StandardMaterial>>, ResMut<Assets<PortalMaterial>>),
-    mut roots: Query<(Entity, &mut SpecialRoot)>,
-    mut pieces: Pieces,
-    prims: Query<(&crate::view::MapPiece, &MapPrim, &Children), Without<SpecialPiece>>,
-    mut levels: Query<&mut MeshMaterial3d<SurfaceMaterial>, (With<crate::view::PrimLevel>, Without<SpecialPiece>)>,
-    mut surfaces: ResMut<Surfaces>,
-    mut images: ResMut<Assets<Image>>,
-    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
+    mut specials: Specials,
+    mut kit: PieceKit,
+    mut map_prims: MapPrims,
+    clock: FrameClock,
 ) {
     let Some(map) = map else { return };
     let cache = &mut *cache;
@@ -236,9 +248,9 @@ pub fn pose_specials(
         cache.tints.clear();
         cache.tinted.clear();
     }
-    let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
+    let t = map.time(clock.tick() - 1.0);
     let mut tints: BTreeMap<u32, Tint> = BTreeMap::new();
-    for (root_e, mut root) in &mut roots {
+    for (root_e, mut root) in &mut specials.roots {
         let Some(SceneItem::Special {
             parts,
             pieces: still,
@@ -290,7 +302,7 @@ pub fn pose_specials(
                             .or_insert_with(|| {
                                 // A portal's disc: its tone is the flash of a trip.
                                 if let Some(disc) = portal_disc(part, key.1, key.2) {
-                                    return PieceMat::Portal(portals.add(disc));
+                                    return PieceMat::Portal(kit.portals.add(disc));
                                 }
                                 let mut m = part_material(part, &map.look, key.1, key.2);
                                 // A board with its emoji drawn on (the board's colour in the picture).
@@ -298,23 +310,19 @@ pub fn pose_specials(
                                     && !text.is_empty()
                                 {
                                     let a = m.base_color.alpha();
-                                    m.base_color_texture =
-                                        Some(images.add(crate::render::emoji::board(text, m.base_color)));
+                                    m.base_color_texture = Some(
+                                        kit.model
+                                            .surfaces
+                                            .images
+                                            .add(crate::render::emoji::board(text, m.base_color)),
+                                    );
                                     m.base_color = Color::WHITE.with_alpha(a);
                                 }
                                 if lit(part) {
                                     let kind = Some(part.surface.map_or(Kind::Plastic, Kind::from));
-                                    PieceMat::Surface(surfaces.material_from(
-                                        m,
-                                        kind,
-                                        None,
-                                        false,
-                                        None,
-                                        &mut images,
-                                        &mut surface_mats,
-                                    ))
+                                    PieceMat::Surface(kit.model.surfaces.material_from(m, kind, false))
                                 } else {
-                                    PieceMat::Plain(materials.add(m))
+                                    PieceMat::Plain(kit.model.materials.add(m))
                                 }
                             })
                             .clone(),
@@ -324,7 +332,7 @@ pub fn pose_specials(
             let n = used[pi];
             used[pi] += 1;
             if let Some(&e) = root.slots[pi].get(n) {
-                if let Ok((mut cur, mut v, plain, surface, portal)) = pieces.get_mut(e) {
+                if let Ok((mut cur, mut v, plain, surface, portal)) = specials.pieces.get_mut(e) {
                     if *cur != tf {
                         *cur = tf;
                     }
@@ -341,14 +349,21 @@ pub fn pose_specials(
             let mut e = commands.spawn((SpecialPiece, tf, vis, ChildOf(root_e)));
             match (part.form, mat) {
                 (Form::Model(name), _) => {
-                    let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
+                    let scene = kit
+                        .model
+                        .assets
+                        .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
                     e.insert((WorldAssetRoot(scene), crate::render::props::Prop::special(name)));
                 }
                 (form, Some(mat)) => {
                     let mesh = cache
                         .meshes
                         .entry((root.item, pi))
-                        .or_insert_with(|| meshes.add(form_mesh(form).unwrap_or_else(|| Cuboid::default().into())))
+                        .or_insert_with(|| {
+                            kit.model
+                                .meshes
+                                .add(form_mesh(form).unwrap_or_else(|| Cuboid::default().into()))
+                        })
                         .clone();
                     match mat {
                         PieceMat::Plain(h) => e.insert((Mesh3d(mesh), MeshMaterial3d(h))),
@@ -366,7 +381,7 @@ pub fn pose_specials(
         // Pieces not placed this frame are hidden.
         for (pi, slots) in root.slots.iter().enumerate() {
             for &e in &slots[used[pi]..] {
-                if let Ok((_, mut v, ..)) = pieces.get_mut(e) {
+                if let Ok((_, mut v, ..)) = specials.pieces.get_mut(e) {
                     v.set_if_neq(Visibility::Hidden);
                 }
             }
@@ -375,7 +390,7 @@ pub fn pose_specials(
     if tints.is_empty() && cache.tinted.is_empty() {
         return;
     }
-    for (piece, prim, children) in &prims {
+    for (piece, prim, children) in &map_prims.prims {
         let h = match tints.get(&piece.node) {
             Some(tint) => {
                 let k = step(tint.k);
@@ -393,7 +408,7 @@ pub fn pose_specials(
                             }
                             None => spec.color = spec.color.mix(&to, f),
                         }
-                        surfaces.material(&spec, &mut images, &mut surface_mats)
+                        kit.model.surfaces.material(&spec)
                     })
                     .clone()
             }
@@ -401,7 +416,7 @@ pub fn pose_specials(
             None => continue,
         };
         for c in children {
-            if let Ok(mut mat) = levels.get_mut(*c)
+            if let Ok(mut mat) = map_prims.levels.get_mut(*c)
                 && mat.0 != h
             {
                 mat.0 = h.clone();

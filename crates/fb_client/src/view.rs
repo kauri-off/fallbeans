@@ -5,6 +5,7 @@ use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use bevy::camera::primitives::MeshAabb;
+use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -23,12 +24,11 @@ use lightyear::prelude::*;
 
 use crate::beans;
 use crate::camera::{PITCH_MAX, PITCH_MIN};
-use crate::game::{CameraAngles, Gate, Map};
+use crate::game::{Buttons, CameraAngles, Gate, Map, Others};
 use crate::render::ao::{self, AoKit, BakedAo, Solids};
-use crate::render::meshes::{self, BandPad, Candidate, LodBand};
+use crate::render::meshes::{self, BandPad, Candidate, LodBand, LodScale};
 use crate::render::props::Prop;
-use crate::render::quality::Quality;
-use crate::render::surface::{Kind, Paint, Spec, SurfaceMaterial, Surfaces};
+use crate::render::surface::{Kind, ModelKit, Paint, Spec, SurfaceMaterial};
 use crate::settings::Controls;
 use crate::specials::{MapPrim, SpecialCache, SpecialRoot, pose_specials};
 
@@ -267,20 +267,25 @@ struct Shading<'a> {
     baked: &'a mut BakedAo,
 }
 
+/// What a map's merged groups are made with: the meshes (on the GPU, and the CPU ones by level), the bakes, the
+/// map's root and `lod_k`.
+struct Merging<'a> {
+    assets: &'a mut Assets<Mesh>,
+    cpu: HashMap<LevelKey, Arc<Mesh>>,
+    shading: Shading<'a>,
+    root: Entity,
+    lod_k: f32,
+}
+
 /// A merged group of static primitives: one mesh per level of detail around the group's centre, its
 /// distances padded by how far its pieces lie from the centre (`BandPad`) and taken at its biggest piece's
 /// size (`meshes::level_class` keeps the sizes close), each baked again with its occlusion in the background.
 /// None: a piece that does not merge.
-#[allow(clippy::too_many_arguments)]
 fn spawn_group(
     commands: &mut Commands,
-    assets: &mut Assets<Mesh>,
-    cpu: &mut HashMap<LevelKey, Arc<Mesh>>,
+    m: &mut Merging,
     group: &[&Placed],
     mat: &Handle<SurfaceMaterial>,
-    root: Entity,
-    lod_k: f32,
-    shading: &mut Shading,
 ) -> Option<Vec<Entity>> {
     let first = group.first()?;
     let (lo, hi) = group.iter().fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
@@ -296,12 +301,17 @@ fn spawn_group(
     let mut made = Vec::with_capacity(levels.len());
     for band in &levels {
         for p in group {
-            cpu.entry(level_key(p.kind, p.dims, band.first))
+            m.cpu
+                .entry(level_key(p.kind, p.dims, band.first))
                 .or_insert_with(|| Arc::new(meshes::prim(p.kind, p.dims, band.first)));
         }
         let pieces: Vec<(&Mesh, Mat4)> = group
             .iter()
-            .filter_map(|p| cpu.get(&level_key(p.kind, p.dims, band.first)).map(|m| (&**m, p.world)))
+            .filter_map(|p| {
+                m.cpu
+                    .get(&level_key(p.kind, p.dims, band.first))
+                    .map(|m| (&**m, p.world))
+            })
             .collect();
         let mesh = meshes::merge(&pieces, origin, true)?;
         let pieces = group
@@ -309,10 +319,10 @@ fn spawn_group(
             .filter_map(|p| {
                 let key = level_key(p.kind, p.dims, band.first);
                 Some(ao::Piece {
-                    mesh: cpu.get(&key)?.clone(),
+                    mesh: m.cpu.get(&key)?.clone(),
                     world: p.world,
-                    own: shading.solid_of.get(p.item).copied().flatten(),
-                    key: ao::piece_key(shading.solids, key, &p.world, band.first),
+                    own: m.shading.solid_of.get(p.item).copied().flatten(),
+                    key: ao::piece_key(m.shading.solids, key, &p.world, band.first),
                 })
             })
             .collect();
@@ -327,21 +337,21 @@ fn spawn_group(
     let mut out = Vec::with_capacity(made.len());
     for (band, (mesh, bake)) in levels.into_iter().zip(made) {
         let aabb = mesh.compute_aabb();
-        let mesh = assets.add(mesh);
-        shading.baked.start(mesh.id(), bake, shading.solids.clone());
+        let mesh = m.assets.add(mesh);
+        m.shading.baked.start(mesh.id(), bake, m.shading.solids.clone());
         let mut e = commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(mat.clone()),
             Transform::from_translation(origin),
             Visibility::default(),
-            ChildOf(root),
+            ChildOf(m.root),
         ));
         if let Some(aabb) = aabb {
             e.insert(aabb);
         }
         if !single {
             let band = LodBand { r, ..band };
-            e.insert((band, BandPad(pad), band.range_padded(lod_k, pad)));
+            e.insert((band, BandPad(pad), band.range_padded(m.lod_k, pad)));
         }
         out.push(e.id());
     }
@@ -456,14 +466,8 @@ fn spawn_map(
     mut commands: Commands,
     map: Option<Res<Map>>,
     roots: Query<(Entity, &MapRoot)>,
-    assets: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut surfaces: ResMut<Surfaces>,
-    mut images: ResMut<Assets<Image>>,
-    mut surface_mats: ResMut<Assets<SurfaceMaterial>>,
-    quality: Option<Res<Quality>>,
-    display: Res<crate::settings::Display>,
+    mut kit: ModelKit,
+    scale: LodScale,
     mut drawn: ResMut<Drawn>,
     mut ao_kit: AoKit,
 ) {
@@ -477,7 +481,7 @@ fn spawn_map(
     let root = commands
         .spawn((MapRoot(map.generation), Transform::default(), Visibility::default()))
         .id();
-    let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
+    let lod_k = scale.k();
     let items = map.scene.items.len();
     let drawn = &mut *drawn;
     *drawn = Drawn {
@@ -528,7 +532,7 @@ fn spawn_map(
                 let lift = lifts.next().unwrap_or(0);
                 let (lo, hi) = prim_bounds.next().copied().unwrap_or_default();
                 let spec = prim_spec(&map.look, *kind, *dims, *pal, *freq, *surface, *pattern);
-                let mat = surfaces.material(&spec, &mut images, &mut surface_mats);
+                let mat = kit.surfaces.material(&spec);
                 let world = mat4(&map.render.get(*node).world)
                     * Mat4::from_translation(Vec3::new(0.0, lift as f32 * meshes::LIFT, 0.0));
                 let opaque = spec.alpha == AlphaMode::Opaque;
@@ -564,7 +568,9 @@ fn spawn_map(
                 continue;
             }
             SceneItem::Model { node, name, tint } => {
-                let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
+                let scene = kit
+                    .assets
+                    .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{name}.glb")));
                 let n = map.render.get(*node);
                 let piece = commands.spawn_empty().id();
                 let prop = commands
@@ -578,7 +584,7 @@ fn spawn_map(
                     .id();
                 // Standing still, it shades the map, and the ground shades its foot; moving, what it passes.
                 let world = mat4(&n.world);
-                let parts = ao_kit.model(*name, &assets, &meshes);
+                let parts = ao_kit.model(*name, &kit.assets, &kit.meshes);
                 if fixed.get(*node as usize) == Some(&true) {
                     ao::model_solids(&parts, &world, &mut solids);
                     if ao::GROUNDED.contains(name) {
@@ -608,28 +614,24 @@ fn spawn_map(
     // Static primitives merge by cell, material and levels of detail (one by itself too: its mesh is its own, to
     // bake its occlusion into); the rest are drawn by themselves.
     let solids = Arc::new(ao::Solids::new(solids));
-    let mut shading = Shading {
-        solids: &solids,
-        solid_of: &solid_of,
-        baked: &mut ao_kit.baked,
+    let mut merging = Merging {
+        assets: &mut kit.meshes,
+        cpu: HashMap::new(),
+        shading: Shading {
+            solids: &solids,
+            solid_of: &solid_of,
+            baked: &mut ao_kit.baked,
+        },
+        root,
+        lod_k,
     };
-    let mut cpu: HashMap<LevelKey, Arc<Mesh>> = HashMap::new();
     let mut alone = vec![true; placed.len()];
     for group in meshes::groups_of(&candidates, 1) {
         let members: Vec<&Placed> = group.iter().filter_map(|&c| placed.get(c)).collect();
         let Some(Some((_, mat, _))) = members.first().and_then(|p| drawn.prims.get(p.item)) else {
             continue;
         };
-        let Some(entities) = spawn_group(
-            &mut commands,
-            &mut meshes,
-            &mut cpu,
-            &members,
-            mat,
-            root,
-            lod_k,
-            &mut shading,
-        ) else {
+        let Some(entities) = spawn_group(&mut commands, &mut merging, &members, mat) else {
             continue;
         };
         let g = drawn.groups.len();
@@ -647,7 +649,7 @@ fn spawn_map(
         }
     }
     for (p, _) in placed.iter().zip(&alone).filter(|(_, a)| **a) {
-        let piece = spawn_prim(&mut commands, drawn, &mut meshes, &map, p.item, lod_k, true);
+        let piece = spawn_prim(&mut commands, drawn, &mut kit.meshes, &map, p.item, lod_k, true);
         if let Some(piece) = piece.filter(|_| p.mover) {
             ao::prim_capsules(p.kind, p.dims, &mut capsules);
             movers.extend(capsules.drain(..).map(|c| (piece, c)));
@@ -666,9 +668,9 @@ fn spawn_map(
     }
     // Bonuses share their meshes, and their materials by kind (the card's picture too: it is the kind's).
     let shapes = [
-        meshes.add(Sphere::new(0.62).mesh().uv(32, 20)),
-        meshes.add(Circle::new(0.42).mesh().resolution(32)),
-        meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40)),
+        kit.meshes.add(Sphere::new(0.62).mesh().uv(32, 20)),
+        kit.meshes.add(Circle::new(0.42).mesh().resolution(32)),
+        kit.meshes.add(Annulus::new(0.75, 1.0).mesh().resolution(40)),
     ];
     let mut looks: HashMap<Power, [Handle<StandardMaterial>; 3]> = HashMap::new();
     for b in &map.bonuses.list {
@@ -678,21 +680,21 @@ fn spawn_map(
                 let color = power_color(b.kind);
                 let (icon, _) = crate::ui::text::bonus(b.kind);
                 [
-                    materials.add(StandardMaterial {
+                    kit.materials.add(StandardMaterial {
                         base_color: color.with_alpha(0.45),
                         emissive: color.to_linear() * 0.45,
                         perceptual_roughness: 0.15,
                         alpha_mode: AlphaMode::Blend,
                         ..default()
                     }),
-                    materials.add(StandardMaterial {
-                        base_color_texture: Some(images.add(crate::render::emoji::board(icon, color))),
+                    kit.materials.add(StandardMaterial {
+                        base_color_texture: Some(kit.surfaces.images.add(crate::render::emoji::board(icon, color))),
                         unlit: true,
                         cull_mode: None,
                         double_sided: true,
                         ..default()
                     }),
-                    materials.add(StandardMaterial {
+                    kit.materials.add(StandardMaterial {
                         base_color: color.with_alpha(0.6),
                         unlit: true,
                         alpha_mode: AlphaMode::Blend,
@@ -784,9 +786,22 @@ pub fn prim_spec(
     }
 }
 
-/// The frame's sim time: the predicted tick plus how far into the next one the frame is.
-pub fn frame_tick(timeline: &LocalTimeline, fixed: &Time<Fixed>) -> f64 {
-    f64::from(timeline.tick().0) + f64::from(fixed.overstep_fraction())
+/// The predicted timeline, and how far into its next tick the frame is.
+#[derive(SystemParam)]
+pub struct FrameClock<'w> {
+    pub timeline: Res<'w, LocalTimeline>,
+    fixed: Res<'w, Time<Fixed>>,
+}
+
+impl FrameClock<'_> {
+    /// The frame's sim time: the predicted tick plus how far into the next one the frame is.
+    pub fn tick(&self) -> f64 {
+        f64::from(self.timeline.tick().0) + f64::from(self.overstep())
+    }
+
+    pub fn overstep(&self) -> f32 {
+        self.fixed.overstep_fraction()
+    }
 }
 
 /// What `pose_map` saw of each node the frame before, so that only what moves is posed again.
@@ -830,30 +845,34 @@ impl Posed {
     }
 }
 
+/// The map as drawn, and what merged pieces that start moving are split out with.
+#[derive(SystemParam)]
+struct Redraw<'w> {
+    drawn: ResMut<'w, Drawn>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    scale: LodScale<'w>,
+}
+
 /// The map's movers pose the nodes for the frame; the pieces on nodes that moved, appeared or vanished follow.
 fn pose_map(
     mut commands: Commands,
     map: Option<ResMut<Map>>,
-    timeline: Res<LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
     mut posed: Local<Posed>,
-    mut drawn: ResMut<Drawn>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    quality: Option<Res<Quality>>,
-    display: Res<crate::settings::Display>,
+    mut redraw: Redraw,
     mut pieces: Query<(Ref<MapPiece>, &mut Transform, &mut Visibility)>,
+    clock: FrameClock,
 ) {
     let Some(mut map) = map else { return };
-    let t = map.time(frame_tick(&timeline, &fixed) - 1.0);
+    let t = map.time(clock.tick() - 1.0);
     // (A map built again after none starts from generation 0 again.)
     let all = map.is_added() || posed.generation != Some(map.generation);
     let map = &mut *map;
     map.world.pose_locals(t, &mut map.render, &*map.spec.logic);
     posed.generation = Some(map.generation);
     posed.update(&mut map.render, all);
-    if !all && drawn.generation == Some(map.generation) {
-        let lod_k = meshes::lod_k(display.fov, quality.as_ref().map(|q| q.preset));
-        split_moved(&mut commands, &mut drawn, &mut meshes, map, &posed, lod_k);
+    if !all && redraw.drawn.generation == Some(map.generation) {
+        let lod_k = redraw.scale.k();
+        split_moved(&mut commands, &mut redraw.drawn, &mut redraw.meshes, map, &posed, lod_k);
     }
     for (piece, mut tf, mut vis) in &mut pieces {
         let n = piece.node as usize;
@@ -878,13 +897,12 @@ fn pose_map(
 /// Pops in, bobs and turns; taken: swells and vanishes.
 fn place_bonuses(
     map: Option<Res<Map>>,
-    timeline: Res<LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
     mut views: Query<(&BonusView, &Children, &mut Visibility)>,
     mut parts: Query<(&BonusPart, &mut Transform)>,
+    clock: FrameClock,
 ) {
     let Some(map) = map else { return };
-    let t = map.time(frame_tick(&timeline, &fixed));
+    let t = map.time(clock.tick());
     for (v, children, mut vis) in &mut views {
         let Some(b) = map.bonuses.list.get(v.0 as usize) else {
             continue;
@@ -929,10 +947,8 @@ const NEXT_KEYS: [KeyCode; 3] = [KeyCode::ArrowRight, KeyCode::KeyD, KeyCode::Ke
 fn spectate(
     map: Option<Res<Map>>,
     own: Query<(), (With<Predicted>, With<BeanId>)>,
-    beans: Query<&BeanId, (With<Interpolated>, Without<Predicted>)>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    pads: Query<&Gamepad>,
+    beans: Query<&BeanId, Others>,
+    buttons: Buttons,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut spec: ResMut<Spectate>,
     gate: Res<Gate>,
@@ -956,16 +972,16 @@ fn spectate(
     }
     // (Checked before `mouse_look`: the click that captures the mouse does not switch.)
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    let pad = |b: [GamepadButton; 2]| pads.iter().any(|p| p.any_just_pressed(b));
+    let pad = |b: [GamepadButton; 2]| buttons.pads.iter().any(|p| p.any_just_pressed(b));
     let dir = if !gate.play {
         0
-    } else if keys.any_just_pressed(PREV_KEYS)
-        || (captured && mouse.just_pressed(MouseButton::Right))
+    } else if buttons.keys.any_just_pressed(PREV_KEYS)
+        || (captured && buttons.mouse.just_pressed(MouseButton::Right))
         || pad([GamepadButton::DPadLeft, GamepadButton::LeftTrigger])
     {
         -1
-    } else if keys.any_just_pressed(NEXT_KEYS)
-        || (captured && mouse.just_pressed(MouseButton::Left))
+    } else if buttons.keys.any_just_pressed(NEXT_KEYS)
+        || (captured && buttons.mouse.just_pressed(MouseButton::Left))
         || pad([GamepadButton::DPadRight, GamepadButton::RightTrigger])
     {
         1

@@ -4,7 +4,7 @@ use fb_shared::{Rgb, rgb};
 use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::m;
 use fb_sim::map::{GameMeta, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
 use fb_sim::scene::{Finish, Form, Part, Piece, pal};
@@ -37,8 +37,8 @@ impl MapDef for Podium {
             freq: Some(0.3),
             ..Default::default()
         };
-        b.cyl(0.0, -1.0, 0.0, 16.0, 2.0, pal::PURPLE, floor);
-        b.cyl(0.0, 0.03, 0.0, 16.05, 0.1, pal::YELLOW, deco());
+        b.cyl(v3(0.0, -1.0, 0.0), 16.0, 2.0, pal::PURPLE, floor);
+        b.cyl(v3(0.0, 0.03, 0.0), 16.05, 0.1, pal::YELLOW, deco());
         let pals = [
             pal::YELLOW,
             pal::WHITE,
@@ -56,7 +56,7 @@ impl MapDef for Podium {
                 // The 8th place stands in front, on the floor.
                 let z = if i == 7 { 4.0 } else { 0.0 };
                 if i < 7 {
-                    b.box_(x, h / 2.0, z, 2.6, h, 2.6, pals[i], o());
+                    b.box_(v3(x, h / 2.0, z), v3(2.6, h, 2.6), pals[i], o());
                 }
                 V3::new(x, h + 0.05, z)
             })
@@ -66,7 +66,7 @@ impl MapDef for Podium {
             let medals = [("🥇", rgb(0xffd84a)), ("🥈", rgb(0xf4f1ff)), ("🥉", rgb(0xff9f4a))];
             for (i, (medal, color)) in medals.into_iter().enumerate() {
                 let (x, h) = PODIUM_SLOTS[i];
-                let at = b.anchor(x, h / 2.0, 1.32, ROOT);
+                let at = b.anchor(v3(x, h / 2.0, 1.32), ROOT);
                 let face = [Part::new(Form::Label(1.4, 1.4, medal), color, Finish::Matte)];
                 b.special(at, "medal", &face, vec![Piece::at(0, 0.0, 0.0, 0.0)]);
             }
@@ -79,24 +79,24 @@ impl MapDef for Podium {
                 scale: 1.3,
                 tint: None,
             };
-            b.prop(Model::Fan, sx * 11.5, 0.0, -5.5, fan);
+            b.prop(Model::Fan, v3(sx * 11.5, 0.0, -5.5), fan);
             let flag = PropOpts {
                 tint: Some(if sx < 0.0 { rgb(0xff5fa2) } else { rgb(0x3fa9ff) }),
                 yaw: if sx < 0.0 { m::PI } else { 0.0 },
                 ..Default::default()
             };
-            b.prop(Model::Flag, sx * 13.5, 0.0, -1.0, flag);
+            b.prop(Model::Flag, v3(sx * 13.5, 0.0, -1.0), flag);
             let star = PropOpts {
                 scale: 1.2,
                 ..Default::default()
             };
-            b.prop(Model::Star, sx * 4.5, 7.2, -2.0, star);
+            b.prop(Model::Star, v3(sx * 4.5, 7.2, -2.0), star);
         }
         let star = PropOpts {
             scale: 1.8,
             ..Default::default()
         };
-        b.prop(Model::Star, 0.0, 8.4, -2.5, star);
+        b.prop(Model::Star, v3(0.0, 8.4, -2.5), star);
         b.clouds(0.0, 0.0, 45.0);
         MapSpec {
             spawns,

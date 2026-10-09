@@ -9,10 +9,10 @@ use fb_shared::m::MinMax;
 use fb_shared::rgb;
 use fb_shared::rng::Rng;
 use fb_shared::{DT, PlayerId, m};
-use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
+use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, Ramp};
 use fb_sim::collider::{ColliderOpts, Contact};
 use fb_sim::map::{Cx, MapLogic, NoLogic};
-use fb_sim::math::{V3, dist_xz};
+use fb_sim::math::{V3, dist_xz, v3};
 use fb_sim::physics::{Body, BodyInput, BodyState, GIANT_MASS, GIANT_SIZE, Power, StepEvents, Touch};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
@@ -27,7 +27,7 @@ const IDLE: BodyInput = BodyInput {
 const FORWARD: BodyInput = BodyInput { mz: 1.0, ..IDLE };
 
 fn block(b: &mut Builder, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64) {
-    b.box_(x, y, z, sx, sy, sz, pal::BLUE, PrimOpts::default());
+    b.box_(v3(x, y, z), v3(sx, sy, sz), pal::BLUE, PrimOpts::default());
 }
 
 struct Sim {
@@ -108,17 +108,13 @@ fn grid_finds_every_collider_a_brute_force_search_finds() {
         let z = (rng.unit() - 0.5) * 120.0;
         if i % 3 == 0 {
             let (y, r, h) = (rng.unit() * 5.0, 0.5 + rng.unit() * 3.0, 1.0 + rng.unit() * 2.0);
-            b.cyl(x, y, z, r, h, pal::BLUE, PrimOpts::default());
+            b.cyl(v3(x, y, z), r, h, pal::BLUE, PrimOpts::default());
         } else {
             let (y, sx, sz) = (rng.unit() * 5.0, 0.5 + rng.unit() * 10.0, 0.5 + rng.unit() * 10.0);
             let rot = Some(V3::new(0.0, rng.unit() * 6.0, rng.unit() * 0.4));
             b.box_(
-                x,
-                y,
-                z,
-                sx,
-                1.0,
-                sz,
+                v3(x, y, z),
+                v3(sx, 1.0, sz),
                 pal::BLUE,
                 PrimOpts {
                     rot,
@@ -217,12 +213,8 @@ fn falls_through_a_fake_pane_keeping_its_speed() {
     let mut b = Builder::new(1, false);
     let pane = b
         .box_(
-            0.0,
-            -0.15,
-            0.0,
-            3.0,
-            0.3,
-            3.0,
+            v3(0.0, -0.15, 0.0),
+            v3(3.0, 0.3, 3.0),
             pal::BLUE,
             PrimOpts {
                 col: ColliderOpts {
@@ -253,7 +245,7 @@ fn falls_through_a_fake_pane_keeping_its_speed() {
 fn arm_course(speed: f64) -> Sim {
     let mut b = Builder::new(1, false);
     block(&mut b, 0.0, -1.0, 0.0, 40.0, 2.0, 40.0);
-    b.rotor(0.0, 0.6, 0.0, 8.0, 1, move |t| t * speed, 1.0);
+    b.rotor(v3(0.0, 0.6, 0.0), 8.0, 1, move |t| t * speed, 1.0);
     Sim::new(b)
 }
 
@@ -438,7 +430,19 @@ fn slope_course(slip: f64) -> Sim {
         },
         ..Default::default()
     };
-    b.ramp(0.0, 0.0, 6.0, 10.4, 0.0, 4.0, pal::WHITE, 0.5, opts);
+    b.ramp(
+        Ramp {
+            x: 0.0,
+            z0: 0.0,
+            y0: 6.0,
+            z1: 10.4,
+            y1: 0.0,
+            width: 4.0,
+            thick: 0.5,
+        },
+        pal::WHITE,
+        opts,
+    );
     Sim::new(b)
 }
 
@@ -549,12 +553,8 @@ fn does_not_catch_a_ledge_that_cannot_be_grabbed() {
         ..Default::default()
     };
     b.box_(
-        0.0,
-        1.3,
-        7.0,
-        20.0,
-        2.6,
-        6.0,
+        v3(0.0, 1.3, 7.0),
+        v3(20.0, 2.6, 6.0),
         pal::BLUE,
         PrimOpts {
             col,

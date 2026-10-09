@@ -5,12 +5,13 @@ use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::MeshAabb;
+use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 
-use super::meshes::{BANDS, LodBand, lod_k};
+use super::meshes::{BANDS, LodBand, LodScale};
 use super::surface::SurfaceMaterial;
 
 /// A mesh with fewer triangles is drawn as it is at every distance (so are all of today's models: an extra
@@ -111,13 +112,16 @@ struct Placed {
     shadow: bool,
 }
 
+/// A mesh's levels being made (none: it does not simplify).
+type Simplifying = Task<Option<Vec<Mesh>>>;
+
 /// The levels made so far, by the full mesh, and those being made.
 #[derive(Resource, Default)]
 pub struct ModelLods {
     /// Levels after the first (None: the mesh is drawn as it is).
     levels: HashMap<AssetId<Mesh>, Option<Vec<Handle<Mesh>>>>,
     /// Meshes being simplified, with the placements waiting for their levels.
-    making: HashMap<AssetId<Mesh>, (Task<Option<Vec<Mesh>>>, Vec<Placed>)>,
+    making: HashMap<AssetId<Mesh>, (Simplifying, Vec<Placed>)>,
 }
 
 impl ModelLods {
@@ -147,21 +151,44 @@ impl ModelLods {
     }
 }
 
-/// Gives a placed model mesh (entity `e`, a child of `parent`) its levels of detail: siblings shown at their
-/// distances, now or once they are made. `scale`: of the mesh and all above it.
-pub fn add_levels(
-    commands: &mut Commands,
-    e: Entity,
-    mesh: &Handle<Mesh>,
-    material: &Handle<SurfaceMaterial>,
-    tf: Transform,
-    parent: Entity,
-    scale: f32,
-    shadow: bool,
-    lods: &mut ModelLods,
-    meshes: &Assets<Mesh>,
-    k: f32,
-) {
+/// A model mesh placed: entity `e`, a child of `parent`; `scale`: of the mesh and all above it.
+pub struct PlacedMesh<'a> {
+    pub e: Entity,
+    pub parent: Entity,
+    pub tf: Transform,
+    pub mesh: &'a Handle<Mesh>,
+    pub material: &'a Handle<SurfaceMaterial>,
+    pub scale: f32,
+    pub shadow: bool,
+}
+
+/// The levels of detail, with what placing them needs.
+#[derive(SystemParam)]
+pub struct Levels<'w> {
+    lods: ResMut<'w, ModelLods>,
+    meshes: Res<'w, Assets<Mesh>>,
+    scale: LodScale<'w>,
+}
+
+impl Levels<'_> {
+    /// `add_levels`.
+    pub fn add(&mut self, commands: &mut Commands, placed: PlacedMesh) {
+        add_levels(commands, placed, &mut self.lods, &self.meshes, self.scale.k());
+    }
+}
+
+/// Gives a placed model mesh its levels of detail: siblings shown at their distances, now or once they are
+/// made.
+pub fn add_levels(commands: &mut Commands, placed: PlacedMesh, lods: &mut ModelLods, meshes: &Assets<Mesh>, k: f32) {
+    let PlacedMesh {
+        e,
+        parent,
+        tf,
+        mesh,
+        material,
+        scale,
+        shadow,
+    } = placed;
     let id = mesh.id();
     if matches!(lods.levels.get(&id), Some(None)) {
         return;
@@ -204,13 +231,12 @@ pub fn finish_levels(
     mut commands: Commands,
     mut lods: ResMut<ModelLods>,
     mut meshes: ResMut<Assets<Mesh>>,
-    display: Res<crate::settings::Display>,
-    quality: Option<Res<super::quality::Quality>>,
+    scale: LodScale,
 ) {
     if lods.making.is_empty() {
         return;
     }
-    let k = lod_k(display.fov, quality.map(|q| q.preset));
+    let k = scale.k();
     let ModelLods { levels, making } = &mut *lods;
     making.retain(|id, (task, waiting)| {
         let Some(made) = check_ready(task) else { return true };

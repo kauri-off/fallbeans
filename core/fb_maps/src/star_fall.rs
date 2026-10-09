@@ -17,7 +17,7 @@ use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSfx, MapSpec};
-use fb_sim::math::{V3, dist_xz};
+use fb_sim::math::{V3, dist_xz, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::BodyState;
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -556,19 +556,19 @@ impl MapDef for StarFall {
         let fly: Note<f64> = b.note();
         let star: Note<usize> = b.note();
         let star_until: Note<f64> = b.note();
-        b.cyl(0.0, -1.0, 0.0, ARENA_R, 2.0, pal::PURPLE, freq(0.3));
-        b.cyl(0.0, 0.03, 0.0, ARENA_R + 0.05, 0.1, pal::YELLOW, deco());
+        b.cyl(v3(0.0, -1.0, 0.0), ARENA_R, 2.0, pal::PURPLE, freq(0.3));
+        b.cyl(v3(0.0, 0.03, 0.0), ARENA_R + 0.05, 0.1, pal::YELLOW, deco());
         let ring = PrimOpts {
             freq: Some(0.35),
             ..deco()
         };
-        b.cyl(0.0, 0.06, 0.0, SWEEP_OUT + 0.3, 0.1, pal::BLUE, ring);
+        b.cyl(v3(0.0, 0.06, 0.0), SWEEP_OUT + 0.3, 0.1, pal::BLUE, ring);
         // The tower, with a ladder on either side, and the bars sweeping round it.
         let rock = PrimOpts {
             surface: Some(Surface::Rock),
             ..Default::default()
         };
-        b.cyl(0.0, TOWER_H / 2.0, 0.0, TOWER_R, TOWER_H, pal::ORANGE, rock);
+        b.cyl(v3(0.0, TOWER_H / 2.0, 0.0), TOWER_R, TOWER_H, pal::ORANGE, rock);
         b.ladder(0.0, 0.0, TOWER_R, TOWER_H, 0.0, rgb(0xffb347));
         b.ladder(0.0, 0.0, -TOWER_R, TOWER_H, m::PI, rgb(0xffb347));
         let dir = if b.rng.unit() < 0.5 { 1.0 } else { -1.0 };
@@ -576,14 +576,14 @@ impl MapDef for StarFall {
             dir,
             spin: SpinUp::new(m::PI / 2.0 + 0.3, 0.55 + b.rng.unit() * 0.1, 0.0012),
         };
-        let sweeper = b.anchor(0.0, 0.6, 0.0, ROOT);
+        let sweeper = b.anchor(v3(0.0, 0.6, 0.0), ROOT);
         for k in 0..2 {
-            let pivot = b.anchor(0.0, 0.0, 0.0, sweeper);
+            let pivot = b.anchor(V3::ZERO, sweeper);
             b.world.nodes.get_mut(pivot).rot.y = f64::from(k) * m::PI;
-            let holder = b.anchor(SWEEP_IN, 0.0, 0.0, pivot);
+            let holder = b.anchor(v3(SWEEP_IN, 0.0, 0.0), pivot);
             let arm = b.model(Model::Arm, holder);
             b.world.nodes.get_mut(arm).scale = V3::new(SWEEP_OUT - SWEEP_IN, 1.0, 1.0);
-            let at = b.anchor((SWEEP_OUT - SWEEP_IN) / 2.0, 0.0, 0.0, holder);
+            let at = b.anchor(v3((SWEEP_OUT - SWEEP_IN) / 2.0, 0.0, 0.0), holder);
             b.collider(
                 at,
                 Shape::Box {
@@ -602,28 +602,28 @@ impl MapDef for StarFall {
         b.mover(move |t, ctx| ctx.node(sweeper).rot.y = sweep.angle(t));
         // Trampolines up to the islands beyond the rim (the big stars fall there).
         for sx in [-1.0, 1.0] {
-            b.trampoline(sx * TRAMP_X, 0.0, 0.0, 1.5, 18.0);
+            b.trampoline(v3(sx * TRAMP_X, 0.0, 0.0), 1.5, 18.0);
             let grass = PrimOpts {
                 surface: Some(Surface::Grass),
                 ..Default::default()
             };
-            b.cyl(sx * ISLAND_X, ISLAND_Y - 0.6, 0.0, ISLAND_R, 1.2, pal::GREEN, grass);
+            b.cyl(v3(sx * ISLAND_X, ISLAND_Y - 0.6, 0.0), ISLAND_R, 1.2, pal::GREEN, grass);
             let mush = PropOpts {
                 scale: 0.7,
                 ..Default::default()
             };
-            b.prop(Model::Mushroom, sx * (ISLAND_X + 1.6), ISLAND_Y, 1.8, mush);
+            b.prop(Model::Mushroom, v3(sx * (ISLAND_X + 1.6), ISLAND_Y, 1.8), mush);
         }
         let bumpers: Vec<(f64, f64)> = [0.5, 7.0 / 6.0, 11.0 / 6.0]
             .iter()
             .map(|a| (m::cos(a * m::PI) * 9.9, m::sin(a * m::PI) * 9.9))
             .collect();
         for &(x, z) in &bumpers {
-            b.bumper(x, 0.0, z, 0.8, 8.0);
+            b.bumper(v3(x, 0.0, z), 0.8, 8.0);
         }
         for k in 0..4 {
             let a = f64::from(k) * 1.57 + 0.4;
-            b.bonus(m::cos(a) * 11.8, 0.0, m::sin(a) * 11.8);
+            b.bonus(v3(m::cos(a) * 11.8, 0.0, m::sin(a) * 11.8));
         }
         b.clouds(0.0, 0.0, 50.0);
 
