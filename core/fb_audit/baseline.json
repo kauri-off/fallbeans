@@ -1,179 +1,159 @@
 {
   "balance/ball-hill/falls_per_bot_min": {
-    "value": 0.189,
+    "value": 0.198,
     "tol": 0.2
   },
   "balance/ball-hill/finish_p50": {
-    "value": 74.418,
-    "tol": 8.487
+    "value": 69.623,
+    "tol": 12.216
   },
   "balance/ball-hill/finish_rate": {
-    "value": 0.953,
-    "tol": 0.077
+    "value": 0.984,
+    "tol": 0.05
   },
   "balance/bounce-park/falls_per_bot_min": {
-    "value": 0.902,
-    "tol": 0.456
+    "value": 0.715,
+    "tol": 0.267
   },
   "balance/bounce-park/finish_p50": {
-    "value": 48.311,
-    "tol": 2.416
+    "value": 47.136,
+    "tol": 2.357
   },
   "balance/bounce-park/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/cliff-climb/falls_per_bot_min": {
-    "value": 0.807,
-    "tol": 0.324
+    "value": 0.865,
+    "tol": 0.396
   },
   "balance/cliff-climb/finish_p50": {
-    "value": 44.564,
-    "tol": 3.746
+    "value": 43.721,
+    "tol": 3.335
   },
   "balance/cliff-climb/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/crown-peak/falls_per_bot_min": {
-    "value": 0.491,
-    "tol": 0.237
+    "value": 0.673,
+    "tol": 0.251
   },
   "balance/crown-peak/finish_p50": {
-    "value": 62.808,
-    "tol": 6.557
+    "value": 60.678,
+    "tol": 4.929
   },
   "balance/crown-peak/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/door-dash/falls_per_bot_min": {
-    "value": 0.901,
-    "tol": 0.435
+    "value": 0.848,
+    "tol": 0.365
   },
   "balance/door-dash/finish_p50": {
-    "value": 48.797,
-    "tol": 3.896
+    "value": 49.721,
+    "tol": 2.971
   },
   "balance/door-dash/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/drum-roll/falls_per_bot_min": {
-    "value": 1.638,
-    "tol": 0.616
+    "value": 1.643,
+    "tol": 0.561
   },
   "balance/drum-roll/finish_p50": {
-    "value": 37.185,
-    "tol": 2.757
+    "value": 35.546,
+    "tol": 1.894
   },
   "balance/drum-roll/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/frost-sky/falls_per_bot_min": {
-    "value": 1.243,
-    "tol": 0.491
+    "value": 1.155,
+    "tol": 0.301
   },
   "balance/frost-sky/finish_p50": {
-    "value": 68.319,
-    "tol": 7.924
+    "value": 63.393,
+    "tol": 7.744
   },
   "balance/frost-sky/finish_rate": {
-    "value": 0.992,
+    "value": 1.0,
     "tol": 0.05
   },
   "balance/hammer-swing/falls_per_bot_min": {
-    "value": 0.684,
-    "tol": 0.287
+    "value": 0.956,
+    "tol": 0.31
   },
   "balance/hammer-swing/finish_p50": {
-    "value": 50.278,
-    "tol": 3.127
+    "value": 50.208,
+    "tol": 3.613
   },
   "balance/hammer-swing/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/hex-a-gone/first_out": {
-    "value": 13.411,
-    "tol": 8.65
-  },
-  "balance/hex-a-gone/survivors_at_end": {
-    "value": 0.0,
-    "tol": 0.5
+  "balance/hex-a-gone/survival": {
+    "value": 37.265,
+    "tol": 3.136
   },
   "balance/hidden-bridge/falls_per_bot_min": {
-    "value": 3.226,
-    "tol": 0.484
+    "value": 3.039,
+    "tol": 0.473
   },
   "balance/hidden-bridge/finish_p50": {
-    "value": 64.904,
-    "tol": 6.184
+    "value": 60.958,
+    "tol": 5.691
   },
   "balance/hidden-bridge/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/jump-club/first_out": {
-    "value": 7.404,
-    "tol": 4.944
+  "balance/jump-club/survival": {
+    "value": 37.274,
+    "tol": 5.969
   },
-  "balance/jump-club/survivors_at_end": {
-    "value": 1.063,
-    "tol": 1.124
-  },
-  "balance/plate-drop/first_out": {
-    "value": 14.312,
-    "tol": 6.551
-  },
-  "balance/plate-drop/survivors_at_end": {
-    "value": 0.063,
-    "tol": 0.5
+  "balance/plate-drop/survival": {
+    "value": 33.975,
+    "tol": 6.601
   },
   "balance/portal-panic/falls_per_bot_min": {
-    "value": 0.786,
-    "tol": 0.53
+    "value": 0.629,
+    "tol": 0.359
   },
   "balance/portal-panic/finish_p50": {
-    "value": 45.111,
-    "tol": 4.61
+    "value": 43.866,
+    "tol": 3.683
   },
   "balance/portal-panic/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
-  "balance/roll-out/first_out": {
-    "value": 11.504,
-    "tol": 2.904
-  },
-  "balance/roll-out/survivors_at_end": {
-    "value": 1.375,
-    "tol": 1.586
+  "balance/roll-out/survival": {
+    "value": 29.097,
+    "tol": 13.314
   },
   "balance/star-fall/falls_per_bot_min": {
-    "value": 0.497,
-    "tol": 0.243
+    "value": 0.591,
+    "tol": 0.2
   },
   "balance/star-fall/top_score": {
-    "value": 25.75,
-    "tol": 7.066
+    "value": 26.0,
+    "tol": 10.758
   },
   "balance/tail-tag/falls_per_bot_min": {
-    "value": 1.381,
-    "tol": 0.542
+    "value": 1.625,
+    "tol": 0.638
   },
   "balance/tail-tag/top_score": {
-    "value": 52.25,
-    "tol": 5.225
+    "value": 53.188,
+    "tol": 5.319
   },
-  "balance/wall-rush/first_out": {
-    "value": 8.019,
-    "tol": 5.914
-  },
-  "balance/wall-rush/survivors_at_end": {
-    "value": 1.813,
-    "tol": 1.223
+  "balance/wall-rush/survival": {
+    "value": 27.889,
+    "tol": 5.742
   },
   "physics/accel": {
     "value": 0.133,
@@ -184,8 +164,8 @@
     "tol": 0.015
   },
   "physics/dive_dist": {
-    "value": 8.641,
-    "tol": 0.173
+    "value": 7.999,
+    "tol": 0.16
   },
   "physics/dive_recover": {
     "value": 0.867,

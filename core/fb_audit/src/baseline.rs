@@ -99,20 +99,13 @@ fn balance(map: &'static dyn MapDef, into: &mut Baseline) {
                 0.5,
             );
         }
+        // (A mean over the 8 bots: the first elimination alone varies too much from seed to seed.)
         Genre::Survival => {
             put(
-                "first_out",
-                runs.iter()
-                    .map(|r| r.out_times.iter().copied().fold(meta.duration, m::min))
-                    .collect(),
-                0.1,
+                "survival",
+                runs.iter().map(|r| r.survival(meta.duration)).collect(),
+                0.03,
                 1.0,
-            );
-            put(
-                "survivors_at_end",
-                runs.iter().map(|r| r.survivors as f64).collect(),
-                0.0,
-                0.5,
             );
         }
         Genre::Points => {
