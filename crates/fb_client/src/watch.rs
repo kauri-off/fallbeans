@@ -19,7 +19,7 @@ const KEEP_TICKS: usize = 20 * TICK_RATE as usize;
 const KEEP_S: f32 = 60.0;
 /// A correction this long (m) is counted; this long, logged.
 const NOTICE_M: f64 = 0.05;
-const LOG_M: f64 = 0.5;
+const LOG_M: f64 = 1.0;
 /// Longer, or with a respawn, it was a teleport the client did not predict (a respawn, a portal).
 const TELEPORT_M: f64 = 15.0;
 /// Logged corrections closer than this (s) are one run of rubber-banding: its first `RUN_LINES` are logged,
@@ -132,15 +132,21 @@ fn check(
     }
     last.corrected = d;
     let now = time.elapsed_secs();
-    if last.teleports != full.teleports || d >= TELEPORT_M {
+    if last.teleports != full.teleports {
+        let p = full.body.pos;
+        info!(
+            "respawned: {d:.1} m to {:.1} {:.1} {:.1} at tick {tick} (respawns {} → {})",
+            p.x, p.y, p.z, last.teleports, full.teleports
+        );
+        return;
+    }
+    if d >= TELEPORT_M {
         let p = full.body.pos;
         warn!(
-            "the server put the bean elsewhere: {d:.1} m to {:.1} {:.1} {:.1} at tick {tick} (respawns {} → {}) | {}",
+            "the server put the bean elsewhere: {d:.1} m to {:.1} {:.1} {:.1} at tick {tick} | {}",
             p.x,
             p.y,
             p.z,
-            last.teleports,
-            full.teleports,
             net.line(now)
         );
         return;

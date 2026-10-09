@@ -71,6 +71,17 @@ pub const SERVER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / (2 * TIC
 /// duplicates once it clears. On UDP a lost message waits at least this long (channels are not per
 /// transport). Lightyear's own channels (replication, inputs) keep their settings.
 pub const RESEND_MIN: Duration = Duration::from_millis(150);
+/// A packet counts as lost once unacked this long. An ack rides the peer's next packet (60 a second, plus a
+/// frame on each side): Lightyear's 1.5 × RTT from 10 ms called a tenth of the packets lost on a LAN and a
+/// third over WebSocket.
+fn nack() -> PacketNackSettings {
+    PacketNackSettings {
+        rtt_multiplier: 2.0,
+        jitter_multiplier: 3.0,
+        minimum_timeout: Duration::from_millis(60),
+        ..default()
+    }
+}
 
 /// The game's own reliable channels.
 fn reliable() -> ReliableSettings {
@@ -85,6 +96,11 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(|add: On<Add, Transport>, mut t: Query<&mut Transport>| {
+            if let Ok(mut t) = t.get_mut(add.entity) {
+                t.set_packet_nack_settings(nack());
+            }
+        });
         app.add_plugins(lightyear::prelude::input::native::InputPlugin::<FbInput> {
             config: lightyear::prelude::input::InputConfig {
                 send_interval: INPUT_SEND_INTERVAL,
