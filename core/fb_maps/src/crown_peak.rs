@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use fb_sim::bots::Waypoint;
-use fb_sim::builder::Builder;
+use fb_sim::builder::{Builder, Ramp};
 use fb_sim::course::{
     CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, moving_platforms, pick_sections, portal_fork, race_course,
     sliding_gates, timed_doors, tipping_bridge, trampoline_gap, with_rests,
@@ -12,7 +12,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, GloveOpts, arm_contact_eta, glove_puncher, rolling_balls, sweep_eta, y_on_ramp};
 use fb_sim::scene::Model;
@@ -43,16 +43,24 @@ fn climb_fork(rise: f64) -> Segment {
         let y1 = y + rise;
         let yr = move |zz: f64| y_on_ramp(zz, z0, y, top, y1);
         // Left: the ramp.
-        s.b.ramp(-5.0, z0, y, top, y1, 7.0, pal::BLUE, 1.0, o());
+        s.b.ramp(
+            Ramp {
+                x: -5.0,
+                z0,
+                y0: y,
+                z1: top,
+                y1,
+                width: 7.0,
+                thick: 1.0,
+            },
+            pal::BLUE,
+            o(),
+        );
         let ang = m::atan2(rise, top - z0);
         let l = m::hypot(top - z0, rise);
         s.b.box_(
-            -8.9,
-            (y + y1) / 2.0 + 0.6,
-            (z0 + top) / 2.0,
-            0.8,
-            1.2,
-            l,
+            v3(-8.9, (y + y1) / 2.0 + 0.6, (z0 + top) / 2.0),
+            v3(0.8, 1.2, l),
             pal::PINK,
             rot(-ang, 0.0, 0.0),
         );
@@ -75,7 +83,7 @@ fn climb_fork(rise: f64) -> Segment {
         let blocks = [z0 + 7.0, z0 + 15.0, z0 + 23.0];
         for (i, &zb) in blocks.iter().enumerate() {
             let p = if i % 2 == 1 { pal::ORANGE } else { pal::YELLOW };
-            s.b.box_(-5.0, yr(zb) + 0.6, zb, 1.8, 1.8, 1.4, p, rot(-ang, 0.0, 0.0));
+            s.b.box_(v3(-5.0, yr(zb) + 0.6, zb), v3(1.8, 1.8, 1.4), p, rot(-ang, 0.0, 0.0));
         }
         // Right: sliding steps.
         let steps: Vec<(f64, f64, f64, f64)> = (0..5)
@@ -93,10 +101,10 @@ fn climb_fork(rise: f64) -> Segment {
         let step_x = |w: f64, ph: f64, t: f64| 5.0 + m::sin(t * w + ph) * 2.2;
         for (k, &(z, sy, w, ph)) in steps.iter().enumerate() {
             let p = if k % 2 == 1 { pal::ORANGE } else { pal::GREEN };
-            let node = s.b.box_(5.0, sy - 0.5, z, 3.2, 1.0, 3.0, p, dynamic()).node;
+            let node = s.b.box_(v3(5.0, sy - 0.5, z), v3(3.2, 1.0, 3.0), p, dynamic()).node;
             s.b.mover(move |t, ctx| ctx.node(node).pos.x = step_x(w, ph, t));
         }
-        s.b.box_(0.0, y1 - 1.0, top + 5.0, 20.0, 2.0, 10.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y1 - 1.0, top + 5.0), v3(20.0, 2.0, 10.0), pal::PURPLE, o());
 
         let ramp = |lane: f64| {
             let mut pts = vec![Waypoint::exact(-5.0, z0 + 0.5)];
@@ -148,7 +156,7 @@ fn glove_launch(rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let z0 = s.z;
-        s.b.box_(0.0, y - 1.0, z0 + 7.0, 14.0, 2.0, 14.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, z0 + 7.0), v3(14.0, 2.0, 14.0), pal::PURPLE, o());
         let gloves: Vec<_> = [(z0 + 5.3, -1.0), (z0 + 8.2, 1.0)]
             .iter()
             .map(|&(z, side)| {
@@ -171,17 +179,17 @@ fn glove_launch(rise: f64) -> Segment {
             })
             .collect();
         let pad_z = z0 + 10.2;
-        s.b.pad(-3.0, y, pad_z, 1.3, 19.0, None);
-        s.b.pad(3.0, y, pad_z, 1.3, 19.0, None);
+        s.b.pad(v3(-3.0, y, pad_z), 1.3, 19.0, None);
+        s.b.pad(v3(3.0, y, pad_z), 1.3, 19.0, None);
         let deck_y = y + rise;
         let deck_z = z0 + 20.0;
-        s.b.box_(0.0, deck_y - 1.0, deck_z, 14.0, 2.0, 10.0, pal::PINK, freq(0.3));
-        s.b.hub(0.0, deck_y, deck_z, 0.9);
+        s.b.box_(v3(0.0, deck_y - 1.0, deck_z), v3(14.0, 2.0, 10.0), pal::PINK, freq(0.3));
+        s.b.hub(v3(0.0, deck_y, deck_z), 0.9);
         let sp = 1.2 + s.rng() * 0.5;
         let ph = s.rng() * 6.0;
         let ang = move |t: f64| if t <= 0.0 { ph } else { ph + t * sp };
-        s.b.rotor(0.0, deck_y + 0.6, deck_z, 5.8, 2, ang, 0.45);
-        s.b.box_(0.0, deck_y - 1.0, deck_z + 7.0, 8.0, 2.0, 4.0, pal::PURPLE, o());
+        s.b.rotor(v3(0.0, deck_y + 0.6, deck_z), 5.8, 2, ang, 0.45);
+        s.b.box_(v3(0.0, deck_y - 1.0, deck_z + 7.0), v3(8.0, 2.0, 4.0), pal::PURPLE, o());
         let route = |x: f64| {
             let gloves = gloves.clone();
             vec![
@@ -212,18 +220,14 @@ fn glove_launch(rise: f64) -> Segment {
 /// The summit: three sliding steps, then the crown over a platform guarded by a slow sweeper.
 fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     let slide_x = |k: f64, t: f64| m::sin(t * (0.8 + k * 0.25) + k * 2.0) * 1.6;
-    b.box_(0.0, y0 - 1.0, z0 + 1.5, 8.0, 2.0, 3.0, pal::PURPLE, o());
+    b.box_(v3(0.0, y0 - 1.0, z0 + 1.5), v3(8.0, 2.0, 3.0), pal::PURPLE, o());
     for k in 0..3 {
         let kf = f64::from(k);
         let p = if k % 2 == 1 { pal::ORANGE } else { pal::GREEN };
         let node = b
             .box_(
-                0.0,
-                y0 + 0.5 + kf * 1.2,
-                z0 + 5.0 + kf * 3.5,
-                4.0,
-                1.0,
-                3.0,
+                v3(0.0, y0 + 0.5 + kf * 1.2, z0 + 5.0 + kf * 3.5),
+                v3(4.0, 1.0, 3.0),
                 p,
                 dynamic(),
             )
@@ -232,12 +236,12 @@ fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     }
     let top_y = y0 + 4.0;
     let cz = z0 + 20.0;
-    b.box_(0.0, top_y - 1.0, cz, 14.0, 2.0, 10.0, pal::YELLOW, o());
+    b.box_(v3(0.0, top_y - 1.0, cz), v3(14.0, 2.0, 10.0), pal::YELLOW, o());
     let hub_z = cz + 1.5;
     let cw = 1.1;
     let crown_ang = move |t: f64| if t <= 0.0 { 0.0 } else { t * cw };
-    b.hub(0.0, top_y, hub_z, 0.6);
-    b.rotor(0.0, top_y + 0.6, hub_z, 5.0, 2, crown_ang, 0.45);
+    b.hub(v3(0.0, top_y, hub_z), 0.6);
+    b.rotor(v3(0.0, top_y + 0.6, hub_z), 5.0, 2, crown_ang, 0.45);
     let crown = b.model(Model::Crown, ROOT);
     let n = b.world.nodes.get_mut(crown);
     n.pos = V3::new(0.0, top_y + 2.6, cz - 1.0);

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
@@ -628,22 +629,39 @@ impl Plugin for FacePlugin {
     }
 }
 
+/// Where a bean model is: the beans' rigs, or a model shown by itself.
+#[derive(SystemParam)]
+struct Models<'w, 's> {
+    rigs: Query<'w, 's, &'static Rig>,
+    sources: Query<'w, 's, Entity, With<FaceSource>>,
+}
+
+/// A model's nodes: their children, meshes with their glTF materials, names, parents and transforms.
+#[derive(SystemParam)]
+struct ModelTree<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    parts: Query<'w, 's, (&'static GltfMaterialName, &'static Mesh3d)>,
+    names: Query<'w, 's, &'static Name>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    transforms: Query<'w, 's, &'static Transform>,
+}
+
+/// What the face kit is made in.
+#[derive(SystemParam)]
+struct FaceAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    images: ResMut<'w, Assets<Image>>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+}
+
 /// The face's shape from the first bean model whose meshes are in.
-#[allow(clippy::too_many_arguments)]
 fn make_kit(
     mut commands: Commands,
     kit: Option<Res<FaceKit>>,
     mut task: Option<ResMut<KitTask>>,
-    rigs: Query<&Rig>,
-    sources: Query<Entity, With<FaceSource>>,
-    children: Query<&Children>,
-    parts: Query<(&GltfMaterialName, &Mesh3d)>,
-    names: Query<&Name>,
-    parents: Query<&ChildOf>,
-    transforms: Query<&Transform>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    models: Models,
+    tree: ModelTree,
+    mut assets: FaceAssets,
 ) {
     if kit.is_some() {
         return;
@@ -655,8 +673,8 @@ fn make_kit(
             .mouths
             .into_iter()
             .map(|(e, img)| {
-                let mat = materials.add(StandardMaterial {
-                    base_color_texture: Some(images.add(img)),
+                let mat = assets.materials.add(StandardMaterial {
+                    base_color_texture: Some(assets.images.add(img)),
                     alpha_mode: AlphaMode::Blend,
                     perceptual_roughness: 0.5,
                     depth_bias: 4.0,
@@ -666,9 +684,9 @@ fn make_kit(
             })
             .collect();
         commands.insert_resource(FaceKit {
-            patch: meshes.add(parts.patch),
-            brow: meshes.add(parts.brow),
-            brow_mat: materials.add(StandardMaterial {
+            patch: assets.meshes.add(parts.patch),
+            brow: assets.meshes.add(parts.brow),
+            brow_mat: assets.materials.add(StandardMaterial {
                 base_color: INK.into(),
                 perceptual_roughness: 0.6,
                 ..default()
@@ -678,17 +696,18 @@ fn make_kit(
         });
         return;
     }
-    let Some(model) = rigs
+    let Some(model) = models
+        .rigs
         .iter()
         .find(|r| r.ready())
         .map(|r| r.model)
-        .or_else(|| sources.iter().next())
+        .or_else(|| models.sources.iter().next())
     else {
         return;
     };
     let mut tris = Vec::new();
-    for e in children.iter_descendants(model) {
-        let Ok((mat, mesh)) = parts.get(e) else { continue };
+    for e in tree.children.iter_descendants(model) {
+        let Ok((mat, mesh)) = tree.parts.get(e) else { continue };
         if !matches!(mat.0.as_str(), "Visor" | "Body") {
             continue;
         }
@@ -697,21 +716,21 @@ fn make_kit(
         let mut on_limb = false;
         let mut at = e;
         while at != model {
-            if let Ok(n) = names.get(at)
+            if let Ok(n) = tree.names.get(at)
                 && matches!(n.as_str(), "ArmL" | "ArmR" | "LegL" | "LegR" | "HandL" | "HandR")
             {
                 on_limb = true;
             }
-            if let Ok(tf) = transforms.get(at) {
+            if let Ok(tf) = tree.transforms.get(at) {
                 affine = tf.to_matrix() * affine;
             }
-            let Ok(p) = parents.get(at) else { break };
+            let Ok(p) = tree.parents.get(at) else { break };
             at = p.parent();
         }
         if on_limb {
             continue;
         }
-        let Some(m) = meshes.get(&mesh.0) else { return };
+        let Some(m) = assets.meshes.get(&mesh.0) else { return };
         let Some(VertexAttributeValues::Float32x3(pos)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
             continue;
         };

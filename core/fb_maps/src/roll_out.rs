@@ -10,7 +10,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::RUN_SPEED;
 use fb_sim::scene::Surface;
@@ -66,7 +66,7 @@ impl MapDef for RollOut {
         let mut rings = Vec::new();
         let mut groups = Vec::new();
         for (z, dir, p) in [(-9.0, 1.0, pal::PINK), (0.0, -1.0, pal::BLUE), (9.0, 1.0, pal::YELLOW)] {
-            let group = b.anchor(0.0, CY, z, ROOT);
+            let group = b.anchor(v3(0.0, CY, z), ROOT);
             let mut missing = BTreeSet::new();
             // The outer drums lose one slat more than the middle one.
             while missing.len() < if z == 0.0 { 4 } else { 5 } {
@@ -90,12 +90,8 @@ impl MapDef for RollOut {
                 };
                 let slat = if k % 2 == 1 { p } else { pal::WHITE };
                 b.box_(
-                    m::sin(a) * (R - 0.25),
-                    m::cos(a) * (R - 0.25),
-                    0.0,
-                    width,
-                    0.5,
-                    8.0,
+                    v3(m::sin(a) * (R - 0.25), m::cos(a) * (R - 0.25), 0.0),
+                    v3(width, 0.5, 8.0),
                     slat,
                     o,
                 );
@@ -138,12 +134,8 @@ impl MapDef for RollOut {
                             ..deco()
                         };
                         b.box_(
-                            0.0,
-                            0.0,
-                            dz * 1.06,
-                            0.3,
-                            R * 2.0 - 0.6,
-                            0.3,
+                            v3(0.0, 0.0, dz * 1.06),
+                            v3(0.3, R * 2.0 - 0.6, 0.3),
                             pal::solid(rgb(0x5a3fb8)),
                             o,
                         );
@@ -152,7 +144,7 @@ impl MapDef for RollOut {
             }
         }
         for r in &rings {
-            b.bonus(0.0, 0.05, r.z + 2.5);
+            b.bonus(v3(0.0, 0.05, r.z + 2.5));
         }
         b.clouds_with(0.0, 0.0, 40.0, 30, -40.0, -10.0);
 

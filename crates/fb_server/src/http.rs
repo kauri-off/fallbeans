@@ -161,6 +161,9 @@ impl Warned {
     }
 }
 
+/// Host name → its address (none: not found) and when it was looked up.
+type Resolved = BTreeMap<String, (Option<IpAddr>, Instant)>;
+
 #[derive(Clone)]
 struct Api {
     auth: Arc<Auth>,
@@ -182,7 +185,7 @@ struct Api {
     build: Arc<str>,
     warned: Arc<Warned>,
     /// Host names looked up for connect tokens (`proxied_host`), and when.
-    resolved: Arc<Mutex<BTreeMap<String, (Option<IpAddr>, Instant)>>>,
+    resolved: Arc<Mutex<Resolved>>,
 }
 
 fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<HttpShared>) {

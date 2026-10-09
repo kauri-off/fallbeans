@@ -3,11 +3,12 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_net::BodyFull;
 use lightyear::prelude::*;
 
-use crate::game::Map;
+use crate::game::MapNow;
 use crate::logs::{self, Logs};
 use crate::net::Conn;
 use crate::session::{FeedLog, Session};
@@ -27,27 +28,36 @@ impl Plugin for ReportPlugin {
     }
 }
 
+/// What a report is written from.
+#[derive(SystemParam)]
+struct Sources<'w, 's> {
+    logs: Res<'w, Logs>,
+    net: Res<'w, NetNow>,
+    recent: Res<'w, Recent>,
+    corrections: Res<'w, Corrections>,
+    conn: Option<Res<'w, Conn>>,
+    now: MapNow<'w>,
+    own: Query<'w, 's, &'static BodyFull, With<Predicted>>,
+    session: Res<'w, Session>,
+}
+
 fn report(
     keys: Res<ButtonInput<KeyCode>>,
-    logs: Res<Logs>,
     real: Res<Time<Real>>,
     time: Res<Time>,
-    net: Res<NetNow>,
-    recent: Res<Recent>,
-    corrections: Res<Corrections>,
-    conn: Option<Res<Conn>>,
-    map: Option<Res<Map>>,
-    timeline: Res<LocalTimeline>,
-    own: Query<&BodyFull, With<Predicted>>,
-    session: Res<Session>,
+    src: Sources,
     mut feed: ResMut<FeedLog>,
 ) {
     if !keys.just_pressed(KeyCode::F8) {
         return;
     }
     let now = real.elapsed_secs();
-    warn!("F8: the player marks a problem | {} | {}", net.transport, net.line(now));
-    let Some(dir) = &logs.0 else { return };
+    warn!(
+        "F8: the player marks a problem | {} | {}",
+        src.net.transport,
+        src.net.line(now)
+    );
+    let Some(dir) = &src.logs.0 else { return };
     let Some((mut file, path)) = logs::create(dir, "report", "txt") else {
         warn!("F8 report: cannot create a file in {}", dir.display());
         feed.note(time.elapsed_secs(), text::REPORT_FAILED.to_string());
@@ -60,17 +70,17 @@ fn report(
     if let Some(log) = logs::file() {
         let _ = writeln!(s, "log: {}", log.display());
     }
-    let _ = writeln!(s, "server: {}", conn.as_ref().map_or("—", |c| c.http.as_str()));
-    let _ = writeln!(s, "net: {} | {}", net.transport, net.line(now));
+    let _ = writeln!(s, "server: {}", src.conn.as_ref().map_or("—", |c| c.http.as_str()));
+    let _ = writeln!(s, "net: {} | {}", src.net.transport, src.net.line(now));
     let _ = writeln!(
         s,
         "room: {} as {} (practice: {})",
-        session.room.as_deref().unwrap_or("—"),
-        session.me.map_or("—".into(), |m| m.to_string()),
-        session.practice
+        src.session.room.as_deref().unwrap_or("—"),
+        src.session.me.map_or("—".into(), |m| m.to_string()),
+        src.session.practice
     );
-    if let Some(m) = &map {
-        let tick = timeline.tick().0;
+    if let Some(m) = &src.now.map {
+        let tick = src.now.timeline.tick().0;
         let _ = writeln!(
             s,
             "arena {}: {} ({:?}) seed {} | tick {tick} t {:.2} s",
@@ -81,7 +91,7 @@ fn report(
             m.time(f64::from(tick))
         );
     }
-    if let Ok(full) = own.single() {
+    if let Ok(full) = src.own.single() {
         let b = &full.body;
         let _ = writeln!(
             s,
@@ -90,7 +100,7 @@ fn report(
         );
     }
     let _ = writeln!(s, "\ncorrections, last minute (s ago, tick, m, x y z, ticks replayed):");
-    for c in &corrections.list {
+    for c in &src.corrections.list {
         let _ = writeln!(
             s,
             "{:6.1} {} {:.2} {:+.2} {:+.2} {:+.2} {}",
@@ -108,7 +118,7 @@ fn report(
         "\nown bean, last {} s (tick arena mx mz buttons x y z, then the correction after it):",
         TICKS / fb_shared::TICK_RATE as usize
     );
-    for r in recent.0.iter().skip(recent.0.len().saturating_sub(TICKS)) {
+    for r in src.recent.0.iter().skip(src.recent.0.len().saturating_sub(TICKS)) {
         let _ = write!(
             s,
             "{} {} {} {} {} {:.3} {:.3} {:.3}",

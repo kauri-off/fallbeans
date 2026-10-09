@@ -151,14 +151,45 @@ struct DevArgs {
     /// The host fills the room's empty places with bots.
     #[arg(long)]
     fill: bool,
-    /// Clients log every left click (`--trace-clicks`).
-    #[arg(long)]
-    trace_clicks: bool,
-    /// Server and clients log contacts, tackles and dives into target/hits (`--trace-hits`).
-    #[arg(long)]
-    trace_hits: bool,
+    #[command(flatten)]
+    trace: TraceArgs,
     #[command(flatten)]
     shared: Shared,
+}
+
+#[derive(Args)]
+pub struct TraceArgs {
+    /// Debug traces into target/traces: `input`, `hits`, `clicks` (the clients'), e.g. `--trace hits,clicks`.
+    #[arg(long, value_delimiter = ',', value_parser = ["input", "hits", "clicks"])]
+    trace: Vec<String>,
+}
+
+impl TraceArgs {
+    /// target/traces, emptied, when anything is traced.
+    pub fn dir(&self) -> Result<Option<PathBuf>> {
+        if self.trace.is_empty() {
+            return Ok(None);
+        }
+        let dir = target_dir().join("traces");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| anyhow!("cannot create {}: {e}", dir.display()))?;
+        eprintln!("traces: {}", dir.display());
+        Ok(Some(dir))
+    }
+
+    /// `--trace kind=<dir>/<kind>-<side>.txt,…` for `side` (`server`: no clicks).
+    pub fn add(&self, c: &mut Command, dir: Option<&Path>, side: &str) {
+        let Some(dir) = dir else { return };
+        let kinds: Vec<String> = self
+            .trace
+            .iter()
+            .filter(|k| side != "server" || *k != "clicks")
+            .map(|k| format!("{k}={}", dir.join(format!("{k}-{side}.txt")).display()))
+            .collect();
+        if !kinds.is_empty() {
+            c.arg("--trace").arg(kinds.join(","));
+        }
+    }
 }
 
 /// Bevy's and Rust's shared libraries of a dev build (`dynamic`) on the loader's path, as `cargo run` puts them.
@@ -317,23 +348,12 @@ fn letters(mut i: u32) -> String {
     String::from_utf8(s).unwrap_or_default()
 }
 
-/// target/hits, emptied: where `--trace-hits` runs write.
-pub fn hits_dir() -> Result<PathBuf> {
-    let dir = target_dir().join("hits");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("cannot create {}: {e}", dir.display()))?;
-    Ok(dir)
-}
-
 fn dev(a: &DevArgs) -> Result<()> {
     a.shared.build()?;
-    let hits = a.trace_hits.then(hits_dir).transpose()?;
+    let traces = a.trace.dir()?;
     let mut server = a.shared.command("fb_server");
     server.args(a.shared.server_args()).args(["--dev", "--solo"]);
-    if let Some(dir) = &hits {
-        server.arg("--trace-hits").arg(dir.join("server.txt"));
-        eprintln!("hits: {}", dir.display());
-    }
+    a.trace.add(&mut server, traces.as_deref(), "server");
     let mut server = start_server(&mut server)?;
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
@@ -359,12 +379,7 @@ fn dev(a: &DevArgs) -> Result<()> {
             if a.fill {
                 c.arg("--fill");
             }
-            if a.trace_clicks {
-                c.arg("--trace-clicks");
-            }
-            if let Some(dir) = &hits {
-                c.arg("--trace-hits").arg(dir.join(format!("client-{profile}.txt")));
-            }
+            a.trace.add(&mut c, traces.as_deref(), &format!("client-dev-{profile}"));
             c.spawn().ok()
         })
         .collect();

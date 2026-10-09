@@ -834,15 +834,20 @@ fn radius_scale(gt: &GlobalTransform) -> f32 {
     m.x_axis.length().max(m.y_axis.length()).max(m.z_axis.length())
 }
 
+/// What may shade the map from up close: the beans, the moving parts, as placed, and the camera.
+#[derive(SystemParam)]
+struct Occluders<'w, 's> {
+    movers: Res<'w, Movers>,
+    camera: Query<'w, 's, &'static GlobalTransform, With<MainCamera>>,
+    beans: Query<'w, 's, &'static Rig, With<BeanView>>,
+    placed: Query<'w, 's, (&'static GlobalTransform, &'static InheritedVisibility)>,
+}
+
 /// Each frame: the beans and the moving parts nearest to the camera go to the occluder texture as capsules
 /// (positions from an anchor near the camera, `ANCHOR`), if anything changed.
-#[allow(clippy::too_many_arguments)]
 fn gather(
     quality: Option<Res<Quality>>,
-    movers: Res<Movers>,
-    camera: Query<&GlobalTransform, With<MainCamera>>,
-    beans: Query<&Rig, With<BeanView>>,
-    placed: Query<(&GlobalTransform, &InheritedVisibility)>,
+    occ: Occluders,
     surfaces: Res<Surfaces>,
     mut images: ResMut<Assets<Image>>,
     mut near: Local<Vec<(f32, Capsule)>>,
@@ -851,7 +856,7 @@ fn gather(
     let Some(texture) = surfaces.occluder_texture() else {
         return;
     };
-    let eye = camera.single().map_or(Vec3::ZERO, GlobalTransform::translation);
+    let eye = occ.camera.single().map_or(Vec3::ZERO, GlobalTransform::translation);
     near.clear();
     let mut consider = |cap: Capsule| {
         let d = nearest(eye, cap.a, cap.b).distance(eye) - cap.r;
@@ -861,8 +866,8 @@ fn gather(
     };
     // A bean: its two spheres (`fb_sim::physics`), as its model is posed (tumbles, squash, a giant's size).
     let [low, high] = fb_sim::physics::SPHERES.map(|y| Vec3::new(0.0, y as f32, 0.0));
-    for rig in &beans {
-        let Ok((gt, shown)) = placed.get(rig.model) else {
+    for rig in &occ.beans {
+        let Ok((gt, shown)) = occ.placed.get(rig.model) else {
             continue;
         };
         if shown.get() {
@@ -873,8 +878,8 @@ fn gather(
             });
         }
     }
-    for (e, cap) in &movers.list {
-        let Ok((gt, shown)) = placed.get(*e) else { continue };
+    for (e, cap) in &occ.movers.list {
+        let Ok((gt, shown)) = occ.placed.get(*e) else { continue };
         if shown.get() {
             consider(Capsule {
                 a: gt.transform_point(cap.a),
@@ -937,10 +942,12 @@ fn ground_tag(y: f32) -> u32 {
     y.to_bits() | 1
 }
 
+type Untagged = (Added<MeshMaterial3d<SurfaceMaterial>>, Without<MeshTag>);
+
 /// Meshes on a surface that appear under a `Grounded` model (its own, its levels of detail) get its tag.
 fn tag_grounded(
     mut commands: Commands,
-    fresh: Query<(Entity, &ChildOf), (Added<MeshMaterial3d<SurfaceMaterial>>, Without<MeshTag>)>,
+    fresh: Query<(Entity, &ChildOf), Untagged>,
     parents: Query<&ChildOf>,
     grounded: Query<&Grounded>,
 ) {

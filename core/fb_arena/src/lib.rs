@@ -20,7 +20,9 @@ use fb_sim::beans::{self, Other, Side};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
 use fb_sim::builder::{Builder, enter_gate};
-use fb_sim::map::{Bodies, Cx, MapCtx, MapDef, MapEvent, MapLogic, MapOut, MapSpec, NoBodies, NoLogic, spec_problems};
+use fb_sim::map::{
+    Bodies, Cx, MapCtx, MapDef, MapEvent, MapLogic, MapOut, MapSpec, NoBodies, NoLogic, Role, spec_problems,
+};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nav::{Nav, NavGrid};
 use fb_sim::physics::{Body, BodyInput, BodyState, Carry, OtherBody, StepEvents, StepScratch, Touch};
@@ -253,8 +255,10 @@ pub struct Arena {
     spots: Vec<V3>,
     /// The beans in play after each of the last MAX_VIEW ticks: (tick, [(id, teleports, down, pose)]).
     seen: SeenTicks,
-    /// `--trace-hits`: lines about contacts, tackles and dives, for the caller to take.
+    /// `--trace hits`: lines about contacts, tackles and dives, for the caller to take.
+    #[cfg(feature = "traces")]
     pub hit_log: Option<Vec<String>>,
+    #[cfg(feature = "traces")]
     hit_quiet: beans::NoteQuiet,
 }
 
@@ -335,7 +339,9 @@ impl Arena {
                 views: Vec::new(),
                 spots: Vec::new(),
                 seen: VecDeque::new(),
+                #[cfg(feature = "traces")]
                 hit_log: None,
+                #[cfg(feature = "traces")]
                 hit_quiet: beans::NoteQuiet::default(),
             },
             b.scene,
@@ -635,9 +641,8 @@ impl Arena {
                 p.stats.tackles += p.ev.tackles;
             }
         }
-        if self.hit_log.is_some() {
-            self.log_hits(k, &active);
-        }
+        #[cfg(feature = "traces")]
+        self.log_hits(k, &active);
         for &i in &active {
             let p = &mut self.pawns[i];
             if let Some(cause) = p.ev.hazard {
@@ -705,15 +710,16 @@ impl Arena {
         if self.pawns[i].view != ticks {
             self.op(Op::View { id, ticks });
             self.pawns[i].view = ticks;
-            let k = self.tick;
+            #[cfg(feature = "traces")]
             if let Some(log) = &mut self.hit_log {
-                log.push(format!("{k} {id} view {ticks}"));
+                log.push(format!("{} {id} view {ticks}", self.tick));
             }
         }
     }
 
-    /// `--trace-hits` lines of tick k: every bean's notes; a tackling bean's pose and, within reach, the others'
+    /// `--trace hits` lines of tick k: every bean's notes; a tackling bean's pose and, within reach, the others'
     /// now and where its player saw them.
+    #[cfg(feature = "traces")]
     fn log_hits(&mut self, k: i64, active: &[usize]) {
         let Some(mut log) = self.hit_log.take() else { return };
         let v3 = |v: V3| format!("{:.2},{:.2},{:.2}", v.x, v.y, v.z);
@@ -771,10 +777,8 @@ impl Arena {
     fn with_cx<R>(&mut self, t: f64, f: impl FnOnce(&mut dyn MapLogic, &mut Cx) -> R) -> R {
         let mut bodies = PawnBodies(&mut self.pawns);
         let mut cx = Cx::new(
-            true,
-            true,
+            Role::SERVER,
             t,
-            None,
             &mut self.world,
             &mut bodies,
             &mut self.scores,

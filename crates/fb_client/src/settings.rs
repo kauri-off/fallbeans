@@ -321,6 +321,13 @@ impl Player {
     }
 }
 
+/// The player's settings and this run's options, to change.
+#[derive(SystemParam)]
+pub struct Profile<'w> {
+    pub player: ResMut<'w, Player>,
+    pub opts: ResMut<'w, Opts>,
+}
+
 /// The player as this run sees them: the files, with the flags on top.
 #[derive(SystemParam)]
 pub struct Me<'w> {

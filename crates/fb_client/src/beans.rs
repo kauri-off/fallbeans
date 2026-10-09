@@ -4,6 +4,7 @@
 use core::f32::consts::FRAC_PI_2;
 use std::collections::HashMap;
 
+use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -16,8 +17,8 @@ use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
-use crate::game::{Cue, HitTrace, Map, PrevPos, Smoothing};
-use crate::outfit::{Base, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
+use crate::game::{Cue, Map, PrevPos, Smoothing};
+use crate::outfit::{Base, Tailor, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
 use crate::session::{Outcome, Session};
 use crate::view::{color, power_color};
 
@@ -176,16 +177,16 @@ pub fn plain_part(model: Option<&StandardMaterial>, color: Color, roughness: f32
     }
 }
 
+/// Beans with a colour, predicted or interpolated, not drawn yet.
+type Undrawn = (
+    With<BeanColor>,
+    Without<BeanView>,
+    Or<(With<Predicted>, With<Interpolated>)>,
+);
+
 pub fn spawn_beans(
     mut commands: Commands,
-    beans: Query<
-        (Entity, &BeanId),
-        (
-            With<BeanColor>,
-            Without<BeanView>,
-            Or<(With<Predicted>, With<Interpolated>)>,
-        ),
-    >,
+    beans: Query<(Entity, &BeanId), Undrawn>,
     assets: Res<AssetServer>,
     mut paints: ResMut<Paints>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -388,20 +389,16 @@ pub fn dress_beans(
     session: Res<Session>,
     map: Option<Res<Map>>,
     mut beans: Query<(&BeanId, &BeanColor, &Rig, &mut Dress)>,
-    assets: Res<AssetServer>,
     mut paints: ResMut<Paints>,
-    mut wardrobe: ResMut<Wardrobe>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    quality: Option<Res<crate::render::quality::Quality>>,
+    mut tailor: Tailor,
     mut coated: Local<Option<bool>>,
 ) {
-    // No clearcoat on Low (a second specular layer in every bean pixel); the suits made already follow a change.
-    let coat = quality.is_none_or(|q| q.preset != crate::render::quality::Preset::Low);
+    // The suits made already follow a change of quality.
+    let coat = tailor.coat();
     if coated.replace(coat).is_some_and(|was| was != coat) {
         for (key, h) in &paints.mats {
             if matches!(key, PaintKey::Body(_))
-                && let Some(mut m) = materials.get_mut(h)
+                && let Some(mut m) = tailor.materials.get_mut(h)
             {
                 m.clearcoat = if coat { 0.3 } else { 0.0 };
             }
@@ -429,7 +426,7 @@ pub fn dress_beans(
 
         let (suit_i, suit) = suit_of(color.0);
         // Soft plastic with a faint clearcoat.
-        let body = paints.get(PaintKey::Body(suit_i), &mut materials, |m| {
+        let body = paints.get(PaintKey::Body(suit_i), &mut tailor.materials, |m| {
             plain_part(m.get(&parts.body_mat), suit_base(suit), 0.5, coat)
         });
         // The belly patch: the suit colour washed towards white, or a colour of its own.
@@ -437,7 +434,7 @@ pub fn dress_beans(
             Some(t) => (PaintKey::Belly(t as u8), crate::view::color(t.rgb())),
             None => (PaintKey::BellyWashed(suit_i), suit_base(suit).mix(&Color::WHITE, 0.62)),
         };
-        let belly = paints.get(belly_key, &mut materials, |m| {
+        let belly = paints.get(belly_key, &mut tailor.materials, |m| {
             plain_part(m.get(&parts.belly_mat), belly_color, 0.55, false)
         });
         if suit == Suit::Rainbow {
@@ -454,14 +451,18 @@ pub fn dress_beans(
             commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
         }
         // Shoes of the outfit's colour, or the model's own (plain too: no baked AO).
-        let shoe = paints.get(PaintKey::Shoe(outfit.shoes.map(|t| t as u8)), &mut materials, |m| {
-            let model = m.get(&parts.shoe_mat);
-            let color = match outfit.shoes {
-                Some(t) => crate::view::color(t.rgb()),
-                None => model.map_or(Color::WHITE, |m| m.base_color),
-            };
-            plain_part(model, color, 0.5, false)
-        });
+        let shoe = paints.get(
+            PaintKey::Shoe(outfit.shoes.map(|t| t as u8)),
+            &mut tailor.materials,
+            |m| {
+                let model = m.get(&parts.shoe_mat);
+                let color = match outfit.shoes {
+                    Some(t) => crate::view::color(t.rgb()),
+                    None => model.map_or(Color::WHITE, |m| m.base_color),
+                };
+                plain_part(model, color, 0.5, false)
+            },
+        );
         for e in &parts.shoes {
             commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
         }
@@ -471,22 +472,15 @@ pub fn dress_beans(
         let mut wiggles = Vec::new();
         for (acc, shadows) in [(hat, true), (make_glasses(outfit.glasses), false)] {
             if let Some(a) = acc {
-                let e = wardrobe.spawn(
-                    &mut commands,
-                    rig.model,
-                    &a.root,
-                    &body,
-                    shadows,
-                    &mut wiggles,
-                    &mut meshes,
-                    &mut materials,
-                );
+                let e = tailor.spawn(&mut commands, rig.model, &a.root, &body, shadows, &mut wiggles);
                 dress.parts.push(e);
             }
         }
         dress.wiggles = wiggles;
         if crown {
-            let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb"));
+            let scene = tailor
+                .assets
+                .load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb"));
             // The band (radius 0.5 in the model) rests on the head where it is 0.31 m from the axis.
             let e = commands
                 .spawn((
@@ -501,12 +495,12 @@ pub fn dress_beans(
             dress.parts.push(e);
         }
         if tail {
-            let fur = paints.get(PaintKey::Tail, &mut materials, |_| StandardMaterial {
+            let fur = paints.get(PaintKey::Tail, &mut tailor.materials, |_| StandardMaterial {
                 base_color: FUR,
                 perceptual_roughness: 0.7,
                 ..default()
             });
-            let tip = paints.get(PaintKey::TailTip, &mut materials, |_| StandardMaterial {
+            let tip = paints.get(PaintKey::TailTip, &mut tailor.materials, |_| StandardMaterial {
                 base_color: FUR_TIP,
                 perceptual_roughness: 0.8,
                 ..default()
@@ -530,8 +524,8 @@ pub fn dress_beans(
             for (i, ball) in BALLS.iter().enumerate() {
                 let r = 0.17 - i as f32 * 0.02;
                 let pos = if i > 0 { Vec3::new(0.0, 0.1, -0.15) } else { Vec3::ZERO };
-                if !meshes.contains(ball) {
-                    let _ = meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
+                if !tailor.meshes.contains(ball) {
+                    let _ = tailor.meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
                 }
                 parent = commands
                     .spawn((
@@ -572,6 +566,14 @@ fn tick_rainbow(
     }
 }
 
+type OwnBean = (
+    &'static BodyFull,
+    &'static PrevPos,
+    &'static mut Smoothing,
+    &'static mut Transform,
+    &'static mut Visibility,
+);
+
 type OtherBeans<'w, 's> = Query<
     'w,
     's,
@@ -589,10 +591,7 @@ pub fn place_beans(
     fixed: Res<Time<Fixed>>,
     time: Res<Time<Real>>,
     map: Option<Res<Map>>,
-    own: Query<
-        (&BodyFull, &PrevPos, &mut Smoothing, &mut Transform, &mut Visibility),
-        (With<Predicted>, With<BeanView>),
-    >,
+    own: Query<OwnBean, (With<Predicted>, With<BeanView>)>,
     mut others: OtherBeans,
 ) {
     let a = fixed.overstep_fraction();
@@ -657,30 +656,56 @@ fn model_affine(root: &Transform, out: &crate::bean::Out) -> bevy::math::Affine3
     root.compute_affine() * pivot.compute_affine() * model.compute_affine()
 }
 
+/// The model nodes the animation moves: the parts, the accessories' wiggling bits, what shows or hides, and
+/// the aura with its materials.
+#[derive(SystemParam)]
+pub struct Puppets<'w, 's> {
+    parts: Query<'w, 's, &'static mut Transform, (Without<BeanAnim>, Without<Wiggle>)>,
+    wiggles: Query<'w, 's, (&'static Wiggle, &'static Base, &'static mut Transform), Without<BeanAnim>>,
+    vis: Query<'w, 's, &'static mut Visibility, Without<BeanAnim>>,
+    aura_mats: Query<'w, 's, &'static mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
+    paints: Res<'w, Paints>,
+}
+
+/// The round being drawn, and its outcome (the podium's places).
+#[derive(SystemParam)]
+pub struct Stage<'w> {
+    map: Option<Res<'w, Map>>,
+    outcome: Res<'w, Outcome>,
+}
+
+/// `--trace hits` of the own bean as drawn, at the frame's tick.
+#[cfg(feature = "traces")]
+#[derive(SystemParam)]
+pub struct DrawnTrace<'w> {
+    hits: Option<ResMut<'w, crate::trace::hits::Hits>>,
+    clock: crate::view::FrameClock<'w>,
+}
+
+type AnimatedBean = (
+    &'static BeanId,
+    &'static mut BeanAnim,
+    &'static Rig,
+    &'static Dress,
+    &'static mut Transform,
+    Option<&'static BodyFull>,
+    Option<&'static RemotePose>,
+    Option<&'static Hold>,
+    Has<Predicted>,
+    Option<&'static Smoothing>,
+);
+
+/// Kept from frame to frame: the cues of the frame, and where every bean is drawn (and how big).
+type AnimScratch = (Vec<Cue>, HashMap<PlayerId, (Vec3, f32)>);
+
 pub fn animate_beans(
     time: Res<Time<Real>>,
-    map: Option<Res<Map>>,
-    outcome: Res<Outcome>,
     mut cues: MessageReader<Cue>,
-    mut beans: Query<(
-        &BeanId,
-        &mut BeanAnim,
-        &Rig,
-        &Dress,
-        &mut Transform,
-        Option<&BodyFull>,
-        Option<&RemotePose>,
-        Option<&Hold>,
-        Has<Predicted>,
-        Option<&Smoothing>,
-    )>,
-    mut parts: Query<&mut Transform, (Without<BeanAnim>, Without<Wiggle>)>,
-    mut wiggles: Query<(&Wiggle, &Base, &mut Transform), Without<BeanAnim>>,
-    mut vis: Query<&mut Visibility, Without<BeanAnim>>,
-    mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
-    paints: Res<Paints>,
-    mut scratch: Local<(Vec<Cue>, HashMap<PlayerId, (Vec3, f32)>)>,
-    (mut hits, timeline, fixed): (Option<ResMut<HitTrace>>, Res<LocalTimeline>, Res<Time<Fixed>>),
+    stage: Stage,
+    mut puppets: Puppets,
+    mut beans: Query<AnimatedBean>,
+    mut scratch: Local<AnimScratch>,
+    #[cfg(feature = "traces")] mut trace: DrawnTrace,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
@@ -696,7 +721,7 @@ pub fn animate_beans(
             .iter()
             .map(|(id, a, .., tf, _, _, _, _, _)| (id.0, (tf.translation, a.out.grow))),
     );
-    let podium = map.as_ref().is_some_and(|m| m.round.kind == ArenaKind::Podium);
+    let podium = stage.map.as_ref().is_some_and(|m| m.round.kind == ArenaKind::Podium);
     for (id, mut anim, rig, dress, mut root, full, pose, hold, own, smooth) in &mut beans {
         for c in cues {
             match *c {
@@ -765,12 +790,13 @@ pub fn animate_beans(
             (model_affine(&root, &anim.out).inverse().transform_point3(world), hs)
         });
         let pose = podium.then(|| {
-            let place = outcome
+            let place = stage
+                .outcome
                 .standings
                 .iter()
                 .find(|s| s.id == id.0)
                 .and_then(|s| (s.place as usize).checked_sub(1));
-            podium_pose(place, outcome.standings.len().max(1))
+            podium_pose(place, stage.outcome.standings.len().max(1))
         });
         let (yaw, _, _) = root.rotation.to_euler(EulerRot::YXZ);
         anim.animate(
@@ -790,9 +816,10 @@ pub fn animate_beans(
             },
         );
         let out = anim.out;
-        // `--trace-hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
-        if own && let (Some(h), Some(m)) = (hits.as_mut(), map.as_ref()) {
-            let k = m.round.arena_tick(timeline.tick()) as f32 + fixed.overstep_fraction();
+        // `--trace hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        #[cfg(feature = "traces")]
+        if own && let (Some(h), Some(m)) = (trace.hits.as_mut(), stage.map.as_ref()) {
+            let k = m.round.arena_tick(trace.clock.timeline.tick()) as f32 + trace.clock.overstep();
             let p = root.translation;
             h.line(format_args!(
                 "F {k:.2} {} dt={:.4} pos={:.3},{:.3},{:.3} yaw={yaw:.3} vel={:.2},{:.2},{:.2} {anim_code:?} lean={:.3} roll={:.3} twist={:.3}",
@@ -800,17 +827,17 @@ pub fn animate_beans(
             ));
         }
         root.scale = Vec3::splat(out.grow);
-        if let Ok(mut tf) = parts.get_mut(rig.pivot) {
+        if let Ok(mut tf) = puppets.parts.get_mut(rig.pivot) {
             tf.rotation = out.pivot;
         }
-        if let Ok(mut tf) = parts.get_mut(rig.model) {
+        if let Ok(mut tf) = puppets.parts.get_mut(rig.model) {
             tf.translation.y = -PIVOT_Y + out.lift;
             tf.rotation = Quat::from_euler(EulerRot::XYZ, out.lean, out.twist, out.roll);
             tf.scale = out.squash;
         }
         if let Some(p) = &rig.parts {
             for (i, ((e, base), (x, z))) in p.limbs.iter().zip(out.limbs).enumerate() {
-                if let Ok(mut tf) = parts.get_mut(*e) {
+                if let Ok(mut tf) = puppets.parts.get_mut(*e) {
                     tf.rotation = Quat::from_euler(EulerRot::XYZ, base.x + x, base.y, base.z + z);
                     if i < 2 {
                         tf.scale.y = out.stretch[i];
@@ -818,24 +845,24 @@ pub fn animate_beans(
                 }
             }
             for (i, h) in p.hands.iter().enumerate() {
-                if let Ok(mut tf) = parts.get_mut(*h) {
+                if let Ok(mut tf) = puppets.parts.get_mut(*h) {
                     tf.scale.y = 1.0 / out.stretch[i];
                 }
             }
             for e in p.eyes {
-                if let Ok(mut tf) = parts.get_mut(e) {
+                if let Ok(mut tf) = puppets.parts.get_mut(e) {
                     tf.scale.y = out.eye_open;
                 }
             }
             for (i, (e, base)) in p.pupils.iter().enumerate() {
-                if let Ok(mut tf) = parts.get_mut(*e) {
+                if let Ok(mut tf) = puppets.parts.get_mut(*e) {
                     tf.scale = Vec3::splat(out.pupil);
                     tf.translation = *base + out.pupil_roll[i].extend(0.0);
                 }
             }
         }
         for (i, e) in rig.tears.iter().enumerate() {
-            if let Ok(mut v) = vis.get_mut(*e) {
+            if let Ok(mut v) = puppets.vis.get_mut(*e) {
                 v.set_if_neq(if out.crying {
                     Visibility::Inherited
                 } else {
@@ -843,7 +870,7 @@ pub fn animate_beans(
                 });
             }
             if out.crying
-                && let Ok(mut tf) = parts.get_mut(*e)
+                && let Ok(mut tf) = puppets.parts.get_mut(*e)
             {
                 // Drops run down from under each eye and drip off.
                 let side = if i % 2 == 1 { 1.0 } else { -1.0 };
@@ -852,7 +879,7 @@ pub fn animate_beans(
                 tf.scale = Vec3::splat(0.6 + (f * core::f32::consts::PI).sin() * 0.5);
             }
         }
-        if let Ok(mut v) = vis.get_mut(rig.aura) {
+        if let Ok(mut v) = puppets.vis.get_mut(rig.aura) {
             v.set_if_neq(if out.aura.is_some() {
                 Visibility::Inherited
             } else {
@@ -860,25 +887,25 @@ pub fn animate_beans(
             });
         }
         if let Some(s) = out.aura {
-            if let Ok(mut tf) = parts.get_mut(rig.aura) {
+            if let Ok(mut tf) = puppets.parts.get_mut(rig.aura) {
                 tf.scale = Vec3::splat(s);
             }
             if let (Ok(mut m), Some(h)) = (
-                aura_mats.get_mut(rig.aura),
-                power.and_then(|p| paints.aura.get(p as usize)),
+                puppets.aura_mats.get_mut(rig.aura),
+                power.and_then(|p| puppets.paints.aura.get(p as usize)),
             ) && m.0 != *h
             {
                 m.0 = h.clone();
             }
         }
         for (e, (ry, rx)) in dress.tail.iter().zip(out.tail) {
-            if let Ok(mut tf) = parts.get_mut(*e) {
+            if let Ok(mut tf) = puppets.parts.get_mut(*e) {
                 tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
             }
         }
         let mut rotor = anim.rotor;
         for e in &dress.wiggles {
-            if let Ok((w, base, mut tf)) = wiggles.get_mut(*e) {
+            if let Ok((w, base, mut tf)) = puppets.wiggles.get_mut(*e) {
                 wiggle(*w, &base.0, &mut tf, t, out.speed, &mut rotor, dt);
             }
         }

@@ -1,12 +1,13 @@
 //! The debug overlay (F3): RTT, rollbacks, transport, map hash, fps.
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
 use fb_net::*;
 use lightyear::prelude::*;
 
-use crate::game::{Map, Stats};
-use crate::net::Conn;
+use crate::game::{MapNow, PredictionStats};
+use crate::net::Connection;
 
 #[derive(Component)]
 struct HudText;
@@ -67,37 +68,41 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut on: ResMut<Overlay>, mut q: Query
     }
 }
 
-fn update(
-    on: Res<Overlay>,
-    mut text: Query<&mut Text, With<HudText>>,
-    conn: Option<Res<Conn>>,
-    map: Option<Res<Map>>,
-    stats: Res<Stats>,
-    metrics: Option<Res<PredictionMetrics>>,
-    links: Query<&Link>,
-    diag: Res<DiagnosticsStore>,
-    timeline: Res<LocalTimeline>,
-    own: Query<&BodyFull, With<Predicted>>,
-    others: Query<(), With<Interpolated>>,
-    net: Res<crate::diag::NetDiag>,
-    time: Res<Time<Real>>,
-    perf: Option<Res<crate::perf::Perf>>,
-) {
+/// What the overlay shows.
+#[derive(SystemParam)]
+struct Shown<'w, 's> {
+    connection: Connection<'w, 's>,
+    net: Res<'w, crate::diag::NetDiag>,
+    now: MapNow<'w>,
+    counts: PredictionStats<'w>,
+    own: Query<'w, 's, &'static BodyFull, With<Predicted>>,
+    others: Query<'w, 's, (), With<Interpolated>>,
+    diag: Res<'w, DiagnosticsStore>,
+    perf: Option<Res<'w, crate::perf::Perf>>,
+}
+
+fn update(on: Res<Overlay>, mut text: Query<&mut Text, With<HudText>>, shown: Shown, time: Res<Time<Real>>) {
     let Ok(mut text) = text.single_mut() else { return };
     if !on.0 {
         return;
     }
     // (As F4 counts it: the frames of the last 2 s over their time. Bevy's smoothed rate, which differs, only
     // without the perf plugin.)
-    let fps = perf
+    let fps = shown
+        .perf
         .and_then(|p| p.fps(2.0))
         .map(f64::from)
-        .or_else(|| diag.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()))
+        .or_else(|| {
+            shown
+                .diag
+                .get(&FrameTimeDiagnosticsPlugin::FPS)
+                .and_then(|d| d.smoothed())
+        })
         .unwrap_or(0.0);
-    let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
-    let link = conn.as_ref().and_then(|c| c.entity).and_then(|e| links.get(e).ok());
-    let net_s = crate::diag::summary(conn.as_deref(), link, &net, time.elapsed_secs());
-    let (round_s, t) = map.as_ref().map_or(("no round".to_string(), 0.0), |m| {
+    let (rollbacks, rb_ticks) = shown.counts.metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
+    let link = shown.connection.link();
+    let net_s = crate::diag::summary(shown.connection.conn.as_deref(), link, &shown.net, time.elapsed_secs());
+    let (round_s, t) = shown.now.map.as_ref().map_or(("no round".to_string(), 0.0), |m| {
         let ok = if m.static_hash == m.round.static_hash {
             "ok"
         } else {
@@ -108,10 +113,11 @@ fn update(
                 "{} seed {} arena {} | map hash {} {ok}",
                 m.round.map, m.round.seed, m.round.arena, m.static_hash
             ),
-            m.time(f64::from(timeline.tick().0)),
+            m.time(f64::from(shown.now.timeline.tick().0)),
         )
     });
-    let body_s = own
+    let body_s = shown
+        .own
         .single()
         .ok()
         .map(|f| &f.body)
@@ -128,8 +134,8 @@ fn update(
         });
     text.0 = format!(
         "{net_s} | {fps:.0} fps (2 s)\n{round_s}\nt {t:.2} s | tick {} | others {}\n{body_s}\nrollbacks {rollbacks} ({rb_ticks} ticks) | map events {}",
-        timeline.tick().0,
-        others.iter().count(),
-        stats.map_events,
+        shown.now.timeline.tick().0,
+        shown.others.iter().count(),
+        shown.counts.stats.map_events,
     );
 }

@@ -1,9 +1,8 @@
 //! The client's copy of the round: the same map built from the seed, own-bean prediction, map events,
 //! and the input it sends.
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use fb_arena::{
@@ -14,7 +13,6 @@ use fb_net::*;
 use fb_proto::{ArenaInfo, PlayerId};
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::{DT, m};
-use fb_sim::beans;
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::map::{BeanDeco, MapOut, MapSfx, MapSpec};
 use fb_sim::math::V3;
@@ -30,6 +28,12 @@ use lightyear::prelude::*;
 use crate::keys::Bind;
 use crate::opts::Opts;
 use crate::settings::Bindings;
+
+/// The other beans: interpolated, not the own one.
+pub type Others = (With<Interpolated>, Without<Predicted>);
+
+/// The client's link once connected.
+pub type Linked = (With<Client>, With<Connected>);
 
 /// The game takes the player's keys, mouse and pad (no menu, chat line or text field has them).
 #[derive(Resource)]
@@ -317,31 +321,18 @@ pub struct Stats {
     pub hash_mismatch: bool,
 }
 
-/// `--trace`: one line per predicted tick while connected, `C tick room id mx mz buttons x y z` (rollback
-/// replays repeat ticks), and `R tick` before the first one of each connection.
-#[derive(Resource)]
-struct Trace {
-    out: BufWriter<File>,
-    fresh: bool,
+/// The prediction's counts: ours, and Lightyear's rollbacks.
+#[derive(SystemParam)]
+pub struct PredictionStats<'w> {
+    pub stats: Res<'w, Stats>,
+    pub metrics: Option<Res<'w, PredictionMetrics>>,
 }
 
-/// `--trace-hits`: the own bean's notes per predicted tick, `C tick id …` (`c`: a rollback's replay), and while
-/// it tackles the others as drawn; the interpolation delay (`view`) when it changes.
-#[derive(Resource)]
-pub struct HitTrace {
-    out: BufWriter<File>,
-    view: Option<u32>,
-    quiet: beans::NoteQuiet,
-    /// The own bean as last predicted at each recent tick (pos, vel, yaw): a rollback's replay is compared with it.
-    pred: BTreeMap<i64, (V3, V3, f64)>,
-}
-
-impl HitTrace {
-    /// One line as it is (the drawing's `F` lines, `beans::animate_beans`).
-    pub fn line(&mut self, l: core::fmt::Arguments) {
-        let _ = self.out.write_fmt(l);
-        let _ = self.out.write_all(b"\n");
-    }
+/// The map being played, and the predicted timeline.
+#[derive(SystemParam)]
+pub struct MapNow<'w> {
+    pub map: Option<Res<'w, Map>>,
+    pub timeline: Res<'w, LocalTimeline>,
 }
 
 pub struct GamePlugin;
@@ -356,7 +347,6 @@ impl Plugin for GamePlugin {
         app.init_resource::<Generations>();
         app.init_resource::<LastRollback>();
         app.add_message::<Cue>();
-        app.add_systems(Startup, open_trace);
         app.add_systems(
             PreUpdate,
             (
@@ -375,30 +365,6 @@ impl Plugin for GamePlugin {
             ((receive_map_events, apply_map_events, map_sounds).chain(), send_emotes),
         );
         app.add_observer(on_controlled);
-        app.add_observer(|_: On<Add, Connected>, trace: Option<ResMut<Trace>>| {
-            if let Some(mut t) = trace {
-                t.fresh = true;
-            }
-        });
-    }
-}
-
-fn open_trace(mut commands: Commands, opts: Res<Opts>) {
-    if let Some(path) = &opts.trace_hits {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
-        commands.insert_resource(HitTrace {
-            out: BufWriter::new(file),
-            view: None,
-            quiet: Default::default(),
-            pred: BTreeMap::new(),
-        });
-    }
-    if let Some(path) = &opts.trace {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
-        commands.insert_resource(Trace {
-            out: BufWriter::new(file),
-            fresh: true,
-        });
     }
 }
 
@@ -551,6 +517,16 @@ fn note_rollback(timeline: Res<LocalTimeline>, manager: Res<PredictionManager>, 
     }
 }
 
+/// Lightyear's rollbacks: the server's checkpoints, the policy, and the last rollback.
+#[derive(SystemParam)]
+struct Rollbacks<'w> {
+    checkpoints: Res<'w, ReplicationCheckpointMap>,
+    mutate: Option<Res<'w, ServerMutateTicks>>,
+    manager: ResMut<'w, PredictionManager>,
+    meta: Res<'w, StateRollbackMetadata>,
+    last: Res<'w, LastRollback>,
+}
+
 /// Beans leaning on each other: the client pushes against the others where it draws them, a little in the
 /// past, so while they touch nearly every snapshot finds the own bean a few millimetres off and rolls back
 /// (portal-panic's crowds at a checkpoint: 600–1200 rollbacks in 100 s). A difference only in where the bean
@@ -559,20 +535,17 @@ fn note_rollback(timeline: Res<LocalTimeline>, manager: Res<PredictionManager>, 
 /// difference stays in the history, and the next check finds it.
 fn pace_pushes(
     timeline: SyncedLocalTimeline,
-    checkpoints: Res<ReplicationCheckpointMap>,
-    mutate: Option<Res<ServerMutateTicks>>,
-    mut manager: ResMut<PredictionManager>,
-    meta: Res<StateRollbackMetadata>,
-    last: Res<LastRollback>,
+    mut rollbacks: Rollbacks,
     own: Query<(&PredictionHistory<BodyFull>, &ConfirmedHistory<BodyFull>), With<Predicted>>,
-    others: Query<&RemotePose, (With<Interpolated>, Without<Predicted>)>,
+    others: Query<&RemotePose, Others>,
 ) {
     let tick = timeline.tick();
-    let recent = last.0.is_some_and(|l| tick - l < PUSH_EVERY);
+    let recent = rollbacks.last.0.is_some_and(|l| tick - l < PUSH_EVERY);
     let wait = recent
-        && meta.forced_rollback_tick().is_none()
-        && mutate
-            .and_then(|m| checkpoints.latest_completed_at_or_before(&m, tick))
+        && rollbacks.meta.forced_rollback_tick().is_none()
+        && rollbacks
+            .mutate
+            .and_then(|m| rollbacks.checkpoints.latest_completed_at_or_before(&m, tick))
             .zip(own.single().ok())
             .and_then(|(c, (predicted, confirmed))| Some((predicted.get(c.tick)?, confirmed.get_present(c.tick)?)))
             .is_some_and(|(p, s)| {
@@ -583,8 +556,8 @@ fn pace_pushes(
                     && (p.body.pos - s.body.pos).length() < PUSH_MAX
                     && others.iter().any(|o| o.pos.distance(at) < PUSH_NEAR)
             });
-    if matches!(manager.rollback_policy.state, RollbackMode::Disabled) != wait {
-        manager.rollback_policy.state = if wait {
+    if matches!(rollbacks.manager.rollback_policy.state, RollbackMode::Disabled) != wait {
+        rollbacks.manager.rollback_policy.state = if wait {
             RollbackMode::Disabled
         } else {
             RollbackMode::Check
@@ -639,38 +612,64 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&BeanId, &BodyFull)>) -> St
 #[derive(Resource, Default)]
 struct Presses(u8);
 
-fn latch_presses(
-    keys: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-    pads: Query<&Gamepad>,
-    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    mut presses: ResMut<Presses>,
-    gate: Res<Gate>,
-    binds: Res<Bindings>,
-) {
-    if !gate.play {
+/// The keyboard, the mouse buttons and the gamepads.
+#[derive(SystemParam)]
+pub struct Buttons<'w, 's> {
+    pub keys: Res<'w, ButtonInput<KeyCode>>,
+    pub mouse: Res<'w, ButtonInput<MouseButton>>,
+    pub pads: Query<'w, 's, &'static Gamepad>,
+}
+
+/// The player's buttons as bound, the presses waiting for a tick, and whether the game has them.
+#[derive(SystemParam)]
+struct PlayInput<'w, 's> {
+    keys: Option<Res<'w, ButtonInput<KeyCode>>>,
+    mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
+    pads: Query<'w, 's, &'static Gamepad>,
+    binds: Res<'w, Bindings>,
+    presses: ResMut<'w, Presses>,
+    gate: Res<'w, Gate>,
+}
+
+/// Input not from the player: the autopilot's (`--autopilot`), or a probe's for a while.
+#[derive(SystemParam)]
+struct Robot<'w> {
+    opts: Res<'w, Opts>,
+    probe: Option<ResMut<'w, ProbeInput>>,
+    time: Res<'w, Time<Real>>,
+}
+
+/// The tick being predicted, and the rollback whose replay it is, if any.
+#[derive(SystemParam)]
+struct Predicting<'w> {
+    timeline: Res<'w, LocalTimeline>,
+    rollback: Option<Res<'w, Rollback>>,
+}
+
+fn latch_presses(mut input: PlayInput, cursor: Query<&CursorOptions, With<PrimaryWindow>>) {
+    if !input.gate.play {
         return;
     }
-    for pad in &pads {
+    for pad in &input.pads {
         if pad.just_pressed(GamepadButton::South) {
-            presses.0 |= BTN_JUMP;
+            input.presses.0 |= BTN_JUMP;
         }
         if pad.any_just_pressed([GamepadButton::West, GamepadButton::East]) {
-            presses.0 |= BTN_DIVE;
+            input.presses.0 |= BTN_DIVE;
         }
     }
-    let (Some(keys), Some(mouse)) = (keys, mouse) else {
+    let (Some(keys), Some(mouse)) = (input.keys, input.mouse) else {
         return;
     };
-    if keys.any_just_pressed(binds.keys(Bind::Jump).iter().copied()) {
-        presses.0 |= BTN_JUMP;
+    if keys.any_just_pressed(input.binds.keys(Bind::Jump).iter().copied()) {
+        input.presses.0 |= BTN_JUMP;
     }
     // The click that captures the mouse is not a dive.
     let captured = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    if keys.any_just_pressed(binds.keys(Bind::Dive).iter().copied())
+    if keys.any_just_pressed(input.binds.keys(Bind::Dive).iter().copied())
         || (captured && mouse.just_pressed(MouseButton::Left))
     {
-        presses.0 |= BTN_DIVE;
+        input.presses.0 |= BTN_DIVE;
     }
 }
 
@@ -702,30 +701,28 @@ fn keyboard(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, binds
     (f, r, if grab { BTN_GRAB } else { 0 })
 }
 
+/// The input to write, and the own bean it steers (none before it is replicated).
+type Steered = (
+    &'static mut ActionState<FbInput>,
+    Option<(&'static BeanId, &'static BodyFull)>,
+);
+
 /// The stick relative to the camera, quantized as the server takes it.
 fn write_input(
-    keys: Option<Res<ButtonInput<KeyCode>>>,
-    mouse: Option<Res<ButtonInput<MouseButton>>>,
-    pads: Query<&Gamepad>,
-    mut presses: ResMut<Presses>,
+    mut input: PlayInput,
+    mut robot: Robot,
+    now: Predicting,
     cam: Res<CameraAngles>,
-    opts: Res<Opts>,
-    timeline: Res<LocalTimeline>,
     map: Option<Res<Map>>,
-    mut probe: Option<ResMut<ProbeInput>>,
-    time: Res<Time<Real>>,
-    mut q: Query<(&mut ActionState<FbInput>, Option<(&BeanId, &BodyFull)>), With<InputMarker<FbInput>>>,
-    gate: Res<Gate>,
-    binds: Res<Bindings>,
-    rollback: Option<Res<Rollback>>,
+    mut q: Query<Steered, With<InputMarker<FbInput>>>,
     sync: Res<LocalTimelineSync>,
 ) {
     // A rollback replays the buffered input over what is written here: a press taken now would be lost.
-    if rollback.is_some() {
+    if now.rollback.is_some() {
         return;
     }
     // Taken by the first tick after the press (or dropped while there is no bean to press it).
-    let pressed = core::mem::take(&mut presses.0);
+    let pressed = core::mem::take(&mut input.presses.0);
     let Ok((mut state, own)) = q.single_mut() else { return };
     // Before the clock is set the ticks are not the server's: what is written now is moved onto ticks the
     // server played without it, and the rollback that follows the setting would replay it there.
@@ -733,28 +730,28 @@ fn write_input(
         state.0 = InputFrame::IDLE.into();
         return;
     }
-    if let Some(p) = probe.as_mut().filter(|p| time.elapsed_secs_f64() < p.until) {
+    if let Some(p) = robot.probe.as_mut().filter(|p| robot.time.elapsed_secs_f64() < p.until) {
         state.0 = p.frame.into();
         p.frame.buttons &= BTN_GRAB;
         return;
     }
-    let (f, r, buttons) = if opts.autopilot() {
-        match autopilot(timeline.tick().0, map.as_deref(), own) {
+    let (f, r, buttons) = if robot.opts.autopilot() {
+        match autopilot(now.timeline.tick().0, map.as_deref(), own) {
             Steer::Camera(f, r, buttons) => (f, r, buttons),
             Steer::World(frame) => {
                 state.0 = frame.into();
                 return;
             }
         }
-    } else if !gate.play {
+    } else if !input.gate.play {
         (0.0, 0.0, 0)
     } else {
-        let (mut f, mut r, mut held) = match (keys, mouse) {
-            (Some(keys), Some(mouse)) => keyboard(&keys, &mouse, &binds),
+        let (mut f, mut r, mut held) = match (input.keys, input.mouse) {
+            (Some(keys), Some(mouse)) => keyboard(&keys, &mouse, &input.binds),
             _ => (0.0, 0.0, 0),
         };
         // The pad's stick wins over the keys while it is pushed.
-        let (stick, grab) = gamepad(&pads);
+        let (stick, grab) = gamepad(&input.pads);
         if stick != (0.0, 0.0) {
             (f, r) = stick;
         }
@@ -773,47 +770,73 @@ fn write_input(
     state.0 = InputFrame::from_stick(mx, mz, buttons).into();
 }
 
+/// The others as drawn, and the tick they are drawn at.
+#[derive(SystemParam)]
+struct Drawn<'w, 's> {
+    beans: Query<'w, 's, (&'static BeanId, &'static RemotePose), Others>,
+    interp: Option<Res<'w, InterpolationTimeline>>,
+}
+
+/// What predicting a tick tells: the stats and the sounds.
+#[derive(SystemParam)]
+struct Told<'w> {
+    stats: ResMut<'w, Stats>,
+    cues: MessageWriter<'w, Cue>,
+}
+
+/// `--trace input` and `--trace hits` when asked for (input: while linked).
+#[cfg(feature = "traces")]
+#[derive(SystemParam)]
+struct PredictTraces<'w, 's> {
+    input: Option<ResMut<'w, crate::trace::input::Input>>,
+    hits: Option<ResMut<'w, crate::trace::hits::Hits>>,
+    link: Query<'w, 's, (), Linked>,
+}
+
+/// The session, and the rounds replicated (arenas whose maps are being built).
+#[derive(SystemParam)]
+struct Arenas<'w, 's> {
+    session: Res<'w, Session>,
+    rounds: Query<'w, 's, &'static Round>,
+}
+
+type OwnBean = (
+    &'static BeanId,
+    &'static mut BodyFull,
+    &'static ActionState<FbInput>,
+    &'static mut OwnEvents,
+    &'static mut PrevPos,
+    &'static mut Smoothing,
+);
+
 /// Own bean: the same tick as the server's, against the others as drawn.
 fn predict(
-    timeline: Res<LocalTimeline>,
+    now: Predicting,
+    drawn: Drawn,
+    mut told: Told,
     map: Option<ResMut<Map>>,
-    mut stats: ResMut<Stats>,
-    mut own: Query<
-        (
-            &BeanId,
-            &mut BodyFull,
-            &ActionState<FbInput>,
-            &mut OwnEvents,
-            &mut PrevPos,
-            &mut Smoothing,
-        ),
-        With<Predicted>,
-    >,
-    others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
-    trace: Option<ResMut<Trace>>,
-    (hits, interp): (Option<ResMut<HitTrace>>, Option<Res<InterpolationTimeline>>),
-    session: Res<Session>,
-    link: Query<(), (With<Client>, With<Connected>)>,
-    rollback: Option<Res<Rollback>>,
-    mut cues: MessageWriter<Cue>,
-    rounds: Query<&Round>,
+    mut own: Query<OwnBean, With<Predicted>>,
+    arenas: Arenas,
+    #[cfg(feature = "traces")] traces: PredictTraces,
 ) {
     let Some(mut map) = map else { return };
     let Ok((id, mut full, state, mut ev, mut prev, mut smooth)) = own.single_mut() else {
         return;
     };
     let frame = InputFrame::from(state.0);
-    let mut trace = trace.filter(|_| !link.is_empty());
+    #[cfg(feature = "traces")]
+    let (mut input_trace, mut hits) = (traces.input.filter(|_| !traces.link.is_empty()), traces.hits);
     // Not on the last arena's ground and clock: the bean waits as the server last had it until the map is built,
     // and `reconcile` replays these ticks on it.
-    if map.stale(&rounds, &session) {
-        if let Some(trace) = &mut trace {
-            write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
+    if map.stale(&arenas.rounds, &arenas.session) {
+        #[cfg(feature = "traces")]
+        if let Some(t) = &mut input_trace {
+            t.write(now.timeline.tick(), &arenas.session, id.0, frame, &full.body);
         }
         return;
     }
     let teleports = full.teleports;
-    let k = map.round.arena_tick(timeline.tick());
+    let k = map.round.arena_tick(now.timeline.tick());
     let t = k as f64 * DT;
     let input: BodyInput = if can_move(map.round.kind, t) {
         frame.into()
@@ -823,12 +846,12 @@ fn predict(
     // The others as drawn, the first time this tick is predicted; a rollback's replay meets them where they
     // were then. As on the server, a bean that finished or is out (or is in a portal) is in nobody's way.
     let map = &mut *map;
-    let replayed = rollback.is_some().then(|| map.others.get(&k).cloned()).flatten();
+    let replayed = now.rollback.is_some().then(|| map.others.get(&k).cloned()).flatten();
     let (lag, extra) = match replayed {
         Some(extra) => extra,
         None => {
-            let lag = interp.as_ref().map_or(0, |i| {
-                (timeline.tick().0.wrapping_sub(i.tick().0) as i32).clamp(0, MAX_VIEW as i32) as u32
+            let lag = drawn.interp.as_ref().map_or(0, |i| {
+                (now.timeline.tick().0.wrapping_sub(i.tick().0) as i32).clamp(0, MAX_VIEW as i32) as u32
             });
             let mut extra = if map.others.len() >= OTHERS_KEPT {
                 map.others.pop_first().map(|(_, v)| v.1).unwrap_or_default()
@@ -837,7 +860,8 @@ fn predict(
             };
             extra.clear();
             extra.extend(
-                others
+                drawn
+                    .beans
                     .iter()
                     .filter(|(o, p)| p.anim != Anim::Portal && !map.gone(o.0))
                     .map(|(o, p)| OtherBody {
@@ -909,20 +933,12 @@ fn predict(
         &drawn,
         &mut run,
     );
-    if let Some(mut hits) = hits {
-        write_hits(
-            &mut hits,
-            k,
-            id.0,
-            rollback.is_some(),
-            Some(lag),
-            &full.body,
-            &ev.0,
-            &extra,
-        );
+    #[cfg(feature = "traces")]
+    if let Some(h) = &mut hits {
+        h.write(k, &steppers[0], now.rollback.is_some(), Some(lag), &extra);
     }
-    if rollback.is_none() {
-        cues.write_batch(out.iter().filter_map(|o| match o {
+    if now.rollback.is_none() {
+        told.cues.write_batch(out.iter().filter_map(|o| match o {
             MapOut::Sfx(s) => Some(Cue::Sfx((*s).into())),
             _ => None,
         }));
@@ -932,9 +948,9 @@ fn predict(
         map.spec.logic.bean(id.0, &mut full.body, t);
     }
     let snapped = full.teleports != teleports || full.body.in_portal();
-    smooth.predicted(k, &full.body, rollback.is_some(), snapped);
-    stats.ticks += 1;
-    if rollback.is_none() {
+    smooth.predicted(k, &full.body, now.rollback.is_some(), snapped);
+    told.stats.ticks += 1;
+    if now.rollback.is_none() {
         let (b, e) = (&full.body, &ev.0);
         let said = [
             (e.jumped, Cue::Jumped),
@@ -949,105 +965,13 @@ fn predict(
                 Cue::Landed(b.land_impact as f32),
             ),
         ];
-        cues.write_batch(said.into_iter().filter(|(on, _)| *on).map(|(_, c)| c));
+        told.cues
+            .write_batch(said.into_iter().filter(|(on, _)| *on).map(|(_, c)| c));
     }
-    if let Some(trace) = &mut trace {
-        write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
+    #[cfg(feature = "traces")]
+    if let Some(t) = &mut input_trace {
+        t.write(now.timeline.tick(), &arenas.session, id.0, frame, &full.body);
     }
-}
-
-/// The `--trace` line of the own bean at `tick`.
-fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: PlayerId, frame: InputFrame, b: &Body) {
-    if core::mem::take(&mut trace.fresh) {
-        let _ = writeln!(trace.out, "R {}", tick.0);
-    }
-    let _ = writeln!(
-        trace.out,
-        "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
-        tick.0,
-        session.room.as_deref().unwrap_or("?"),
-        id,
-        frame.mx,
-        frame.mz,
-        frame.buttons,
-        b.pos.x,
-        b.pos.y,
-        b.pos.z
-    );
-}
-
-/// `--trace-hits` lines of predicted tick k.
-#[allow(clippy::too_many_arguments)]
-fn write_hits(
-    hits: &mut HitTrace,
-    k: i64,
-    id: PlayerId,
-    replay: bool,
-    view: Option<u32>,
-    b: &Body,
-    ev: &StepEvents,
-    extra: &[OtherBody],
-) {
-    let c = if replay { 'c' } else { 'C' };
-    let v3 = |x: f64, y: f64, z: f64| format!("{x:.2},{y:.2},{z:.2}");
-    // A replay that ends elsewhere than the prediction it replaces: the correction the drawing jumps by.
-    let now = (b.pos, b.vel, b.yaw);
-    if let Some((p, v, y)) = hits.pred.insert(k, now).filter(|_| replay) {
-        let (dp, dv) = (b.pos - p, b.vel - v);
-        let dy = (b.yaw - y).sin().atan2((b.yaw - y).cos());
-        if dp.length() > 1e-3 || dv.length() > 1e-2 || dy.abs() > 1e-3 {
-            let _ = writeln!(
-                hits.out,
-                "c {k} {id} corr dpos={} dvel={} dyaw={dy:.3}",
-                v3(dp.x, dp.y, dp.z),
-                v3(dv.x, dv.y, dv.z)
-            );
-        }
-    }
-    while hits.pred.len() > 256 {
-        hits.pred.pop_first();
-    }
-    // (It swings a tick either way as frames and ticks beat: only a real change.)
-    if let Some(v) = view
-        && !replay
-        && hits.view.is_none_or(|w| v.abs_diff(w) >= 2)
-    {
-        hits.view = view;
-        let _ = writeln!(hits.out, "{c} {k} {id} view {v}");
-    }
-    for n in &ev.notes {
-        if replay || hits.quiet.fresh(k, id, n) {
-            let _ = writeln!(hits.out, "{c} {k} {id} {n}");
-        }
-    }
-    if ev.knocked {
-        let _ = writeln!(
-            hits.out,
-            "{c} {k} {id} state {:?} v={}",
-            b.state,
-            v3(b.vel.x, b.vel.y, b.vel.z)
-        );
-    }
-    if beans::tackling(b) {
-        let _ = writeln!(
-            hits.out,
-            "{c} {k} {id} {:?} pos={} v={}",
-            b.state,
-            v3(b.pos.x, b.pos.y, b.pos.z),
-            v3(b.vel.x, b.vel.y, b.vel.z)
-        );
-        let cb = beans::Capsule::of_body(b);
-        for o in extra.iter().filter(|o| m::hypot(o.x - b.pos.x, o.z - b.pos.z) <= 4.0) {
-            let _ = writeln!(
-                hits.out,
-                "{c} {k} {id}   near {} drawn={} gap={:.2}",
-                o.id,
-                v3(o.x, o.y, o.z),
-                beans::gap(&cb, &beans::Capsule::of_other(o))
-            );
-        }
-    }
-    let _ = hits.out.flush();
 }
 
 /// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall
@@ -1096,19 +1020,31 @@ fn receive_map_events(
     }
 }
 
+/// The own bean, and the tick the others are drawn at.
+#[derive(SystemParam)]
+struct Viewer<'w, 's> {
+    own: Query<'w, 's, &'static BeanId, With<Predicted>>,
+    interp: Option<Res<'w, InterpolationTimeline>>,
+}
+
+/// What the player is told of: sounds and feed lines.
+#[derive(SystemParam)]
+pub struct Tell<'w> {
+    pub cues: MessageWriter<'w, Cue>,
+    pub feed: ResMut<'w, FeedLog>,
+}
+
 /// Bonuses about the own bean apply at once (it is drawn ahead), the others' when they are drawn at their
 /// tick. The rest apply as they come: a map event changes the world the own bean is predicted in
 /// (a tile falls, a portal shuts), and a bean that finished or is out leaves the arena.
 fn apply_map_events(
     map: Option<ResMut<Map>>,
     mut inbox: ResMut<Inbox>,
-    interp: Option<Res<InterpolationTimeline>>,
-    own: Query<&BeanId, With<Predicted>>,
+    viewer: Viewer,
+    mut tell: Tell,
     rounds: Query<&Round>,
     mut session: ResMut<Session>,
-    mut feed: ResMut<FeedLog>,
     time: Res<Time<Real>>,
-    mut cues: MessageWriter<Cue>,
 ) {
     let now = time.elapsed_secs_f64();
     let Some(mut map) = map else {
@@ -1137,8 +1073,8 @@ fn apply_map_events(
     if map.pending.is_empty() {
         return;
     }
-    let me = own.single().ok().map(|p| p.0);
-    let now = interp.map(|t| t.tick().0);
+    let me = viewer.own.single().ok().map(|p| p.0);
+    let now = viewer.interp.map(|t| t.tick().0);
     let mut out = Vec::new();
     let pending = core::mem::take(&mut map.pending);
     for msg in pending {
@@ -1157,9 +1093,10 @@ fn apply_map_events(
                         at: *at,
                     });
                     if let Some(b) = taken.filter(|_| loud) {
-                        cues.write(Cue::Bonus(*id));
+                        tell.cues.write(Cue::Bonus(*id));
                         let who = (Some(*id) != session.me).then(|| session.name_of(*id));
-                        feed.note(real, crate::ui::text::bonus_note(b.kind, who.as_deref()));
+                        tell.feed
+                            .note(real, crate::ui::text::bonus_note(b.kind, who.as_deref()));
                     }
                 } else {
                     map.pending.push(msg);
@@ -1171,9 +1108,9 @@ fn apply_map_events(
                 if !map.info.finished.contains(id) {
                     map.info.finished.push(*id);
                     if loud {
-                        cues.write(Cue::Finish(*id));
+                        tell.cues.write(Cue::Finish(*id));
                         let line = crate::ui::text::finish_note(&session.name_of(*id), *place as usize, *time);
-                        feed.note(real, line);
+                        tell.feed.note(real, line);
                     }
                 }
             }
@@ -1193,7 +1130,7 @@ fn apply_map_events(
                     map.info.out.push(*id);
                 }
                 if loud {
-                    cues.write(Cue::Ko { id: *id, out: *out });
+                    tell.cues.write(Cue::Ko { id: *id, out: *out });
                     if map.round.kind == ArenaKind::Round {
                         let what = Feed::Ko {
                             victim: *id,
@@ -1202,7 +1139,7 @@ fn apply_map_events(
                             out: *out,
                             shortcut: *shortcut,
                         };
-                        feed.push(real, what);
+                        tell.feed.push(real, what);
                     }
                 }
             }

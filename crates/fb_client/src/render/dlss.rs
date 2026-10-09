@@ -16,6 +16,7 @@ use bevy::camera::MainPassResolutionOverride;
 use bevy::core_pipeline::prepass::ViewPrepassTextures;
 use bevy::core_pipeline::schedule::{Core3d, Core3dSystems};
 use bevy::diagnostic::FrameCount;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::camera::TemporalJitter;
 use bevy::render::diagnostic::RecordDiagnostics;
@@ -158,21 +159,29 @@ fn drop_stale(mut commands: Commands, views: Query<(Entity, Option<&TemporalView
     }
 }
 
+/// What a DLSS context is made with.
+#[derive(SystemParam)]
+struct Gpu<'w> {
+    sdk: Res<'w, Sdk>,
+    device: Res<'w, RenderDevice>,
+    queue: Res<'w, RenderQueue>,
+}
+
+type DlssView = (
+    Entity,
+    &'static TemporalView,
+    &'static mut TemporalJitter,
+    &'static mut MainPassResolutionOverride,
+    Option<&'static DlssContext>,
+);
+
 /// Each view's context for its output size, the main pass's size inside its range, this frame's jitter.
 fn prepare(
     mut commands: Commands,
-    sdk: Res<Sdk>,
-    device: Res<RenderDevice>,
-    queue: Res<RenderQueue>,
+    gpu: Gpu,
     frames: Res<FrameCount>,
     faults: Res<Faults>,
-    mut views: Query<(
-        Entity,
-        &TemporalView,
-        &mut TemporalJitter,
-        &mut MainPassResolutionOverride,
-        Option<&DlssContext>,
-    )>,
+    mut views: Query<DlssView>,
     mut told: Local<Option<(UVec2, UVec2)>>,
 ) {
     for (e, view, mut jitter, mut size, ctx) in &mut views {
@@ -187,9 +196,9 @@ fn prepare(
                     view.out.to_array(),
                     want,
                     flags(),
-                    Arc::clone(&sdk.0),
-                    device.wgpu_device(),
-                    &queue,
+                    Arc::clone(&gpu.sdk.0),
+                    gpu.device.wgpu_device(),
+                    &gpu.queue,
                 );
                 match made {
                     Ok(sr) => Some(sr),

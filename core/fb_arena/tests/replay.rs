@@ -4,7 +4,7 @@ use fb_arena::{Stepper, tick_plain};
 use fb_shared::{DT, PlayerId, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::map::NoLogic;
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::physics::{Body, BodyInput, StepEvents};
 use fb_sim::scene::pal;
 use fb_sim::world::World;
@@ -12,12 +12,8 @@ use fb_sim::world::World;
 fn platform_world() -> World {
     let mut b = Builder::new(1, false);
     let p = b.box_(
-        0.0,
-        -0.5,
-        0.0,
-        8.0,
-        1.0,
-        8.0,
+        v3(0.0, -0.5, 0.0),
+        v3(8.0, 1.0, 8.0),
         pal::BLUE,
         PrimOpts {
             dynamic: true,

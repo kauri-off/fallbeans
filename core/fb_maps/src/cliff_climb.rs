@@ -11,7 +11,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::Surface;
 use fb_sim::scene::{Palette, pal};
@@ -43,7 +43,7 @@ fn ledge_steps(n: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         let w = 14.0;
         let depth = 3.5;
-        s.b.box_(0.0, s.y - 1.0, s.z + 2.0, w, 2.0, 4.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, s.y - 1.0, s.z + 2.0), v3(w, 2.0, 4.0), pal::PURPLE, o());
         let mut z = s.z + 4.0;
         let mut y = s.y;
         let mut route = Vec::new();
@@ -52,15 +52,15 @@ fn ledge_steps(n: u32, rise: f64) -> Segment {
             let d = if k == n - 1 { 7.0 } else { depth };
             let h = y - s.y + 3.0;
             let p = STEP_PALS[k as usize % STEP_PALS.len()];
-            s.b.box_(0.0, y - h / 2.0, z + d / 2.0, w, h, d, p, rock());
+            s.b.box_(v3(0.0, y - h / 2.0, z + d / 2.0), v3(w, h, d), p, rock());
             if k % 2 == 1 && k < n - 1 {
                 let x = -4.0 + s.rng() * 8.0;
-                s.b.box_(x, y + 0.4, z + d / 2.0, 2.4, 0.8, 1.2, pal::WHITE, rock());
+                s.b.box_(v3(x, y + 0.4, z + d / 2.0), v3(2.4, 0.8, 1.2), pal::WHITE, rock());
             }
             route.push(Waypoint::spread(0.0, z + d / 2.0, 2.0));
             z += d;
         }
-        s.b.bonus(3.0, s.y + rise, s.z + 5.7);
+        s.b.bonus(v3(3.0, s.y + rise, s.z + 5.7));
         SegOut {
             z,
             y,
@@ -77,14 +77,10 @@ fn ladder_wall(h: f64) -> Segment {
     Box::new(move |s| {
         let w = 14.0;
         let wf = s.z + 10.0;
-        s.b.box_(0.0, s.y - 1.0, s.z + 5.0, w, 2.0, 10.0, pal::BLUE, o());
+        s.b.box_(v3(0.0, s.y - 1.0, s.z + 5.0), v3(w, 2.0, 10.0), pal::BLUE, o());
         s.b.box_(
-            0.0,
-            s.y + (h - 2.0) / 2.0,
-            wf + 4.0,
-            w,
-            h + 2.0,
-            8.0,
+            v3(0.0, s.y + (h - 2.0) / 2.0, wf + 4.0),
+            v3(w, h + 2.0, 8.0),
             pal::PURPLE,
             rock(),
         );
@@ -96,12 +92,12 @@ fn ladder_wall(h: f64) -> Segment {
         let py = s.y + h + 3.2;
         let pz = wf - 1.2;
         for sx in [-7.4, 7.4] {
-            s.b.box_(sx, (s.y + py) / 2.0, pz, 0.8, py - s.y, 0.8, pal::PINK, o());
+            s.b.box_(v3(sx, (s.y + py) / 2.0, pz), v3(0.8, py - s.y, 0.8), pal::PINK, o());
         }
-        s.b.box_(0.0, py + 0.4, pz, 15.6, 0.8, 1.2, pal::PINK, o());
+        s.b.box_(v3(0.0, py + 0.4, pz), v3(15.6, 0.8, 1.2), pal::PINK, o());
         let sp = 1.1 + s.rng() * 0.4;
         let ph = s.rng() * m::TAU;
-        s.b.hammer(0.0, py, pz, sp, ph, 1.0, false);
+        s.b.hammer(v3(0.0, py, pz), sp, ph, 1.0, false);
         let head_x = move |t: f64| 6.0 * m::sin(m::sin(t * sp + ph));
         let top = s.y + h;
         SegOut {
@@ -136,7 +132,7 @@ fn ladder_wall(h: f64) -> Segment {
 /// (catch its edge if the jump is short).
 fn zigzag_ledges(n: u32, rise: f64) -> Segment {
     Box::new(move |s| {
-        s.b.box_(0.0, s.y - 1.0, s.z + 2.5, 10.0, 2.0, 5.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, s.y - 1.0, s.z + 2.5), v3(10.0, 2.0, 5.0), pal::PURPLE, o());
         let mut shelves = Vec::new();
         let mut y = s.y;
         let mut z = s.z + 5.0 + 1.5;
@@ -145,13 +141,13 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
             y += rise;
             let x = side * 2.6;
             let p = STEP_PALS[k as usize % STEP_PALS.len()];
-            s.b.box_(x, y - 1.5, z, 4.0, 3.0, 3.0, p, rock());
+            s.b.box_(v3(x, y - 1.5, z), v3(4.0, 3.0, 3.0), p, rock());
             shelves.push((x, y, z));
             side = -side;
             z += 2.4;
         }
         let z0 = z - 0.4;
-        s.b.box_(0.0, y + rise - 1.0, z0 + 3.5, 12.0, 2.0, 7.0, pal::PINK, o());
+        s.b.box_(v3(0.0, y + rise - 1.0, z0 + 3.5), v3(12.0, 2.0, 7.0), pal::PINK, o());
         let top_y = y + rise;
         let mut route = vec![Waypoint::spread(0.0, s.z + 3.0, 0.5)];
         let mut hops = shelves;
@@ -189,7 +185,7 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         let w = 12.0;
         let depth = 8.0;
-        s.b.box_(0.0, s.y - 1.0, s.z + 3.5, w, 2.0, 7.0, pal::BLUE, o());
+        s.b.box_(v3(0.0, s.y - 1.0, s.z + 3.5), v3(w, 2.0, 7.0), pal::BLUE, o());
         let mut routes: [Vec<Waypoint>; 2] = [Vec::new(), Vec::new()];
         let never: SharedTest = Arc::new(|_: &mut BotView| false);
         let mut jump_when = never.clone();
@@ -201,7 +197,7 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
             let d = if k == levels { 9.0 } else { depth };
             let h = y - s.y + 3.0;
             let p = STEP_PALS[(k as usize + 2) % STEP_PALS.len()];
-            s.b.box_(0.0, y - h / 2.0, face + d / 2.0, w, h, d, p, rock());
+            s.b.box_(v3(0.0, y - h / 2.0, face + d / 2.0), v3(w, h, d), p, rock());
             let spread = 2.0 + s.rng() * 2.5;
             for (r, sx) in [-1.0, 1.0].into_iter().enumerate() {
                 let lx = sx * spread;
@@ -216,8 +212,8 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
                 let sp = (0.9 + s.rng() * 0.4) * if s.rng() < 0.5 { -1.0 } else { 1.0 };
                 let ph = s.rng() * 6.0;
                 let ang = move |t: f64| if t <= 0.0 { ph } else { ph + t * sp };
-                s.b.hub(0.0, y, c, 0.7);
-                s.b.rotor(0.0, y + 0.6, c, 3.5, 1, ang, 0.45);
+                s.b.hub(v3(0.0, y, c), 0.7);
+                s.b.rotor(v3(0.0, y + 0.6, c), 3.5, 1, ang, 0.45);
                 jump_when = Arc::new(move |bot: &mut BotView| {
                     let p = bot.body.pos;
                     if bot.t <= 0.0 || (p.y - y).abs() > 0.5 || m::hypot(p.x, p.z - c) < 1.2 {

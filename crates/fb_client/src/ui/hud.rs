@@ -18,7 +18,7 @@ use crate::game::Map;
 use crate::net::Conn;
 use crate::opts::Transport;
 use crate::session::{FEED_SECS, Feed, FeedEntry, FeedLog, Outcome, Session};
-use crate::view::{Spectate, frame_tick};
+use crate::view::{FrameClock, Spectate};
 
 pub struct HudPlugin;
 
@@ -315,9 +315,8 @@ fn hud_state(
     map: Option<ResMut<Map>>,
     session: Res<Session>,
     spectate: Option<Res<Spectate>>,
-    timeline: Res<LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
     own: Query<&BodyFull, With<Predicted>>,
+    clock: FrameClock,
 ) {
     let Some(mut map) = map.filter(|_| session.room.is_some()) else {
         hud.set_if_neq(Hud::default());
@@ -325,7 +324,7 @@ fn hud_state(
     };
     let map = &mut *map;
     let kind = map.round.kind;
-    let tick = frame_tick(&timeline, &fixed);
+    let tick = clock.tick();
     let t = map.time(tick);
     let me = session.me;
     let roster = map
@@ -362,7 +361,7 @@ fn hud_state(
         Part::Spectating
     };
     let bonus = body.and_then(|b| {
-        let left = (b.power_until - f64::from(timeline.tick().0) * DT + map.round.zero_tick as f64 * DT).ceil();
+        let left = (b.power_until - f64::from(clock.timeline.tick().0) * DT + map.round.zero_tick as f64 * DT).ceil();
         let (icon, title) = text::bonus(b.power?);
         (left > 0.0).then(|| format!("{icon} {title} · {left:.0} с"))
     });
@@ -377,7 +376,7 @@ fn hud_state(
         .lobby
         .as_ref()
         .and_then(|l| l.next)
-        .map(|n| ((f64::from(n) - f64::from(timeline.tick().0)) * DT).max(0.0));
+        .map(|n| ((f64::from(n) - f64::from(clock.timeline.tick().0)) * DT).max(0.0));
     let spectating = spectate
         .and_then(|s| s.target)
         .filter(|_| status != Part::Play)
@@ -735,53 +734,78 @@ fn intro(
     });
 }
 
+/// The HUD's state, the round's time, and the outcome (shown between rounds).
+#[derive(SystemParam)]
+struct RoundView<'w> {
+    hud: Res<'w, Hud>,
+    time: Res<'w, RoundTime>,
+    outcome: Res<'w, Outcome>,
+}
+
+impl RoundView<'_> {
+    /// Between rounds: the results or the game's end are up.
+    fn between(&self) -> bool {
+        self.outcome.results.is_some() || self.outcome.game_end.is_some()
+    }
+}
+
+type Only<T, A, B> = (With<T>, Without<A>, Without<B>);
+
+/// The intro box, and the timer, «ВПЕРЁД!» and 3-2-1 texts.
+#[derive(SystemParam)]
+struct Countdown<'w, 's> {
+    intro: Single<'w, 's, &'static mut Node, (With<IntroBox>, Without<Pill>)>,
+    timer: Single<'w, 's, (&'static mut Text, &'static mut TextColor), Only<TimerText, GoText, CountText>>,
+    go: Single<'w, 's, &'static mut Text, Only<GoText, TimerText, CountText>>,
+    count: Single<'w, 's, &'static mut Text, Only<CountText, TimerText, GoText>>,
+}
+
 /// Every frame: the intro and its time to the start, the timer, the map's line, the bonus in effect, «ВПЕРЁД!»,
 /// 3-2-1, and the time to the next scene.
 fn clock(
-    hud: Res<Hud>,
-    time: Res<RoundTime>,
-    outcome: Res<Outcome>,
-    mut intro: Single<&mut Node, (With<IntroBox>, Without<Pill>)>,
-    mut timer: Single<(&mut Text, &mut TextColor), (With<TimerText>, Without<GoText>, Without<CountText>)>,
-    mut go: Single<&mut Text, (With<GoText>, Without<TimerText>, Without<CountText>)>,
-    mut count: Single<&mut Text, (With<CountText>, Without<TimerText>, Without<GoText>)>,
+    round: RoundView,
+    mut countdown: Countdown,
     mut pills: Query<(Entity, &Pill, &mut Node), Without<IntroBox>>,
     mut leaves: Query<(&mut Rich, Option<&IntroLeft>, Option<&NextLine>)>,
     children: Query<&Children>,
 ) {
-    let between = outcome.results.is_some() || outcome.game_end.is_some();
-    let round = hud.on && hud.kind == Some(ArenaKind::Round) && !between;
-    let before = round && time.t < 0.0;
-    let on = round && time.t >= 0.0;
-    show(&mut intro, before);
-    let (ref mut t, ref mut c) = *timer;
+    let between = round.between();
+    let in_round = round.hud.on && round.hud.kind == Some(ArenaKind::Round) && !between;
+    let before = in_round && round.time.t < 0.0;
+    let on = in_round && round.time.t >= 0.0;
+    show(&mut countdown.intro, before);
+    let (ref mut t, ref mut c) = *countdown.timer;
     let s = if on {
-        text::fmt_time(time.time_left)
+        text::fmt_time(round.time.time_left)
     } else {
         String::new()
     };
     if t.0 != s {
         t.0 = s;
     }
-    c.set_if_neq(TextColor(if time.time_left < 10.0 { YELLOW } else { Color::WHITE }));
-    let s = if on && time.t < 1.2 { text::GO } else { "" };
-    if go.0 != s {
-        go.0 = s.into();
+    c.set_if_neq(TextColor(if round.time.time_left < 10.0 {
+        YELLOW
+    } else {
+        Color::WHITE
+    }));
+    let s = if on && round.time.t < 1.2 { text::GO } else { "" };
+    if countdown.go.0 != s {
+        countdown.go.0 = s.into();
     }
-    let left = (-time.t).ceil() as i64;
-    let s = if hud.on && hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&left) {
+    let left = (-round.time.t).ceil() as i64;
+    let s = if round.hud.on && round.hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&left) {
         left.to_string()
     } else {
         String::new()
     };
-    if count.0 != s {
-        count.0 = s;
+    if countdown.count.0 != s {
+        countdown.count.0 = s;
     }
     for (e, pill, mut node) in &mut pills {
         let s = match pill {
             _ if !on => None,
-            Pill::MapText => hud.map_text.as_deref(),
-            Pill::Bonus => hud.bonus.as_deref(),
+            Pill::MapText => round.hud.map_text.as_deref(),
+            Pill::Bonus => round.hud.bonus.as_deref(),
         };
         show(&mut node, s.is_some());
         if let Some(s) = s
@@ -793,10 +817,10 @@ fn clock(
     }
     for (mut t, intro, next) in &mut leaves {
         if intro.is_some() && before {
-            t.set(&text::in_secs(text::TO_START, -time.t));
+            t.set(&text::in_secs(text::TO_START, -round.time.t));
         }
         if let Some(n) = next {
-            t.set(&time.next_in.map(|s| text::in_secs(n.0, s)).unwrap_or_default());
+            t.set(&round.time.next_in.map(|s| text::in_secs(n.0, s)).unwrap_or_default());
         }
     }
 }
@@ -1068,20 +1092,19 @@ fn status(
 
 /// The controls line at the bottom: in the first seconds of a round, and in the lobby with the menu shut.
 fn keys(
-    hud: Res<Hud>,
-    time: Res<RoundTime>,
-    outcome: Res<Outcome>,
+    round: RoundView,
     ui: Res<Ui>,
     session: Res<Session>,
     binds: Res<crate::settings::Bindings>,
     mut q: Single<(Entity, &mut Node), With<KeysBox>>,
-    children: Query<&Children>,
-    mut texts: Query<&mut Rich>,
+    mut labels: Labels,
 ) {
-    let between = outcome.results.is_some() || outcome.game_end.is_some();
+    let between = round.between();
     let info = session.arena.as_ref();
-    let line = match hud.kind {
-        Some(ArenaKind::Round) if hud.on && !between && hud.status == Part::Play && (0.0..10.0).contains(&time.t) => {
+    let line = match round.hud.kind {
+        Some(ArenaKind::Round)
+            if round.hud.on && !between && round.hud.status == Part::Play && (0.0..10.0).contains(&round.time.t) =>
+        {
             let practice = info.is_some_and(|i| i.practice);
             let grab = info.is_some_and(|i| fb_maps::by_id(i.game).meta().grab);
             let g = if grab {
@@ -1097,7 +1120,7 @@ fn keys(
                 &text::menu_lead(ui.pad, false),
             ))
         }
-        Some(ArenaKind::Lobby) if hud.on && !ui.menu => Some(text::keys(
+        Some(ArenaKind::Lobby) if round.hud.on && !ui.menu => Some(text::keys(
             ui.pad,
             &binds,
             "захват",
@@ -1109,7 +1132,7 @@ fn keys(
     let (e, ref mut node) = *q;
     show(node, line.is_some());
     if let Some(line) = line {
-        relabel(e, &line, &children, &mut texts);
+        labels.set(e, &line);
     }
 }
 

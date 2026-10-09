@@ -3,6 +3,7 @@ use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::settings::{ReflectSettingsGroup, SettingsGroup};
 use fb_net::HTTP_PORT;
@@ -177,6 +178,15 @@ impl States {
 /// The server being played on: its HTTP API (None at the server list).
 #[derive(Resource, Default, Clone, Debug)]
 pub struct Target(pub Option<String>);
+
+/// The servers added, what they answered, the one being played on, and the identities they gave.
+#[derive(SystemParam)]
+pub struct ServerBook<'w> {
+    pub servers: ResMut<'w, Servers>,
+    pub states: ResMut<'w, States>,
+    pub target: ResMut<'w, Target>,
+    pub ids: Res<'w, crate::settings::Identities>,
+}
 
 /// Checks the list's servers while the list is on screen.
 pub fn poll(time: Res<Time<Real>>, servers: Res<Servers>, target: Res<Target>, mut res: ResMut<States>) {

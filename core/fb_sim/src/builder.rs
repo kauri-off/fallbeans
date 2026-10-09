@@ -1,5 +1,6 @@
 //! The map-building API (`b.cyl`, `b.rotor`, …). The server builds without a scene: only nodes,
 //! colliders and movers; the client also gets a `SceneDesc` to draw.
+use std::ops::Range;
 use std::sync::Arc;
 
 use fb_shared::cause::Hazard;
@@ -11,7 +12,7 @@ use crate::collider::{ColId, ColliderOpts, Shape};
 use crate::looks::Pattern;
 use crate::m::{self, MinMax};
 use crate::map::{Cx, Hook, MapEvent, MapOut};
-use crate::math::V3;
+use crate::math::{V3, v3};
 use crate::nodes::{NodeId, ROOT};
 use crate::physics::{Body, PORTAL_T, StepEvents};
 use crate::scene::Surface;
@@ -51,6 +52,18 @@ impl Default for PrimOpts {
             pattern: None,
         }
     }
+}
+
+/// A slab `thick` deep and `width` wide at `x`, rising from (z0, y0) to (z1, y1) along its top.
+#[derive(Clone, Copy, Debug)]
+pub struct Ramp {
+    pub x: f64,
+    pub z0: f64,
+    pub y0: f64,
+    pub z1: f64,
+    pub y1: f64,
+    pub width: f64,
+    pub thick: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -200,8 +213,8 @@ impl Builder {
         self.world.movers.push(Box::new(f));
     }
 
-    pub fn anchor(&mut self, x: f64, y: f64, z: f64, parent: NodeId) -> NodeId {
-        self.world.nodes.add(parent, V3::new(x, y, z))
+    pub fn anchor(&mut self, at: V3, parent: NodeId) -> NodeId {
+        self.world.nodes.add(parent, at)
     }
 
     pub fn model(&mut self, name: Model, parent: NodeId) -> NodeId {
@@ -277,18 +290,8 @@ impl Builder {
         self.world.colliders[col as usize].opts.on_ground = true;
     }
 
-    fn prim(
-        &mut self,
-        kind: PrimKind,
-        dims: [f64; 3],
-        p: Palette,
-        x: f64,
-        y: f64,
-        z: f64,
-        o: &PrimOpts,
-        freq: Option<f64>,
-    ) -> NodeId {
-        let node = self.world.nodes.add(o.parent.unwrap_or(ROOT), V3::new(x, y, z));
+    fn prim(&mut self, kind: PrimKind, dims: [f64; 3], p: Palette, at: V3, o: &PrimOpts, freq: Option<f64>) -> NodeId {
+        let node = self.world.nodes.add(o.parent.unwrap_or(ROOT), at);
         if let Some(r) = o.rot {
             self.world.nodes.get_mut(node).rot = r;
         }
@@ -321,51 +324,45 @@ impl Builder {
         Prim { node, col: Some(col) }
     }
 
-    pub fn box_(&mut self, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64, p: Palette, o: PrimOpts) -> Prim {
-        let node = self.prim(PrimKind::Box, [sx, sy, sz], p, x, y, z, &o, None);
+    pub fn box_(&mut self, at: V3, size: V3, p: Palette, o: PrimOpts) -> Prim {
+        let node = self.prim(PrimKind::Box, size.to_array(), p, at, &o, None);
         self.result(
             node,
             Shape::Box {
-                hx: sx / 2.0,
-                hy: sy / 2.0,
-                hz: sz / 2.0,
+                hx: size.x / 2.0,
+                hy: size.y / 2.0,
+                hz: size.z / 2.0,
             },
             o,
         )
     }
 
-    pub fn cyl(&mut self, x: f64, y: f64, z: f64, r: f64, h: f64, p: Palette, o: PrimOpts) -> Prim {
+    pub fn cyl(&mut self, at: V3, r: f64, h: f64, p: Palette, o: PrimOpts) -> Prim {
         let seg = f64::from(o.seg);
-        let node = self.prim(PrimKind::Cyl, [r, h, seg], p, x, y, z, &o, None);
+        let node = self.prim(PrimKind::Cyl, [r, h, seg], p, at, &o, None);
         self.result(node, Shape::Cyl { r, hh: h / 2.0 }, o)
     }
 
-    pub fn sphere(&mut self, x: f64, y: f64, z: f64, r: f64, p: Palette, o: PrimOpts) -> Prim {
-        let node = self.prim(PrimKind::Sphere, [r, 0.0, 0.0], p, x, y, z, &o, Some(0.6));
+    pub fn sphere(&mut self, at: V3, r: f64, p: Palette, o: PrimOpts) -> Prim {
+        let node = self.prim(PrimKind::Sphere, [r, 0.0, 0.0], p, at, &o, Some(0.6));
         self.result(node, Shape::Sphere { r }, o)
     }
 
-    pub fn ramp(
-        &mut self,
-        x: f64,
-        z0: f64,
-        y0: f64,
-        z1: f64,
-        y1: f64,
-        width: f64,
-        p: Palette,
-        thick: f64,
-        o: PrimOpts,
-    ) -> Prim {
+    pub fn ramp(&mut self, ramp: Ramp, p: Palette, o: PrimOpts) -> Prim {
+        let Ramp {
+            x,
+            z0,
+            y0,
+            z1,
+            y1,
+            width,
+            thick,
+        } = ramp;
         let ang = m::atan2(y1 - y0, z1 - z0);
         let len = m::hypot(z1 - z0, y1 - y0);
         self.box_(
-            x,
-            (y0 + y1) / 2.0 - thick / 2.0 / m::cos(ang),
-            (z0 + z1) / 2.0,
-            width,
-            thick,
-            len,
+            v3(x, (y0 + y1) / 2.0 - thick / 2.0 / m::cos(ang), (z0 + z1) / 2.0),
+            v3(width, thick, len),
             p,
             PrimOpts {
                 rot: Some(V3::new(-ang, 0.0, 0.0)),
@@ -375,21 +372,17 @@ impl Builder {
     }
 
     pub fn rails(&mut self, z0: f64, z1: f64, half_width: f64, y: f64, p: Palette) {
-        self.fence(z0, z1, half_width, y, 1.2, false, p);
+        self.fence(z0..z1, half_width, y, 1.2, false, p);
     }
 
-    /// Side walls `h` high; `no_grab`: their top edge cannot be climbed.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fence(&mut self, z0: f64, z1: f64, half_width: f64, y: f64, h: f64, no_grab: bool, p: Palette) {
+    /// Side walls `h` high along `z`; `no_grab`: their top edge cannot be climbed.
+    pub fn fence(&mut self, z: Range<f64>, half_width: f64, y: f64, h: f64, no_grab: bool, p: Palette) {
+        let (z0, z1) = (z.start, z.end);
         let len = (z1 - z0).abs();
         for s in [-1.0, 1.0] {
             self.box_(
-                s * (half_width + 0.4),
-                y + h / 2.0,
-                (z0 + z1) / 2.0,
-                0.8,
-                h,
-                len,
+                v3(s * (half_width + 0.4), y + h / 2.0, (z0 + z1) / 2.0),
+                v3(0.8, h, len),
                 p,
                 PrimOpts {
                     col: ColliderOpts {
@@ -402,12 +395,13 @@ impl Builder {
         }
     }
 
-    pub fn hub(&mut self, x: f64, y: f64, z: f64, scale: f64) {
+    pub fn hub(&mut self, at: V3, scale: f64) {
+        let V3 { x, y, z } = at;
         let h = self.model(Model::Hub, ROOT);
         let n = self.world.nodes.get_mut(h);
-        n.pos = V3::new(x, y, z);
+        n.pos = at;
         n.scale = V3::splat(scale);
-        let a = self.anchor(x, y + 1.6 * scale, z, ROOT);
+        let a = self.anchor(v3(x, y + 1.6 * scale, z), ROOT);
         self.collider(
             a,
             Shape::Cyl {
@@ -423,21 +417,19 @@ impl Builder {
 
     pub fn rotor(
         &mut self,
-        x: f64,
-        y: f64,
-        z: f64,
+        at: V3,
         len: f64,
         count: u32,
         angle: impl Fn(f64) -> f64 + Send + Sync + 'static,
         hit: f64,
     ) -> NodeId {
-        let rotor = self.anchor(x, y, z, ROOT);
+        let rotor = self.anchor(at, ROOT);
         for k in 0..count {
             let pivot = self.world.nodes.add(rotor, V3::ZERO);
             self.world.nodes.get_mut(pivot).rot.y = (f64::from(k) / f64::from(count)) * m::PI * 2.0;
             let arm = self.model(Model::Arm, pivot);
             self.world.nodes.get_mut(arm).scale = V3::new(len, 1.0, 1.0);
-            let a = self.anchor(len / 2.0 + 0.3, 0.0, 0.0, pivot);
+            let a = self.anchor(v3(len / 2.0 + 0.3, 0.0, 0.0), pivot);
             self.collider(
                 a,
                 Shape::Box {
@@ -457,12 +449,13 @@ impl Builder {
         rotor
     }
 
-    pub fn bumper(&mut self, x: f64, y: f64, z: f64, s: f64, power: f64) -> NodeId {
+    pub fn bumper(&mut self, at: V3, s: f64, power: f64) -> NodeId {
+        let V3 { x, y, z } = at;
         let b = self.model(Model::Bumper, ROOT);
         let n = self.world.nodes.get_mut(b);
-        n.pos = V3::new(x, y, z);
+        n.pos = at;
         n.scale = V3::splat(s);
-        let a = self.anchor(x, y + 0.95 * s, z, ROOT);
+        let a = self.anchor(v3(x, y + 0.95 * s, z), ROOT);
         self.collider(
             a,
             Shape::Cyl {
@@ -479,21 +472,32 @@ impl Builder {
         b
     }
 
-    pub fn hammer(&mut self, x: f64, y: f64, z: f64, speed: f64, phase: f64, amp: f64, with_frame: bool) -> NodeId {
+    pub fn hammer(&mut self, at: V3, speed: f64, phase: f64, amp: f64, with_frame: bool) -> NodeId {
+        let V3 { x, y, z } = at;
         if with_frame {
             for sx in [-4.4, 4.4] {
                 for sz in [-1.5, 1.5] {
-                    self.box_(x + sx, y - 3.6, z + sz, 0.8, 8.4, 0.8, pal::PURPLE, PrimOpts::default());
+                    self.box_(
+                        v3(x + sx, y - 3.6, z + sz),
+                        v3(0.8, 8.4, 0.8),
+                        pal::PURPLE,
+                        PrimOpts::default(),
+                    );
                 }
             }
             for sx in [-4.4, 4.4] {
-                self.box_(x + sx, y + 0.8, z, 0.8, 0.8, 3.8, pal::PURPLE, PrimOpts::default());
+                self.box_(
+                    v3(x + sx, y + 0.8, z),
+                    v3(0.8, 0.8, 3.8),
+                    pal::PURPLE,
+                    PrimOpts::default(),
+                );
             }
-            self.box_(x, y + 0.8, z, 9.6, 0.8, 1.2, pal::PURPLE, PrimOpts::default());
+            self.box_(v3(x, y + 0.8, z), v3(9.6, 0.8, 1.2), pal::PURPLE, PrimOpts::default());
         }
         let h = self.model(Model::Hammer, ROOT);
-        self.world.nodes.get_mut(h).pos = V3::new(x, y, z);
-        let a = self.anchor(0.0, -6.0, 0.0, h);
+        self.world.nodes.get_mut(h).pos = at;
+        let a = self.anchor(v3(0.0, -6.0, 0.0), h);
         self.collider(
             a,
             Shape::Box {
@@ -512,20 +516,17 @@ impl Builder {
     }
 
     /// A launch pad: throws beans up (power, m/s), and along `launch` (horizontal m/s) when given.
-    pub fn pad(&mut self, x: f64, y: f64, z: f64, r: f64, power: f64, launch: Option<(f64, f64)>) -> Prim {
+    pub fn pad(&mut self, at: V3, r: f64, power: f64, launch: Option<(f64, f64)>) -> Prim {
+        let V3 { x, y, z } = at;
         self.cyl(
-            x,
-            y - 0.26,
-            z,
+            v3(x, y - 0.26, z),
             r + 0.2,
             0.6,
             [rgb(0x5a3fb8), rgb(0x5a3fb8)],
             PrimOpts::default(),
         );
         self.cyl(
-            x,
-            y + 0.07,
-            z,
+            v3(x, y + 0.07, z),
             r,
             0.2,
             if launch.is_some() { pal::ORANGE } else { pal::TEAL },
@@ -542,13 +543,14 @@ impl Builder {
     }
 
     /// A bouncy mushroom standing at (x, y, z): its cap throws beans up at `power` m/s; the stem is solid.
-    pub fn mushroom(&mut self, x: f64, y: f64, z: f64, scale: f64, power: f64, tint: Option<Rgb>) -> ColId {
+    pub fn mushroom(&mut self, at: V3, scale: f64, power: f64, tint: Option<Rgb>) -> ColId {
+        let V3 { x, y, z } = at;
         let mush = self.model_tinted(Model::Mushroom, ROOT, tint);
         let n = self.world.nodes.get_mut(mush);
-        n.pos = V3::new(x, y, z);
+        n.pos = at;
         n.scale = V3::splat(scale);
         n.rot.y = (x * 1.7 + z * 0.9) % m::TAU;
-        let stem = self.anchor(x, y + 0.6 * scale, z, ROOT);
+        let stem = self.anchor(v3(x, y + 0.6 * scale, z), ROOT);
         self.collider(
             stem,
             Shape::Cyl {
@@ -560,7 +562,7 @@ impl Builder {
                 ..Default::default()
             },
         );
-        let cap = self.anchor(x, y + 1.66 * scale, z, ROOT);
+        let cap = self.anchor(v3(x, y + 1.66 * scale, z), ROOT);
         self.collider(
             cap,
             Shape::Cyl {
@@ -583,9 +585,9 @@ impl Builder {
     )]
     pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64, color: Rgb) {
         let h = y1 - y0;
-        let holder = self.anchor(x, y0, z, ROOT);
+        let holder = self.anchor(v3(x, y0, z), ROOT);
         self.world.nodes.get_mut(holder).rot.y = yaw;
-        let a = self.anchor(0.0, h / 2.0, 0.45, holder);
+        let a = self.anchor(v3(0.0, h / 2.0, 0.45), holder);
         self.collider(
             a,
             Shape::Box {
@@ -611,14 +613,12 @@ impl Builder {
             ..Default::default()
         };
         for sx in [-0.45, 0.45] {
-            self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco);
+            self.box_(v3(sx, (h + 0.7) / 2.0, 0.14), v3(0.11, h + 0.7, 0.11), wood, deco);
         }
         let rungs = (h / 0.38).round().at_least(2.0) as u32;
         for k in 1..rungs {
             self.cyl(
-                0.0,
-                (f64::from(k) / f64::from(rungs)) * h,
-                0.14,
+                v3(0.0, (f64::from(k) / f64::from(rungs)) * h, 0.14),
                 0.045,
                 0.9,
                 wood,
@@ -632,14 +632,13 @@ impl Builder {
     }
 
     /// A trampoline: a springy mat on a ring frame that throws beans up (power: m/s upwards).
-    pub fn trampoline(&mut self, x: f64, y: f64, z: f64, r: f64, power: f64) -> Prim {
+    pub fn trampoline(&mut self, at: V3, r: f64, power: f64) -> Prim {
+        let V3 { x, y, z } = at;
         let legs = 6;
         for k in 0..legs {
             let a = (f64::from(k) / f64::from(legs)) * m::PI * 2.0;
             self.cyl(
-                x + m::cos(a) * (r + 0.1),
-                y - 0.65,
-                z + m::sin(a) * (r + 0.1),
+                v3(x + m::cos(a) * (r + 0.1), y - 0.65, z + m::sin(a) * (r + 0.1)),
                 0.09,
                 1.2,
                 [rgb(0x39406b), rgb(0x39406b)],
@@ -650,11 +649,9 @@ impl Builder {
                 },
             );
         }
-        self.cyl(x, y - 0.03, z, r + 0.3, 0.3, pal::ORANGE, PrimOpts::default());
+        self.cyl(v3(x, y - 0.03, z), r + 0.3, 0.3, pal::ORANGE, PrimOpts::default());
         self.cyl(
-            x,
-            y + 0.14,
-            z,
+            v3(x, y + 0.14, z),
             r,
             0.1,
             pal::BLUE,
@@ -669,8 +666,8 @@ impl Builder {
     }
 
     /// A spot where a bonus may lie (on the ground at y).
-    pub fn bonus(&mut self, x: f64, y: f64, z: f64) {
-        self.bonus_spots.push(V3::new(x, y, z));
+    pub fn bonus(&mut self, at: V3) {
+        self.bonus_spots.push(at);
     }
 
     /// Decorative clouds around the course (client only).
@@ -692,23 +689,24 @@ impl Builder {
     }
 
     /// A decorative model (client only, no collision): trees, flags, cones, stars, fans, mushrooms.
-    pub fn prop(&mut self, name: Model, x: f64, y: f64, z: f64, o: PropOpts) -> Option<NodeId> {
+    pub fn prop(&mut self, name: Model, at: V3, o: PropOpts) -> Option<NodeId> {
         if self.server() {
             return None;
         }
         let node = self.model_tinted(name, ROOT, o.tint);
         let n = self.world.nodes.get_mut(node);
-        n.pos = V3::new(x, y, z);
+        n.pos = at;
         n.rot.y = o.yaw;
         n.scale = V3::splat(o.scale);
         Some(node)
     }
 
-    pub fn finish(&mut self, x: f64, y: f64, z: f64) {
+    pub fn finish(&mut self, at: V3) {
+        let V3 { x, y, z } = at;
         let f = self.model(Model::Finish, ROOT);
-        self.world.nodes.get_mut(f).pos = V3::new(x, y, z);
+        self.world.nodes.get_mut(f).pos = at;
         for sx in [-8.5, 8.5] {
-            let a = self.anchor(x + sx, y + 3.0, z, ROOT);
+            let a = self.anchor(v3(x + sx, y + 3.0, z), ROOT);
             self.collider(
                 a,
                 Shape::Cyl { r: 0.6, hh: 3.0 },
@@ -724,9 +722,7 @@ impl Builder {
             let scale = if sx != 0.0 { 1.1 } else { 1.5 };
             self.prop(
                 Model::Star,
-                x + sx,
-                star_y,
-                z,
+                v3(x + sx, star_y, z),
                 PropOpts {
                     scale,
                     ..Default::default()
@@ -739,17 +735,17 @@ impl Builder {
                 yaw: if sx < 0.0 { m::PI } else { 0.0 },
                 ..Default::default()
             };
-            self.prop(Model::Flag, x + sx, y, z + 3.0, o);
+            self.prop(Model::Flag, v3(x + sx, y, z + 3.0), o);
         }
     }
 
     /// Start pen with a gate that opens at t = 0; returns 8 spawn points.
     pub fn start_area(&mut self, z0: f64) -> Vec<V3> {
         let d = PrimOpts::default;
-        self.box_(0.0, -1.0, z0, 18.0, 2.0, 14.0, pal::PURPLE, d());
-        self.box_(-9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
-        self.box_(9.4, 0.6, z0, 0.8, 1.2, 14.0, pal::PINK, d());
-        self.box_(0.0, 0.6, z0 - 7.4, 19.6, 1.2, 0.8, pal::PINK, d());
+        self.box_(v3(0.0, -1.0, z0), v3(18.0, 2.0, 14.0), pal::PURPLE, d());
+        self.box_(v3(-9.4, 0.6, z0), v3(0.8, 1.2, 14.0), pal::PINK, d());
+        self.box_(v3(9.4, 0.6, z0), v3(0.8, 1.2, 14.0), pal::PINK, d());
+        self.box_(v3(0.0, 0.6, z0 - 7.4), v3(19.6, 1.2, 0.8), pal::PINK, d());
         // Gone by the time bots plan (t = 0): the grid leaves it out, so the one built during the intro holds.
         let no_nav = PrimOpts {
             col: ColliderOpts {
@@ -758,21 +754,21 @@ impl Builder {
             },
             ..d()
         };
-        let gate = self.box_(0.0, 1.8, z0 + 7.1, 18.0, 3.6, 0.4, pal::PINK, no_nav);
+        let gate = self.box_(v3(0.0, 1.8, z0 + 7.1), v3(18.0, 3.6, 0.4), pal::PINK, no_nav);
         // Flags and cones by the gate (on the rails: nothing to trip over, out of the camera's way).
         let flag = |tint, yaw| PropOpts {
             tint: Some(tint),
             yaw,
             ..Default::default()
         };
-        self.prop(Model::Flag, -9.4, 1.2, z0 + 6.4, flag(rgb(0xff5fa2), m::PI));
-        self.prop(Model::Flag, 9.4, 1.2, z0 + 6.4, flag(rgb(0x3fa9ff), 0.0));
+        self.prop(Model::Flag, v3(-9.4, 1.2, z0 + 6.4), flag(rgb(0xff5fa2), m::PI));
+        self.prop(Model::Flag, v3(9.4, 1.2, z0 + 6.4), flag(rgb(0x3fa9ff), 0.0));
         for sx in [-1.0, 1.0] {
             let o = PropOpts {
                 scale: 0.9,
                 ..Default::default()
             };
-            self.prop(Model::Cone, sx * 9.4, 1.2, z0 + 4.2, o);
+            self.prop(Model::Cone, v3(sx * 9.4, 1.2, z0 + 4.2), o);
         }
         let (node, col) = (gate.node, gate.col());
         self.mover(move |t, ctx| {
@@ -810,10 +806,10 @@ impl Builder {
                 other.y + 0.05,
                 other.z + m::cos(other.yaw) * 1.9,
             );
-            let ring = self.anchor(e.x, e.y, e.z, ROOT);
+            let ring = self.anchor(v3(e.x, e.y, e.z), ROOT);
             self.world.nodes.get_mut(ring).rot.y = e.yaw;
             if !exit_only {
-                let at = self.anchor(0.0, 1.35, 0.0, ring);
+                let at = self.anchor(v3(0.0, 1.35, 0.0), ring);
                 let trigger = self.collider(
                     at,
                     Shape::Box {
@@ -840,7 +836,7 @@ impl Builder {
                 };
                 self.world.gates.insert(trigger, gate);
                 // Shut: the sashes are a wall.
-                let at = self.anchor(0.0, 1.35, 0.0, ring);
+                let at = self.anchor(v3(0.0, 1.35, 0.0), ring);
                 let sash = self.collider(
                     at,
                     Shape::Box {
@@ -871,12 +867,12 @@ impl Builder {
                     ..Default::default()
                 };
                 self.box_(
-                    e.x + m::cos(e.yaw) * sx * 1.35,
-                    e.y + 0.15,
-                    e.z - m::sin(e.yaw) * sx * 1.35,
-                    0.5,
-                    0.3,
-                    0.5,
+                    v3(
+                        e.x + m::cos(e.yaw) * sx * 1.35,
+                        e.y + 0.15,
+                        e.z - m::sin(e.yaw) * sx * 1.35,
+                    ),
+                    v3(0.5, 0.3, 0.5),
                     pal::solid(color),
                     deco,
                 );

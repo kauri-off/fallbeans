@@ -10,7 +10,7 @@ use fb_sim::collider::{ColId, ColliderOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
 use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::scene::{Palette, pal};
 
@@ -78,14 +78,14 @@ impl MapDef for WallRush {
         let home_note: Note<f64> = b.note();
         let wall_note: Note<usize> = b.note();
         let gap_note: Note<usize> = b.note();
-        b.box_(0.0, -1.0, 0.0, W, 2.0, 16.0, pal::BLUE, freq(0.3));
-        b.box_(0.0, 0.02, -7.6, W, 0.05, 0.6, pal::RED, deco());
-        b.box_(0.0, 0.02, 7.6, W, 0.05, 0.6, pal::RED, deco());
+        b.box_(v3(0.0, -1.0, 0.0), v3(W, 2.0, 16.0), pal::BLUE, freq(0.3));
+        b.box_(v3(0.0, 0.02, -7.6), v3(W, 0.05, 0.6), pal::RED, deco());
+        b.box_(v3(0.0, 0.02, 7.6), v3(W, 0.05, 0.6), pal::RED, deco());
         for sx in [-1.0, 1.0] {
-            b.box_(sx * (W / 2.0 + 0.4), 0.6, 0.0, 0.8, 1.2, 16.0, pal::PINK, o());
+            b.box_(v3(sx * (W / 2.0 + 0.4), 0.6, 0.0), v3(0.8, 1.2, 16.0), pal::PINK, o());
         }
         for k in 0..4 {
-            b.bonus(-6.0 + f64::from(k) * 4.0, 0.0, -3.0 + f64::from(k % 2) * 6.0);
+            b.bonus(v3(-6.0 + f64::from(k) * 4.0, 0.0, -3.0 + f64::from(k % 2) * 6.0));
         }
 
         let mut walls: Vec<Wall> = Vec::new();
@@ -137,7 +137,7 @@ impl MapDef for WallRush {
             }
             // Three times the old pace: from 11 m/s up to about 19.
             let speed = 11.0 + 8f64.at_most(k as f64 * 0.22) + b.rng.unit() * 1.5;
-            let group = b.anchor(0.0, 0.0, START_Z, ROOT);
+            let group = b.anchor(v3(0.0, 0.0, START_Z), ROOT);
             b.world.nodes.get_mut(group).visible = false;
             let p = pals[k % pals.len()];
             let thick = 0.8 + b.rng.unit() * 1.2;
@@ -155,7 +155,7 @@ impl MapDef for WallRush {
                         },
                         ..Default::default()
                     };
-                    cols.push(b.box_(x, y + h / 2.0, 0.0, w, h, thick, c, opts).col());
+                    cols.push(b.box_(v3(x, y + h / 2.0, 0.0), v3(w, h, thick), c, opts).col());
                 };
                 match pc.kind {
                     Kind::Solid => add(b, 0.0, 4.2, p),

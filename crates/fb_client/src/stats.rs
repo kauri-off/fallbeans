@@ -1,12 +1,13 @@
 //! What the log says about the connection: a `net:` summary a minute while connected, and a line as soon as
 //! something goes wrong (loss, a slow round trip, a long frame, a clock jump). `NetNow` is the same for other
 //! lines (a correction, an F8 report). `stats:` (every second headless) is what stress runs compare.
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_net::NetStats;
 use lightyear::prelude::*;
 
-use crate::game::{Map, Stats};
-use crate::net::Conn;
+use crate::game::{MapNow, PredictionStats};
+use crate::net::Connection;
 use crate::opts::Opts;
 use crate::watch::Corrections;
 
@@ -109,6 +110,25 @@ struct StatsLine {
     shifts: Vec<i32>,
 }
 
+/// What the connection's state is read from.
+#[derive(SystemParam)]
+struct NetSources<'w, 's> {
+    connection: Connection<'w, 's>,
+    diag: Res<'w, crate::diag::NetDiag>,
+    lead: Res<'w, crate::clock::Lead>,
+    metrics: Option<Res<'w, PredictionMetrics>>,
+}
+
+/// What the `stats:` line reports.
+#[derive(SystemParam)]
+struct Logged<'w, 's> {
+    net: Res<'w, NetNow>,
+    now: MapNow<'w>,
+    counts: PredictionStats<'w>,
+    bytes: Res<'w, NetStats>,
+    others: Query<'w, 's, (), With<Interpolated>>,
+}
+
 fn on_shift(
     trigger: On<LocalTimelineShift>,
     time: Res<Time<Real>>,
@@ -135,20 +155,16 @@ fn on_shift(
 
 fn watch(
     time: Res<Time<Real>>,
-    conn: Option<Res<Conn>>,
-    links: Query<&Link>,
-    diag: Res<crate::diag::NetDiag>,
-    lead: Res<crate::clock::Lead>,
-    metrics: Option<Res<PredictionMetrics>>,
+    src: NetSources,
     mut net: ResMut<NetNow>,
     mut w: ResMut<Window>,
     mut alarms: ResMut<Alarms>,
     mut line: ResMut<StatsLine>,
 ) {
     let now = time.elapsed_secs();
-    let link = links.iter().next();
-    net.connected = conn.as_ref().is_some_and(|c| c.connected);
-    net.transport = conn.as_ref().map_or("not connected".into(), |c| {
+    let link = src.connection.links.iter().next();
+    net.connected = src.connection.conn.as_ref().is_some_and(|c| c.connected);
+    net.transport = src.connection.conn.as_ref().map_or("not connected".into(), |c| {
         format!(
             "{:?} {}{}",
             c.transport,
@@ -161,13 +177,13 @@ fn watch(
     });
     net.rtt = link.map_or(0.0, |l| l.stats.rtt.as_secs_f64() * 1000.0);
     net.jitter = link.map_or(0.0, |l| l.stats.jitter.as_secs_f64() * 1000.0);
-    net.loss = diag.loss(now);
-    net.lead = lead.held.map(|_| lead.margin);
+    net.loss = src.diag.loss(now);
+    net.lead = src.lead.held.map(|_| src.lead.margin);
     let frame = time.delta_secs_f64() * 1000.0;
     line.frame_max = line.frame_max.max(frame);
     if !net.connected {
         alarms.synced = false;
-        let rollbacks = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
+        let rollbacks = src.metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
         *w = Window {
             since: now,
             rollbacks,
@@ -249,13 +265,7 @@ fn summary(
 fn log_stats(
     opts: Res<Opts>,
     time: Res<Time<Real>>,
-    net: Res<NetNow>,
-    map: Option<Res<Map>>,
-    stats: Res<Stats>,
-    bytes: Res<NetStats>,
-    metrics: Option<Res<PredictionMetrics>>,
-    timeline: Res<LocalTimeline>,
-    others: Query<(), With<Interpolated>>,
+    logged: Logged,
     mut line: ResMut<StatsLine>,
     mut last_bytes: Local<u64>,
 ) {
@@ -265,25 +275,32 @@ fn log_stats(
         return;
     }
     let span = now - core::mem::replace(&mut line.at, now);
-    let (rollbacks, rb_ticks) = metrics.map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
-    let t = map.as_ref().map_or(0.0, |m| m.time(f64::from(timeline.tick().0)));
+    let (rollbacks, rb_ticks) = logged
+        .counts
+        .metrics
+        .map_or((0, 0), |m| (m.rollbacks, m.rollback_ticks));
+    let t = logged
+        .now
+        .map
+        .as_ref()
+        .map_or(0.0, |m| m.time(f64::from(logged.now.timeline.tick().0)));
     // (A rate: the lines come every `every` s, or a bit later.)
-    let out = bytes.bytes_out.saturating_sub(*last_bytes) as f64 / f64::from(span.max(1e-3));
-    *last_bytes = bytes.bytes_out;
+    let out = logged.bytes.bytes_out.saturating_sub(*last_bytes) as f64 / f64::from(span.max(1e-3));
+    *last_bytes = logged.bytes.bytes_out;
     let frame_max = core::mem::take(&mut line.frame_max);
     let shifts = core::mem::take(&mut line.shifts);
     info!(
         "stats: {} | rtt {:.0} ms jitter {:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out:.0} B/s | arena {} t {t:.1}{}",
-        net.transport,
-        net.rtt,
-        net.jitter,
-        pct(net.loss),
-        net.lead.map_or("—".into(), |l| format!("{l:.1}")),
-        stats.ticks,
-        others.iter().count(),
-        stats.map_events,
-        map.as_ref().map_or(0, |m| m.round.arena),
-        if stats.hash_mismatch {
+        logged.net.transport,
+        logged.net.rtt,
+        logged.net.jitter,
+        pct(logged.net.loss),
+        logged.net.lead.map_or("—".into(), |l| format!("{l:.1}")),
+        logged.counts.stats.ticks,
+        logged.others.iter().count(),
+        logged.counts.stats.map_events,
+        logged.now.map.as_ref().map_or(0, |m| m.round.arena),
+        if logged.counts.stats.hash_mismatch {
             " | MAP HASH MISMATCH"
         } else {
             ""

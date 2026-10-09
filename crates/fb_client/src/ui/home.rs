@@ -11,9 +11,9 @@ use super::*;
 use crate::crash::LastCrash;
 use crate::net::Conn;
 use crate::opts::Opts;
-use crate::servers::{Servers, States, Status, Target};
-use crate::session::{Denied, RoomList, RoomView, Session};
-use crate::settings::{Identities, Me, Player};
+use crate::servers::{ServerBook, Servers, States, Status, Target};
+use crate::session::{Denied, RoomList, RoomState, Session};
+use crate::settings::{Me, Player, Profile};
 use crate::update::{State as UpdateState, Update};
 
 pub struct HomePlugin;
@@ -231,6 +231,12 @@ pub fn name_row(p: &mut ChildSpawnerCommands, f: &Fonts, which: Field, name: &st
     });
 }
 
+/// The home tab's parts.
+type Panels = (
+    Or<(With<ServersBox>, With<RoomsBox>, With<SettingsBox>)>,
+    Without<Layer>,
+);
+
 /// The screen decides which layers are up, and the home tab which of its parts.
 fn layers(
     mut q: Query<(&Layer, &mut Node)>,
@@ -238,13 +244,7 @@ fn layers(
     tab: Option<Res<State<HomeTab>>>,
     session: Res<Session>,
     ui: Res<Ui>,
-    mut boxes: Query<
-        (&mut Node, Has<ServersBox>, Has<RoomsBox>),
-        (
-            Or<(With<ServersBox>, With<RoomsBox>, With<SettingsBox>)>,
-            Without<Layer>,
-        ),
-    >,
+    mut boxes: Query<(&mut Node, Has<ServersBox>, Has<RoomsBox>), Panels>,
 ) {
     let screen = *screen.get();
     let room = screen == Screen::Room;
@@ -277,8 +277,7 @@ fn tabs_follow(
     home: Option<Res<State<HomeTab>>>,
     menu: Option<Res<State<MenuTab>>>,
     mut tabs: Query<(Entity, &Act, &mut Look)>,
-    children: Query<&Children>,
-    mut texts: Query<&mut Rich>,
+    mut labels: Labels,
 ) {
     for (e, act, mut look) in &mut tabs {
         let on = match act.0 {
@@ -293,7 +292,7 @@ fn tabs_follow(
             } else {
                 text::TAB_SERVERS
             };
-            relabel(e, s, &children, &mut texts);
+            labels.set(e, s);
         }
     }
 }
@@ -675,20 +674,26 @@ enum Show {
     Line(&'static str),
 }
 
+/// What the banner tells of.
+#[derive(SystemParam)]
+struct BannerFacts<'w> {
+    session: Res<'w, Session>,
+    list: Res<'w, RoomList>,
+    conn: Option<Res<'w, Conn>>,
+    target: Res<'w, Target>,
+    update: Option<Res<'w, Update>>,
+}
+
 /// Connecting, reconnecting, the game being updated, or refused: a card in the middle or a banner on top.
 fn banner(
     q: Single<Entity, With<BannerBox>>,
-    session: Res<Session>,
-    list: Res<RoomList>,
-    conn: Option<Res<Conn>>,
-    target: Res<Target>,
-    update: Option<Res<Update>>,
+    facts: BannerFacts,
     f: Res<Fonts>,
     mut shown: Local<Option<Show>>,
     mut commands: Commands,
 ) {
-    let online = conn.as_ref().is_some_and(|c| c.connected);
-    let offer = match update.as_ref().map(|u| (&u.state, u.can_install())) {
+    let online = facts.conn.as_ref().is_some_and(|c| c.connected);
+    let offer = match facts.update.as_ref().map(|u| (&u.state, u.can_install())) {
         Some((UpdateState::Available(_), true)) => Offer::Install,
         Some((UpdateState::Downloading(got, total), _)) => {
             Offer::Downloading((got * 100).checked_div(*total).unwrap_or(0))
@@ -697,16 +702,16 @@ fn banner(
         Some((UpdateState::Restarting, _)) => Offer::Restarting,
         _ => Offer::Page,
     };
-    let ever = conn.as_ref().is_some_and(|c| c.ever);
-    let show = if target.0.is_none() {
+    let ever = facts.conn.as_ref().is_some_and(|c| c.ever);
+    let show = if facts.target.0.is_none() {
         Show::None
-    } else if let Some(msg) = &session.reject {
+    } else if let Some(msg) = &facts.session.reject {
         Show::Card(Some(msg.clone()), true)
-    } else if session.refused {
+    } else if facts.session.refused {
         Show::Outdated(offer)
     } else if !online && ever {
         Show::Line(text::RECONNECTING)
-    } else if !online || (session.room.is_none() && list.rooms.is_none()) {
+    } else if !online || (facts.session.room.is_none() && facts.list.rooms.is_none()) {
         Show::Line(text::CONNECTING)
     } else {
         Show::None
@@ -852,15 +857,20 @@ fn enter_submits(
     out.write(UiAction(a));
 }
 
+/// The interface's state, the forms' and their fields.
+#[derive(SystemParam)]
+struct Forms<'w, 's> {
+    ui: ResMut<'w, Ui>,
+    form: ResMut<'w, Form>,
+    fields: Query<'w, 's, (&'static Field, &'static EditableText)>,
+}
+
 fn home_actions(
     mut actions: MessageReader<UiAction>,
     mut session: ResMut<Session>,
-    mut player: ResMut<Player>,
-    mut opts: ResMut<Opts>,
-    mut ui: ResMut<Ui>,
-    mut form: ResMut<Form>,
+    mut profile: Profile,
+    mut forms: Forms,
     conn: Option<ResMut<Conn>>,
-    fields: Query<(&Field, &EditableText)>,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
     mut commands: Commands,
 ) {
@@ -872,12 +882,12 @@ fn home_actions(
         match a {
             Action::Send(m) => send(&mut senders, m.clone()),
             Action::SaveName(which) => {
-                let n = fb_shared::text::sanitize_name(&field_text(&fields, *which));
+                let n = fb_shared::text::sanitize_name(&field_text(&forms.fields, *which));
                 if n.is_empty() {
                     continue;
                 }
-                player.name = n.clone();
-                opts.name = None;
+                profile.player.name = n.clone();
+                profile.opts.name = None;
                 crate::settings::save_soon(&mut commands);
                 send(&mut senders, ClientMsg::Name(n));
             }
@@ -892,7 +902,7 @@ fn home_actions(
                 );
             }
             Action::SubmitPin(room) => {
-                let pin = field_text(&fields, Field::Pin);
+                let pin = field_text(&forms.fields, Field::Pin);
                 if fb_proto::valid_pin(&pin) {
                     send(
                         &mut senders,
@@ -904,10 +914,10 @@ fn home_actions(
                 }
             }
             Action::CancelPin => session.denied = None,
-            Action::CreatePrivate => form.private ^= true,
+            Action::CreatePrivate => forms.form.private ^= true,
             Action::CreateRoom => {
-                let mut title = fb_shared::text::sanitize_title(&field_text(&fields, Field::RoomTitle));
-                let name = opts.name.clone().unwrap_or_else(|| player.name.clone());
+                let mut title = fb_shared::text::sanitize_title(&field_text(&forms.fields, Field::RoomTitle));
+                let name = profile.opts.name.clone().unwrap_or_else(|| profile.player.name.clone());
                 if title.is_empty() && !name.is_empty() {
                     title = text::room_title_placeholder(&name);
                 }
@@ -915,29 +925,29 @@ fn home_actions(
                     &mut senders,
                     ClientMsg::Create {
                         title,
-                        private: form.private,
+                        private: forms.form.private,
                     },
                 );
             }
             Action::Practice(id) => {
                 let Some(c) = conn.as_deref_mut() else { continue };
                 session.back_to = session.room.clone().filter(|r| !r.is_empty());
-                opts.practice = Some(*id);
-                opts.room = None;
+                profile.opts.practice = Some(*id);
+                profile.opts.room = None;
                 session.room = None;
-                ui.menu = false;
+                forms.ui.menu = false;
                 crate::net::restart(&mut commands, c);
             }
             Action::EndPractice => {
                 let Some(c) = conn.as_deref_mut() else { continue };
-                opts.practice = None;
-                opts.room = session.back_to.take();
+                profile.opts.practice = None;
+                profile.opts.room = session.back_to.take();
                 session.room = None;
                 crate::net::restart(&mut commands, c);
             }
             Action::LeaveRoom => {
-                ui.menu = false;
-                opts.room = None;
+                forms.ui.menu = false;
+                profile.opts.room = None;
                 send(&mut senders, ClientMsg::Leave);
             }
             _ => {}
@@ -948,18 +958,10 @@ fn home_actions(
 /// Adding, removing, entering and leaving servers.
 fn server_actions(
     mut actions: MessageReader<UiAction>,
-    mut servers: ResMut<Servers>,
-    mut states: ResMut<States>,
-    mut target: ResMut<Target>,
-    mut session: ResMut<Session>,
-    mut list: ResMut<RoomList>,
-    mut view: RoomView,
+    mut book: ServerBook,
+    mut rooms: RoomState,
+    mut forms: Forms,
     mut opts: ResMut<Opts>,
-    mut ui: ResMut<Ui>,
-    mut form: ResMut<Form>,
-    ids: Res<Identities>,
-    conn: Option<Res<Conn>>,
-    fields: Query<(&Field, &EditableText)>,
     time: Res<Time<Real>>,
     mut commands: Commands,
 ) {
@@ -967,50 +969,50 @@ fn server_actions(
     for UiAction(a) in actions.read() {
         match a {
             Action::AddServer => {
-                let addr = field_text(&fields, Field::Server);
-                form.server_bad = !addr.trim().is_empty() && crate::servers::candidates(&addr).is_empty();
-                if servers.add(&addr) {
-                    states.refresh();
+                let addr = field_text(&forms.fields, Field::Server);
+                forms.form.server_bad = !addr.trim().is_empty() && crate::servers::candidates(&addr).is_empty();
+                if book.servers.add(&addr) {
+                    book.states.refresh();
                     crate::settings::save_soon(&mut commands);
                 }
             }
             Action::RemoveServer(addr) => {
-                servers.remove(addr);
+                book.servers.remove(addr);
                 crate::settings::save_soon(&mut commands);
             }
             Action::Connect(addr) => {
                 // (A second click on the button in the frame it goes would open a second link.)
-                if conn.is_some() || opened {
+                if rooms.conn.is_some() || opened {
                     continue;
                 }
-                let base = match states.get(addr) {
+                let base = match book.states.get(addr) {
                     Status::Up(i) => Some(i.base),
                     _ => crate::servers::candidates(addr).into_iter().next(),
                 };
                 let Some(base) = base else { continue };
-                servers.last = Some(addr.clone());
+                book.servers.last = Some(addr.clone());
                 crate::settings::save_soon(&mut commands);
                 // (This server's own: one never sees the player's identity on another.)
-                let identity = opts.token.clone().or_else(|| ids.get(&base));
-                *session = Session::default();
-                *list = RoomList::default();
-                view.clear();
-                target.0 = Some(base.clone());
+                let identity = opts.token.clone().or_else(|| book.ids.get(&base));
+                *rooms.session = Session::default();
+                *rooms.list = RoomList::default();
+                rooms.view.clear();
+                book.target.0 = Some(base.clone());
                 crate::net::open(&mut commands, &opts, identity, base, time.elapsed_secs());
                 opened = true;
             }
             Action::LeaveServer => {
-                if let Some(c) = &conn {
+                if let Some(c) = &rooms.conn {
                     crate::net::close(&mut commands, c);
                 }
-                target.0 = None;
-                *session = Session::default();
-                *list = RoomList::default();
-                view.clear();
+                book.target.0 = None;
+                *rooms.session = Session::default();
+                *rooms.list = RoomList::default();
+                rooms.view.clear();
                 opts.room = None;
                 opts.practice = None;
-                ui.menu = false;
-                states.refresh();
+                forms.ui.menu = false;
+                book.states.refresh();
             }
             _ => {}
         }

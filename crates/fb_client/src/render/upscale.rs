@@ -371,6 +371,15 @@ fn follow(faults: Res<Faults>, g: Res<Graphics>, mut up: ResMut<Upscaling>) {
     }
 }
 
+type TemporalCamera = (
+    Entity,
+    &'static Transform,
+    Option<&'static mut Temporal>,
+    (Has<DepthPrepass>, Has<MotionVectorPrepass>, Has<TemporalJitter>),
+    Option<&'static MipBias>,
+    Option<&'static CameraMainTextureUsages>,
+);
+
 /// The camera's components for the upscaler in use (the main pass's size itself is `fsr.rs`'s).
 fn apply(
     mut commands: Commands,
@@ -378,17 +387,7 @@ fn apply(
     g: Res<Graphics>,
     time: Res<Time<Real>>,
     map: Option<Res<crate::game::Map>>,
-    mut cams: Query<
-        (
-            Entity,
-            &Transform,
-            Option<&mut Temporal>,
-            (Has<DepthPrepass>, Has<MotionVectorPrepass>, Has<TemporalJitter>),
-            Option<&MipBias>,
-            Option<&CameraMainTextureUsages>,
-        ),
-        With<MainCamera>,
-    >,
+    mut cams: Query<TemporalCamera, With<MainCamera>>,
     mut last: Local<Option<(Vec3, Quat, Option<u32>)>>,
 ) {
     let Ok((e, tf, temporal, (depth, motion, jitter), bias, usages)) = cams.single_mut() else {

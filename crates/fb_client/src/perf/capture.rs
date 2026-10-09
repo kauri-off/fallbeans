@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use bevy::diagnostic::DiagnosticsStore;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::renderer::RenderAdapterInfo;
 use fb_shared::game::ArenaKind;
@@ -245,14 +246,20 @@ fn start(what: What, now: f32, g: &mut Graphics, q: Option<&Quality>) -> Capture
     c
 }
 
+/// A capture: the recording, the frames measured, and the graphics settings it sweeps.
+#[derive(SystemParam)]
+struct Bench<'w> {
+    recording: ResMut<'w, Recording>,
+    perf: ResMut<'w, Perf>,
+    g: ResMut<'w, Graphics>,
+    q: Option<Res<'w, Quality>>,
+}
+
 fn keys(
     keys: Res<ButtonInput<KeyCode>>,
     real: Res<Time<Real>>,
     time: Res<Time>,
-    mut recording: ResMut<Recording>,
-    mut perf: ResMut<Perf>,
-    mut g: ResMut<Graphics>,
-    q: Option<Res<Quality>>,
+    mut bench: Bench,
     mut feed: ResMut<FeedLog>,
 ) {
     if !keys.just_pressed(KeyCode::F9) {
@@ -260,20 +267,20 @@ fn keys(
     }
     let now = real.elapsed_secs();
     // (Any recording stops: a benchmark of `--perf-capture` then saves what it has and quits.)
-    if let Some(c) = recording.0.as_mut() {
+    if let Some(c) = bench.recording.0.as_mut() {
         c.stop_at = Some(now);
         return;
     }
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let what = if shift { What::Sweep } else { What::Manual };
-    let c = start(what, now, &mut g, q.as_deref());
-    perf.busy = what == What::Sweep;
+    let c = start(what, now, &mut bench.g, bench.q.as_deref());
+    bench.perf.busy = what == What::Sweep;
     info!("perf: {what:?} recording started");
     feed.note(
         time.elapsed_secs(),
         if shift { text::PERF_SWEEP } else { text::PERF_RECORDING }.into(),
     );
-    recording.0 = Some(c);
+    bench.recording.0 = Some(c);
 }
 
 /// `--perf-capture` / `--perf-sweep`: once a round has run for `--perf-warmup` seconds.
@@ -281,10 +288,7 @@ fn auto_start(
     opts: Res<Opts>,
     real: Res<Time<Real>>,
     map: Option<Res<Map>>,
-    mut recording: ResMut<Recording>,
-    mut perf: ResMut<Perf>,
-    mut g: ResMut<Graphics>,
-    q: Option<Res<Quality>>,
+    mut bench: Bench,
     mut round_since: Local<Option<f32>>,
     mut done: Local<bool>,
     warm: Option<Res<crate::render::warmup::Warmup>>,
@@ -294,7 +298,7 @@ fn auto_start(
     }
     let now = real.elapsed_secs();
     // (Not while the loading screen is up, nor over the maps it builds.)
-    if recording.0.is_some() || warm.is_some_and(|w| w.busy()) {
+    if bench.recording.0.is_some() || warm.is_some_and(|w| w.busy()) {
         return;
     }
     if !opts.perf_from_start {
@@ -309,15 +313,15 @@ fn auto_start(
     }
     *done = true;
     let what = if opts.perf_sweep { What::Sweep } else { What::Benchmark };
-    let mut c = start(what, now, &mut g, q.as_deref());
+    let mut c = start(what, now, &mut bench.g, bench.q.as_deref());
     if what == What::Benchmark {
         c.stop_at = opts.perf_capture.map(|s| now + s);
     }
     c.exit = true;
     c.out = opts.perf_out.clone();
-    perf.busy = true;
+    bench.perf.busy = true;
     info!("perf: {what:?} started");
-    recording.0 = Some(c);
+    bench.recording.0 = Some(c);
 }
 
 /// `menu`, `lobby`, `podium`, or the map of a round.
@@ -339,23 +343,21 @@ fn record(
     real: Res<Time<Real>>,
     map: Option<Res<Map>>,
     store: Res<DiagnosticsStore>,
-    perf: Res<Perf>,
     shared: Res<RenderShared>,
-    mut recording: ResMut<Recording>,
-    mut g: ResMut<Graphics>,
+    mut bench: Bench,
 ) {
-    if recording.0.is_none() {
+    if bench.recording.0.is_none() {
         return;
     }
-    let Some(frame) = perf.frames.back().copied() else {
+    let Some(frame) = bench.perf.frames.back().copied() else {
         return;
     };
-    let Some(c) = recording.0.as_mut() else { return };
+    let Some(c) = bench.recording.0.as_mut() else { return };
     let now = real.elapsed_secs();
     let passes = gpu::passes(&store, Instant::now());
     // (The overlay's spikes come in time order: the ones after the last taken are new.)
     let (started, last) = (c.started, c.spike_t);
-    for s in perf.spikes.iter().filter(|s| s.t >= started && s.t > last) {
+    for s in bench.perf.spikes.iter().filter(|s| s.t >= started && s.t > last) {
         c.spike_t = s.t;
         c.spike_count += 1;
         if c.spikes.len() < SPIKES_MAX {
@@ -386,7 +388,7 @@ fn record(
             c.step += 1;
             c.step_started = now;
             match c.steps.get(c.step) {
-                Some(step) => *g = step.graphics.clone(),
+                Some(step) => *bench.g = step.graphics.clone(),
                 None => finished = true,
             }
         }
@@ -405,16 +407,16 @@ fn record(
         if let Some(seg) = c.segments.last_mut() {
             seg.frames.push(frame);
             seg.passes.add(passes.clone());
-            seg.cpu.add(&perf.taken);
-            if perf.scene.is_some() {
-                seg.counts.clone_from(&perf.scene);
+            seg.cpu.add(&bench.perf.taken);
+            if bench.perf.scene.is_some() {
+                seg.counts.clone_from(&bench.perf.scene);
             }
         }
         c.frames.push(frame);
         c.passes.add(passes);
-        c.cpu.add(&perf.taken);
+        c.cpu.add(&bench.perf.taken);
     }
-    if finished && let Some(c) = recording.0.take() {
+    if finished && let Some(c) = bench.recording.0.take() {
         commands.queue(move |world: &mut World| finish(world, c));
     }
 }

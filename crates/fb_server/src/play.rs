@@ -2,10 +2,9 @@
 //! and its rooms' arenas published as replicated entities (a `Round` per room, a pawn per bean in play), each
 //! visible only to the links in that room.
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::time::Duration;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_real_timer;
 use fb_arena::PawnStatus;
@@ -25,6 +24,9 @@ use crate::opts::Opts;
 use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
 use crate::rooms::{Backoff, ConnId, Inputs, Out, ticks};
+
+#[cfg(feature = "traces")]
+mod trace;
 
 /// A bean in play in a room (`RoomTag`, `BeanId`).
 #[derive(Component, Clone, Copy, Debug)]
@@ -84,16 +86,12 @@ struct FarInputs {
     log: Backoff,
 }
 
+type InputReceiver = MessageReceiver<InputMessage<NativeStateSequence<FbInput>>>;
+
 fn count_far_inputs(
     timeline: Res<LocalTimeline>,
     mut far: ResMut<FarInputs>,
-    mut receivers: Query<
-        (
-            &RemoteId,
-            &mut MessageReceiver<InputMessage<NativeStateSequence<FbInput>>>,
-        ),
-        With<Connected>,
-    >,
+    mut receivers: Query<(&RemoteId, &mut InputReceiver), With<Connected>>,
 ) {
     let tick = timeline.tick();
     let far = &mut *far;
@@ -127,19 +125,13 @@ fn count_far_inputs(
     }
 }
 
-/// `--trace`: one line per pawn per tick, `S tick room id mx mz buttons x y z`.
-#[derive(Resource)]
-struct Trace(BufWriter<File>);
-
-/// `--trace-hits`: `room arena map tick id …` lines of every room's arenas (`Arena::hit_log`).
-#[derive(Resource)]
-struct HitTrace(BufWriter<File>);
-
 pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start);
+        #[cfg(feature = "traces")]
+        app.add_systems(Startup, trace::open);
         // Lightyear's copy of the input buffer into `ActionState` would also drop every tick before
         // the current one, and with them any input that arrives late: a late press would be lost.
         // The room reads the buffer itself (`frame_for`); the buffer is a ring of 64 ticks.
@@ -186,14 +178,6 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         in_room: BTreeMap::new(),
         real,
     });
-    if let Some(path) = &opts.trace {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
-        commands.insert_resource(Trace(BufWriter::new(file)));
-    }
-    if let Some(path) = &opts.trace_hits {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
-        commands.insert_resource(HitTrace(BufWriter::new(file)));
-    }
 }
 
 pub fn conn_of(link: Entity) -> ConnId {
@@ -226,7 +210,8 @@ pub struct InputState {
     late: u8,
     /// Newest tick looked at for late presses.
     late_seen: u32,
-    /// What the last tick used (`--trace`).
+    /// What the last tick used (`--trace input`).
+    #[cfg(feature = "traces")]
     used: Option<(u32, InputFrame)>,
     /// Ticks run without the player's input since the last `metrics:` line (after their first input).
     pub missed: u32,
@@ -247,6 +232,7 @@ impl InputState {
             ack: now.0,
             late: 0,
             late_seen: now.0,
+            #[cfg(feature = "traces")]
             used: None,
             missed: 0,
             gap: 0,
@@ -360,7 +346,10 @@ impl Inputs for LinkInputs<'_, '_, '_> {
             return InputFrame::IDLE;
         };
         let f = frame_for(Tick(tick), buffer, &mut st);
-        st.used = Some((tick, f));
+        #[cfg(feature = "traces")]
+        {
+            st.used = Some((tick, f));
+        }
         f
     }
 
@@ -375,21 +364,45 @@ type Bodies = (
     &'static mut RemotePose,
     &'static mut Hold,
 );
+/// The clients' links: who they are, how far behind they see, and their senders.
+#[derive(SystemParam)]
+struct Links<'w, 's> {
+    remotes: Query<'w, 's, &'static RemoteId, With<ClientOf>>,
+    delays: Query<'w, 's, (Entity, &'static InterpolationDelay), With<ClientOf>>,
+    control: Query<'w, 's, &'static mut MessageSender<ServerMsg>>,
+    events: Query<'w, 's, &'static mut MessageSender<MapEventMsg>>,
+}
+
+/// The pawns' inputs and bodies, and the round entities.
+#[derive(SystemParam)]
+struct PawnsMut<'w, 's> {
+    inputs: Query<'w, 's, (Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
+    bodies: Query<'w, 's, Bodies>,
+    rounds: Query<'w, 's, &'static mut Round>,
+}
+
+/// The dev server's traces, when asked for.
+#[cfg(feature = "traces")]
+#[derive(SystemParam)]
+struct Traces<'w> {
+    input: Option<ResMut<'w, trace::Input>>,
+    hits: Option<ResMut<'w, trace::Hits>>,
+}
+
 fn tick_rooms(
     timeline: Res<LocalTimeline>,
+    time: Res<Time<Real>>,
     mut rooms: ResMut<Rooms>,
     mut commands: Commands,
-    mut control: Query<&mut MessageSender<ServerMsg>>,
-    mut events: Query<&mut MessageSender<MapEventMsg>>,
-    mut inputs: Query<(Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
-    mut bodies: Query<Bodies>,
-    mut round_q: Query<&mut Round>,
-    remotes: Query<&RemoteId, With<ClientOf>>,
-    delays: Query<(Entity, &InterpolationDelay), With<ClientOf>>,
-    time: Res<Time<Real>>,
-    trace: Option<ResMut<Trace>>,
-    hit_trace: Option<ResMut<HitTrace>>,
+    mut links: Links,
+    pawns: PawnsMut,
+    #[cfg(feature = "traces")] traces: Traces,
 ) {
+    let PawnsMut {
+        mut inputs,
+        mut bodies,
+        mut rounds,
+    } = pawns;
     let tick = timeline.tick();
     let rooms = &mut *rooms;
     let owners: BTreeMap<ConnId, Entity> = rooms
@@ -402,7 +415,8 @@ fn tick_rooms(
         clippy::cast_sign_loss,
         reason = "milliseconds of delay"
     )]
-    let views: BTreeMap<ConnId, u32> = delays
+    let views: BTreeMap<ConnId, u32> = links
+        .delays
         .iter()
         .map(|(link, d)| (conn_of(link), d.delay.value.to_num::<f64>().round() as u32))
         .collect();
@@ -415,28 +429,17 @@ fn tick_rooms(
             views: &views,
         },
     );
-    if let Some(mut trace) = trace {
-        write_trace(&mut trace, rooms, &mut inputs, tick);
-    }
-    if let Some(mut out) = hit_trace {
-        for room in rooms.hub.rooms.values_mut() {
-            let hits = room.hits.get_or_insert_default();
-            for l in hits.drain(..) {
-                let _ = writeln!(out.0, "{} {l}", room.id);
-            }
-        }
-        // (The dev server is killed, not stopped: nothing may wait in the buffer.)
-        let _ = out.0.flush();
-    }
+    #[cfg(feature = "traces")]
+    trace::write(traces.input, traces.hits, rooms, &mut inputs, tick);
     for out in rooms.hub.take_out() {
         match out {
             Out::Msg(c, m) => {
-                if let Ok(mut s) = control.get_mut(link_of(c)) {
+                if let Ok(mut s) = links.control.get_mut(link_of(c)) {
                     s.send::<ControlChannel>(m);
                 }
             }
             Out::Event(c, e) => {
-                if let Ok(mut s) = events.get_mut(link_of(c)) {
+                if let Ok(mut s) = links.events.get_mut(link_of(c)) {
                     s.send::<MapEventsChannel>(e);
                 }
             }
@@ -447,7 +450,7 @@ fn tick_rooms(
             }
         }
     }
-    publish(rooms, &mut commands, &mut bodies, &mut round_q, &remotes, tick);
+    publish(rooms, &mut commands, &mut bodies, &mut rounds, &links.remotes, tick);
 }
 
 fn receive(mut rooms: ResMut<Rooms>, mut receivers: Query<(Entity, &mut MessageReceiver<ClientMsg>), With<ClientOf>>) {
@@ -455,33 +458,6 @@ fn receive(mut rooms: ResMut<Rooms>, mut receivers: Query<(Entity, &mut MessageR
         for msg in r.receive() {
             rooms.hub.message(conn_of(link), msg);
         }
-    }
-}
-
-fn write_trace(
-    trace: &mut Trace,
-    rooms: &Rooms,
-    inputs: &mut Query<(Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
-    tick: Tick,
-) {
-    for (&(key, id), pe) in &rooms.pawns {
-        let Ok((_, mut st)) = inputs.get_mut(pe.entity) else {
-            continue;
-        };
-        let Some((t, f)) = st.used.take() else { continue };
-        let Some(room) = rooms.hub.rooms.get(&key) else {
-            continue;
-        };
-        let Some(p) = room.arena.pawn(id) else { continue };
-        if t != tick.0 {
-            continue;
-        }
-        let b = &p.body;
-        let _ = writeln!(
-            trace.0,
-            "S {} {} {id} {} {} {} {:.6} {:.6} {:.6}",
-            tick.0, room.id, f.mx, f.mz, f.buttons, b.pos.x, b.pos.y, b.pos.z
-        );
     }
 }
 

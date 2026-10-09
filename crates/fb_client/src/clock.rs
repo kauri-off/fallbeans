@@ -11,6 +11,7 @@ use lightyear::prelude::client::{InputDelayConfig, InputTimelineConfig, RemoteTi
 use lightyear::prelude::*;
 use lightyear_sync::timeline::sync::SyncTargetTimeline;
 
+use crate::game::Linked;
 use crate::net::Conn;
 use crate::opts::{Opts, Transport};
 
@@ -96,7 +97,7 @@ fn steer(
     opts: Res<Opts>,
     time: Res<Time<Real>>,
     conn: Option<Res<Conn>>,
-    links: Query<(&PingManager, &RemoteTimeline), (With<Client>, With<Connected>)>,
+    links: Query<(&PingManager, &RemoteTimeline), Linked>,
     mut lead: ResMut<Lead>,
 ) {
     let Ok((ping, remote)) = links.single() else {

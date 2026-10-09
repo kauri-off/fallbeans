@@ -307,23 +307,22 @@ struct Feet {
     puffed: f32,
 }
 
+/// A bean as drawn, and what it is doing (its own body, or the others' pose).
+type DrawnBean = (
+    Entity,
+    &'static GlobalTransform,
+    &'static InheritedVisibility,
+    Option<&'static BodyFull>,
+    Option<&'static RemotePose>,
+    Has<Predicted>,
+);
+
 /// Dust where a bean comes down after a moment in the air (more if it lands on its belly), as it throws itself
 /// down on the ground, and behind it while it slides on fast; every bean, from what it is drawn doing.
-#[allow(clippy::type_complexity)]
 fn bean_dust(
     time: Res<Time<Real>>,
     map: Option<Res<Map>>,
-    beans: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            &InheritedVisibility,
-            Option<&BodyFull>,
-            Option<&RemotePose>,
-            Has<Predicted>,
-        ),
-        With<BeanView>,
-    >,
+    beans: Query<DrawnBean, With<BeanView>>,
     mut feet: Local<HashMap<Entity, Feet>>,
     mut bursts: MessageWriter<Burst>,
 ) {

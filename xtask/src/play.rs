@@ -5,16 +5,15 @@ use std::process::Command;
 use anyhow::Result;
 use clap::Args;
 
-use crate::{cargo, dlss_features, run, start_server, target_dir, with_features};
+use crate::{TraceArgs, cargo, dlss_features, run, start_server, target_dir, with_features};
 
 #[derive(Args)]
 pub struct PlayArgs {
     /// The client exactly as the packages ship it (`dist` profile: thin LTO, a minute or more per change) instead of `perf`.
     #[arg(long)]
     dist: bool,
-    /// Server and client log contacts, tackles and dives into target/hits (`--trace-hits`).
-    #[arg(long)]
-    trace_hits: bool,
+    #[command(flatten)]
+    trace: TraceArgs,
     /// More arguments for the client, e.g. `-- --windowed`.
     #[arg(last = true)]
     client_arg: Vec<String>,
@@ -57,11 +56,11 @@ pub fn play(a: &PlayArgs) -> Result<()> {
     let mut server = Command::new(perf_bin("fb_server"));
     server.args(["--dev", "--solo"]);
     let mut client = Command::new(&client);
-    if a.trace_hits {
-        let dir = crate::hits_dir()?;
-        server.arg("--trace-hits").arg(dir.join("server.txt"));
-        client.arg("--trace-hits").arg(dir.join("client.txt"));
-        eprintln!("hits: {}", dir.display());
+    let traces = a.trace.dir()?;
+    a.trace.add(&mut server, traces.as_deref(), "server");
+    // (The packages' client has no `--trace`.)
+    if !a.dist {
+        a.trace.add(&mut client, traces.as_deref(), "client");
     }
     let mut server = start_server(&mut server)?;
     eprintln!("server: 127.0.0.1 (add it to the client's server list once)");

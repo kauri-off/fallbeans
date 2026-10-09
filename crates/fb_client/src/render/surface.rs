@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline, MaterialPlugin};
@@ -890,24 +891,28 @@ impl Surfaces {
         });
     }
 
-    /// A material with a base standard material to start from (a model's own); the kind's roughness
-    /// replaces the base's unless `keep_roughness`.
-    #[allow(clippy::too_many_arguments)]
+    /// A material of its own with a base standard material to start from (a model's own); the kind's
+    /// roughness replaces the base's unless `keep_roughness`.
     pub fn material_from(
+        &mut self,
+        base: StandardMaterial,
+        kind: Option<Kind>,
+        keep_roughness: bool,
+        images: &mut Assets<Image>,
+        materials: &mut Assets<SurfaceMaterial>,
+    ) -> Handle<SurfaceMaterial> {
+        self.make(base, kind, None, keep_roughness, images, materials)
+    }
+
+    fn make(
         &mut self,
         base: StandardMaterial,
         kind: Option<Kind>,
         paint: Option<Paint>,
         keep_roughness: bool,
-        key: Option<SpecKey>,
         images: &mut Assets<Image>,
         materials: &mut Assets<SurfaceMaterial>,
     ) -> Handle<SurfaceMaterial> {
-        if let Some(k) = &key
-            && let Some(h) = self.materials.get(k)
-        {
-            return h.clone();
-        }
         let mut base = base;
         let d = kind.map(def);
         let mut u = SurfaceUniform {
@@ -948,9 +953,6 @@ impl Surfaces {
         if let Some(k) = waits {
             self.waiting.push((k, h.id()));
         }
-        if let Some(k) = key {
-            self.materials.insert(k, h.clone());
-        }
         h
     }
 
@@ -978,7 +980,44 @@ impl Surfaces {
             emissive: spec.emissive,
             ..default()
         };
-        self.material_from(base, spec.kind, spec.paint, true, Some(key), images, materials)
+        let h = self.make(base, spec.kind, spec.paint, true, images, materials);
+        self.materials.insert(key, h.clone());
+        h
+    }
+}
+
+/// What models and pieces are made with: the asset server, meshes, standard and surface materials.
+#[derive(SystemParam)]
+pub struct ModelKit<'w> {
+    pub assets: Res<'w, AssetServer>,
+    pub meshes: ResMut<'w, Assets<Mesh>>,
+    pub materials: ResMut<'w, Assets<StandardMaterial>>,
+    pub surfaces: SurfaceKit<'w>,
+}
+
+/// The surface materials with the assets they are made in.
+#[derive(SystemParam)]
+pub struct SurfaceKit<'w> {
+    pub surfaces: ResMut<'w, Surfaces>,
+    pub images: ResMut<'w, Assets<Image>>,
+    pub materials: ResMut<'w, Assets<SurfaceMaterial>>,
+}
+
+impl SurfaceKit<'_> {
+    /// `Surfaces::material`.
+    pub fn material(&mut self, spec: &Spec) -> Handle<SurfaceMaterial> {
+        self.surfaces.material(spec, &mut self.images, &mut self.materials)
+    }
+
+    /// `Surfaces::material_from`.
+    pub fn material_from(
+        &mut self,
+        base: StandardMaterial,
+        kind: Option<Kind>,
+        keep_roughness: bool,
+    ) -> Handle<SurfaceMaterial> {
+        self.surfaces
+            .material_from(base, kind, keep_roughness, &mut self.images, &mut self.materials)
     }
 }
 

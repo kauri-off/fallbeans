@@ -5,6 +5,7 @@
 //! when a bean touches them.
 use std::collections::HashMap;
 
+use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -12,11 +13,11 @@ use fb_shared::Rgb;
 use fb_sim::scene::Model;
 
 use super::cloth::{ClothMaterial, Cloths, Cut, WIND, gust, pennant_bounds};
-use super::lod::{ModelLods, add_levels};
-use super::surface::{Kind, SurfaceMaterial, Surfaces};
+use super::lod::{Levels, ModelLods, PlacedMesh};
+use super::surface::{Kind, SurfaceKit, SurfaceMaterial};
 use super::vfx::{Burst, Pool};
 use crate::game::Map;
-use crate::view::{MainCamera, frame_tick};
+use crate::view::{FrameClock, MainCamera};
 
 /// A map model: what it is, its tint, and the phase of its motion (from where it stands).
 #[derive(Component)]
@@ -122,60 +123,70 @@ fn prop_of(mut e: Entity, parents: &Query<&ChildOf>, props: &Query<&Prop>) -> Op
     None
 }
 
+/// A model mesh as the glTF loader spawns it.
+type GltfMesh = (
+    Entity,
+    &'static MeshMaterial3d<StandardMaterial>,
+    Option<&'static GltfMaterialName>,
+    Option<&'static Name>,
+);
+
+/// The props' entity tree: what is a prop, and where its meshes are.
+#[derive(SystemParam)]
+struct PropTree<'w, 's> {
+    parents: Query<'w, 's, &'static ChildOf>,
+    props: Query<'w, 's, &'static Prop>,
+    shadowless: Query<'w, 's, (), (With<Prop>, With<NotShadowCaster>)>,
+    shapes: Query<'w, 's, (&'static Mesh3d, &'static Transform, &'static ChildOf)>,
+    transforms: Query<'w, 's, &'static Transform>,
+}
+
+/// The surface materials made, by glTF material and look.
+type Made = HashMap<(AssetId<StandardMaterial>, String), Handle<SurfaceMaterial>>;
+
+/// What model meshes are dressed in, and the surface materials made so far.
+#[derive(SystemParam)]
+struct Dressing<'w, 's> {
+    standard: Res<'w, Assets<StandardMaterial>>,
+    surfaces: SurfaceKit<'w>,
+    cloths: ResMut<'w, Cloths>,
+    cloth_mats: ResMut<'w, Assets<ClothMaterial>>,
+    done: Local<'s, Made>,
+}
+
 /// Model meshes as they appear: the standard material from the glTF becomes a surface material. A model whose
 /// root casts no shadow (scenery) gives that to each of its meshes: the component is not inherited.
-#[allow(clippy::type_complexity)]
 fn dress(
     mut commands: Commands,
-    meshes: Query<
-        (
-            Entity,
-            &MeshMaterial3d<StandardMaterial>,
-            Option<&GltfMaterialName>,
-            Option<&Name>,
-        ),
-        Without<Dressed>,
-    >,
-    parents: Query<&ChildOf>,
-    props: Query<&Prop>,
-    shadowless: Query<(), (With<Prop>, With<NotShadowCaster>)>,
-    standard: Res<Assets<StandardMaterial>>,
-    mut surfaces: ResMut<Surfaces>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<SurfaceMaterial>>,
-    mut done: Local<HashMap<(AssetId<StandardMaterial>, String), Handle<SurfaceMaterial>>>,
-    lod: (
-        ResMut<ModelLods>,
-        Res<Assets<Mesh>>,
-        Res<crate::settings::Display>,
-        Option<Res<super::quality::Quality>>,
-    ),
-    shapes: Query<(&Mesh3d, &Transform, &ChildOf)>,
-    transforms: Query<&Transform>,
-    cloth: (ResMut<Cloths>, ResMut<Assets<ClothMaterial>>),
+    meshes: Query<GltfMesh, Without<Dressed>>,
+    tree: PropTree,
+    mut dressing: Dressing,
+    mut levels: Levels,
 ) {
-    let (mut lods, mesh_assets, display, quality) = lod;
-    let (mut cloths, mut cloth_mats) = cloth;
-    let k = super::meshes::lod_k(display.fov, quality.map(|q| q.preset));
     if !meshes.is_empty() {
         // (Materials of a model unloaded between maps come back under new ids: forget the old ones.)
-        done.retain(|(id, _), _| standard.contains(*id));
-        cloths.retain(|id| done.values().any(|h| h.id() == id));
+        dressing.done.retain(|(id, _), _| dressing.standard.contains(*id));
+        dressing
+            .cloths
+            .retain(|id| dressing.done.values().any(|h| h.id() == id));
     }
     for (e, mat, mat_name, name) in &meshes {
-        let Some(p) = prop_of(e, &parents, &props) else {
+        let Some(p) = prop_of(e, &tree.parents, &tree.props) else {
             commands.entity(e).try_insert(Dressed);
             continue;
         };
-        let Some(base) = standard.get(&mat.0) else { continue };
-        let prop = props.get(p).ok();
+        let Some(base) = dressing.standard.get(&mat.0) else {
+            continue;
+        };
+        let prop = tree.props.get(p).ok();
         let part = name.map(|n| n.as_str()).unwrap_or("");
         let mat_name = mat_name.map(|n| n.0.as_str()).unwrap_or("");
         let tinted = part.starts_with("Pennant") || part.starts_with("MushCap");
         let tint = prop.and_then(|p| p.tint).filter(|_| tinted);
         let paint = prop.and_then(|p| p.paint.iter().find(|(n, _, _)| *n == mat_name));
         let key = format!("{tint:?} {paint:?}");
-        let h = done
+        let h = dressing
+            .done
             .entry((mat.0.id(), key))
             .or_insert_with(|| {
                 let mut base = base.clone();
@@ -202,15 +213,17 @@ fn dress(
                 {
                     base.metallic = 0.0;
                 }
-                surfaces.material_from(base, kind, None, mat_name == "Glint", None, &mut images, &mut materials)
+                dressing.surfaces.material_from(base, kind, mat_name == "Glint")
             })
             .clone();
-        let shadow = !shadowless.contains(p);
+        let shadow = !tree.shadowless.contains(p);
         // A pennant waves: the model's flat one gives way to a cloth of its cut sewn round the pole, in its
         // surface's cloth twin, with bounds that hold the swing.
         if part.starts_with("Pennant")
-            && let Some(c) = cloths.pennant(&h, &materials, &mut cloth_mats)
-            && let Some(cloth) = cloths.mesh(cut_of(prop))
+            && let Some(c) = dressing
+                .cloths
+                .pennant(&h, &dressing.surfaces.materials, &mut dressing.cloth_mats)
+            && let Some(cloth) = dressing.cloths.mesh(cut_of(prop))
         {
             let mut pennant = commands.entity(e);
             pennant.remove::<MeshMaterial3d<StandardMaterial>>().insert((
@@ -233,30 +246,27 @@ fn dress(
         }
         // Levels of detail for what stands still (moving parts would leave their copies behind).
         let moving = part.starts_with("Pennant") || part.starts_with("FanBlades") || prop.is_some_and(|p| p.special);
-        if !moving && let Ok((mesh, tf, parent)) = shapes.get(e) {
+        if !moving && let Ok((mesh, tf, parent)) = tree.shapes.get(e) {
             // (The levels switch by the size on screen: the scales of the mesh and all above it count.
             // The global transform is not propagated yet for a scene just spawned.)
             let mut scale = tf.scale.abs().max_element();
             let mut up = Some(parent.parent());
             while let Some(a) = up {
-                if let Ok(t) = transforms.get(a) {
+                if let Ok(t) = tree.transforms.get(a) {
                     scale *= t.scale.abs().max_element();
                 }
-                up = parents.get(a).ok().map(ChildOf::parent);
+                up = tree.parents.get(a).ok().map(ChildOf::parent);
             }
-            add_levels(
-                &mut commands,
+            let placed = PlacedMesh {
                 e,
-                &mesh.0,
-                &h,
-                *tf,
-                parent.parent(),
+                parent: parent.parent(),
+                tf: *tf,
+                mesh: &mesh.0,
+                material: &h,
                 scale,
                 shadow,
-                &mut lods,
-                &mesh_assets,
-                k,
-            );
+            };
+            levels.add(&mut commands, placed);
         }
     }
 }
@@ -270,10 +280,12 @@ fn cut_of(prop: Option<&Prop>) -> Cut {
     }
 }
 
+type NewlyNamed = (Added<Name>, Without<Moving>);
+
 /// The parts that move (by node name), once the model's scene is in; the trees that sway.
 fn find_moving(
     mut commands: Commands,
-    named: Query<(Entity, &Name, &Transform), (Added<Name>, Without<Moving>)>,
+    named: Query<(Entity, &Name, &Transform), NewlyNamed>,
     parents: Query<&ChildOf>,
     props: Query<&Prop>,
     trees: Query<(Entity, &Prop, &Transform), Added<Prop>>,
@@ -306,15 +318,17 @@ fn find_moving(
     }
 }
 
+/// Props that move as a whole (not by their parts, not swaying).
+type Whole = (Without<Moving>, Without<Sway>);
+
 fn animate(
     map: Option<Res<Map>>,
-    timeline: Res<lightyear::prelude::LocalTimeline>,
-    fixed: Res<Time<Fixed>>,
-    mut props: Query<(&Prop, &mut Transform), (Without<Moving>, Without<Sway>)>,
+    mut props: Query<(&Prop, &mut Transform), Whole>,
     mut parts: Query<(&Moving, &Name, &mut Transform), Without<Prop>>,
+    clock: FrameClock,
 ) {
     let Some(map) = map else { return };
-    let t = map.time(frame_tick(&timeline, &fixed)) as f32;
+    let t = map.time(clock.tick()) as f32;
     for (p, mut tf) in &mut props {
         if p.still {
             continue;
@@ -407,10 +421,9 @@ const BUMP_S: f32 = 0.6;
 /// Bumpers squash and wobble like jelly when a bean touches them, and a ring of light flies off where it did:
 /// seen from where the beans are drawn, so the others' bumps too. Per bumper: when it was last touched (s), and
 /// whether a bean touches it now.
-#[allow(clippy::type_complexity)]
 fn bumpers(
     time: Res<Time>,
-    mut props: Query<(Entity, &Prop, &GlobalTransform, &mut Transform), (Without<Moving>, Without<Sway>)>,
+    mut props: Query<(Entity, &Prop, &GlobalTransform, &mut Transform), Whole>,
     beans: Query<&GlobalTransform, With<crate::beans::BeanView>>,
     mut hits: Local<HashMap<Entity, (f32, bool)>>,
     mut bursts: MessageWriter<Burst>,

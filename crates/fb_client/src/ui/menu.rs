@@ -1,6 +1,7 @@
 //! The Esc menu: the room (players, access, the host's game setup), the player's name
 //! and look, the options, dev tools; and who has the mouse: the game (captured) or the interface.
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::picking::events::{Pointer, Press};
 use bevy::prelude::*;
@@ -17,9 +18,9 @@ use lightyear::prelude::*;
 
 use super::home::{head, name_row, practice_list};
 use super::*;
-use crate::game::Gate;
+use crate::game::{Buttons, Gate};
 use crate::session::Session;
-use crate::settings::{Me, Player};
+use crate::settings::{Me, Player, Profile};
 
 pub struct MenuPlugin;
 
@@ -256,25 +257,44 @@ fn capture(cursor: &mut Mut<CursorOptions>, on: bool) {
 
 /// Who has the mouse, and when the menu opens and closes: it opens on entering a room and
 /// with Esc; a round's start, Esc again or a click on the field close it and capture the mouse.
+/// The primary window: its cursor, whether it has the focus, and when it loses it.
+#[derive(SystemParam)]
+pub(super) struct MainWindow<'w, 's> {
+    cursor: Query<'w, 's, &'static mut CursorOptions, With<PrimaryWindow>>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    focus_events: MessageReader<'w, 's, WindowFocused>,
+}
+
+/// Whether a text field has the keyboard.
+#[derive(SystemParam)]
+pub(super) struct Typing<'w, 's> {
+    focus: Res<'w, InputFocus>,
+    fields: Query<'w, 's, (), With<EditableText>>,
+}
+
+impl Typing<'_, '_> {
+    pub(super) fn typing(&self) -> bool {
+        self.focus.get().is_some_and(|e| self.fields.contains(e))
+    }
+}
+
 pub(super) fn menu_flow(
     mut res: ResMut<Ui>,
     session: Res<Session>,
-    keys: Res<ButtonInput<KeyCode>>,
-    pads: Query<&Gamepad>,
+    buttons: Buttons,
+    mut window: MainWindow,
+    typing: Typing,
     mut clicks: MessageReader<FieldClick>,
-    mut focus_events: MessageReader<WindowFocused>,
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     mut seen: Local<(u32, Option<u32>)>,
-    fields: Query<(), With<EditableText>>,
-    focus: Res<InputFocus>,
 ) {
-    let Ok(mut cursor) = cursor.single_mut() else { return };
+    let Ok(mut cursor) = window.cursor.single_mut() else {
+        return;
+    };
     // (Worked out on a copy: `Ui` reads as changed only when it is.)
     let mut ui = res.clone();
     let in_room = session.room.is_some() && session.arena.is_some();
     let clicked = clicks.read().count() > 0;
-    let lost_focus = focus_events.read().any(|e| !e.focused);
+    let lost_focus = window.focus_events.read().any(|e| !e.focused);
     if in_room {
         let captured = cursor.grab_mode != CursorGrabMode::None;
         let was_menu = ui.menu;
@@ -294,10 +314,12 @@ pub(super) fn menu_flow(
                 }
             }
         }
-        let typing = focus.get().is_some_and(|e| fields.contains(e));
-        let esc = keys.just_pressed(KeyCode::Escape) && !ui.chat && ui.rebinding.is_none() && !(typing && !ui.menu);
+        let typing = typing.typing();
+        let esc =
+            buttons.keys.just_pressed(KeyCode::Escape) && !ui.chat && ui.rebinding.is_none() && !(typing && !ui.menu);
         // (A pad keeps reporting while another window has the focus.)
-        let start = window_focused(&windows) && pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
+        let start =
+            window_focused(&window.windows) && buttons.pads.iter().any(|p| p.just_pressed(GamepadButton::Start));
         if esc || start {
             if ui.menu {
                 ui.menu = false;
@@ -419,40 +441,42 @@ fn parts(
     }
 }
 
+type Tops = (Without<PracticeTop>, Without<RoomTop>, Without<PrivateNote>);
+type PracticeOnly = (With<PracticeTop>, Without<RoomTop>);
+type NoteOnly = (With<PrivateNote>, Without<PracticeTop>, Without<RoomTop>);
+
+/// The menu's top: practice's, the room's with its title and the private note, and their buttons.
+#[derive(SystemParam)]
+struct Top<'w, 's> {
+    practice: Single<'w, 's, (Entity, &'static mut Node), PracticeOnly>,
+    room: Single<'w, 's, &'static mut Node, (With<RoomTop>, Without<PracticeTop>)>,
+    title: Single<'w, 's, Entity, With<RoomTitle>>,
+    note: Single<'w, 's, &'static mut Node, NoteOnly>,
+    buttons: Query<'w, 's, (Entity, &'static mut Act, &'static mut Look, &'static mut Node), Tops>,
+}
+
 /// The room's name and the way out; for the host, private or public and the PIN. In practice: the way back.
-fn top(
-    session: Res<Session>,
-    mut practice: Single<(Entity, &mut Node), (With<PracticeTop>, Without<RoomTop>)>,
-    mut room: Single<&mut Node, (With<RoomTop>, Without<PracticeTop>)>,
-    title: Single<Entity, With<RoomTitle>>,
-    mut note: Single<&mut Node, (With<PrivateNote>, Without<PracticeTop>, Without<RoomTop>)>,
-    mut buttons: Query<
-        (Entity, &mut Act, &mut Look, &mut Node),
-        (Without<PracticeTop>, Without<RoomTop>, Without<PrivateNote>),
-    >,
-    children: Query<&Children>,
-    mut texts: Query<&mut Rich>,
-) {
-    let (practice_e, ref mut practice_node) = *practice;
+fn top(session: Res<Session>, mut top: Top, mut labels: Labels) {
+    let (practice_e, ref mut practice_node) = *top.practice;
     show(practice_node, session.practice);
-    show(&mut room, !session.practice && session.lobby.is_some());
+    show(&mut top.room, !session.practice && session.lobby.is_some());
     if session.practice {
         let title = session
             .arena
             .as_ref()
             .map_or("", |a| fb_maps::by_id(a.game).meta().title);
-        relabel(practice_e, &text::practice_now(title), &children, &mut texts);
+        labels.set(practice_e, &text::practice_now(title));
     }
     let host = session.host();
     let private = session.lobby.as_ref().is_some_and(|l| l.room.private);
     if let Some(l) = &session.lobby {
         let lock = if private { "🔒 " } else { "" };
-        if let Ok(mut t) = texts.get_mut(*title) {
+        if let Ok(mut t) = labels.texts.get_mut(*top.title) {
             t.set(&format!("{lock}{}", l.room.title));
         }
     }
-    show(&mut note, !host && private);
-    for (e, mut act, mut look, mut node) in &mut buttons {
+    show(&mut top.note, !host && private);
+    for (e, mut act, mut look, mut node) in &mut top.buttons {
         match act.0 {
             Action::EndPractice => {
                 let back = if session.back_to.is_some() {
@@ -460,7 +484,7 @@ fn top(
                 } else {
                     text::PRACTICE_BACK
                 };
-                relabel(e, back, &children, &mut texts);
+                labels.set(e, back);
             }
             Action::Send(ClientMsg::Access { .. }) => {
                 show(&mut node, host);
@@ -472,7 +496,7 @@ fn top(
                     Some(pin) => text::pin_line(pin),
                     None => format!("{} {}", text::PRIVATE_ROOM, text::PIN_FOR_ENTRY),
                 };
-                relabel(e, &s, &children, &mut texts);
+                labels.set(e, &s);
             }
             _ => {}
         }
@@ -907,8 +931,7 @@ fn dev(
 fn menu_actions(
     mut actions: MessageReader<UiAction>,
     mut ui: ResMut<Ui>,
-    mut player: ResMut<Player>,
-    mut opts: ResMut<crate::opts::Opts>,
+    mut profile: Profile,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     time: Res<Time<Real>>,
@@ -923,12 +946,12 @@ fn menu_actions(
                 }
             }
             Action::Color(c) => {
-                player.color = crate::settings::ColorSetting(Some(*c));
-                opts.color = None;
+                profile.player.color = crate::settings::ColorSetting(Some(*c));
+                profile.opts.color = None;
                 crate::settings::save_soon(&mut commands);
                 crate::session::send(&mut senders, ClientMsg::Color(*c));
             }
-            Action::Wear(o) => wear(&mut player, &mut senders, &mut commands, o),
+            Action::Wear(o) => wear(&mut profile.player, &mut senders, &mut commands, o),
             Action::RandomOutfit => {
                 // Any pick will do: the clock's nanoseconds are random enough for a hat.
                 let mut x = time.elapsed().as_nanos() as u64 | 1;
@@ -946,7 +969,7 @@ fn menu_actions(
                     belly: tint(pick(Tint::ALL.len() + 1)),
                     shoes: tint(pick(Tint::ALL.len() + 1)),
                 };
-                wear(&mut player, &mut senders, &mut commands, &o);
+                wear(&mut profile.player, &mut senders, &mut commands, &o);
             }
             _ => {}
         }

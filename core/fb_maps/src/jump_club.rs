@@ -5,7 +5,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::physics::BodyState;
 use fb_sim::props::{SpinUp, arm_contact_eta};
 use fb_sim::scene::pal;
@@ -55,14 +55,14 @@ impl MapDef for JumpClub {
             no_collide: true,
             ..Default::default()
         };
-        b.cyl(0.0, -1.0, 0.0, 13.0, 2.0, pal::BLUE, freq(0.35));
-        b.cyl(0.0, 0.03, 0.0, 13.05, 0.1, pal::YELLOW, deco(None));
-        b.cyl(0.0, 0.06, 0.0, 11.5, 0.1, pal::BLUE, deco(Some(0.35)));
-        b.hub(0.0, 0.0, 0.0, 1.2);
-        b.rotor(0.0, 0.6, 0.0, 12.6, low_arms, low_ang, 0.6);
-        b.rotor(0.0, 2.45, 0.0, 12.6, high_arms, high_ang, 0.6);
+        b.cyl(v3(0.0, -1.0, 0.0), 13.0, 2.0, pal::BLUE, freq(0.35));
+        b.cyl(v3(0.0, 0.03, 0.0), 13.05, 0.1, pal::YELLOW, deco(None));
+        b.cyl(v3(0.0, 0.06, 0.0), 11.5, 0.1, pal::BLUE, deco(Some(0.35)));
+        b.hub(V3::ZERO, 1.2);
+        b.rotor(v3(0.0, 0.6, 0.0), 12.6, low_arms, low_ang, 0.6);
+        b.rotor(v3(0.0, 2.45, 0.0), 12.6, high_arms, high_ang, 0.6);
         for a in [0.0, 1.0, 2.0, 3.0] {
-            b.bonus(m::cos(a * 1.57 + 0.8) * 8.0, 0.0, m::sin(a * 1.57 + 0.8) * 8.0);
+            b.bonus(v3(m::cos(a * 1.57 + 0.8) * 8.0, 0.0, m::sin(a * 1.57 + 0.8) * 8.0));
         }
         b.clouds(0.0, 0.0, 40.0);
         let spawns = [25.0, 65.0, 115.0, 155.0, 205.0, 245.0, 295.0, 335.0]

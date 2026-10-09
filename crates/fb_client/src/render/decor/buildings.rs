@@ -151,8 +151,25 @@ pub(super) fn gear(k: &mut Kit, g: Entity) {
     k.tick(move |t, tx| tx.set(wheel, base.with_rotation(Quat::from_rotation_z(t * sp))));
 }
 
+/// Smoke: puffs from `y0` up by `rise` and along `drift` over their life, of size `size.0` growing by `size.1`,
+/// `rate` lives a second.
+pub(super) struct Smoke {
+    pub y0: f32,
+    pub rise: f32,
+    pub drift: Vec3,
+    pub size: (f32, f32),
+    pub rate: f32,
+}
+
 /// Puffs of smoke rising from a spout (chimneys, volcanoes).
-pub(super) fn puffs(k: &mut Kit, g: Entity, mat: &Mat, y0: f32, rise: f32, drift: Vec3, size: (f32, f32), rate: f32) {
+pub(super) fn puffs(k: &mut Kit, g: Entity, mat: &Mat, smoke: Smoke) {
+    let Smoke {
+        y0,
+        rise,
+        drift,
+        size,
+        rate,
+    } = smoke;
     let list: Vec<Entity> = (0..4)
         .map(|_| k.part(g, Shape::Sphere, mat, [0.0, y0, 0.0], [size.0; 3], NO_ROT))
         .collect();
@@ -180,7 +197,18 @@ pub(super) fn chimney(k: &mut Kit, g: Entity) {
         s.color.alpha = 0.75;
         s.alpha = AlphaMode::Blend;
     });
-    puffs(k, g, &smoke, 10.5, 5.0, Vec3::new(1.6, 0.0, 0.6), (0.5, 1.4), 0.25);
+    puffs(
+        k,
+        g,
+        &smoke,
+        Smoke {
+            y0: 10.5,
+            rise: 5.0,
+            drift: Vec3::new(1.6, 0.0, 0.6),
+            size: (0.5, 1.4),
+            rate: 0.25,
+        },
+    );
 }
 
 pub(super) fn tank(k: &mut Kit, g: Entity) {

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use bevy::asset::embedded_asset;
 use bevy::camera::MainPassResolutionOverride;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::render::renderer::RenderAdapterInfo;
@@ -233,14 +234,21 @@ fn setup_line(
     )
 }
 
+/// The graphics setup the overlay describes: the settings, the quality and upscaler in use, the adapter, and the
+/// main camera's size.
+#[derive(SystemParam)]
+struct Setup<'w, 's> {
+    g: Res<'w, Graphics>,
+    q: Option<Res<'w, Quality>>,
+    up: Option<Res<'w, Upscaling>>,
+    info: Option<Res<'w, RenderAdapterInfo>>,
+    camera: Query<'w, 's, (&'static Camera, Option<&'static MainPassResolutionOverride>), With<MainCamera>>,
+}
+
 fn text(
     time: Res<Time<Real>>,
     perf: Res<Perf>,
-    g: Res<Graphics>,
-    q: Option<Res<Quality>>,
-    up: Option<Res<Upscaling>>,
-    info: Option<Res<RenderAdapterInfo>>,
-    camera: Query<(&Camera, Option<&MainPassResolutionOverride>), With<MainCamera>>,
+    setup: Setup,
     recording: Res<super::capture::Recording>,
     mut head: Query<&mut Text, (With<Head>, Without<Body>)>,
     mut body: Query<&mut Text, (With<Body>, Without<Head>)>,
@@ -252,18 +260,19 @@ fn text(
     let (Ok(mut head), Ok(mut body)) = (head.single_mut(), body.single_mut()) else {
         return;
     };
-    let summary = Summary::of(&perf.recent(2.0), g.vsync);
+    let summary = Summary::of(&perf.recent(2.0), setup.g.vsync);
     let mut h = line(&summary);
     if let Some(r) = recording.0.as_ref() {
         h += &format!("\n● {}", r.status(now));
     }
-    let (target, low) = camera
+    let (target, low) = setup
+        .camera
         .single()
         .map_or((None, None), |(c, l)| (c.physical_target_size(), l.map(|l| l.0)));
     let b = match perf.mode {
         Mode::Off | Mode::Line => String::new(),
         Mode::Full => {
-            let s = Summary::of(&perf.recent(5.0), g.vsync);
+            let s = Summary::of(&perf.recent(5.0), setup.g.vsync);
             h += &format!(
                 "\n{}\n{}\n{}\n{}\n{}\n{}\n{}\nstutters {} in 5 s\n{}",
                 "ms, 5 s   avg     p50     p95     p99     max",
@@ -274,7 +283,14 @@ fn text(
                 row("wait", s.wait),
                 row("sleep", Some(s.sleep)),
                 s.stutters,
-                setup_line(&g, q.as_deref(), up.as_deref(), target, low, info.as_deref()),
+                setup_line(
+                    &setup.g,
+                    setup.q.as_deref(),
+                    setup.up.as_deref(),
+                    target,
+                    low,
+                    setup.info.as_deref()
+                ),
             );
             full_body(&perf, target)
         }

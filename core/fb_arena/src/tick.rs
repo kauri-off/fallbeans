@@ -27,16 +27,12 @@ pub struct MapRun<'a> {
 impl MapRun<'_> {
     fn touch(&mut self, world: &mut World, t: f64, body: &mut Body, ev: &mut StepEvents, tc: Touch) {
         let mut none = NoBodies;
-        let mut cx = Cx::new(
-            self.server,
-            self.apply,
-            t,
-            self.me,
-            world,
-            &mut none,
-            self.scores,
-            self.out,
-        );
+        let role = Role {
+            server: self.server,
+            apply: self.apply,
+            me: self.me,
+        };
+        let mut cx = Cx::new(role, t, world, &mut none, self.scores, self.out);
         if !enter_gate(&mut cx, tc.col, body, ev) {
             self.logic.touch(&mut cx, body, ev, tc);
         }
@@ -59,7 +55,7 @@ pub fn client_event(
         return;
     }
     let mut none = NoBodies;
-    let mut cx = Cx::new(false, false, world.t, me, world, &mut none, scores, out);
+    let mut cx = Cx::new(Role::client(me), world.t, world, &mut none, scores, out);
     spec.logic.event(&mut cx, ev);
 }
 
@@ -72,7 +68,7 @@ pub fn client_start(
     out: &mut Vec<MapOut>,
 ) {
     let mut none = NoBodies;
-    let mut cx = Cx::new(false, false, world.t, me, world, &mut none, scores, out);
+    let mut cx = Cx::new(Role::client(me), world.t, world, &mut none, scores, out);
     spec.logic.start(&mut cx);
 }
 
@@ -85,7 +81,7 @@ pub fn client_hud(
 ) -> Option<String> {
     let mut out = Vec::new();
     let mut none = NoBodies;
-    let cx = Cx::new(false, false, world.t, me, world, &mut none, scores, &mut out);
+    let cx = Cx::new(Role::client(me), world.t, world, &mut none, scores, &mut out);
     spec.logic.hud(&cx)
 }
 
@@ -155,7 +151,7 @@ pub fn tick_bodies_with(
         s.body.after_world_update(c, world);
     }
     for s in bodies.iter_mut() {
-        s.body.step(step, s.ev, DT, s.input, world, t, &mut |w, b, e, tc| {
+        s.body.step(step, s.ev, s.input, world, t, &mut |w, b, e, tc| {
             map.touch(w, t, b, e, tc)
         });
     }

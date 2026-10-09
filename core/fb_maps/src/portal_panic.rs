@@ -13,7 +13,7 @@ use fb_sim::course::{
 use fb_sim::looks::LookId;
 use fb_sim::m;
 use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
-use fb_sim::math::V3;
+use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::{Piece, lamp_part, pal};
@@ -77,15 +77,15 @@ fn portal_islands(n: usize) -> Segment {
         let mut routes: Vec<Vec<Waypoint>> = vec![Vec::new(), Vec::new()];
         for (k, &(iz, il)) in islands.iter().enumerate() {
             let p = if k % 2 == 1 { pal::TEAL } else { pal::BLUE };
-            s.b.box_(0.0, y - 1.0, iz + il / 2.0, w, 2.0, il, p, o());
+            s.b.box_(v3(0.0, y - 1.0, iz + il / 2.0), v3(w, 2.0, il), p, o());
             let mut jump_when: SharedTest = Arc::new(|_: &mut BotView| false);
             if k > 0 {
                 let c = iz + il / 2.0 + 0.5;
                 let sp = (0.9 + s.rng() * 0.5) * if s.rng() < 0.5 { -1.0 } else { 1.0 };
                 let ph = s.rng() * 6.0;
                 let ang = move |t: f64| if t <= 0.0 { ph } else { ph + t * sp };
-                s.b.hub(0.0, y, c, 0.8);
-                s.b.rotor(0.0, y + 0.6, c, 6.4, 2, ang, 0.45);
+                s.b.hub(v3(0.0, y, c), 0.8);
+                s.b.rotor(v3(0.0, y + 0.6, c), 6.4, 2, ang, 0.45);
                 jump_when = Arc::new(move |bot: &mut BotView| {
                     let p = bot.body.pos;
                     if bot.t <= 0.0 || (p.z - c).abs() > 7.0 || m::hypot(p.x, p.z - c) < 1.2 {
@@ -115,7 +115,7 @@ fn portal_islands(n: usize) -> Segment {
         }
         let (lz, ll) = islands[n];
         let end_z = lz + ll;
-        s.b.bonus(0.0, y, islands[1].0 + 2.0);
+        s.b.bonus(v3(0.0, y, islands[1].0 + 2.0));
         for r in &mut routes {
             r.push(Waypoint::spread(0.0, end_z + 0.5, 1.0));
         }
@@ -135,8 +135,13 @@ fn blinking_portals() -> Segment {
         let near = 9.0;
         let gap = 14.0;
         let far = s.z + near + gap;
-        s.b.box_(0.0, y - 1.0, s.z + near / 2.0, 17.0, 2.0, near, pal::PURPLE, o());
-        s.b.box_(0.0, y - 1.0, far + 4.0, 17.0, 2.0, 8.0, pal::PINK, o());
+        s.b.box_(
+            v3(0.0, y - 1.0, s.z + near / 2.0),
+            v3(17.0, 2.0, near),
+            pal::PURPLE,
+            o(),
+        );
+        s.b.box_(v3(0.0, y - 1.0, far + 4.0), v3(17.0, 2.0, 8.0), pal::PINK, o());
         let period = 3.4 + s.rng() * 1.2;
         let share = 0.42;
         let start = s.rng() * period;
@@ -150,7 +155,7 @@ fn blinking_portals() -> Segment {
                 s.b.portal(end(x, y, ez), end(x, y, far + 0.6), BLINK, one_way(Some(open.clone())));
             // A lamp over each: green while it is open.
             if !s.b.server() {
-                let lamp = s.b.anchor(x, y + 3.35, ez, ROOT);
+                let lamp = s.b.anchor(v3(x, y + 3.35, ez), ROOT);
                 let open = open.clone();
                 s.b.special_look(lamp, "portal-lamp", &[lamp_part(0.26)], move |_, t, out| {
                     out.pieces
@@ -166,7 +171,7 @@ fn blinking_portals() -> Segment {
                 Waypoint::spread(0.0, far + 5.0, 1.0),
             ]);
         }
-        s.b.bonus(0.0, y, s.z + 2.5);
+        s.b.bonus(v3(0.0, y, s.z + 2.5));
         SegOut {
             z: far + 8.0,
             y,
@@ -185,12 +190,12 @@ fn portal_wall() -> Segment {
         let w = 16.0;
         let h = 7.0;
         let wz = s.z + 12.0;
-        s.b.box_(0.0, y - 1.0, s.z + 6.0, w, 2.0, 12.0, pal::BLUE, o());
-        s.b.box_(0.0, y + h / 2.0 - 1.0, wz, w, h + 2.0, 3.0, pal::PURPLE, o());
-        s.b.box_(0.0, y - 1.0, wz + 1.5 + 7.0, w, 2.0, 14.0, pal::TEAL, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 6.0), v3(w, 2.0, 12.0), pal::BLUE, o());
+        s.b.box_(v3(0.0, y + h / 2.0 - 1.0, wz), v3(w, h + 2.0, 3.0), pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, wz + 1.5 + 7.0), v3(w, 2.0, 14.0), pal::TEAL, o());
         let bumpers = [(-2.4 - s.rng(), s.z + 4.5), (2.4 + s.rng(), s.z + 4.5)];
         for (x, z) in bumpers {
-            s.b.bumper(x, y, z, 0.8, 10.0);
+            s.b.bumper(v3(x, y, z), 0.8, 10.0);
         }
         let mut routes = Vec::new();
         for x in [-5.0, 0.0, 5.0] {
@@ -226,7 +231,7 @@ fn portal_cannons(n: usize) -> Segment {
         let mut y = s.y;
         for k in 0..=n {
             let p = if k % 2 == 1 { pal::PINK } else { pal::BLUE };
-            s.b.box_(0.0, y - 1.0, z + len / 2.0, 14.0, 2.0, len, p, o());
+            s.b.box_(v3(0.0, y - 1.0, z + len / 2.0), v3(14.0, 2.0, len), p, o());
             if k == n {
                 break;
             }
@@ -263,9 +268,9 @@ fn portal_cannons(n: usize) -> Segment {
 fn last_hop() -> Segment {
     Box::new(move |s| {
         let y = s.y;
-        s.b.box_(0.0, y - 1.0, s.z + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(10.0, 2.0, 6.0), pal::PURPLE, o());
         let far = s.z + 6.0 + 9.0;
-        s.b.box_(0.0, y - 1.0, far + 3.0, 10.0, 2.0, 6.0, pal::PURPLE, o());
+        s.b.box_(v3(0.0, y - 1.0, far + 3.0), v3(10.0, 2.0, 6.0), pal::PURPLE, o());
         s.b.portal(end(0.0, y, s.z + 4.0), end(0.0, y, far + 0.5), ONE_WAY, one_way(None));
         let mut route: Vec<Waypoint> = through(0.0, s.z + 4.0).into();
         route.push(Waypoint::spread(0.0, far + 5.0, 0.5));
