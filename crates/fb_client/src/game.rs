@@ -317,6 +317,8 @@ impl Smoothing {
 pub struct Stats {
     /// Prediction steps, replays of rollbacks included.
     pub ticks: u64,
+    /// Rollbacks for a push only (`pace_pushes`).
+    pub push_rollbacks: u32,
     pub map_events: u32,
     pub hash_mismatch: bool,
 }
@@ -500,20 +502,33 @@ fn reconcile(
     *last = Some(at);
 }
 
-/// Ticks between rollbacks for a push (below).
+/// Ticks between rollbacks for a push (below): for one near PUSH_MAX, and for one of nothing.
 const PUSH_EVERY: i32 = 8;
+const PUSH_EVERY_MAX: i32 = 60;
 /// Closer than this (m, between feet) another bean may be leaning on the own one.
 const PUSH_NEAR: f32 = 2.5;
 /// A difference this small (m) in position can be a push.
 const PUSH_MAX: f64 = 0.3;
 
-/// The last tick a rollback was started at.
-#[derive(Resource, Default)]
-struct LastRollback(Option<Tick>);
+/// Ticks a push `off` (m) waits after the last rollback.
+fn push_every(off: f64) -> i32 {
+    let small = (1.0 - off / PUSH_MAX).clamp(0.0, 1.0);
+    PUSH_EVERY + (f64::from(PUSH_EVERY_MAX - PUSH_EVERY) * small).round() as i32
+}
 
-fn note_rollback(timeline: Res<LocalTimeline>, manager: Res<PredictionManager>, mut last: ResMut<LastRollback>) {
+/// The last tick a rollback was started at, and whether this frame's difference is a push only.
+#[derive(Resource, Default)]
+struct LastRollback(Option<Tick>, bool);
+
+fn note_rollback(
+    timeline: Res<LocalTimeline>,
+    manager: Res<PredictionManager>,
+    mut last: ResMut<LastRollback>,
+    mut stats: ResMut<Stats>,
+) {
     if manager.is_rollback() {
         last.0 = Some(timeline.tick());
+        stats.push_rollbacks += u32::from(last.1);
     }
 }
 
@@ -524,15 +539,16 @@ struct Rollbacks<'w> {
     mutate: Option<Res<'w, ServerMutateTicks>>,
     manager: ResMut<'w, PredictionManager>,
     meta: Res<'w, StateRollbackMetadata>,
-    last: Res<'w, LastRollback>,
+    last: ResMut<'w, LastRollback>,
 }
 
 /// Beans leaning on each other: the client pushes against the others where it draws them, a little in the
 /// past, so while they touch nearly every snapshot finds the own bean a few millimetres off and rolls back
-/// (portal-panic's crowds at a checkpoint: 600–1200 rollbacks in 100 s). A difference only in where the bean
-/// is and how fast it goes, with another bean near, waits until PUSH_EVERY ticks after the last rollback
-/// (state checks are off for the frame); anything else rolls back at once. Waiting loses nothing: the
-/// difference stays in the history, and the next check finds it.
+/// (portal-panic's crowds at a checkpoint: up to 800 rollbacks in 100 s at one every 8 ticks). A difference
+/// only in where the bean is and how fast it goes, with another bean near, waits after the last rollback
+/// (state checks are off for the frame): PUSH_EVERY ticks near PUSH_MAX, up to PUSH_EVERY_MAX for millimetres
+/// nobody sees (40 rollbacks at most in the same test); anything else rolls back at once. Waiting loses
+/// nothing: the difference stays in the history, and the next check finds it.
 fn pace_pushes(
     timeline: SyncedLocalTimeline,
     mut rollbacks: Rollbacks,
@@ -540,22 +556,26 @@ fn pace_pushes(
     others: Query<&RemotePose, Others>,
 ) {
     let tick = timeline.tick();
-    let recent = rollbacks.last.0.is_some_and(|l| tick - l < PUSH_EVERY);
-    let wait = recent
-        && rollbacks.meta.forced_rollback_tick().is_none()
-        && rollbacks
-            .mutate
-            .and_then(|m| rollbacks.checkpoints.latest_completed_at_or_before(&m, tick))
-            .zip(own.single().ok())
-            .and_then(|(c, (predicted, confirmed))| Some((predicted.get(c.tick)?, confirmed.get_present(c.tick)?)))
-            .is_some_and(|(p, s)| {
-                let mut moved = p.clone();
-                (moved.body.pos, moved.body.vel) = (s.body.pos, s.body.vel);
-                let at = s.body.pos.as_vec3();
-                !body_differs(&moved, s)
-                    && (p.body.pos - s.body.pos).length() < PUSH_MAX
-                    && others.iter().any(|o| o.pos.distance(at) < PUSH_NEAR)
-            });
+    let since = rollbacks.last.0.map(|l| tick - l);
+    let push = rollbacks
+        .mutate
+        .filter(|_| rollbacks.meta.forced_rollback_tick().is_none())
+        .and_then(|m| rollbacks.checkpoints.latest_completed_at_or_before(&m, tick))
+        .zip(own.single().ok())
+        .and_then(|(c, (predicted, confirmed))| Some((predicted.get(c.tick)?, confirmed.get_present(c.tick)?)))
+        .and_then(|(p, s)| {
+            let mut moved = p.clone();
+            (moved.body.pos, moved.body.vel) = (s.body.pos, s.body.vel);
+            let at = s.body.pos.as_vec3();
+            let off = (p.body.pos - s.body.pos).length();
+            (body_differs(p, s)
+                && !body_differs(&moved, s)
+                && off < PUSH_MAX
+                && others.iter().any(|o| o.pos.distance(at) < PUSH_NEAR))
+            .then_some(off)
+        });
+    let wait = push.is_some_and(|off| since.is_some_and(|t| t < push_every(off)));
+    rollbacks.last.1 = push.is_some();
     if matches!(rollbacks.manager.rollback_policy.state, RollbackMode::Disabled) != wait {
         rollbacks.manager.rollback_policy.state = if wait {
             RollbackMode::Disabled
@@ -1214,6 +1234,13 @@ mod tests {
         let mut b = Body::new(1);
         b.pos.z = z;
         b
+    }
+
+    #[test]
+    fn a_smaller_push_waits_longer() {
+        assert_eq!(push_every(0.0), PUSH_EVERY_MAX);
+        assert_eq!(push_every(PUSH_MAX), PUSH_EVERY);
+        assert!(push_every(0.01) > push_every(0.1));
     }
 
     #[test]

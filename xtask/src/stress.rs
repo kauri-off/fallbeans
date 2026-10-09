@@ -433,6 +433,8 @@ fn num_before(line: &str, key: &str) -> Option<f64> {
 /// A client's `stats:` line, the message only (the target, `fb_client::stats:`, would match the keys too).
 struct ClientStats {
     rollbacks: Option<f64>,
+    /// Those for a push only (`fb_client::game::pace_pushes`).
+    push_rollbacks: Option<f64>,
     out: Option<f64>,
     frame_max: Option<f64>,
     /// The clock resyncs, as the line lists them.
@@ -448,6 +450,7 @@ impl ClientStats {
             .map_or("", |(s, _)| s);
         Some(ClientStats {
             rollbacks: num_after(m, "rollbacks "),
+            push_rollbacks: num_before(m, " pushes)"),
             out: num_after(m, "out "),
             frame_max: num_after(m, "frame max "),
             shifts: shifts.to_string(),
@@ -493,7 +496,7 @@ fn report(a: &StressArgs, dir: &Path) -> Result<()> {
     let server = Server::new(&parse_trace(&dir.join("server.trace"), "S", &mut rooms));
 
     println!(
-        "client  ticks   late   late%  respawn  late-runs  push  other  other/min  rollbacks  out B/s  frame-max  shifts"
+        "client  ticks   late   late%  respawn  late-runs  push  other  other/min  rollbacks  pushes  out B/s  frame-max  shifts"
     );
     for i in 0..a.clients {
         let rows = parse_trace(&dir.join(format!("client-{i}.trace")), "C", &mut rooms);
@@ -514,7 +517,7 @@ fn report(a: &StressArgs, dir: &Path) -> Result<()> {
         let late = d.late as f64 / d.ticks.max(1) as f64;
         let other = d.runs_other as f64 / minutes.max(1e-9);
         println!(
-            "{i:>6} {:>6} {:>6} {:>6.3}% {:>8} {:>10} {:>5} {:>6} {:>10.1} {:>10} {:>8} {:>8.0}ms  {}",
+            "{i:>6} {:>6} {:>6} {:>6.3}% {:>8} {:>10} {:>5} {:>6} {:>10.1} {:>10} {:>7} {:>8} {:>8.0}ms  {}",
             d.ticks,
             d.late,
             late * 100.0,
@@ -524,6 +527,7 @@ fn report(a: &StressArgs, dir: &Path) -> Result<()> {
             d.runs_other,
             other,
             last.and_then(|s| s.rollbacks).unwrap_or(f64::NAN),
+            last.and_then(|s| s.push_rollbacks).unwrap_or(f64::NAN),
             last.and_then(|s| s.out).unwrap_or(f64::NAN),
             frame_max,
             shifts.join(" "),

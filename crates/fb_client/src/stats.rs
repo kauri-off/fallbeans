@@ -290,12 +290,13 @@ fn log_stats(
     let frame_max = core::mem::take(&mut line.frame_max);
     let shifts = core::mem::take(&mut line.shifts);
     info!(
-        "stats: {} | rtt {:.0} ms jitter {:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks) | predicted {} | others {} | events {} | out {out:.0} B/s | arena {} t {t:.1}{}",
+        "stats: {} | rtt {:.0} ms jitter {:.0} ms loss {} | lead {} | frame max {frame_max:.0} ms | shifts {shifts:?} | rollbacks {rollbacks} ({rb_ticks} ticks, {} pushes) | predicted {} | others {} | events {} | out {out:.0} B/s | arena {} t {t:.1}{}",
         logged.net.transport,
         logged.net.rtt,
         logged.net.jitter,
         pct(logged.net.loss),
         logged.net.lead.map_or("—".into(), |l| format!("{l:.1}")),
+        logged.counts.stats.push_rollbacks,
         logged.counts.stats.ticks,
         logged.others.iter().count(),
         logged.counts.stats.map_events,
