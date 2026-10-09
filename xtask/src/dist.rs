@@ -360,6 +360,8 @@ fn tool(var: &str, name: &str) -> Command {
 fn nsis() -> Result<()> {
     let s = stage("nsis")?;
     client_into(&s)?;
+    // The backtrace's names on Windows: dbghelp finds the PDB beside the exe.
+    copy(target_dir().join("dist").join("fb_client.pdb"), s.join("fb_client.pdb"))?;
     copy("packaging/icons/fallbeans.ico", s.join("fallbeans.ico"))?;
     let out = out_dir()?.join(format!("FallBeans-{}-setup.exe", version()));
     let default = if cfg!(windows) && Path::new(r"C:\Program Files (x86)\NSIS\makensis.exe").exists() {

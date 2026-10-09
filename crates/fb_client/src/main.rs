@@ -18,6 +18,7 @@ mod game;
 #[cfg(test)]
 mod harness;
 mod hud;
+mod icon;
 mod job;
 mod keys;
 mod logs;
@@ -253,7 +254,12 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
             app.add_plugins(clicks::ClickTracePlugin);
         }
         if !opts.offscreen && !test {
-            app.add_plugins((audio::AudioPlugin, update::UpdatePlugin, fullscreen::FullscreenPlugin));
+            app.add_plugins((
+                audio::AudioPlugin,
+                update::UpdatePlugin,
+                fullscreen::FullscreenPlugin,
+                icon::IconPlugin,
+            ));
         }
         app.add_systems(Update, screenshot);
     }

@@ -3481,6 +3481,7 @@ dependencies = [
  "ureq",
  "wgpu",
  "wgpu-types",
+ "winit",
  "winresource",
 ]
 

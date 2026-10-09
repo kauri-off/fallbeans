@@ -107,6 +107,8 @@ lightyear = { workspace = true, features = [
 ] }
 # The process's RAM and CPU in the F4 overlay and recordings, read only while shown.
 sysinfo.workspace = true
+# The window's icon (`icon.rs`): Bevy's winit, which does not export its `Icon`.
+winit = { version = "0.30", default-features = false }
 # Only for the `profiler` feature: the spans of these three without the rest of `bevy/trace`.
 bevy_app = { version = "=0.19.1", default-features = false, optional = true }
 bevy_ecs = { version = "=0.19.1", default-features = false, optional = true }

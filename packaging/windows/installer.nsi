@@ -98,6 +98,8 @@ Section
   SetOutPath "$INSTDIR"
   RMDir /r "$INSTDIR\assets"
   File "${SRC}\fb_client.exe"
+  ; The function names and lines in a crash report's backtrace.
+  File "${SRC}\fb_client.pdb"
   File "${SRC}\fallbeans.ico"
   File "${SRC}\LICENSE"
   File "${SRC}\THIRD-PARTY-LICENSES.html"
@@ -136,6 +138,7 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\fb_client.exe"
+  Delete "$INSTDIR\fb_client.pdb"
   Delete "$INSTDIR\fallbeans.ico"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD-PARTY-LICENSES.html"

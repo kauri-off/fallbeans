@@ -91,7 +91,7 @@ codegen-units = 256
 # Release packages (`cargo xtask dist`), client and server: the release profile's thin LTO (fat LTO with one codegen
 # unit took a single core for 10+ minutes a package, for an unmeasured few %). Symbols and line tables stay (nothing
 # is stripped): crash reports name the function and the line in their backtrace. On Windows those come from the PDB,
-# which the installer does not ship.
+# which the installer puts beside the exe.
 [profile.dist]
 inherits = "release"
 debug = "line-tables-only"
