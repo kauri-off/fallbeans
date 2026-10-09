@@ -43,6 +43,8 @@ glam = { version = "=0.32.1", default-features = false, features = ["std", "serd
 hmac = "0.12"
 libm = "=0.2.16"
 meshopt = "0.6"
+# Property tests of core/: dev-dependency only, the simulation never links it.
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 # The glyph rasterizer Bevy's text uses (emoji on the maps' boards).
 swash = "0.2"
 rayon = "1.11"
