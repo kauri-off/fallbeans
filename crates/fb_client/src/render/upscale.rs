@@ -1,10 +1,11 @@
 //! Which upscaler draws the frame: the graphics setting's (`Graphics::upscaler`, switched in play) when this machine
-//! offers it, else the best offered, told in the log: NVIDIA DLSS 4.5 Super Resolution on an RTX GPU (Vulkan, the
-//! `dlss` feature: `dlss.rs`), else AMD FSR 3.1 (Vulkan, AMD's library beside the game: `fsr3.rs`), else FSR 1
-//! (DX12, no library, anything that failed: `fsr.rs`). All draw the main pass at the scale of the player's mode
-//! (`Graphics::upscale`, switched in play: the vendors' ultra quality 0.77, quality 0.67 or balanced 0.59) and bring
-//! it to the full resolution. A temporal one (DLSS, FSR 3.1) failing
-//! at run time is not offered again this session: the next best takes over.
+//! offers it, else the best offered, told in the log: AMD FSR 3.1 (Vulkan, AMD's library beside the game:
+//! `fsr3.rs`), else NVIDIA DLSS 4.5 Super Resolution (an RTX GPU, Vulkan, the `dlss` feature: `dlss.rs`), else FSR 1
+//! (DX12, no library, anything that failed: `fsr.rs`). DLSS looks better but costs more of the frame (preset M took
+//! ~4× FSR 3.1's on an RTX 5070 Laptop): beside FSR 3.1 only when chosen. All draw the main pass at the scale of the
+//! player's mode (`Graphics::upscale`, switched in play: the vendors' ultra quality 0.77, quality 0.67 or balanced
+//! 0.59) and bring it to the full resolution. A temporal one (DLSS, FSR 3.1) failing at run time is not offered again
+//! this session: the next best takes over.
 //!
 //! A temporal upscaler is the anti-aliasing too: no SMAA, FXAA or CAS with it (`quality.rs`, `fsr.rs`). It needs
 //! the depth and motion vector prepasses (every material writes its motion, the cloth's waves too:
@@ -32,7 +33,7 @@ use crate::view::MainCamera;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Upscaler {
-    /// NVIDIA DLSS 4.5 Super Resolution (preset M, the second-generation transformer model).
+    /// NVIDIA DLSS 4.5 Super Resolution (preset K, the first-generation transformer model).
     Dlss,
     /// AMD FSR 3.1 (temporal).
     Fsr3,
@@ -124,14 +125,14 @@ pub fn pick(o: Offer, want: Option<Upscaler>) -> Upscaler {
     want.filter(|u| o.has(*u)).unwrap_or_else(|| choose(o))
 }
 
-/// The upscaler for what is offered: DLSS, then FSR 3.1, then FSR 1.
+/// The upscaler for what is offered: FSR 3.1, then DLSS, then FSR 1.
 pub fn choose(o: Offer) -> Upscaler {
     if !o.vulkan {
         Upscaler::Fsr1
-    } else if o.dlss {
-        Upscaler::Dlss
     } else if o.fsr3 {
         Upscaler::Fsr3
+    } else if o.dlss {
+        Upscaler::Dlss
     } else {
         Upscaler::Fsr1
     }
@@ -453,9 +454,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dlss_then_fsr3_then_fsr1() {
+    fn fsr3_then_dlss_then_fsr1() {
         let o = |vulkan, dlss, fsr3| Offer { vulkan, dlss, fsr3 };
-        assert_eq!(choose(o(true, true, true)), Upscaler::Dlss);
+        assert_eq!(choose(o(true, true, true)), Upscaler::Fsr3);
         assert_eq!(choose(o(true, true, false)), Upscaler::Dlss);
         assert_eq!(choose(o(true, false, true)), Upscaler::Fsr3);
         assert_eq!(choose(o(true, false, false)), Upscaler::Fsr1);
@@ -474,8 +475,8 @@ mod tests {
             dlss: true,
             fsr3: true,
         };
-        assert_eq!(pick(rtx, None), Upscaler::Dlss);
-        assert_eq!(pick(rtx, Some(Upscaler::Fsr3)), Upscaler::Fsr3);
+        assert_eq!(pick(rtx, None), Upscaler::Fsr3);
+        assert_eq!(pick(rtx, Some(Upscaler::Dlss)), Upscaler::Dlss);
         assert_eq!(pick(rtx, Some(Upscaler::Fsr1)), Upscaler::Fsr1);
         let dx12 = Offer { vulkan: false, ..rtx };
         assert_eq!(pick(dx12, Some(Upscaler::Dlss)), Upscaler::Fsr1);

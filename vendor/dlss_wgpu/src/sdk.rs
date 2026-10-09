@@ -77,8 +77,9 @@ impl DlssSdk {
 
     /// fallbeans patch: the model ("render preset", `NVSDK_NGX_DLSS_Hint_Render_Preset` in
     /// `nvsdk_ngx_defs.h`) the Super Resolution contexts made afterwards in `mode` use (`Auto`: every mode).
-    /// 0 is NVIDIA's default for the mode; 12 and 13 are presets L and M, DLSS 4.5's second-generation
-    /// transformer models (DLLs from 310.5.0 on; an older DLL falls back to its default).
+    /// 0 is NVIDIA's default for the mode; 11 is preset K, the first-generation transformer; 12 and 13 are presets
+    /// L and M, DLSS 4.5's second-generation transformer models (DLLs from 310.5.0 on; an older DLL falls back to
+    /// its default).
     pub fn set_render_preset(&mut self, mode: DlssPerfQualityMode, preset: u32) {
         const DLAA: &std::ffi::CStr = c"DLSS.Hint.Render.Preset.DLAA";
         const QUALITY: &std::ffi::CStr = c"DLSS.Hint.Render.Preset.Quality";

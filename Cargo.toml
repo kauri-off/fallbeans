@@ -119,6 +119,6 @@ aeronet_websocket = { path = "vendor/aeronet_websocket" }
 # never expire: one packet could take all memory of the server or a client. An acked message the receiver
 # refuses or expires leaves a hole in a reliable channel: `Transport::receive_failed`, and the link is dropped.
 lightyear_transport = { path = "vendor/lightyear_transport" }
-# DLSS through Bevy's binding (only with the client's `dlss` feature): the model is chosen per mode (DLSS 4.5's
-# preset M, `DlssSdk::set_render_preset`), and a result code the SDK does not name is an error, not a panic.
+# DLSS through Bevy's binding (only with the client's `dlss` feature): the model is chosen per mode (preset K,
+# `DlssSdk::set_render_preset`), and a result code the SDK does not name is an error, not a panic.
 dlss_wgpu = { path = "vendor/dlss_wgpu" }

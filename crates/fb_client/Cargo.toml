@@ -146,7 +146,7 @@ profiler = ["bevy_ecs/trace", "bevy_app/trace", "bevy_render/trace"]
 tracy = ["profiler", "bevy/trace", "bevy/trace_tracy"]
 # All of them to a `trace-*.json` for https://ui.perfetto.dev (`TRACE_CHROME=path` names the file).
 chrome = ["profiler", "bevy/trace", "bevy/trace_chrome"]
-# NVIDIA DLSS 4.5 Super Resolution on RTX GPUs (Vulkan), before AMD FSR 3.1 (`render/upscale.rs`). Builds with
+# NVIDIA DLSS 4.5 Super Resolution on RTX GPUs (Vulkan), chosen in the settings (`render/upscale.rs`). Builds with
 # the DLSS SDK (`DLSS_SDK`), the Vulkan headers (`VULKAN_SDK`) and clang; `cargo xtask` turns it on when
 # `DLSS_SDK` is set. The game needs `nvngx_dlss.dll` (Linux: `libnvidia-ngx-dlss.so.*`) beside it to use it.
 dlss = ["bevy/dlss", "dep:dlss_wgpu"]

@@ -2,10 +2,10 @@
 //! binding is built on (`dlss_wgpu`, patched in `vendor/`). Bevy's `DlssInitPlugin` asks the Vulkan instance and
 //! device for what NGX needs; its `DlssPlugin` is left out (`add_anti_alias`): it panics on any error and can only
 //! render at a mode's own size. Here the context is made in the quality or the balanced mode (`mode`) with preset
-//! M, DLSS 4.5's second-generation transformer model, and fed the main pass at the setting's scale: DLSS takes any
-//! size in the range a mode gives (dynamic resolution); one outside it is brought inside. What has no motion
-//! vectors of its own is biased towards the current colour (the reactive mask, `reactive.rs`). An error falls
-//! back to FSR 1.
+//! K, the first-generation transformer model (NVIDIA's pick for these modes, cheaper than DLSS 4.5's M), and fed
+//! the main pass at the setting's scale: DLSS takes any size in the range a mode gives (dynamic resolution); one
+//! outside it is brought inside. What has no motion vectors of its own is biased towards the current colour (the
+//! reactive mask, `reactive.rs`). An error falls back to FSR 1.
 use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::contrast_adaptive_sharpening::CasPlugin;
@@ -46,9 +46,9 @@ fn mode(render: UVec2, out: UVec2) -> DlssPerfQualityMode {
     }
 }
 
-/// `NVSDK_NGX_DLSS_Hint_Render_Preset_M` (`nvsdk_ngx_defs.h`): DLSS 4.5's second-generation transformer, the
-/// one NVIDIA made for the sharper modes (L is the heavier one meant for ultra performance).
-const PRESET_M: u32 = 13;
+/// `NVSDK_NGX_DLSS_Hint_Render_Preset_K` (`nvsdk_ngx_defs.h`): the first-generation transformer, NVIDIA's pick for
+/// the quality and balanced modes; DLSS 4.5's M and L (made for performance and ultra performance) cost far more.
+const PRESET_K: u32 = 11;
 
 /// For `DlssInitPlugin`, which reads it before `DefaultPlugins` build.
 pub fn project_id() -> DlssProjectId {
@@ -134,10 +134,10 @@ impl Plugin for DlssPlugin {
         };
         if let Ok(mut s) = sdk.lock() {
             for m in [DlssPerfQualityMode::Quality, DlssPerfQualityMode::Balanced] {
-                s.set_render_preset(m, PRESET_M);
+                s.set_render_preset(m, PRESET_K);
             }
         }
-        info!("upscaling: NVIDIA DLSS offered (Super Resolution, preset M)");
+        info!("upscaling: NVIDIA DLSS offered (Super Resolution, preset K)");
         app.world_mut().resource_mut::<Available>().dlss = true;
         app.sub_app_mut(RenderApp)
             .insert_resource(Sdk(sdk))
