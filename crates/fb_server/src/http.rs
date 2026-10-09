@@ -43,8 +43,9 @@ use crate::rooms::room::Room;
 const BASE: &str = "/fallbeans";
 /// A connect token is good for one connection attempt this soon.
 const TOKEN_EXPIRE_S: i32 = 30;
-/// Silence before netcode gives a connection up: WebSocket through a TCP tunnel stalls for seconds at a time.
-const UDP_TIMEOUT_S: i32 = 3;
+/// Silence before netcode gives a connection up: WebSocket through a TCP tunnel stalls for seconds at a time. A
+/// client sends from its main loop, so its longest frame (entering a round on weak hardware) must fit in it too.
+const UDP_TIMEOUT_S: i32 = 6;
 const WS_TIMEOUT_S: i32 = 10;
 /// Metric samples kept for `/api/debug/health`.
 const SAMPLES: usize = 240;
