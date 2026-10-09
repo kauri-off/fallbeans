@@ -267,6 +267,8 @@ pub struct Room {
     pub arena: Arena,
     /// Changes with every new arena (clients drop what belongs to an older one).
     pub arena_id: u32,
+    /// `--trace-hits`: the arenas' lines (`Arena::hit_log`), prefixed with the arena, for the server to take.
+    pub hits: Option<Vec<String>>,
     /// Game tick of the arena's tick 0.
     zero: f64,
     pub playlist: Playlist,
@@ -373,6 +375,7 @@ impl Room {
             stage: Stage::Lobby,
             arena,
             arena_id: 1,
+            hits: None,
             zero,
             playlist: Playlist::default(),
             fill: false,
@@ -1591,6 +1594,15 @@ impl Room {
 
     fn step(&mut self, k: i64, inputs: &mut dyn Inputs) {
         let tick = self.server_tick(k);
+        if self.hits.is_some() && self.arena.hit_log.is_none() {
+            self.arena.hit_log = Some(Vec::new());
+        }
+        for p in &self.players {
+            if let Some(conn) = p.conn() {
+                let view = inputs.view(p.id, conn);
+                self.arena.set_view(p.id, view);
+            }
+        }
         let mut frames: Vec<(Pid, InputFrame)> = self
             .players
             .iter()
@@ -1605,6 +1617,10 @@ impl Room {
                 .binary_search_by_key(&id, |f| f.0)
                 .map_or(InputFrame::IDLE, |i| frames[i].1)
         });
+        if let (Some(out), Some(log)) = (&mut self.hits, &mut self.arena.hit_log) {
+            let (arena, map) = (self.arena_id, self.arena.map.meta().id);
+            out.extend(log.drain(..).map(|l| format!("{arena} {map} {l}")));
+        }
         let live = self.round_live();
         for e in events {
             match e {

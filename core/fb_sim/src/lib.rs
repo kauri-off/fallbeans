@@ -1,4 +1,5 @@
 //! Deterministic simulation core: no Bevy, f64 everywhere, maths only through `m`.
+pub mod beans;
 pub mod bonus;
 pub mod bots;
 pub mod builder;

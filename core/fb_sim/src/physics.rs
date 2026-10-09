@@ -3,6 +3,7 @@ use fb_shared::NEVER;
 use fb_shared::cause::Hazard;
 use serde::{Deserialize, Serialize};
 
+use crate::beans::Note;
 use crate::collider::{ColId, Collider, Contact};
 use crate::m::{self, MinMax};
 use crate::math::V3;
@@ -46,6 +47,11 @@ const LIE: f64 = 1.4;
 const DIVE_TILT_MIN: f64 = 0.95;
 const DIVE_TILT_MAX: f64 = 1.75;
 const SLIDE_TILT: f64 = 1.45;
+/// How fast the stick turns a dive and a belly slide (rad/s).
+const DIVE_TURN: f64 = 1.2;
+const SLIDE_TURN: f64 = 2.0;
+/// Below this speed (m/s) the stick no longer turns a dive or a slide.
+const STEER_FROM: f64 = 4.0;
 const SCOOP_V: f64 = 7.0;
 const LEDGE_MIN: f64 = 0.5;
 const LEDGE_MAX: f64 = 1.75;
@@ -59,10 +65,14 @@ const LADDER_LEAP: f64 = 4.0;
 const LADDER_AGAIN: f64 = 0.35;
 const SPINE: f64 = SPHERES[1] - SPHERES[0];
 pub const BEAN_GAP: f64 = 1.05;
-const BUMP_E: f64 = 0.45;
 const TUMBLE_E: f64 = 0.4;
+/// A dive or slide into a wall faster than this (m/s) bonks: thrown back, stunned for BONK_T.
+const BONK_SPEED: f64 = 8.0;
+const BONK_BACK: f64 = 3.0;
+const BONK_UP: f64 = 2.5;
+const BONK_T: f64 = 0.5;
 const AIR_ACCEL: f64 = 24.0;
-const SUBSTEP_REACH: f64 = 0.6;
+pub(crate) const SUBSTEP_REACH: f64 = 0.6;
 const MAX_SUBSTEPS: f64 = 8.0;
 const STEEP_FROM: f64 = 0.77;
 const STEEP_SLIP: f64 = 7.0;
@@ -109,8 +119,17 @@ pub struct OtherBody {
     pub y: f64,
     pub z: f64,
     pub vx: f64,
+    pub vy: f64,
     pub vz: f64,
+    pub tilt: f64,
+    pub tilt_dir: f64,
     pub size: f64,
+}
+
+impl OtherBody {
+    pub fn mass(&self) -> f64 {
+        if self.size > 1.0 { GIANT_MASS } else { 1.0 }
+    }
 }
 
 /// Buffers a step reuses: kept by the caller from step to step, never part of a body's state.
@@ -129,6 +148,12 @@ pub struct StepEvents {
     pub stunned: bool,
     pub knocked: bool,
     pub bumped: f64,
+    /// Knocked over by this bean's tackle.
+    pub tackled_by: Option<u32>,
+    /// Tackles this bean landed.
+    pub tackles: u32,
+    /// Contacts, tackles and dives in detail (`--trace-hits`).
+    pub notes: Vec<Note>,
     pub hazard: Option<Hazard>,
     pub portal_in: bool,
     pub portal_out: bool,
@@ -177,11 +202,13 @@ pub struct Body {
     pub power_until: f64,
     pub size: f64,
     pub climb_to: V3,
+    /// The last bean this dive (and the slide after it) knocked over: it is not knocked over again.
+    pub tackled: Option<u32>,
 }
 
 /// Centre of collision sphere i of a body with its feet at `pos`, tipped by `tilt` towards `tilt_dir`.
 #[inline]
-fn sphere_at(pos: V3, tilt: f64, tilt_dir: f64, size: f64, i: usize) -> V3 {
+pub(crate) fn sphere_at(pos: V3, tilt: f64, tilt_dir: f64, size: f64, i: usize) -> V3 {
     let c = V3::new(pos.x, pos.y + SPHERES[0] * size, pos.z);
     if i == 0 {
         return c;
@@ -280,6 +307,7 @@ impl Body {
             power_until: NEVER,
             size: 1.0,
             climb_to: V3::ZERO,
+            tackled: None,
         }
     }
 
@@ -463,6 +491,21 @@ impl Body {
         }
     }
 
+    /// Turns the horizontal velocity towards the stick, at most `rate` rad/s, keeping its speed, and the body with
+    /// it by as much. (Not to face the velocity: after a bump what is left of it points anywhere.)
+    fn steer(&mut self, input: BodyInput, rate: f64, dt: f64) {
+        let sp = m::hypot(self.vel.x, self.vel.z);
+        if m::hypot(input.mx, input.mz) < 0.3 || sp < STEER_FROM {
+            return;
+        }
+        let cur = m::atan2(self.vel.x, self.vel.z);
+        let mut d = m::atan2(input.mx, input.mz) - cur;
+        d = m::clamp(m::atan2(m::sin(d), m::cos(d)), -rate * dt, rate * dt);
+        self.vel.x = m::sin(cur + d) * sp;
+        self.vel.z = m::cos(cur + d) * sp;
+        self.yaw += d;
+    }
+
     pub fn step(
         &mut self,
         scratch: &mut StepScratch,
@@ -471,7 +514,6 @@ impl Body {
         input: BodyInput,
         world: &mut World,
         t: f64,
-        others: &[OtherBody],
         touch: &mut OnTouch,
     ) {
         if self.state == BodyState::Portal {
@@ -528,6 +570,9 @@ impl Body {
                 }
             }
             BodyState::Stun | BodyState::Slide => {
+                if self.state == BodyState::Slide {
+                    self.steer(input, SLIDE_TURN, dt);
+                }
                 let f = if g {
                     m::exp(-(if self.state == BodyState::Slide { 3.5 } else { 5.0 }) * (1.0 - slip * 0.8) * dt)
                 } else {
@@ -546,6 +591,7 @@ impl Body {
                 }
             }
             BodyState::Dive => {
+                self.steer(input, DIVE_TURN, dt);
                 if g && self.state_t < 0.25 {
                     self.state = BodyState::Slide;
                     self.state_t = 0.45;
@@ -581,6 +627,7 @@ impl Body {
                 if input.dive {
                     self.state = BodyState::Dive;
                     self.state_t = 0.6;
+                    self.tackled = None;
                     let l = m::hypot(input.mx, input.mz);
                     let mut fx = m::sin(self.yaw);
                     let mut fz = m::cos(self.yaw);
@@ -593,12 +640,16 @@ impl Body {
                     let sp = (DIVE_SPEED * slow).at_least(along.at_most(DIVE_SPEED * 1.25));
                     self.vel.x = fx * sp + if g { plat_v.x } else { 0.0 };
                     self.vel.z = fz * sp + if g { plat_v.z } else { 0.0 };
-                    self.vel.y = if g {
-                        6.0 + plat_v.y.at_least(0.0)
-                    } else {
-                        self.vel.y.at_least(3.0)
-                    };
+                    // (In the air it adds no height: a lunge, not a second jump.)
+                    if g {
+                        self.vel.y = 6.0 + plat_v.y.at_least(0.0);
+                    }
                     self.grounded = false;
+                    ev.notes.push(Note::Dive {
+                        air: !g,
+                        speed: sp,
+                        vy: self.vel.y,
+                    });
                 }
             }
         }
@@ -706,6 +757,17 @@ impl Body {
                                 0.0
                             };
                             self.vel += n * (-vn * (1.0 + e));
+                            // Head first into a wall: a bonk.
+                            if matches!(self.state, BodyState::Dive | BodyState::Slide)
+                                && -vn > BONK_SPEED
+                                && n.y.abs() < 0.35
+                            {
+                                self.vel += n * BONK_BACK;
+                                self.vel.y = self.vel.y.at_least(BONK_UP);
+                                self.stun(BONK_T);
+                                ev.hit_something = true;
+                                ev.notes.push(Note::Bonk { speed: -vn });
+                            }
                         }
                         let fresh =
                             self.state != BodyState::Tumble && !(self.state == BodyState::Stun && self.state_t > 0.2);
@@ -835,53 +897,6 @@ impl Body {
             if back < -0.3 {
                 self.state = BodyState::Normal;
                 self.state_t = LADDER_AGAIN;
-            }
-        }
-
-        let my_mass = self.mass();
-        for o in others.iter() {
-            let dx = self.pos.x - o.x;
-            let dz = self.pos.z - o.z;
-            let dy = self.pos.y - o.y;
-            let d = m::hypot(dx, dz);
-            let os = o.size;
-            let gap = (BEAN_GAP * (size + os)) / 2.0;
-            if d < gap && dy < HEIGHT * os && -dy < HEIGHT * size {
-                if climbing {
-                    continue;
-                }
-                if dy > SPHERES[1] * os && self.vel.y <= 0.0 {
-                    self.pos.y = o.y + HEIGHT * os;
-                    self.vel.y = 0.0;
-                    self.grounded = true;
-                } else {
-                    let nx = if d > 1e-4 {
-                        dx / d
-                    } else {
-                        m::sin(self.actor as f64 * 2.4)
-                    };
-                    let nz = if d > 1e-4 {
-                        dz / d
-                    } else {
-                        m::cos(self.actor as f64 * 2.4)
-                    };
-                    let o_mass = if os > 1.0 { GIANT_MASS } else { 1.0 };
-                    let share = o_mass / (my_mass + o_mass);
-                    // (At most a substep's reach a tick: coincident beans must not be thrown through a wall.)
-                    let push = ((gap - d) * share).at_most(r * SUBSTEP_REACH);
-                    self.pos.x += nx * push;
-                    self.pos.z += nz * push;
-                    let vrel = (self.vel.x - o.vx) * nx + (self.vel.z - o.vz) * nz;
-                    if vrel < 0.0 {
-                        let j = -(1.0 + BUMP_E) * vrel * share;
-                        self.vel.x += nx * j;
-                        self.vel.z += nz * j;
-                        if -vrel > 6.0 && self.grounded {
-                            self.vel.y = self.vel.y.at_least((-vrel * 0.3).at_most(4.0));
-                        }
-                        ev.bumped = ev.bumped.at_least(-vrel);
-                    }
-                }
             }
         }
 

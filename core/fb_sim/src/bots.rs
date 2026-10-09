@@ -808,7 +808,7 @@ pub fn smart_dive(bot: &mut BotView, out: &mut BotInput, land: Option<&LandCheck
         }
         let along = (b.vel.x * fx + b.vel.z * fz).at_least(0.0);
         let sp = DIVE_SPEED.at_least(along.at_most(DIVE_SPEED * 1.25));
-        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y.at_least(3.0)) else {
+        let Some(far) = fly(bot, fx * sp, fz * sp, b.vel.y) else {
             return;
         };
         if !far.safe {

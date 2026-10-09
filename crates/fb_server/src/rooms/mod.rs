@@ -61,6 +61,11 @@ pub enum Out {
 pub trait Inputs {
     /// Player `id`'s frame for server tick `tick`.
     fn frame(&mut self, id: Pid, conn: ConnId, tick: u32) -> InputFrame;
+
+    /// How many ticks behind its own bean player `id` sees the others.
+    fn view(&mut self, _id: Pid, _conn: ConnId) -> u32 {
+        0
+    }
 }
 
 /// Nobody presses anything (warps, tests).

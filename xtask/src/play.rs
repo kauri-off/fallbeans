@@ -12,6 +12,9 @@ pub struct PlayArgs {
     /// The client exactly as the packages ship it (`dist` profile: thin LTO, a minute or more per change) instead of `perf`.
     #[arg(long)]
     dist: bool,
+    /// Server and client log contacts, tackles and dives into target/hits (`--trace-hits`).
+    #[arg(long)]
+    trace_hits: bool,
     /// More arguments for the client, e.g. `-- --windowed`.
     #[arg(last = true)]
     client_arg: Vec<String>,
@@ -51,9 +54,18 @@ pub fn play(a: &PlayArgs) -> Result<()> {
         crate::perf::dxc_beside(dir);
         let _ = crate::dist::upscalers_into(dir, None);
     }
-    let mut server = start_server(Command::new(perf_bin("fb_server")).args(["--dev", "--solo"]))?;
+    let mut server = Command::new(perf_bin("fb_server"));
+    server.args(["--dev", "--solo"]);
+    let mut client = Command::new(&client);
+    if a.trace_hits {
+        let dir = crate::hits_dir()?;
+        server.arg("--trace-hits").arg(dir.join("server.txt"));
+        client.arg("--trace-hits").arg(dir.join("client.txt"));
+        eprintln!("hits: {}", dir.display());
+    }
+    let mut server = start_server(&mut server)?;
     eprintln!("server: 127.0.0.1 (add it to the client's server list once)");
-    let played = run(Command::new(&client).args(&a.client_arg));
+    let played = run(client.args(&a.client_arg));
     let _ = server.kill();
     let _ = server.wait();
     played

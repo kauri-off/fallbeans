@@ -206,6 +206,10 @@ pub struct Opts {
     pub upscaler: Option<String>,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
+    /// Writes the own bean's contacts, tackles and dives here, with the others as drawn (`cargo xtask play
+    /// --trace-hits` pairs it with the server's).
+    #[arg(long)]
+    pub trace_hits: Option<PathBuf>,
     /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).
     #[arg(long)]
     pub trace_clicks: bool,

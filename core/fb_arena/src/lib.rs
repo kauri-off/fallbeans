@@ -11,6 +11,7 @@ use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
 use fb_shared::rng::Rng;
 use fb_shared::{BOT_EVERY, DT, m};
+use fb_sim::beans::{self, Other, Side};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
 use fb_sim::builder::{Builder, enter_gate};
@@ -38,8 +39,8 @@ const HOLD_MAX: f64 = 3.0;
 /// Jumps a held bean needs to break free.
 const STRUGGLE: u32 = 3;
 const GRAB_COOLDOWN: f64 = 1.2;
-/// Centre distance for a dive to tackle.
-const DIVE_REACH: f64 = 1.6;
+/// The farthest back (ticks) a tackle is judged by where its player saw the others.
+pub const MAX_VIEW: u32 = 30;
 /// Bots' navigation grid is built this long (s) before the start, while nobody may move yet.
 const NAV_PREBUILD: f64 = 1.5;
 /// A hit (by a player or a hazard) counts for a fall this long after it (s).
@@ -98,7 +99,6 @@ pub struct Pawn {
     pub grab_ready_at: f64,
     /// Jumps while held (breaking free).
     pub struggle: u32,
-    dive_hits: BTreeMap<u32, f64>,
     /// Respawns so far: views snap instead of smoothing when it changes.
     pub teleports: u32,
     pub stats: RoundStats,
@@ -108,6 +108,8 @@ pub struct Pawn {
     pub force_grab_until: f64,
     /// Grab button held with nobody in hand (the arms reach out).
     pub reaching: bool,
+    /// How many ticks behind its own bean the player sees the others (lag compensation of its tackles).
+    pub view: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -237,6 +239,24 @@ pub struct Arena {
     scratch: TickScratch,
     views: Vec<OtherView>,
     spots: Vec<V3>,
+    /// The beans in play after each of the last MAX_VIEW ticks: (tick, [(id, teleports, down, pose)]).
+    seen: SeenTicks,
+    /// `--trace-hits`: lines about contacts, tackles and dives, for the caller to take.
+    pub hit_log: Option<Vec<String>>,
+    hit_quiet: beans::NoteQuiet,
+}
+
+type SeenTicks = VecDeque<(i64, Vec<(u32, u32, bool, OtherBody)>)>;
+
+/// Where a player seeing `view` ticks behind saw bean `b` at tick k. None: now, or the bean is not where it was
+/// any more (respawned since, or knocked over since by someone else: no tackle on what already flies away).
+fn saw_in(seen: &SeenTicks, k: i64, view: u32, b: u32, teleports: u32, down: bool) -> Option<OtherBody> {
+    if view == 0 {
+        return None;
+    }
+    let (_, list) = seen.iter().find(|h| h.0 == k - i64::from(view))?;
+    let &(_, t, was_down, o) = list.iter().find(|e| e.0 == b)?;
+    (t == teleports && (was_down || !down)).then_some(o)
 }
 
 /// One body for `tick_bodies`.
@@ -331,15 +351,13 @@ pub fn client_hud(
 #[derive(Default)]
 pub struct TickScratch {
     carries: Vec<Carry>,
-    others: Vec<OtherBody>,
-    rest: Vec<OtherBody>,
     step: StepScratch,
 }
 
 /// One tick of bodies in a world: the shared core of the server arena and client prediction.
 /// `extra` are bodies that are not stepped here (on a client: the others, as drawn).
 pub fn tick_bodies(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[OtherBody], map: &mut MapRun) {
-    tick_bodies_with(&mut TickScratch::default(), world, t, bodies, extra, map);
+    tick_bodies_with(&mut TickScratch::default(), world, t, bodies, extra, &|_, _| None, map);
 }
 
 /// `tick_bodies` in a world without map logic (portals still work), as the server would step it.
@@ -356,13 +374,14 @@ pub fn tick_plain(world: &mut World, t: f64, bodies: &mut [Stepper], extra: &[Ot
     tick_bodies(world, t, bodies, extra, &mut map);
 }
 
-/// `tick_bodies` with buffers kept by the caller.
+/// `tick_bodies` with buffers kept by the caller; `seen(a, b)`: where `a`'s player saw `b` when it acted, if not now.
 pub fn tick_bodies_with(
     scratch: &mut TickScratch,
     world: &mut World,
     t: f64,
     bodies: &mut [Stepper],
     extra: &[OtherBody],
+    seen: &dyn Fn(u32, u32) -> Option<OtherBody>,
     map: &mut MapRun,
 ) {
     // Where a body stands on a moving platform is read in the world of the previous tick. The server's
@@ -379,12 +398,7 @@ pub fn tick_bodies_with(
             }
         }
     }
-    let TickScratch {
-        carries,
-        others,
-        rest,
-        step,
-    } = scratch;
+    let TickScratch { carries, step } = scratch;
     carries.clear();
     for s in bodies.iter_mut() {
         *s.ev = StepEvents::default();
@@ -397,21 +411,47 @@ pub fn tick_bodies_with(
     for (s, c) in bodies.iter_mut().zip(carries.iter()) {
         s.body.after_world_update(c, world);
     }
-    others.clear();
-    others.extend(
-        bodies
-            .iter()
-            .filter(|s| !s.body.in_portal())
-            .map(|s| other_of(s.id, s.body))
-            .chain(extra.iter().copied()),
-    );
     for s in bodies.iter_mut() {
-        rest.clear();
-        rest.extend(others.iter().copied().filter(|o| o.id != s.id));
-        s.body
-            .step(step, s.ev, DT, s.input, world, t, rest, &mut |w, b, e, tc| {
-                map.touch(w, t, b, e, tc)
-            });
+        s.body.step(step, s.ev, DT, s.input, world, t, &mut |w, b, e, tc| {
+            map.touch(w, t, b, e, tc)
+        });
+    }
+    for i in 0..bodies.len() {
+        let (head, tail) = bodies.split_at_mut(i + 1);
+        let x = &mut head[i];
+        if x.body.in_portal() {
+            continue;
+        }
+        for y in tail.iter_mut().filter(|y| !y.body.in_portal()) {
+            let (x_saw, y_saw) = (seen(x.id, y.id), seen(y.id, x.id));
+            beans::resolve(
+                Side {
+                    id: x.id,
+                    body: x.body,
+                    ev: x.ev,
+                },
+                Other::Stepped(Side {
+                    id: y.id,
+                    body: y.body,
+                    ev: y.ev,
+                }),
+                x_saw.as_ref(),
+                y_saw.as_ref(),
+            );
+        }
+        for o in extra {
+            let x_saw = seen(x.id, o.id);
+            beans::resolve(
+                Side {
+                    id: x.id,
+                    body: x.body,
+                    ev: x.ev,
+                },
+                Other::Seen(o),
+                x_saw.as_ref(),
+                None,
+            );
+        }
     }
 }
 
@@ -467,7 +507,10 @@ pub fn other_of(id: u32, b: &Body) -> OtherBody {
         y: b.pos.y,
         z: b.pos.z,
         vx: b.vel.x,
+        vy: b.vel.y,
         vz: b.vel.z,
+        tilt: b.tilt,
+        tilt_dir: b.tilt_dir,
         size: b.size,
     }
 }
@@ -549,6 +592,9 @@ impl Arena {
                 scratch: TickScratch::default(),
                 views: Vec::new(),
                 spots: Vec::new(),
+                seen: VecDeque::new(),
+                hit_log: None,
+                hit_quiet: beans::NoteQuiet::default(),
             },
             b.scene,
         )
@@ -634,13 +680,13 @@ impl Arena {
             hold_since: 0.0,
             grab_ready_at: NEVER,
             struggle: 0,
-            dive_hits: BTreeMap::new(),
             teleports: 0,
             stats: RoundStats::default(),
             last_hit: None,
             forbidden_for: 0.0,
             force_grab_until: NEVER,
             reaching: false,
+            view: 0,
         });
         self.pawns.last_mut().unwrap()
     }
@@ -677,12 +723,8 @@ impl Arena {
     pub fn remove_pawn(&mut self, id: u32) {
         self.op(Op::Remove(id));
         self.pawns.retain(|p| p.id != id);
-        // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up,
-        // and so would the tackles they took.)
+        // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up.)
         self.trace.remove(&id);
-        for p in &mut self.pawns {
-            p.dive_hits.remove(&id);
-        }
     }
 
     /// Results are decided: no more finishes, outs or credits (recorded: a replay freezes at the same tick).
@@ -708,8 +750,8 @@ impl Arena {
     /// Starts recording the round for replays (before pawns are added).
     pub fn record(&mut self) {
         self.recording = Some(Recording {
-            // 3: `state_hash` covers the whole state, by the bits.
-            v: 3,
+            // 4: tackles are judged by where the player saw the others (`Op::View`).
+            v: 4,
             game: self.map.meta().id.to_string(),
             kind: self.kind,
             seed: self.seed,
@@ -786,6 +828,19 @@ impl Arena {
         }
 
         {
+            let looks: Vec<(u32, u32, u32, bool)> = active
+                .iter()
+                .map(|&i| {
+                    let p = &self.pawns[i];
+                    (p.id, p.view, p.teleports, p.body.down())
+                })
+                .collect();
+            let history = &self.seen;
+            let seen = |a: u32, b: u32| -> Option<OtherBody> {
+                let look = |id: u32| looks.iter().find(|l| l.0 == id);
+                let o = look(b)?;
+                saw_in(history, k, look(a)?.1, b, o.2, o.3)
+            };
             let mut steppers: Vec<Stepper> = Vec::with_capacity(active.len());
             let mut it = active.iter().peekable();
             for (i, p) in self.pawns.iter_mut().enumerate() {
@@ -807,9 +862,33 @@ impl Arena {
                 scores: &mut self.scores,
                 out: &mut self.map_out,
             };
-            tick_bodies_with(&mut self.scratch, &mut self.world, t, &mut steppers, &[], &mut map);
+            tick_bodies_with(
+                &mut self.scratch,
+                &mut self.world,
+                t,
+                &mut steppers,
+                &[],
+                &seen,
+                &mut map,
+            );
         }
         self.flush(&mut events);
+        for &i in &active {
+            let p = &mut self.pawns[i];
+            if let Some(by) = p.ev.tackled_by {
+                p.last_hit = Some(Hit {
+                    by: Some(by),
+                    cause: Cause::Tackle,
+                    t,
+                });
+            }
+            if round {
+                p.stats.tackles += p.ev.tackles;
+            }
+        }
+        if self.hit_log.is_some() {
+            self.log_hits(k, &active);
+        }
         for &i in &active {
             let p = &mut self.pawns[i];
             if let Some(cause) = p.ev.hazard {
@@ -849,7 +928,94 @@ impl Arena {
         }
         self.map_tick(t, &mut events);
         self.prebuild_nav();
+        self.remember_seen(k);
         events
+    }
+
+    /// Keeps where every bean in play is after tick k, for tackles judged by what a lagging player saw.
+    fn remember_seen(&mut self, k: i64) {
+        let mut list = if self.seen.len() > MAX_VIEW as usize {
+            self.seen.pop_front().map(|e| e.1).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        list.clear();
+        list.extend(
+            self.pawns
+                .iter()
+                .filter(|p| p.status == PawnStatus::Play && !p.body.in_portal())
+                .map(|p| (p.id, p.teleports, p.body.down(), other_of(p.id, &p.body))),
+        );
+        self.seen.push_back((k, list));
+    }
+
+    /// How many ticks behind its bean player `id` sees the others (from its client; recorded).
+    pub fn set_view(&mut self, id: u32, ticks: u32) {
+        let ticks = ticks.min(MAX_VIEW);
+        let Some(i) = self.index(id) else { return };
+        if self.pawns[i].view != ticks {
+            self.op(Op::View { id, ticks });
+            self.pawns[i].view = ticks;
+            let k = self.tick;
+            if let Some(log) = &mut self.hit_log {
+                log.push(format!("{k} {id} view {ticks}"));
+            }
+        }
+    }
+
+    /// `--trace-hits` lines of tick k: every bean's notes; a tackling bean's pose and, within reach, the others'
+    /// now and where its player saw them.
+    fn log_hits(&mut self, k: i64, active: &[usize]) {
+        let Some(mut log) = self.hit_log.take() else { return };
+        let v3 = |v: V3| format!("{:.2},{:.2},{:.2}", v.x, v.y, v.z);
+        for &i in active {
+            let p = &self.pawns[i];
+            let b = &p.body;
+            for n in &p.ev.notes {
+                if self.hit_quiet.fresh(k, p.id, n) {
+                    log.push(format!("{k} {} {n}", p.id));
+                }
+            }
+            if p.ev.tackled_by.is_some() || p.ev.knocked {
+                log.push(format!("{k} {} state {:?} v={}", p.id, b.state, v3(b.vel)));
+            }
+            if !beans::tackling(b) {
+                continue;
+            }
+            log.push(format!(
+                "{k} {} {:?} pos={} v={} view={}",
+                p.id,
+                b.state,
+                v3(b.pos),
+                v3(b.vel),
+                p.view
+            ));
+            let cb = beans::Capsule::of_body(b);
+            for &j in active {
+                let o = &self.pawns[j];
+                if j == i || dist_xz(o.body.pos, b.pos) > 4.0 {
+                    continue;
+                }
+                let now = beans::Capsule::of_body(&o.body);
+                let saw = saw_in(&self.seen, k, p.view, o.id, o.teleports, o.body.down());
+                let seen = saw.map_or("-".to_string(), |s| {
+                    format!(
+                        "{} gap={:.2}",
+                        v3(V3::new(s.x, s.y, s.z)),
+                        beans::gap(&cb, &beans::Capsule::of_other(&s))
+                    )
+                });
+                log.push(format!(
+                    "{k} {}   near {} {:?} now={} gap={:.2} seen={seen}",
+                    p.id,
+                    o.id,
+                    o.body.state,
+                    v3(o.body.pos),
+                    beans::gap(&cb, &now)
+                ));
+            }
+        }
+        self.hit_log = Some(log);
     }
 
     /// Runs `f` with the map's logic and context (the server's: every bean in play).
@@ -1036,8 +1202,7 @@ impl Arena {
         }
     }
 
-    /// Grabbing holds on (pulling the other bean along) until released, broken free or timed out;
-    /// dives knock over.
+    /// Grabbing holds on (pulling the other bean along) until released, broken free or timed out.
     fn interact(&mut self, i: usize, active: &[usize], t: f64, events: &mut Vec<ArenaEvent>) {
         let round = self.kind == ArenaKind::Round;
         let f = self.pawns[i].frame;
@@ -1124,53 +1289,6 @@ impl Arena {
                 let dist = dist_xz(ob.pos, b.pos);
                 let of = frame_of(&self.pawns, oj);
                 self.hold(i, oj, dist, t, of);
-            }
-        }
-
-        let b = &self.pawns[i].body;
-        if b.state == BodyState::Dive || (b.state == BodyState::Slide && m::hypot(b.vel.x, b.vel.z) > 6.0) {
-            let fx = m::sin(b.yaw);
-            let fz = m::cos(b.yaw);
-            let pid = self.pawns[i].id;
-            for &oj in active {
-                if oj == i {
-                    continue;
-                }
-                let (p, o) = pair(&mut self.pawns, i, oj);
-                // Anyone can be hit, a bean already down or getting up too (each diver once per dive); not
-                // one inside a portal.
-                if p.dive_hits.get(&o.id).copied().unwrap_or(NEVER) > t || o.body.in_portal() {
-                    continue;
-                }
-                let b = &mut p.body;
-                let dx = o.body.pos.x - b.pos.x;
-                let dz = o.body.pos.z - b.pos.z;
-                let d = m::hypot(dx, dz);
-                if d > DIVE_REACH || (o.body.pos.y - b.pos.y).abs() > 1.3 {
-                    continue;
-                }
-                // Only what is ahead of the diver (or right on top of it).
-                if d > 0.4 && (dx * fx + dz * fz) / d < 0.25 {
-                    continue;
-                }
-                let nx = if d > 1e-3 { dx / d } else { fx };
-                let nz = if d > 1e-3 { dz / d } else { fz };
-                let sp = m::hypot(b.vel.x, b.vel.z);
-                let k = 5.0 + (sp * 0.4).at_most(5.0);
-                o.body
-                    .knock(&mut o.ev, nx * k + fx * 2.0, nz * k + fz * 2.0, 4.5, 0.9, false);
-                o.last_hit = Some(Hit {
-                    by: Some(pid),
-                    cause: Cause::Tackle,
-                    t,
-                });
-                // The tackler spends its momentum on the hit.
-                b.vel.x *= 0.45;
-                b.vel.z *= 0.45;
-                p.dive_hits.insert(o.id, t + 0.6);
-                if round {
-                    p.stats.tackles += 1;
-                }
             }
         }
     }
@@ -1369,8 +1487,10 @@ impl Arena {
                 p.status as u64,
                 opt(p.checkpoint.map(|c| c as u64)),
                 opt(p.grabbing.map(u64::from)),
+                opt(b.tackled.map(u64::from)),
                 u64::from(p.struggle),
                 u64::from(p.reaching),
+                u64::from(p.view),
                 p.spawn_i as u64,
                 opt(p.bot.as_ref().map(|s| u64::from(s.rng.state()))),
             ] {
@@ -1384,10 +1504,18 @@ impl Arena {
                 }
                 None => h.int(u64::MAX),
             }
-            h.int(p.dive_hits.len() as u64);
-            for (&id, &until) in &p.dive_hits {
-                h.int(u64::from(id));
-                h.bits(until);
+        }
+        h.int(self.seen.len() as u64);
+        for (k, list) in &self.seen {
+            h.int(*k as u64);
+            h.int(list.len() as u64);
+            // (Not the teleports: like the pawns' own, a room may shift them; only their changes count.)
+            for (id, _, down, o) in list {
+                h.int(u64::from(*down));
+                h.int(u64::from(*id));
+                for v in [o.x, o.y, o.z, o.vx, o.vy, o.vz, o.tilt, o.tilt_dir, o.size] {
+                    h.bits(v);
+                }
             }
         }
         h.int(self.scores.len() as u64);
@@ -1525,6 +1653,7 @@ impl Arena {
             }
             Op::Bots(on) => self.set_bots_on(on),
             Op::Freeze => self.freeze(),
+            Op::View { id, ticks } => self.set_view(id, ticks),
         }
     }
 }

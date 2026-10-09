@@ -206,6 +206,7 @@ struct Full {
     power: Option<Power>
     power_until: f64
     climb_to: [f64; 3]
+    tackled: Option<u32>
     teleports: u32
     checkpoint: Option<u16>
     spawn: u16

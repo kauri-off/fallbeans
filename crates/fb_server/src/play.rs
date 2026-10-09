@@ -131,6 +131,10 @@ fn count_far_inputs(
 #[derive(Resource)]
 struct Trace(BufWriter<File>);
 
+/// `--trace-hits`: `room arena map tick id …` lines of every room's arenas (`Arena::hit_log`).
+#[derive(Resource)]
+struct HitTrace(BufWriter<File>);
+
 pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
@@ -185,6 +189,10 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
     if let Some(path) = &opts.trace {
         let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
         commands.insert_resource(Trace(BufWriter::new(file)));
+    }
+    if let Some(path) = &opts.trace_hits {
+        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
+        commands.insert_resource(HitTrace(BufWriter::new(file)));
     }
 }
 
@@ -339,6 +347,8 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
 struct LinkInputs<'a, 'w, 's> {
     owners: &'a BTreeMap<ConnId, Entity>,
     pawns: &'a mut Query<'w, 's, (Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
+    /// How many ticks behind its bean each link sees the others.
+    views: &'a BTreeMap<ConnId, u32>,
 }
 
 impl Inputs for LinkInputs<'_, '_, '_> {
@@ -352,6 +362,10 @@ impl Inputs for LinkInputs<'_, '_, '_> {
         let f = frame_for(Tick(tick), buffer, &mut st);
         st.used = Some((tick, f));
         f
+    }
+
+    fn view(&mut self, _: Pid, conn: ConnId) -> u32 {
+        self.views.get(&conn).copied().unwrap_or(0)
     }
 }
 
@@ -372,8 +386,10 @@ fn tick_rooms(
     mut bodies: Query<Bodies>,
     mut round_q: Query<&mut Round>,
     remotes: Query<&RemoteId, With<ClientOf>>,
+    delays: Query<(Entity, &InterpolationDelay), With<ClientOf>>,
     time: Res<Time<Real>>,
     trace: Option<ResMut<Trace>>,
+    hit_trace: Option<ResMut<HitTrace>>,
 ) {
     let tick = timeline.tick();
     let rooms = &mut *rooms;
@@ -382,16 +398,31 @@ fn tick_rooms(
         .values()
         .filter_map(|p| Some((p.owner?, p.entity)))
         .collect();
+    let views: BTreeMap<ConnId, u32> = delays
+        .iter()
+        .map(|(link, d)| (conn_of(link), d.delay.value.to_num::<f64>().round() as u32))
+        .collect();
     let real = rooms.real.of(tick.0);
     rooms.hub.update(
         real,
         &mut LinkInputs {
             owners: &owners,
             pawns: &mut inputs,
+            views: &views,
         },
     );
     if let Some(mut trace) = trace {
         write_trace(&mut trace, rooms, &mut inputs, tick);
+    }
+    if let Some(mut out) = hit_trace {
+        for room in rooms.hub.rooms.values_mut() {
+            let hits = room.hits.get_or_insert_default();
+            for l in hits.drain(..) {
+                let _ = writeln!(out.0, "{} {l}", room.id);
+            }
+        }
+        // (The dev server is killed, not stopped: nothing may wait in the buffer.)
+        let _ = out.0.flush();
     }
     for out in rooms.hub.take_out() {
         match out {

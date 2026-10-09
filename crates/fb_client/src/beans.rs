@@ -16,7 +16,7 @@ use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
-use crate::game::{Cue, Map, PrevPos};
+use crate::game::{Cue, HitTrace, Map, PrevPos, Smoothing};
 use crate::outfit::{Base, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
 use crate::session::{Outcome, Session};
 use crate::view::{color, power_color};
@@ -587,8 +587,12 @@ type OtherBeans<'w, 's> = Query<
 /// Where each bean is drawn: the own one between its last two ticks, the others as interpolated.
 pub fn place_beans(
     fixed: Res<Time<Fixed>>,
+    time: Res<Time<Real>>,
     map: Option<Res<Map>>,
-    own: Query<(&BodyFull, &PrevPos, &mut Transform, &mut Visibility), (With<Predicted>, With<BeanView>)>,
+    own: Query<
+        (&BodyFull, &PrevPos, &mut Smoothing, &mut Transform, &mut Visibility),
+        (With<Predicted>, With<BeanView>),
+    >,
     mut others: OtherBeans,
 ) {
     let a = fixed.overstep_fraction();
@@ -605,15 +609,17 @@ pub fn place_beans(
         .as_vec3(),
         None => p,
     };
-    for (full, prev, mut tf, mut vis) in own {
+    for (full, prev, mut smooth, mut tf, mut vis) in own {
         let b = &full.body;
-        let p = prev.0.as_vec3().lerp(b.pos.as_vec3(), a);
+        // A rollback's correction fades instead of jumping (`Smoothing`).
+        smooth.frame(time.delta_secs());
+        let p = prev.0.as_vec3().lerp(b.pos.as_vec3(), a) + smooth.pos;
         tf.translation = if b.state == BodyState::Portal {
             p
         } else {
             out(p, b.tilt as f32, b.tilt_dir as f32, b.size as f32)
         };
-        tf.rotation = Quat::from_rotation_y(b.yaw as f32);
+        tf.rotation = Quat::from_rotation_y(b.yaw as f32 + smooth.yaw);
         // Inside a portal: out of sight, gliding to the other end.
         vis.set_if_neq(if b.state == BodyState::Portal {
             Visibility::Hidden
@@ -666,6 +672,7 @@ pub fn animate_beans(
         Option<&RemotePose>,
         Option<&Hold>,
         Has<Predicted>,
+        Option<&Smoothing>,
     )>,
     mut parts: Query<&mut Transform, (Without<BeanAnim>, Without<Wiggle>)>,
     mut wiggles: Query<(&Wiggle, &Base, &mut Transform), Without<BeanAnim>>,
@@ -673,6 +680,7 @@ pub fn animate_beans(
     mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
     paints: Res<Paints>,
     mut scratch: Local<(Vec<Cue>, HashMap<u32, (Vec3, f32)>)>,
+    (mut hits, timeline, fixed): (Option<ResMut<HitTrace>>, Res<LocalTimeline>, Res<Time<Fixed>>),
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
@@ -686,10 +694,10 @@ pub fn animate_beans(
     drawn.extend(
         beans
             .iter()
-            .map(|(id, a, .., tf, _, _, _, _)| (id.0, (tf.translation, a.out.grow))),
+            .map(|(id, a, .., tf, _, _, _, _, _)| (id.0, (tf.translation, a.out.grow))),
     );
     let podium = map.as_ref().is_some_and(|m| m.round.kind == ArenaKind::Podium);
-    for (id, mut anim, rig, dress, mut root, full, pose, hold, own) in &mut beans {
+    for (id, mut anim, rig, dress, mut root, full, pose, hold, own, smooth) in &mut beans {
         for c in cues {
             match *c {
                 Cue::Emote { id: who, e } if who == id.0 => anim.play_emote(e),
@@ -710,7 +718,8 @@ pub fn animate_beans(
             (true, Some(f), _) => {
                 let b = &f.body;
                 (
-                    b.vel.as_vec3(),
+                    // (A correction's jump in speed is drawn away too: it would shake the body's jelly.)
+                    b.vel.as_vec3() + smooth.map_or(Vec3::ZERO, |s| s.vel),
                     Anim::of(b, hold.target.is_some(), hold.reaching),
                     b.tilt as f32,
                     b.tilt_dir as f32,
@@ -781,6 +790,15 @@ pub fn animate_beans(
             },
         );
         let out = anim.out;
+        // `--trace-hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        if own && let (Some(h), Some(m)) = (hits.as_mut(), map.as_ref()) {
+            let k = m.round.arena_tick(timeline.tick()) as f32 + fixed.overstep_fraction();
+            let p = root.translation;
+            h.line(format_args!(
+                "F {k:.2} {} dt={:.4} pos={:.3},{:.3},{:.3} yaw={yaw:.3} vel={:.2},{:.2},{:.2} {anim_code:?} lean={:.3} roll={:.3} twist={:.3}",
+                id.0, dt, p.x, p.y, p.z, vel.x, vel.y, vel.z, out.lean, out.roll, out.twist
+            ));
+        }
         root.scale = Vec3::splat(out.grow);
         if let Ok(mut tf) = parts.get_mut(rig.pivot) {
             tf.rotation = out.pivot;

@@ -154,6 +154,9 @@ struct DevArgs {
     /// Clients log every left click (`--trace-clicks`).
     #[arg(long)]
     trace_clicks: bool,
+    /// Server and clients log contacts, tackles and dives into target/hits (`--trace-hits`).
+    #[arg(long)]
+    trace_hits: bool,
     #[command(flatten)]
     shared: Shared,
 }
@@ -298,14 +301,24 @@ fn letters(mut i: u32) -> String {
     String::from_utf8(s).unwrap_or_default()
 }
 
+/// target/hits, emptied: where `--trace-hits` runs write.
+pub fn hits_dir() -> Result<PathBuf> {
+    let dir = target_dir().join("hits");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("cannot create {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
 fn dev(a: &DevArgs) -> Result<()> {
     a.shared.build()?;
-    let mut server = start_server(
-        a.shared
-            .command("fb_server")
-            .args(a.shared.server_args())
-            .args(["--dev", "--solo"]),
-    )?;
+    let hits = a.trace_hits.then(hits_dir).transpose()?;
+    let mut server = a.shared.command("fb_server");
+    server.args(a.shared.server_args()).args(["--dev", "--solo"]);
+    if let Some(dir) = &hits {
+        server.arg("--trace-hits").arg(dir.join("server.txt"));
+        eprintln!("hits: {}", dir.display());
+    }
+    let mut server = start_server(&mut server)?;
     let clients: Vec<_> = (0..a.clients)
         .filter_map(|i| {
             let mut c = a.shared.command("fb_client");
@@ -332,6 +345,9 @@ fn dev(a: &DevArgs) -> Result<()> {
             }
             if a.trace_clicks {
                 c.arg("--trace-clicks");
+            }
+            if let Some(dir) = &hits {
+                c.arg("--trace-hits").arg(dir.join(format!("client-{profile}.txt")));
             }
             c.spawn().ok()
         })

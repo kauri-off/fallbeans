@@ -63,6 +63,9 @@ pub struct Opts {
     /// Writes every pawn's input and position per tick here (`cargo xtask stress` compares it with clients').
     #[arg(long)]
     pub trace: Option<PathBuf>,
+    /// Writes contacts, tackles (with where the tackler's player saw the others) and dives here.
+    #[arg(long)]
+    pub trace_hits: Option<PathBuf>,
     /// Seconds between metric lines in the log (0: none).
     #[arg(long, default_value_t = 5.0)]
     pub metrics_every: f64,

@@ -343,6 +343,90 @@ fn a_dive_lays_the_body_along_its_flight_and_stays_out_of_a_wall() {
     assert!(deepest < 0.02, "{deepest}");
 }
 
+#[test]
+fn the_stick_turns_a_dive_a_little_and_keeps_its_speed() {
+    let mut b = Builder::new(1, false);
+    block(&mut b, 0.0, -1.0, 0.0, 40.0, 2.0, 40.0);
+    let mut s = Sim::new(b);
+    s.reset(0.0, 0.02, -10.0);
+    s.run(0.0, 30, FORWARD);
+    s.run(30.0 * DT, 1, BodyInput { dive: true, ..FORWARD });
+    let sp = m::hypot(s.body.vel.x, s.body.vel.z);
+    let right = BodyInput { mx: 1.0, ..IDLE };
+    s.run(31.0 * DT, 24, right);
+    assert_eq!(s.body.state, BodyState::Dive);
+    let turned = m::atan2(s.body.vel.x, s.body.vel.z);
+    assert!(turned > 0.15 && turned < 0.4, "{turned}");
+    assert!((m::hypot(s.body.vel.x, s.body.vel.z) - sp).abs() < 1e-6);
+    assert!((s.body.yaw - turned).abs() < 1e-9);
+}
+
+#[test]
+fn what_is_left_of_a_dive_after_a_bump_does_not_turn_the_body() {
+    let mut b = Builder::new(1, false);
+    block(&mut b, 0.0, -1.0, 0.0, 40.0, 2.0, 40.0);
+    let mut s = Sim::new(b);
+    s.reset(0.0, 0.02, -10.0);
+    s.run(0.0, 30, FORWARD);
+    s.run(30.0 * DT, 1, BodyInput { dive: true, ..FORWARD });
+    let yaw = s.body.yaw;
+    s.body.vel.x = -0.9;
+    s.body.vel.z = 1.3;
+    s.run(31.0 * DT, 12, FORWARD);
+    assert!((s.body.yaw - yaw).abs() < 1e-9, "{} {yaw}", s.body.yaw);
+}
+
+#[test]
+fn a_dive_into_a_wall_bonks_and_a_glancing_one_slides_on() {
+    for (yaw, bonks) in [(0.0, true), (1.2, false)] {
+        let mut b = Builder::new(1, false);
+        block(&mut b, 0.0, -1.0, 0.0, 20.0, 2.0, 40.0);
+        block(&mut b, 0.0, 2.0, 4.0, 20.0, 4.0, 1.0);
+        let mut s = Sim::new(b);
+        s.reset(0.0, 0.02, 0.0);
+        s.body.yaw = yaw;
+        let dir = BodyInput {
+            mx: m::sin(yaw),
+            mz: m::cos(yaw),
+            ..IDLE
+        };
+        s.run(0.0, 10, IDLE);
+        s.run(10.0 * DT, 1, BodyInput { dive: true, ..dir });
+        let mut stunned = false;
+        for i in 0..60 {
+            s.run((11 + i) as f64 * DT, 1, dir);
+            stunned |= s.body.state == BodyState::Stun;
+        }
+        assert_eq!(stunned, bonks, "yaw {yaw}");
+    }
+}
+
+#[test]
+fn a_dive_in_the_air_adds_no_height_but_a_jump_and_a_dive_clear_nine_metres() {
+    let mut b = Builder::new(1, false);
+    block(&mut b, 0.0, -1.0, -10.0, 10.0, 2.0, 20.0);
+    block(&mut b, 0.0, -1.0, 19.0, 10.0, 2.0, 20.0);
+    let mut s = Sim::new(b);
+    s.reset(0.0, 0.02, -12.0);
+    let mut k = 0;
+    while s.body.pos.z < -0.35 {
+        k += 1;
+        s.run(k as f64 * DT, 1, FORWARD);
+    }
+    k += 1;
+    s.run(k as f64 * DT, 1, BodyInput { jump: true, ..FORWARD });
+    let vy = s.body.vel.y;
+    k += 1;
+    s.run(k as f64 * DT, 1, BodyInput { dive: true, ..FORWARD });
+    assert_eq!(s.body.state, BodyState::Dive);
+    assert!(s.body.vel.y < vy, "{} {vy}", s.body.vel.y);
+    for _ in 0..120 {
+        k += 1;
+        s.run(k as f64 * DT, 1, FORWARD);
+    }
+    assert!(s.body.pos.y > -0.1 && s.body.pos.z > 9.0, "{:?}", s.body.pos);
+}
+
 /// A 30° slope of the given grip from y = 6 down to the floor at z = 10.4.
 fn slope_course(slip: f64) -> Sim {
     let mut b = Builder::new(1, false);

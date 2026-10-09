@@ -1,6 +1,6 @@
-//! A recorded round (humans' frames, bots from the seed, dev ops in between) replays to the same state.
+//! A recorded round (humans' frames and views, bots from the seed, dev ops in between) replays to the same state.
 use fb_arena::{Arena, ArenaKind, replay};
-use fb_shared::input::{BTN_JUMP, InputFrame};
+use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_sim::math::V3;
 
 #[test]
@@ -20,10 +20,20 @@ fn replays_end_in_the_recorded_state() {
             if k == 2400 {
                 a.add_late_pawn(9, true, None);
             }
+            if k == 600 || k == 1800 {
+                a.set_view(1, (k / 40) as u32);
+                a.set_view(2, 7);
+            }
             a.step(k, |id| InputFrame {
                 mx: ((k / 50 + id as i64) % 3 * 60 - 60) as i8,
                 mz: 100,
-                buttons: if k % 90 == 0 { BTN_JUMP } else { 0 },
+                buttons: if k % 90 == 0 {
+                    BTN_JUMP
+                } else if k % 170 == id as i64 * 20 {
+                    BTN_DIVE
+                } else {
+                    0
+                },
             });
         }
         let rec = a.take_recording().unwrap();
@@ -32,4 +42,28 @@ fn replays_end_in_the_recorded_state() {
         let r = replay(&rec, |_| false).unwrap();
         assert!(r.matches, "{map}: replay {} vs recorded {}", r.hash, a.state_hash());
     }
+}
+
+#[test]
+fn a_traced_round_logs_dives_and_tackles_and_leaves_the_state_alone() {
+    let def = fb_maps::by_id("door-dash").unwrap();
+    let ids: Vec<u32> = (1..=8).collect();
+    let run = |traced: bool| {
+        let (mut a, _) = Arena::new(def, ArenaKind::Round, 7, -360, &ids, false);
+        if traced {
+            a.hit_log = Some(Vec::new());
+        }
+        for &id in &ids {
+            a.add_pawn(id, true);
+        }
+        for k in -359..=3000i64 {
+            a.step(k, |_| InputFrame::IDLE);
+        }
+        (a.state_hash(), a.hit_log.unwrap_or_default())
+    };
+    let (plain, _) = run(false);
+    let (hash, log) = run(true);
+    assert_eq!(plain, hash);
+    let has = |what: &str| log.iter().any(|l| l.split(' ').nth(2) == Some(what));
+    assert!(has("dive") && has("tackle"), "{:?}", &log[..log.len().min(20)]);
 }

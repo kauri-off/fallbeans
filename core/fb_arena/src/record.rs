@@ -134,6 +134,11 @@ pub enum Op {
     Bots(bool),
     /// The results were decided (`Arena::freeze`).
     Freeze,
+    /// How many ticks behind its bean a player sees the others (`Arena::set_view`).
+    View {
+        id: u32,
+        ticks: u32,
+    },
 }
 
 impl Recording {

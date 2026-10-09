@@ -7,18 +7,19 @@ use std::io::{BufWriter, Write};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use fb_arena::{
-    ArenaKind, FallBehaviour, MapRun, Stepper, build_map, can_move, client_event, client_start, fell, reach_checkpoint,
-    respawn, respawn_point, tick_bodies,
+    ArenaKind, FallBehaviour, MAX_VIEW, MapRun, Stepper, TickScratch, build_map, can_move, client_event, client_start,
+    fell, reach_checkpoint, respawn, respawn_point, tick_bodies_with,
 };
 use fb_net::*;
 use fb_proto::{ArenaInfo, Pid};
-use fb_shared::DT;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
+use fb_shared::{DT, m};
+use fb_sim::beans;
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::map::{BeanDeco, MapOut, MapSfx, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::Nodes;
-use fb_sim::physics::{BodyInput, BodyState, OtherBody, StepEvents};
+use fb_sim::physics::{Body, BodyInput, BodyState, OtherBody, StepEvents};
 use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
 use lightyear::core::confirmed_history::ConfirmedHistory;
@@ -93,9 +94,9 @@ pub struct Map {
     room: Option<String>,
     /// Built by the warm-up behind the loading screen (`render/warmup.rs`), in no room: nobody plays it.
     pub warmup: bool,
-    /// The others as the own bean met them at each predicted tick: a rollback replays a tick against the same
-    /// bodies, not against where they are drawn now.
-    others: BTreeMap<i64, Vec<OtherBody>>,
+    /// The others as drawn at each predicted tick, and how many ticks behind the own bean: a rollback replays a
+    /// tick against the same bodies, not against where they are drawn now.
+    others: BTreeMap<i64, (u32, Vec<OtherBody>)>,
 }
 
 /// The maps built so far, the warm-up's too: each its own `generation`, by which views tell maps apart.
@@ -246,6 +247,57 @@ pub struct PrevPos(pub V3);
 #[derive(Component, Default)]
 pub struct OwnEvents(pub StepEvents);
 
+/// Seconds a rollback's correction of the own bean takes to fade out of the drawing.
+pub const SMOOTH_T: f32 = 0.1;
+/// A correction farther than this (m) is not smoothed: the bean is put where it is at once.
+const SMOOTH_MAX: f64 = 1.5;
+
+/// A rollback's correction of the own bean, drawn away: the bean is drawn and animated off its state by `pos`,
+/// `vel` and `yaw`, which fade over SMOOTH_T (`beans::place_beans`), instead of jumping (and the body's jelly
+/// with its speed).
+#[derive(Component, Default)]
+pub struct Smoothing {
+    /// The own bean as last predicted at each recent tick (pos, vel, yaw).
+    pred: BTreeMap<i64, (V3, V3, f64)>,
+    /// The correction of the last tick a rollback replayed, for the drawing to take.
+    pending: Option<(V3, V3, f64)>,
+    pub pos: Vec3,
+    pub vel: Vec3,
+    pub yaw: f32,
+}
+
+impl Smoothing {
+    /// The frame's drawing: takes a new correction in, fades the rest by `dt` seconds.
+    pub fn frame(&mut self, dt: f32) {
+        if let Some((p, v, y)) = self.pending.take() {
+            self.pos += p.as_vec3();
+            self.vel += v.as_vec3();
+            self.yaw += y as f32;
+        }
+        let k = (-dt / SMOOTH_T).exp();
+        self.pos *= k;
+        self.vel *= k;
+        self.yaw *= k;
+    }
+
+    /// The own bean at tick k (`replay`: by a rollback); `snapped`: put somewhere else (a respawn, a portal).
+    fn predicted(&mut self, k: i64, b: &Body, replay: bool, snapped: bool) {
+        let old = self.pred.insert(k, (b.pos, b.vel, b.yaw));
+        if snapped {
+            *self = Self::default();
+            return;
+        }
+        if let Some((p, v, y)) = old.filter(|_| replay) {
+            let dy = y - b.yaw;
+            self.pending =
+                (p.distance(b.pos) < SMOOTH_MAX).then(|| (p - b.pos, v - b.vel, m::atan2(m::sin(dy), m::cos(dy))));
+        }
+        while self.pred.len() > 256 {
+            self.pred.pop_first();
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct Stats {
     /// Prediction steps, replays of rollbacks included.
@@ -260,6 +312,25 @@ pub struct Stats {
 struct Trace {
     out: BufWriter<File>,
     fresh: bool,
+}
+
+/// `--trace-hits`: the own bean's notes per predicted tick, `C tick id …` (`c`: a rollback's replay), and while
+/// it tackles the others as drawn; the interpolation delay (`view`) when it changes.
+#[derive(Resource)]
+pub struct HitTrace {
+    out: BufWriter<File>,
+    view: Option<u32>,
+    quiet: beans::NoteQuiet,
+    /// The own bean as last predicted at each recent tick (pos, vel, yaw): a rollback's replay is compared with it.
+    pred: BTreeMap<i64, (V3, V3, f64)>,
+}
+
+impl HitTrace {
+    /// One line as it is (the drawing's `F` lines, `beans::animate_beans`).
+    pub fn line(&mut self, l: core::fmt::Arguments) {
+        let _ = self.out.write_fmt(l);
+        let _ = self.out.write_all(b"\n");
+    }
 }
 
 pub struct GamePlugin;
@@ -302,6 +373,15 @@ impl Plugin for GamePlugin {
 }
 
 fn open_trace(mut commands: Commands, opts: Res<Opts>) {
+    if let Some(path) = &opts.trace_hits {
+        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
+        commands.insert_resource(HitTrace {
+            out: BufWriter::new(file),
+            view: None,
+            quiet: Default::default(),
+            pred: BTreeMap::new(),
+        });
+    }
     if let Some(path) = &opts.trace {
         let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
         commands.insert_resource(Trace {
@@ -507,6 +587,7 @@ fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Qu
             InputMarker::<FbInput>::default(),
             PrevPos::default(),
             OwnEvents::default(),
+            Smoothing::default(),
         ));
     }
 }
@@ -693,20 +774,23 @@ fn predict(
             &ActionState<FbInput>,
             &mut OwnEvents,
             &mut PrevPos,
+            &mut Smoothing,
         ),
         With<Predicted>,
     >,
     others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     trace: Option<ResMut<Trace>>,
+    (hits, interp): (Option<ResMut<HitTrace>>, Option<Res<InterpolationTimeline>>),
     session: Res<Session>,
     link: Query<(), (With<Client>, With<Connected>)>,
     rollback: Option<Res<Rollback>>,
     mut cues: MessageWriter<Cue>,
 ) {
     let Some(mut map) = map else { return };
-    let Ok((id, mut full, state, mut ev, mut prev)) = own.single_mut() else {
+    let Ok((id, mut full, state, mut ev, mut prev, mut smooth)) = own.single_mut() else {
         return;
     };
+    let teleports = full.teleports;
     let k = map.round.arena_tick(timeline.tick());
     let t = k as f64 * DT;
     let frame = InputFrame::from(state.0);
@@ -719,11 +803,14 @@ fn predict(
     // were then. As on the server, a bean that finished or is out (or is in a portal) is in nobody's way.
     let map = &mut *map;
     let replayed = rollback.is_some().then(|| map.others.get(&k).cloned()).flatten();
-    let extra = match replayed {
+    let (lag, extra) = match replayed {
         Some(extra) => extra,
         None => {
+            let lag = interp.as_ref().map_or(0, |i| {
+                (timeline.tick().0.wrapping_sub(i.tick().0) as i32).clamp(0, MAX_VIEW as i32) as u32
+            });
             let mut extra = if map.others.len() >= OTHERS_KEPT {
-                map.others.pop_first().map(|(_, v)| v).unwrap_or_default()
+                map.others.pop_first().map(|(_, v)| v.1).unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -738,16 +825,33 @@ fn predict(
                         y: p.pos.y as f64,
                         z: p.pos.z as f64,
                         vx: p.vel.x as f64,
+                        vy: 0.0,
                         vz: p.vel.y as f64,
+                        tilt: p.tilt as f64,
+                        tilt_dir: p.tilt_dir as f64,
                         size: p.size as f64,
                     }),
             );
             // (By id: the query's order may change between a tick and its replay.)
             extra.sort_by_key(|o| o.id);
-            map.others.insert(k, extra.clone());
-            extra
+            map.others.insert(k, (lag, extra.clone()));
+            (lag, extra)
         }
     };
+    // They are drawn `lag` ticks in the past: the own bean bumps into where they will be by now, going on as they
+    // went; its tackles connect with them as drawn, as the server judges them.
+    let ahead: Vec<OtherBody> = extra
+        .iter()
+        .map(|o| {
+            let s = f64::from(lag) * DT;
+            OtherBody {
+                x: o.x + o.vx * s,
+                z: o.z + o.vz * s,
+                ..*o
+            }
+        })
+        .collect();
+    let drawn = |_: u32, b: u32| extra.iter().find(|o| o.id == b).copied();
     let full = &mut *full;
     // A body from the previous arena may stand on a collider this world does not have.
     if full
@@ -775,7 +879,27 @@ fn predict(
         scores: &mut scores,
         out: &mut out,
     };
-    tick_bodies(&mut map.world, t, &mut steppers, &extra, &mut run);
+    tick_bodies_with(
+        &mut TickScratch::default(),
+        &mut map.world,
+        t,
+        &mut steppers,
+        &ahead,
+        &drawn,
+        &mut run,
+    );
+    if let Some(mut hits) = hits {
+        write_hits(
+            &mut hits,
+            k,
+            id.0,
+            rollback.is_some(),
+            Some(lag),
+            &full.body,
+            &ev.0,
+            &extra,
+        );
+    }
     if rollback.is_none() {
         cues.write_batch(out.iter().filter_map(|o| match o {
             MapOut::Sfx(s) => Some(Cue::Sfx((*s).into())),
@@ -786,6 +910,8 @@ fn predict(
     if !map.gone(id.0) {
         map.spec.logic.bean(id.0, &mut full.body, t);
     }
+    let snapped = full.teleports != teleports || full.body.in_portal();
+    smooth.predicted(k, &full.body, rollback.is_some(), snapped);
     stats.ticks += 1;
     if rollback.is_none() {
         let (b, e) = (&full.body, &ev.0);
@@ -795,7 +921,7 @@ fn predict(
             // (Into a portal: the same spring.)
             (e.bounced || e.portal_in, Cue::Bounced),
             (e.knocked, Cue::Knocked),
-            (e.stunned && !e.knocked, Cue::Hit),
+            ((e.stunned && !e.knocked) || e.tackles > 0, Cue::Hit),
             (e.bumped > 5.0, Cue::Bumped(e.bumped as f32)),
             (
                 !was_grounded && b.grounded && b.land_impact > 0.3,
@@ -825,6 +951,80 @@ fn predict(
             b.pos.z
         );
     }
+}
+
+/// `--trace-hits` lines of predicted tick k.
+#[allow(clippy::too_many_arguments)]
+fn write_hits(
+    hits: &mut HitTrace,
+    k: i64,
+    id: u32,
+    replay: bool,
+    view: Option<u32>,
+    b: &Body,
+    ev: &StepEvents,
+    extra: &[OtherBody],
+) {
+    let c = if replay { 'c' } else { 'C' };
+    let v3 = |x: f64, y: f64, z: f64| format!("{x:.2},{y:.2},{z:.2}");
+    // A replay that ends elsewhere than the prediction it replaces: the correction the drawing jumps by.
+    let now = (b.pos, b.vel, b.yaw);
+    if let Some((p, v, y)) = hits.pred.insert(k, now).filter(|_| replay) {
+        let (dp, dv) = (b.pos - p, b.vel - v);
+        let dy = (b.yaw - y).sin().atan2((b.yaw - y).cos());
+        if dp.length() > 1e-3 || dv.length() > 1e-2 || dy.abs() > 1e-3 {
+            let _ = writeln!(
+                hits.out,
+                "c {k} {id} corr dpos={} dvel={} dyaw={dy:.3}",
+                v3(dp.x, dp.y, dp.z),
+                v3(dv.x, dv.y, dv.z)
+            );
+        }
+    }
+    while hits.pred.len() > 256 {
+        hits.pred.pop_first();
+    }
+    // (It swings a tick either way as frames and ticks beat: only a real change.)
+    if let Some(v) = view
+        && !replay
+        && hits.view.is_none_or(|w| v.abs_diff(w) >= 2)
+    {
+        hits.view = view;
+        let _ = writeln!(hits.out, "{c} {k} {id} view {v}");
+    }
+    for n in &ev.notes {
+        if replay || hits.quiet.fresh(k, id, n) {
+            let _ = writeln!(hits.out, "{c} {k} {id} {n}");
+        }
+    }
+    if ev.knocked {
+        let _ = writeln!(
+            hits.out,
+            "{c} {k} {id} state {:?} v={}",
+            b.state,
+            v3(b.vel.x, b.vel.y, b.vel.z)
+        );
+    }
+    if beans::tackling(b) {
+        let _ = writeln!(
+            hits.out,
+            "{c} {k} {id} {:?} pos={} v={}",
+            b.state,
+            v3(b.pos.x, b.pos.y, b.pos.z),
+            v3(b.vel.x, b.vel.y, b.vel.z)
+        );
+        let cb = beans::Capsule::of_body(b);
+        for o in extra.iter().filter(|o| m::hypot(o.x - b.pos.x, o.z - b.pos.z) <= 4.0) {
+            let _ = writeln!(
+                hits.out,
+                "{c} {k} {id}   near {} drawn={} gap={:.2}",
+                o.id,
+                v3(o.x, o.y, o.z),
+                beans::gap(&cb, &beans::Capsule::of_other(o))
+            );
+        }
+    }
+    let _ = hits.out.flush();
 }
 
 /// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall
@@ -1043,5 +1243,42 @@ fn send_emotes(
         .find_map(|p| EMOTE_PAD.iter().position(|b| p.just_pressed(*b)));
     if let Some(i) = key.or(pad) {
         crate::session::send(&mut senders, ClientMsg::Emote(i as u8 + 1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(z: f64) -> Body {
+        let mut b = Body::new(1);
+        b.pos.z = z;
+        b
+    }
+
+    #[test]
+    fn a_correction_is_drawn_away_and_fades() {
+        let mut s = Smoothing::default();
+        s.predicted(10, &at(1.0), false, false);
+        s.predicted(10, &at(0.8), true, false);
+        s.frame(0.0);
+        assert!((s.pos.z - 0.2).abs() < 1e-6, "{}", s.pos.z);
+        for _ in 0..30 {
+            s.frame(1.0 / 60.0);
+        }
+        assert!(s.pos.z.abs() < 0.01, "{}", s.pos.z);
+    }
+
+    #[test]
+    fn a_respawn_or_a_far_correction_is_not_smoothed() {
+        let mut s = Smoothing::default();
+        s.predicted(10, &at(1.0), false, false);
+        s.predicted(10, &at(9.0), true, false);
+        s.frame(0.0);
+        assert_eq!(s.pos, Vec3::ZERO);
+        s.predicted(11, &at(1.0), false, false);
+        s.predicted(11, &at(0.9), true, true);
+        s.frame(0.0);
+        assert_eq!(s.pos, Vec3::ZERO);
     }
 }

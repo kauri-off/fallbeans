@@ -81,6 +81,8 @@ impl Plugin for ProtocolPlugin {
             config: lightyear::prelude::input::InputConfig {
                 send_interval: INPUT_SEND_INTERVAL,
                 packet_redundancy: INPUT_REDUNDANCY,
+                // The client's interpolation delay rides along: tackles are judged by what the player saw.
+                lag_compensation: true,
                 ..default()
             },
         });
