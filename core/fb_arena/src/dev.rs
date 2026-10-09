@@ -82,13 +82,13 @@ impl Arena {
         true
     }
 
-    pub fn dev_grab(&mut self, actor: PlayerId, target: PlayerId, seconds: f64) -> Result<(), &'static str> {
+    pub fn dev_grab(&mut self, actor: PlayerId, target: PlayerId, seconds: f64) -> bool {
         self.op(Op::Grab { actor, target, seconds });
         let (Some(a), Some(o)) = (self.index(actor), self.index(target)) else {
-            return Err("no such beans in play");
+            return false;
         };
         if a == o || self.pawns[a].status != PawnStatus::Play || self.pawns[o].status != PawnStatus::Play {
-            return Err("no such beans in play");
+            return false;
         }
         let t = self.time();
         let p = &mut self.pawns[a];
@@ -96,7 +96,7 @@ impl Arena {
         p.grabbing = Some(target);
         p.hold_since = t;
         self.pawns[o].struggle = 0;
-        Ok(())
+        true
     }
 
     /// Replays: applies a recorded operation.
@@ -114,7 +114,7 @@ impl Arena {
                 self.dev_kill(id);
             }
             Op::Grab { actor, target, seconds } => {
-                let _ = self.dev_grab(actor, target, seconds);
+                self.dev_grab(actor, target, seconds);
             }
             Op::Bots(on) => self.set_bots_on(on),
             Op::Freeze => self.freeze(),

@@ -1,4 +1,5 @@
 //! Self-update from the latest GitHub release (NSIS and AppImage install it; Flatpak links to it).
+use core::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,12 +81,36 @@ pub enum State {
     Restarting,
 }
 
+/// Why an update check or install failed.
+#[derive(Debug)]
+pub enum UpdateError {
+    Http { url: String, error: ureq::Error },
+    NotListed { name: String },
+    NotAFileName { name: String },
+    File { path: PathBuf, error: std::io::Error },
+    Mismatch { name: String },
+    Flatpak,
+}
+
+impl fmt::Display for UpdateError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UpdateError::Http { url, error } => write!(f, "{url}: {error}"),
+            UpdateError::NotListed { name } => write!(f, "{name} is not in {SUMS}"),
+            UpdateError::NotAFileName { name } => write!(f, "{name}: not a file name"),
+            UpdateError::File { path, error } => write!(f, "{}: {error}", path.display()),
+            UpdateError::Mismatch { name } => write!(f, "{name}: the download does not match the release"),
+            UpdateError::Flatpak => f.write_str("a Flatpak updates from its file"),
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct Update {
     pub install: Option<Install>,
     pub state: State,
     checking: Option<Job<Option<Release>>>,
-    working: Option<Job<Result<(), String>>>,
+    working: Option<Job<Result<(), UpdateError>>>,
     got: Arc<AtomicU64>,
     total: u64,
     release: Option<Release>,
@@ -194,14 +219,14 @@ struct GithubAsset {
 }
 
 /// The latest release, if newer than this build.
-fn latest(install: &Install) -> Result<Option<Release>, String> {
+fn latest(install: &Install) -> Result<Option<Release>, UpdateError> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let v: GithubRelease = agent(Some(Duration::from_secs(10)), None)
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .call()
         .and_then(|mut r| r.body_mut().read_json())
-        .map_err(|e| format!("{url}: {e}"))?;
+        .map_err(|error| UpdateError::Http { url, error })?;
     let tag = v.tag_name.as_str();
     if !newer(tag, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
@@ -255,7 +280,7 @@ fn poll(mut update: ResMut<Update>, mut actions: MessageReader<crate::ui::UiActi
         }
         Some(Some(Err(e))) => {
             warn!("update: {e}");
-            u.state = State::Failed(e);
+            u.state = State::Failed(e.to_string());
         }
         Some(None) => u.state = State::Failed("the update thread is gone".into()),
     }
@@ -307,13 +332,20 @@ fn fetch_and_install(
     size: u64,
     sums_url: &str,
     got: &AtomicU64,
-) -> Result<(), String> {
+) -> Result<(), UpdateError> {
+    let file_error = |path: &std::path::Path| {
+        let path = path.to_path_buf();
+        move |error| UpdateError::File { path, error }
+    };
     let sums = agent(Some(Duration::from_secs(30)), None)
         .get(sums_url)
         .call()
         .and_then(|mut r| r.body_mut().read_to_string())
-        .map_err(|e| format!("{sums_url}: {e}"))?;
-    let want = expected_sum(&sums, name).ok_or_else(|| format!("{name} is not in {SUMS}"))?;
+        .map_err(|error| UpdateError::Http {
+            url: sums_url.into(),
+            error,
+        })?;
+    let want = expected_sum(&sums, name).ok_or_else(|| UpdateError::NotListed { name: name.into() })?;
     let path = match install {
         Install::AppImage(p) => {
             let mut n = p.as_os_str().to_owned();
@@ -324,30 +356,32 @@ fn fetch_and_install(
         _ => std::path::Path::new(name)
             .file_name()
             .map(|n| std::env::temp_dir().join(n))
-            .ok_or_else(|| format!("{name}: not a file name"))?,
+            .ok_or_else(|| UpdateError::NotAFileName { name: name.into() })?,
     };
     let mut resp = agent(None, Some(download_budget(size)))
         .get(url)
         .call()
-        .map_err(|e| format!("{url}: {e}"))?;
-    let mut file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|error| UpdateError::Http { url: url.into(), error })?;
+    let mut file = std::fs::File::create(&path).map_err(file_error(&path))?;
     let mut hash = Sha256::new();
     let mut total = 0u64;
     let fetched = (|| {
         let mut body = resp.body_mut().as_reader();
         let mut buf = vec![0; 1 << 16];
         loop {
-            let n = body.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
+            let n = body.read(&mut buf).map_err(|e| UpdateError::Http {
+                url: url.into(),
+                error: e.into(),
+            })?;
             if n == 0 {
                 break;
             }
             hash.update(&buf[..n]);
-            file.write_all(&buf[..n])
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            file.write_all(&buf[..n]).map_err(file_error(&path))?;
             total += n as u64;
             got.store(total, Ordering::Relaxed);
         }
-        file.sync_all().map_err(|e| format!("{}: {e}", path.display()))
+        file.sync_all().map_err(file_error(&path))
     })();
     drop(file);
     let have: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
@@ -355,7 +389,7 @@ fn fetch_and_install(
     let checked = fetched.and_then(|()| {
         (total == size && have == want)
             .then_some(())
-            .ok_or_else(|| format!("{name}: the download does not match the release"))
+            .ok_or_else(|| UpdateError::Mismatch { name: name.into() })
     });
     if let Err(e) = checked {
         let _ = std::fs::remove_file(&path);
@@ -378,22 +412,21 @@ fn fetch_and_install(
                 #[cfg(not(windows))]
                 cmd.arg(restart);
             }
-            cmd.spawn().map_err(|e| format!("{}: {e}", path.display()))?;
+            cmd.spawn().map_err(file_error(&path))?;
         }
         Install::AppImage(target) => {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(file_error(&path))?;
             }
-            std::fs::rename(&path, target).map_err(|e| format!("{}: {e}", target.display()))?;
+            std::fs::rename(&path, target).map_err(file_error(target))?;
             std::process::Command::new(target)
                 .args(std::env::args_os().skip(1))
                 .spawn()
-                .map_err(|e| format!("{}: {e}", target.display()))?;
+                .map_err(file_error(target))?;
         }
-        Install::Flatpak => return Err("a Flatpak updates from its file".into()),
+        Install::Flatpak => return Err(UpdateError::Flatpak),
     }
     Ok(())
 }

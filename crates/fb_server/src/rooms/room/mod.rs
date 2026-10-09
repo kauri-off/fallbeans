@@ -32,6 +32,8 @@ mod dev;
 mod flow;
 mod sim;
 
+pub use dev::DevError;
+
 /// Control messages per second from one player.
 const MSG_RATE: u32 = 60;
 /// Shortest time between two chat lines of one player (s).

@@ -1,5 +1,6 @@
 //! Connecting: a connect token from the HTTP API, then UDP (WebSocket if UDP is silent for 2 s); after a drop, again.
 //! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
+use core::fmt;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::time::Duration;
 use std::sync::LazyLock;
@@ -42,7 +43,7 @@ pub struct Conn {
     pub connected: bool,
     /// The player's identity from the HTTP API, kept for later requests: the same player after a reconnect.
     pub identity: Option<String>,
-    asking: Option<Job<Result<SessionReply, String>>>,
+    asking: Option<Job<Result<SessionReply, SessionError>>>,
     /// When to ask the HTTP API for a connection.
     next_try: Option<f32>,
     /// `auto` on WebSocket: the UDP check under way, when the next one is due, and that UDP worked.
@@ -214,8 +215,30 @@ pub fn agent() -> &'static ureq::Agent {
     &AGENT
 }
 
+/// Why a session request brought no connection.
+#[derive(Debug)]
+pub enum SessionError {
+    Http { url: String, error: ureq::Error },
+    NoThread(std::io::Error),
+    ThreadGone,
+    NoToken { http: String },
+    Netcode(lightyear::netcode::Error),
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SessionError::Http { url, error } => write!(f, "{url}: {error}"),
+            SessionError::NoThread(e) => write!(f, "no thread for the request: {e}"),
+            SessionError::ThreadGone => f.write_str("the request thread is gone"),
+            SessionError::NoToken { http } => write!(f, "no connect token from {http}"),
+            SessionError::Netcode(e) => write!(f, "netcode client: {e}"),
+        }
+    }
+}
+
 /// `POST <url>` of the session API (blocking).
-pub fn request(url: &str, req: &SessionRequest) -> Result<SessionReply, String> {
+pub fn request(url: &str, req: &SessionRequest) -> Result<SessionReply, SessionError> {
     agent()
         .post(url)
         .config()
@@ -223,7 +246,7 @@ pub fn request(url: &str, req: &SessionRequest) -> Result<SessionReply, String> 
         .build()
         .send_json(req)
         .and_then(|mut r| r.body_mut().read_json::<SessionReply>())
-        .map_err(|e| format!("{url}: {e}"))
+        .map_err(|error| SessionError::Http { url: url.into(), error })
 }
 
 pub fn token_of(reply: &SessionReply) -> Option<ConnectToken> {
@@ -298,7 +321,7 @@ fn ask(conn: &mut Conn, now: f32) {
     conn.started = now;
     match Job::spawn("session", move || request(&url, &req)) {
         Ok(job) => conn.asking = Some(job),
-        Err(e) => failed(conn, format!("no thread for the request: {e}"), now),
+        Err(e) => failed(conn, SessionError::NoThread(e), now),
     }
 }
 
@@ -319,10 +342,10 @@ fn spawn_client(
     conn: &Conn,
     token: ConnectToken,
     now: f32,
-) -> Result<Entity, String> {
+) -> Result<Entity, SessionError> {
     let transport = conn.transport;
-    let netcode = NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default())
-        .map_err(|e| format!("netcode client: {e:?}"))?;
+    let netcode =
+        NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()).map_err(SessionError::Netcode)?;
     // The server address comes from the token (`PeerAddr` set by `NetcodeClient`).
     let local = local_addr_for(netcode.inner.server_addr());
     let mut e = commands.spawn((
@@ -460,7 +483,7 @@ fn receive_session(
     let Some(reply) = Job::take(&mut conn.asking) else {
         return;
     };
-    let reply = match reply.unwrap_or_else(|| Err("the request thread is gone".to_string())) {
+    let reply = match reply.unwrap_or(Err(SessionError::ThreadGone)) {
         Ok(r) => r,
         Err(e) => return failed(&mut conn, e, now),
     };
@@ -481,8 +504,8 @@ fn receive_session(
         return;
     }
     let Some(token) = token_of(&reply) else {
-        let e = format!("no connect token from {}", conn.http);
-        failed(&mut conn, e, now);
+        let http = conn.http.clone();
+        failed(&mut conn, SessionError::NoToken { http }, now);
         return;
     };
     match spawn_client(&mut commands, &opts, &conn, token, now) {
@@ -496,7 +519,7 @@ fn receive_session(
 }
 
 /// A session request failed.
-fn failed(conn: &mut Conn, e: String, now: f32) {
+fn failed(conn: &mut Conn, e: SessionError, now: f32) {
     conn.next_try = Some(now + RETRY_S);
     if let Some(n) = again(&mut conn.failing, format!("session: {e}")) {
         warn!("session: {e}{n}");

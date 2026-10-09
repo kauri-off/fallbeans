@@ -1,14 +1,51 @@
 //! Dev commands.
+use core::fmt;
+
 use super::*;
+
+/// Why a dev command did not run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DevError {
+    Off,
+    NotHost,
+    BadWarp,
+    NoRound,
+    NotGames(Vec<MapId>),
+    NotPaused,
+    NoBean(PlayerId),
+    NoCheckpoint(u32),
+    NoFinish,
+    Full,
+    NoGrab,
+}
+
+impl fmt::Display for DevError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DevError::Off => f.write_str("dev commands are off"),
+            DevError::NotHost => f.write_str("dev commands are the host's"),
+            DevError::BadWarp => f.write_str("warp by some seconds"),
+            DevError::NoRound => f.write_str("no round running"),
+            DevError::NotGames(ids) => {
+                let ids: Vec<&str> = ids.iter().map(|m| m.as_str()).collect();
+                write!(f, "not games: {}", ids.join(", "))
+            }
+            DevError::NotPaused => f.write_str("pause first (rate 0)"),
+            DevError::NoBean(id) => write!(f, "no bean #{id} in this arena"),
+            DevError::NoCheckpoint(i) => write!(f, "this map has no checkpoint {i}"),
+            DevError::NoFinish => f.write_str("this map has no finish"),
+            DevError::Full => f.write_str("room is full"),
+            DevError::NoGrab => f.write_str("no such beans in play"),
+        }
+    }
+}
 
 impl Room {
     /// Runs a dev command for player `by`: a short result, or why it cannot.
-    pub fn dev_command(&mut self, by: PlayerId, cmd: &DevCmd) -> Result<String, String> {
+    pub fn dev_command(&mut self, by: PlayerId, cmd: &DevCmd) -> Result<String, DevError> {
         let target = |a: &Arena, id: Option<PlayerId>| {
             let tid = id.unwrap_or(by);
-            a.pawn(tid)
-                .map(|_| tid)
-                .ok_or_else(|| format!("no bean #{tid} in this arena"))
+            a.pawn(tid).map(|_| tid).ok_or(DevError::NoBean(tid))
         };
         match cmd {
             DevCmd::SkipIntro => {
@@ -21,7 +58,7 @@ impl Room {
             }
             DevCmd::Warp { s } => {
                 if !s.is_finite() || *s <= 0.0 {
-                    return Err("warp by some seconds".into());
+                    return Err(DevError::BadWarp);
                 }
                 let capped = s.min(WARP_MAX_S);
                 self.warp((capped * TICK_RATE as f64).round());
@@ -33,19 +70,15 @@ impl Room {
             }
             DevCmd::EndRound => {
                 if !self.round_live() {
-                    return Err("no round running".into());
+                    return Err(DevError::NoRound);
                 }
                 self.end_round();
                 Ok("round ended".into())
             }
             DevCmd::Start { games, rounds, bots } => {
-                let bad: Vec<&str> = games
-                    .iter()
-                    .filter(|&&g| Game::by_id(g).is_none())
-                    .map(|g| g.as_str())
-                    .collect();
+                let bad: Vec<MapId> = games.iter().copied().filter(|&g| Game::by_id(g).is_none()).collect();
                 if !bad.is_empty() {
-                    return Err(format!("unknown games: {}", bad.join(", ")));
+                    return Err(DevError::NotGames(bad));
                 }
                 if !matches!(self.stage, Stage::Lobby) {
                     self.back_to_lobby();
@@ -99,7 +132,7 @@ impl Room {
             }
             DevCmd::Step { ticks } => {
                 if self.clock.rate != 0.0 {
-                    return Err("pause first (rate 0)".into());
+                    return Err(DevError::NotPaused);
                 }
                 self.warp(f64::from(*ticks));
                 Ok(format!("stepped {ticks} ticks (tick {})", self.arena.tick))
@@ -118,8 +151,8 @@ impl Room {
                 };
                 let Some(at) = self.arena.dev_place(id, place) else {
                     return Err(match to {
-                        Goto::Checkpoint(i) => format!("this map has no checkpoint {i}"),
-                        _ => "this map has no finish".into(),
+                        Goto::Checkpoint(i) => DevError::NoCheckpoint(*i),
+                        _ => DevError::NoFinish,
                     });
                 };
                 self.arena.dev_teleport(id, at, None);
@@ -145,7 +178,7 @@ impl Room {
                     }
                 }
                 if added.is_empty() {
-                    return Err("room is full".into());
+                    return Err(DevError::Full);
                 }
                 self.send_lobby();
                 Ok(format!("bots {}", added.join(", ")))
@@ -167,7 +200,9 @@ impl Room {
             DevCmd::Grab { actor, target: t, s } => {
                 let actor = target(&self.arena, *actor)?;
                 let t = target(&self.arena, Some(*t))?;
-                self.arena.dev_grab(actor, t, s.unwrap_or(3.0)).map_err(String::from)?;
+                if !self.arena.dev_grab(actor, t, s.unwrap_or(3.0)) {
+                    return Err(DevError::NoGrab);
+                }
                 Ok(format!("#{actor} holds #{t}"))
             }
             DevCmd::Seed { seed } => {

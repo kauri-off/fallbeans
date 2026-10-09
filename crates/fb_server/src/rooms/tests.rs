@@ -566,7 +566,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
     assert!(has(|o| matches!(o, fb_arena::Op::Late { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Grab { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Bots(_))), "{:?}", rec.ops);
-    let r = fb_arena::replay(&rec, |_| false).unwrap();
+    let r = fb_arena::replay(&rec, |_| false);
     assert!(r.ticks > 900);
     assert!(r.matches);
 }
@@ -644,7 +644,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     cmd(&mut t, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
     assert_eq!(rec.game, MapId::DoorDash);
-    let r = fb_arena::replay(&rec, |_| false).unwrap();
+    let r = fb_arena::replay(&rec, |_| false);
     assert!(r.ticks > 900);
     assert!(r.matches);
 }

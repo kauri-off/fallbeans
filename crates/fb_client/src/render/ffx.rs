@@ -9,6 +9,7 @@
 )]
 
 use core::ffi::{CStr, c_char, c_void};
+use core::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -348,15 +349,15 @@ impl Api {
     }
 
     /// The first DLL found that has the entry points.
-    pub fn load() -> Result<Api, String> {
-        let mut why = format!("no {DLL} beside the game");
+    pub fn load() -> Result<Api, FfxError> {
+        let mut why = FfxError::NoDll;
         for path in Self::places().into_iter().filter(|p| p.is_file()) {
             match Self::open(&path) {
                 Ok(api) => {
                     info!("upscaling: FidelityFX from {}", path.display());
                     return Ok(api);
                 }
-                Err(e) => why = format!("{}: {e}", path.display()),
+                Err(error) => why = FfxError::Load { path, error },
             }
         }
         Err(why)
@@ -466,11 +467,11 @@ unsafe impl Send for Upscaler {}
 impl Upscaler {
     /// A context upscaling `render` (at most) to `out` on wgpu's Vulkan device, with the `flags` of
     /// `ffxCreateContextDescUpscale`.
-    pub fn new(api: Arc<Api>, device: &wgpu::Device, render: UVec2, out: UVec2, flags: u32) -> Result<Self, String> {
+    pub fn new(api: Arc<Api>, device: &wgpu::Device, render: UVec2, out: UVec2, flags: u32) -> Result<Self, FfxError> {
         // SAFETY: only reads wgpu-hal's handles of the device; they stay valid while `device` (kept in the
         // context) lives, and FidelityFX does not destroy them.
         let mut backend = unsafe {
-            let hal = device.as_hal::<Vulkan>().ok_or("not a Vulkan device")?;
+            let hal = device.as_hal::<Vulkan>().ok_or(FfxError::NotVulkan)?;
             DEVICE_PROC_ADDR.get_or_init(|| hal.shared_instance().raw_instance().fp_v1_0().get_device_proc_addr);
             CreateBackendVk {
                 header: Header::of(CREATE_BACKEND_VK),
@@ -494,7 +495,10 @@ impl Upscaler {
         // through the call; no allocation callbacks (FidelityFX's own allocator).
         let code = unsafe { (api.create)(&mut ctx, &mut desc.header, core::ptr::null()) };
         if code != 0 || ctx.is_null() {
-            return Err(format!("ffxCreateContext: {}", code_name(code)));
+            return Err(FfxError::Code {
+                call: "ffxCreateContext",
+                code,
+            });
         }
         let mut up = Upscaler {
             api,
@@ -568,7 +572,7 @@ impl Upscaler {
         &mut self,
         command_buffer: ash::vk::CommandBuffer,
         d: &mut DispatchUpscale,
-    ) -> Result<(), String> {
+    ) -> Result<(), FfxError> {
         d.header = Header::of(DISPATCH_UPSCALE);
         d.command_list = command_buffer.as_raw() as usize as *mut c_void;
         // SAFETY: as the caller promises; the descriptor is `ffx_upscale.h`'s and lives through the call.
@@ -576,7 +580,10 @@ impl Upscaler {
         if code == 0 {
             Ok(())
         } else {
-            Err(format!("ffxDispatch: {}", code_name(code)))
+            Err(FfxError::Code {
+                call: "ffxDispatch",
+                code,
+            })
         }
     }
 }
@@ -590,6 +597,26 @@ impl Drop for Upscaler {
                 let _ = hal.raw_device().device_wait_idle();
             }
             (self.api.destroy)(&mut self.ctx, core::ptr::null());
+        }
+    }
+}
+
+/// Why FidelityFX does not upscale.
+#[derive(Debug)]
+pub enum FfxError {
+    NoDll,
+    Load { path: PathBuf, error: libloading::Error },
+    NotVulkan,
+    Code { call: &'static str, code: u32 },
+}
+
+impl fmt::Display for FfxError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FfxError::NoDll => write!(f, "no {DLL} beside the game"),
+            FfxError::Load { path, error } => write!(f, "{}: {error}", path.display()),
+            FfxError::NotVulkan => f.write_str("not on Vulkan"),
+            FfxError::Code { call, code } => write!(f, "{call}: {}", code_name(*code)),
         }
     }
 }

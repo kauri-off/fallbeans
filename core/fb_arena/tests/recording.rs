@@ -42,7 +42,7 @@ fn replays_end_in_the_recorded_state() {
         let json = serde_json::to_string(&rec).unwrap();
         assert!(json.contains(&format!("\"game\":\"{map}\"")), "{map}");
         let rec = serde_json::from_str(&json).unwrap();
-        let r = replay(&rec, |_| false).unwrap();
+        let r = replay(&rec, |_| false);
         assert!(r.matches, "{map}: replay {} vs recorded {}", r.hash, a.state_hash());
     }
 }
@@ -70,10 +70,10 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
         k += 1;
     }
     let rec = a.take_recording().unwrap();
-    assert!(replay(&rec, |_| false).unwrap().matches);
+    assert!(replay(&rec, |_| false).matches);
     let mut unskipped = rec.clone();
     unskipped.ops.retain(|o| !matches!(o.1, fb_arena::Op::Skip(_)));
-    assert!(!replay(&unskipped, |_| false).unwrap().matches);
+    assert!(!replay(&unskipped, |_| false).matches);
 }
 
 #[test]

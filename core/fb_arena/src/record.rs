@@ -166,7 +166,7 @@ pub struct Replay {
 }
 
 /// Plays a recorded round again; `each` sees the arena after every tick (returning true stops).
-pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<Replay, String> {
+pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Replay {
     let map = fb_maps::by_id(rec.game);
     let (mut a, _) = Arena::new(map, rec.kind, rec.seed, rec.tick0, &rec.participants, false);
     let first = a.tick;
@@ -205,10 +205,10 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
     }
     let hash = a.state_hash();
     let ticks = a.tick - first;
-    Ok(Replay {
+    Replay {
         matches: !stopped && hash == rec.hash,
         hash,
         ticks,
         arena: a,
-    })
+    }
 }

@@ -139,7 +139,7 @@ fn prepare(
                     Some(u)
                 }
                 Err(err) => {
-                    faults.report(Upscaler::Fsr3, err);
+                    faults.report(Upscaler::Fsr3, err.to_string());
                     continue;
                 }
             },
@@ -257,12 +257,12 @@ fn upscale(
     let done = unsafe {
         encoder.as_hal_mut::<Vulkan, _, _>(|e| match e {
             Some(e) => fsr.dispatch(e.raw_handle(), &mut d),
-            None => Err("not a Vulkan command encoder".to_string()),
+            None => Err(ffx::FfxError::NotVulkan),
         })
     };
     match done {
         Ok(()) => ctx.add_command_buffer(encoder.finish()),
-        Err(e) => faults.report(Upscaler::Fsr3, e),
+        Err(e) => faults.report(Upscaler::Fsr3, e.to_string()),
     }
     span.end(ctx.command_encoder());
 }

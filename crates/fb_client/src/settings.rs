@@ -2,6 +2,7 @@
 //! identity each server gave (`identity.json`). One folder per profile in the system's settings directory;
 //! `--profile b` is a second player on the same machine. Flags (`--name`, `--token`, `--color`) win over the
 //! files for the run and are not saved.
+use core::fmt;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::fs;
@@ -398,6 +399,22 @@ pub struct Identities {
     file: Option<PathBuf>,
 }
 
+/// Why the identity file was not written.
+#[derive(Debug)]
+enum SaveError {
+    Json(serde_json::Error),
+    Write { path: PathBuf, error: std::io::Error },
+}
+
+impl fmt::Display for SaveError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SaveError::Json(e) => e.fmt(f),
+            SaveError::Write { path, error } => write!(f, "{}: {error}", path.display()),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct IdentityFile {
     servers: BTreeMap<String, String>,
@@ -421,13 +438,16 @@ impl Identities {
         }
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&self) -> Result<(), SaveError> {
         let Some(path) = &self.file else { return Ok(()) };
         let file = IdentityFile {
             servers: self.by_server.clone(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-        write_atomic(path, json.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+        let json = serde_json::to_string_pretty(&file).map_err(SaveError::Json)?;
+        write_atomic(path, json.as_bytes()).map_err(|error| SaveError::Write {
+            path: path.clone(),
+            error,
+        })
     }
 
     /// The file at `path` (none yet: no identities); one that cannot be read is set aside, said in `notes`.

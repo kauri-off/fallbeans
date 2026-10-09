@@ -236,13 +236,13 @@ impl Room {
             }
             ClientMsg::Dev { q, cmd } => {
                 let result = if !self.dev() {
-                    Err("dev commands are off".into())
+                    Err(DevError::Off)
                 } else if !host {
-                    Err("dev commands are the host's".into())
+                    Err(DevError::NotHost)
                 } else {
                     let result = self.dev_command(id, cmd);
                     let ok = result.is_ok();
-                    let (Ok(msg) | Err(msg)) = &result;
+                    let msg = result.as_ref().map_or_else(ToString::to_string, Clone::clone);
                     info!(room = %self.id, %id, cmd = cmd.name(), ok, msg, "dev");
                     self.arena.note(
                         "dev",
@@ -251,6 +251,7 @@ impl Room {
                     );
                     result
                 };
+                let result = result.map_err(|e| e.to_string());
                 self.send_to(id, DevReply { q: *q, result }.into());
             }
         }
