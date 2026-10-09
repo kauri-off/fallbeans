@@ -19,16 +19,27 @@ fn a_leaving_holder_hands_the_tail_on() {
             arena.add_pawn_at(id, false, Some(id.0 as usize - 1));
         }
         arena.step(0, |_| InputFrame::IDLE);
-        // Everybody but bean 4 leaves: whatever tails they held end up with it, and it scores.
+        // Everybody but bean 4 leaves: whatever tails they held end up with it, and it scores; a tail it
+        // cannot take as well goes with its holder.
         for id in (1..=3).map(PlayerId) {
             arena.remove_pawn(id);
         }
         let end = 3 * i64::from(TICK_RATE);
+        let mut last = None;
         for k in 1..=end {
-            arena.step(k, |_| InputFrame::IDLE);
+            for e in arena.step(k, |_| InputFrame::IDLE) {
+                if let ArenaEvent::Event {
+                    ev: MapEvent::Tails { ids, .. },
+                    ..
+                } = e
+                {
+                    last = Some(ids);
+                }
+            }
         }
         let score = arena.scores.get(&PlayerId(4)).copied().unwrap_or(0);
         assert!(score >= 2, "seed {seed}: the last bean scored {score}");
+        assert!(last.is_none_or(|ids| ids == [PlayerId(4)]), "seed {seed}");
     }
 }
 

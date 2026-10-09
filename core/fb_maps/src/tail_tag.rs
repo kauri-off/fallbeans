@@ -133,6 +133,10 @@ impl MapLogic for Tails {
                     .min_by_key(|&a| cx.score(a));
                 if let Some(to) = to {
                     self.pass(cx, gone, to);
+                } else {
+                    // Everybody here has one: nobody could take it, nor score for it.
+                    let ids = self.tails.iter().copied().filter(|&id| id != gone).collect();
+                    self.emit(cx, MapEvent::Tails { ids, by: gone, t });
                 }
             }
             // Tails held through their immunity change hands as it ends. A hold renews the grabber's slow-down
