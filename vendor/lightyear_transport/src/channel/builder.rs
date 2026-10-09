@@ -233,6 +233,8 @@ pub struct Transport {
     pub send: Vec<SendPayload>,
     /// Buffer to store payloads that will be processed by the transport and stored in receive channels.
     pub recv: Vec<RecvPayload>,
+    /// fallbeans patch: a packet was acked but its messages were refused (see `receive_failed`).
+    pub(crate) receive_failed: bool,
 }
 
 impl Transport {
@@ -253,6 +255,7 @@ impl Transport {
             recv_channel,
             send: vec![],
             recv: vec![],
+            receive_failed: false,
         }
     }
 
@@ -279,6 +282,12 @@ impl Transport {
     /// Returns the policy used to classify unacknowledged packets as lost.
     pub fn packet_nack_settings(&self) -> PacketNackSettings {
         self.packet_manager.nack_settings()
+    }
+
+    /// fallbeans patch: a received packet was acked but its messages were not all taken in, so a
+    /// reliable channel may never deliver again. The link should be dropped.
+    pub fn receive_failed(&self) -> bool {
+        self.receive_failed
     }
 
     /// Number of packet payload buffers allocated because none was ready in the local pool.

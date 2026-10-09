@@ -129,6 +129,139 @@ mod tests {
         });
     }
 
+    /// The fullest message each kind can be stays well under what a peer reassembles: past it the message is
+    /// refused and the link dropped (`Transport::receive_failed`).
+    #[test]
+    fn largest_messages_fit_a_fragmented_message() {
+        use fb_proto::{
+            ArenaInfo, Award, AwardKind, Lobby, LobbyPlayer, Mode, Phase, Playlist, RoomInfo, RoomRef, Standing,
+        };
+        use fb_shared::game::ArenaKind;
+        use fb_shared::rules::{RoundNote, RoundRow};
+        use fb_shared::{CHAT_MAX, MAX_PLAYERS, MAX_ROOMS, NAME_MAX, ROOM_TITLE_MAX};
+        use lightyear::transport::channel::receive::MAX_FRAGMENTED_MESSAGE_BYTES;
+
+        // Four-byte characters, as many as a sanitized field keeps.
+        let text = |n: usize| "🫘".repeat(n);
+        let pids = || (1..=MAX_PLAYERS as u32).map(|i| u32::MAX - i).collect::<Vec<_>>();
+        let rooms = (0..MAX_ROOMS)
+            .map(|_| RoomInfo {
+                id: "k7qxmzzz".into(),
+                title: text(ROOM_TITLE_MAX),
+                private: true,
+                host: Some(text(NAME_MAX)),
+                players: u32::MAX,
+                bots: u32::MAX,
+                max: u32::MAX,
+                phase: Phase::Podium,
+            })
+            .collect();
+        let lobby = Lobby {
+            room: RoomRef {
+                id: Some("k7qxmzzz".into()),
+                title: text(ROOM_TITLE_MAX),
+                private: true,
+            },
+            phase: Phase::Podium,
+            host: Some(u32::MAX),
+            min: u32::MAX,
+            max: u32::MAX,
+            players: pids()
+                .into_iter()
+                .map(|id| LobbyPlayer {
+                    id,
+                    name: text(NAME_MAX),
+                    color: u8::MAX,
+                    outfit: Default::default(),
+                    score: i64::MIN,
+                    crowns: u32::MAX,
+                    spectator: true,
+                    bot: true,
+                    connected: true,
+                    ping: u32::MAX,
+                })
+                .collect(),
+            playlist: Playlist {
+                mode: Mode::Custom,
+                games: vec![text(32); 12],
+                rounds: u32::MAX,
+            },
+            fill: true,
+            pin: Some("0042".into()),
+            next: Some(u32::MAX),
+        };
+        let row = |id| RoundRow {
+            id,
+            place: usize::MAX,
+            points: i64::MIN,
+            penalty: i64::MIN,
+            delta: i64::MIN,
+            total: i64::MIN,
+            ok: true,
+            note: RoundNote::Finish(Some(f64::MAX)),
+            falls: u32::MAX,
+        };
+        let msgs = [
+            ServerMsg::Rooms {
+                rooms,
+                mine: Some("k7qxmzzz".into()),
+            },
+            ServerMsg::Lobby(lobby),
+            ServerMsg::Arena(ArenaInfo {
+                id: u32::MAX,
+                kind: ArenaKind::Podium,
+                game: text(32),
+                participants: pids(),
+                index: u32::MAX,
+                total: u32::MAX,
+                practice: true,
+                late: true,
+                finished: pids(),
+                out: pids(),
+                scores: pids().into_iter().map(|id| (id, i64::MIN)).collect(),
+            }),
+            ServerMsg::RoundEnd {
+                game: text(32),
+                index: u32::MAX,
+                total: u32::MAX,
+                rows: pids().into_iter().map(row).collect(),
+                practice: true,
+            },
+            ServerMsg::GameEnd {
+                standings: pids()
+                    .into_iter()
+                    .map(|id| Standing {
+                        id,
+                        name: text(NAME_MAX),
+                        color: u8::MAX,
+                        place: u32::MAX,
+                        total: i64::MIN,
+                        wins: u32::MAX,
+                        falls: u32::MAX,
+                    })
+                    .collect(),
+                awards: vec![
+                    Award {
+                        kind: AwardKind::Sly,
+                        id: u32::MAX,
+                        value: u32::MAX,
+                    };
+                    6 * MAX_PLAYERS
+                ],
+            },
+            ServerMsg::Chat {
+                id: u32::MAX,
+                name: text(NAME_MAX),
+                text: text(CHAT_MAX),
+            },
+        ];
+        let mut buf = vec![0u8; MAX_FRAGMENTED_MESSAGE_BYTES];
+        for m in &msgs {
+            let len = postcard::to_slice(m, &mut buf).map_or(usize::MAX, |b| b.len());
+            assert!(len <= MAX_FRAGMENTED_MESSAGE_BYTES / 4, "{len} bytes: {m:?}");
+        }
+    }
+
     #[test]
     fn garbage_does_not_panic() {
         let mut x = 0x2545_f491_u32;

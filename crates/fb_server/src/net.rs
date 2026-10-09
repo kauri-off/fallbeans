@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
 use fb_net::*;
-use lightyear::connection::client::{Connected, Disconnected};
+use lightyear::connection::client::{Connected, Disconnected, Disconnecting};
 use lightyear::netcode::{NetcodeServer, TokenUserData};
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
@@ -24,7 +24,7 @@ pub struct NetPlugin;
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start_server);
-        app.add_systems(Update, (reap_links, watch_server, shut_down));
+        app.add_systems(Update, (reap_links, drop_broken_links, watch_server, shut_down));
         app.add_observer(on_link);
         app.add_observer(on_connected);
         app.add_observer(on_disconnected);
@@ -153,6 +153,20 @@ fn reap_links(
     if reaped.0 > 0 && now - reaped.1 >= 60.0 {
         info!("let go of {} links that never connected", reaped.0);
         *reaped = (0, now);
+    }
+}
+
+/// A client whose packet was acked but whose messages were refused (too large, or a partial one expired):
+/// its reliable channels would never deliver again, so it goes and comes back with a fresh link.
+fn drop_broken_links(
+    links: Query<(Entity, &Transport, &RemoteId), (With<ClientOf>, With<Connected>)>,
+    mut commands: Commands,
+) {
+    for (link, transport, remote) in &links {
+        if transport.receive_failed() {
+            warn!("dropping {:?}: a reliable message from it was lost", remote.0);
+            commands.entity(link).insert(Disconnecting);
+        }
     }
 }
 

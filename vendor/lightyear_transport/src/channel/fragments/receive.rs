@@ -20,7 +20,7 @@ use tracing::trace;
 /// fallbeans patch: the largest message one fragmented message may claim. `FragmentConstructor::new`
 /// allocates `num_fragments × fragment_size` up front from the peer's varint, so without a cap one
 /// packet asks for any amount of memory. Fall Beans' largest message is the room list (16 rooms, ~9 KB).
-pub(crate) const MAX_FRAGMENTED_MESSAGE_BYTES: usize = 64 * 1024;
+pub const MAX_FRAGMENTED_MESSAGE_BYTES: usize = 64 * 1024;
 
 /// fallbeans patch: what all partial messages of one channel may hold at once. A new message past it is
 /// refused.
@@ -53,7 +53,10 @@ impl FragmentReceiver {
     /// (i.e. we probably lost some fragments and we will never complete the message)
     ///
     /// If we don't keep track of the last received time, we will never clean up the messages.
-    pub fn cleanup(&mut self, cleanup_time: Duration) {
+    ///
+    /// fallbeans patch: returns whether any message was dropped.
+    pub fn cleanup(&mut self, cleanup_time: Duration) -> bool {
+        let before = self.fragment_messages.len();
         let pending_bytes = &mut self.pending_bytes;
         self.fragment_messages.retain(|_, c| {
             let keep = c
@@ -65,7 +68,8 @@ impl FragmentReceiver {
                 *pending_bytes = pending_bytes.saturating_sub(c.reserved);
             }
             keep
-        })
+        });
+        self.fragment_messages.len() != before
     }
 
     /// Receive a fragment of a FragmentData message.

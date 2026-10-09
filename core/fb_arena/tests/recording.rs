@@ -59,7 +59,11 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
             a.skip_to(700);
             k = 701;
         }
-        a.step(k, |_| InputFrame { mx: 40, mz: 100, buttons: 0 });
+        a.step(k, |_| InputFrame {
+            mx: 40,
+            mz: 100,
+            buttons: 0,
+        });
         k += 1;
     }
     let rec = a.take_recording().unwrap();

@@ -103,11 +103,18 @@ impl TransportPlugin {
                 .receivers
                 .values_mut()
                 .for_each(|channel_receive| {
-                    channel_receive.update(time.elapsed());
+                    // fallbeans patch: an expired partial reliable message is a hole as well.
+                    if channel_receive.update(time.elapsed()) {
+                        transport.receive_failed = true;
+                    }
                 });
-            link.recv
+            // fallbeans patch: whether the failing packet's header (its acks) was already taken in.
+            let acked = core::cell::Cell::new(false);
+            let received = link
+                .recv
                 .drain()
                 .try_for_each(|packet| {
+                    acked.set(false);
                     let packet_len = packet.len();
                     #[cfg(feature = "metrics")]
                     metrics::gauge!("transport/recv_bytes").increment(packet_len as f64);
@@ -138,6 +145,7 @@ impl TransportPlugin {
                         .packet_manager
                         .header_manager
                         .process_recv_packet_header(&header, time.elapsed());
+                    acked.set(true);
 
                     #[cfg(feature = "std")]
                     par_commands.command_scope(|mut commands| {
@@ -279,11 +287,15 @@ impl TransportPlugin {
                         }
                     }
                     Ok::<(), TransportError>(())
-                })
-                .inspect_err(|e| {
-                    error!("Error processing packet: {e:?}");
-                })
-                .ok();
+                });
+            if let Err(e) = received {
+                error!("Error processing packet: {e:?}");
+                // fallbeans patch: the peer will not resend what this packet carried, so a reliable
+                // channel may have a hole it never fills: let the app drop the link.
+                if acked.get() {
+                    transport.receive_failed = true;
+                }
+            }
 
             // Consume ACKs already queued for this frame before expiring packets. Otherwise a
             // packet can lose its message-ACK mapping immediately before its ACK is processed.

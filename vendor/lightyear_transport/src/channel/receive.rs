@@ -11,6 +11,8 @@ use crate::channel::registry::ChannelKind;
 use crate::packet::message::{MessageData, MessageId, ReceiveMessage};
 
 use crate::channel::fragments::FragmentReceiver;
+/// fallbeans patch: the app keeps its own messages under it.
+pub use crate::channel::fragments::MAX_FRAGMENTED_MESSAGE_BYTES;
 
 type Result<T> = core::result::Result<T, ChannelReceiveError>;
 #[derive(thiserror::Error, Debug)]
@@ -59,7 +61,7 @@ const DISCARD_AFTER: Duration = Duration::from_millis(3000);
 /// never finishing them. A live sender resends the missing fragments every resend delay (well under a
 /// second), which refreshes the timer; nothing for this long means the link is gone (connections time
 /// out in seconds) or the peer is hostile. The dropped fragments were acked, so their channel stalls:
-/// acceptable only for a link that is dead anyway.
+/// `update` reports it and the link is dropped (`Transport::receive_failed`).
 const RELIABLE_DISCARD_AFTER: Duration = Duration::from_secs(30);
 
 type ReceivedMessage = (Tick, Bytes);
@@ -152,7 +154,8 @@ impl ChannelReceive {
         self.fragments.set_fragment_size(fragment_size);
     }
 
-    pub(crate) fn update(&mut self, now: Duration) {
+    /// fallbeans patch: returns whether a reliable channel dropped a partial message.
+    pub(crate) fn update(&mut self, now: Duration) -> bool {
         self.current_time = now;
         // fallbeans patch: reliable channels expire their partial messages too, later. (Nothing expires
         // before that much time has passed: a fragment received at time zero would go at once.)
@@ -161,9 +164,10 @@ impl ChannelReceive {
         } else {
             RELIABLE_DISCARD_AFTER
         };
-        if let Some(cleanup_time) = self.current_time.checked_sub(discard_after) {
-            self.fragments.cleanup(cleanup_time);
-        }
+        let Some(cleanup_time) = self.current_time.checked_sub(discard_after) else {
+            return false;
+        };
+        self.fragments.cleanup(cleanup_time) && !self.state.expires_fragments()
     }
 
     pub(crate) fn buffer_recv(&mut self, message: ReceiveMessage) -> Result<()> {
@@ -534,5 +538,35 @@ mod tests {
         let received = channel.read_message().unwrap();
         assert_eq!(received.1, Bytes::from_static(b"after wrap"));
         assert_eq!(received.2, Some(MessageId(0)));
+    }
+
+    /// fallbeans patch.
+    #[test]
+    fn expired_partial_reliable_message_is_reported() {
+        use crate::packet::message::{FragmentCompression, FragmentData, FragmentIndex};
+        let first_half = || ReceiveMessage {
+            data: FragmentData {
+                message_id: MessageId(0),
+                fragment_id: FragmentIndex(0),
+                num_fragments: FragmentIndex(2),
+                compression: Some(FragmentCompression::None),
+                bytes: Bytes::from_static(b"half"),
+            }
+            .into(),
+            remote_sent_tick: Tick(0),
+            compression: CompressionConfig::DISABLED,
+        };
+        for (mode, reported) in [
+            (ChannelMode::OrderedReliable(ReliableSettings::default()), true),
+            (ChannelMode::SequencedUnreliable, false),
+        ] {
+            let mut channel = channel(mode);
+            channel.set_fragment_size(4);
+            assert!(!channel.update(Duration::from_secs(1)));
+            channel.buffer_recv(first_half()).unwrap();
+            assert!(!channel.update(Duration::from_secs(2)));
+            assert_eq!(channel.update(Duration::from_secs(40)), reported);
+            assert!(!channel.update(Duration::from_secs(41)));
+        }
     }
 }

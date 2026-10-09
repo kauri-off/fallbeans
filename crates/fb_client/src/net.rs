@@ -88,6 +88,7 @@ impl Plugin for NetPlugin {
             Update,
             (receive_session, watch_link, fallback_to_ws, back_to_udp, spike_link).chain(),
         );
+        app.add_systems(Update, drop_broken_link);
         app.add_systems(First, disconnect_hung_up);
         app.add_systems(Last, despawn_closed);
     }
@@ -100,6 +101,23 @@ struct HangUp;
 
 pub fn hang_up(commands: &mut Commands, link: Entity) {
     commands.entity(link).insert(HangUp);
+}
+
+/// A packet from the server was acked but its messages were refused (too large, or a partial one expired):
+/// its reliable channels would never deliver again, so it connects again over the same transport.
+fn drop_broken_link(
+    mut commands: Commands,
+    conn: Option<ResMut<Conn>>,
+    links: Query<&lightyear::prelude::Transport, (With<Connected>, Without<HangUp>)>,
+) {
+    let Some(mut conn) = conn else { return };
+    let Some(transport) = conn.entity.and_then(|e| links.get(e).ok()) else {
+        return;
+    };
+    if transport.receive_failed() {
+        warn!("a reliable message from the server was lost: reconnecting");
+        restart(&mut commands, &mut conn);
+    }
 }
 
 fn disconnect_hung_up(mut commands: Commands, links: Query<(Entity, Has<Closing>), With<HangUp>>) {
