@@ -543,7 +543,7 @@ pub const CELL: f32 = 20.0;
 /// Marks a merged mesh whose vertices carry the frames of the pieces they came from, for the surface shader's
 /// object-space mapping (`OBJECT_FRAME` in surface.wgsl): the piece's rotation in COLOR, the position in its
 /// frame (at world scale) in UV_1 and UV_0.x; UV_0.y is the sky hidden from the vertex, 0 until a bake writes it
-/// (`ao.rs`, `decor.rs`). (The value itself is unused.)
+/// (`ao.rs`, `decor`). (The value itself is unused.)
 pub const ATTRIBUTE_FRAME: MeshVertexAttribute =
     MeshVertexAttribute::new("Fb_ObjectFrame", 0x4642_4652_414d_4500, VertexFormat::Float32);
 
