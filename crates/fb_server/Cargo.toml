@@ -45,6 +45,9 @@ workspace = true
 # (`target/release/` is the tools' placeholder for the real profile directory), and the third-party licenses
 # that xtask generates first.
 [features]
+default = ["traces"]
+# `--trace` (input, hits): off in packages.
+traces = ["fb_net/traces", "fb_arena/traces"]
 # Bevy as a shared library, for local builds only (`cargo xtask dev`; see fb_client).
 dynamic = ["bevy/dynamic_linking"]
 
@@ -57,6 +60,8 @@ section = "games"
 priority = "optional"
 depends = ""
 maintainer-scripts = "../../packaging/server/debian/"
+# No `--trace` in packages.
+default-features = false
 assets = [
   [
     "target/release/fb_server",

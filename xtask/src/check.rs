@@ -171,6 +171,31 @@ pub fn check(a: &CheckArgs) -> Result<()> {
         summary(&["fmt ok".into(), "clippy FAILED".into()]);
         return Err(Reported.into());
     }
+    // Without `traces`, as packages build (Bevy's features as above; no `--all-targets`: tests bring `traces` back).
+    let mut bare = cargo();
+    bare.args([
+        "clippy",
+        "--locked",
+        "-p",
+        "fb_client",
+        "-p",
+        "fb_server",
+        "--no-default-features",
+    ]);
+    with_features(
+        &mut bare,
+        &[
+            features.as_slice(),
+            &crate::dlss_features()[..],
+            &["fb_client/brp", "fb_client/profiler"],
+        ]
+        .concat(),
+    );
+    bare.args(["--", "-D", "warnings"]);
+    if !ch.step("clippy (no traces)", &mut bare, |_| {}) {
+        summary(&["fmt ok".into(), "clippy (no traces) FAILED".into()]);
+        return Err(Reported.into());
+    }
     let test_cmd = |extra: &[&str]| {
         let mut c = cargo();
         c.args(["test", "--locked", "--workspace", "--no-fail-fast"]);

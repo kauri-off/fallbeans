@@ -17,10 +17,10 @@ use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
-use crate::game::{Cue, HitTrace, Map, PrevPos, Smoothing};
+use crate::game::{Cue, Map, PrevPos, Smoothing};
 use crate::outfit::{Base, Tailor, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
 use crate::session::{Outcome, Session};
-use crate::view::{FrameClock, color, power_color};
+use crate::view::{color, power_color};
 
 #[derive(Component)]
 pub struct BeanView;
@@ -674,11 +674,12 @@ pub struct Stage<'w> {
     outcome: Res<'w, Outcome>,
 }
 
-/// `--trace-hits` of the own bean as drawn, at the frame's tick.
+/// `--trace hits` of the own bean as drawn, at the frame's tick.
+#[cfg(feature = "traces")]
 #[derive(SystemParam)]
 pub struct DrawnTrace<'w> {
-    hits: Option<ResMut<'w, HitTrace>>,
-    clock: FrameClock<'w>,
+    hits: Option<ResMut<'w, crate::trace::hits::Hits>>,
+    clock: crate::view::FrameClock<'w>,
 }
 
 type AnimatedBean = (
@@ -702,9 +703,9 @@ pub fn animate_beans(
     mut cues: MessageReader<Cue>,
     stage: Stage,
     mut puppets: Puppets,
-    mut trace: DrawnTrace,
     mut beans: Query<AnimatedBean>,
     mut scratch: Local<AnimScratch>,
+    #[cfg(feature = "traces")] mut trace: DrawnTrace,
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
@@ -815,7 +816,8 @@ pub fn animate_beans(
             },
         );
         let out = anim.out;
-        // `--trace-hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        // `--trace hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        #[cfg(feature = "traces")]
         if own && let (Some(h), Some(m)) = (trace.hits.as_mut(), stage.map.as_ref()) {
             let k = m.round.arena_tick(trace.clock.timeline.tick()) as f32 + trace.clock.overstep();
             let p = root.translation;

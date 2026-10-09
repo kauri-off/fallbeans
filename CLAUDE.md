@@ -16,7 +16,8 @@ English.
 - `cargo xtask doctor` — what this machine lacks for the build, the upscalers and each package.
 - `cargo xtask setup [--dist]` — the pinned SDKs and tools of `toolchain/deps.toml` (their versions change only
   there) into `target/sdk`; an environment variable (`DLSS_SDK`…) overrides them.
-- `cargo xtask dev [--clients N] [--autopilot] [--fill]` — server plus windowed clients locally.
+- `cargo xtask dev [--clients N] [--autopilot] [--fill] [--trace hits,clicks,input]` — server plus windowed clients
+  locally; traces into `target/traces`.
 - `cargo xtask audit [map…] [--quick]` — map audits.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
 - `cargo xtask perf <run|show|compare|csv>` — render benchmarks.
@@ -33,6 +34,9 @@ English.
   `core/fb_arena/tests/determinism.txt`: never set by hand.
 - Graphics: Vulkan 1.2+ first (its render thread is ~3× cheaper than wgpu's DX12), DX12 as the Windows fallback
   (`crates/fb_client/src/backend.rs`); no OpenGL.
+- Debug traces (`--trace <kind>`) exist only with the `traces` feature (default, never in packages): their code
+  lives in `trace` modules (`fb_net::trace`, `fb_server::play::trace`, `fb_client::trace`), the game's code calls
+  them under `#[cfg(feature = "traces")]`.
 - The repository is public: no private hosts, addresses or keys in committed files.
 
 ## Tooling habits

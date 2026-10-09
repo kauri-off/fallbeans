@@ -123,7 +123,7 @@ pub fn stress(a: &StressArgs) -> Result<()> {
             "5",
         ])
         .args(["--exit-after", &(a.secs + 4).to_string(), "--trace"])
-        .arg(dir.join("server.trace"))
+        .arg(trace_arg(&dir.join("server.trace")))
         .stdout(log("server.log")?)
         .stderr(log("server.err.log")?);
     let mut server = server_cmd.spawn().map_err(|_| anyhow!("cannot start the server"))?;
@@ -160,7 +160,7 @@ pub fn stress(a: &StressArgs) -> Result<()> {
         .args(a.shared.net_args())
         .args(&a.client_arg)
         .arg("--trace")
-        .arg(dir.join(format!("client-{i}.trace")))
+        .arg(trace_arg(&dir.join(format!("client-{i}.trace"))))
         .stdout(log(&format!("client-{i}.log"))?)
         .stderr(log(&format!("client-{i}.err.log"))?);
         match c.spawn() {
@@ -246,6 +246,11 @@ struct Traced {
     tick: u32,
     bean: Bean,
     row: Row,
+}
+
+/// `--trace input=<path>`.
+fn trace_arg(path: &Path) -> String {
+    format!("input={}", path.display())
 }
 
 /// Lines `tag tick room id mx mz buttons x y z`.

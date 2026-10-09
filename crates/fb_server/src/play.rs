@@ -2,8 +2,6 @@
 //! and its rooms' arenas published as replicated entities (a `Round` per room, a pawn per bean in play), each
 //! visible only to the links in that room.
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::time::Duration;
 
 use bevy::ecs::system::SystemParam;
@@ -26,6 +24,9 @@ use crate::opts::Opts;
 use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
 use crate::rooms::{Backoff, ConnId, Inputs, Out, ticks};
+
+#[cfg(feature = "traces")]
+mod trace;
 
 /// A bean in play in a room (`RoomTag`, `BeanId`).
 #[derive(Component, Clone, Copy, Debug)]
@@ -124,19 +125,13 @@ fn count_far_inputs(
     }
 }
 
-/// `--trace`: one line per pawn per tick, `S tick room id mx mz buttons x y z`.
-#[derive(Resource)]
-struct Trace(BufWriter<File>);
-
-/// `--trace-hits`: `room arena map tick id …` lines of every room's arenas (`Arena::hit_log`).
-#[derive(Resource)]
-struct HitTrace(BufWriter<File>);
-
 pub struct PlayPlugin;
 
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, start);
+        #[cfg(feature = "traces")]
+        app.add_systems(Startup, trace::open);
         // Lightyear's copy of the input buffer into `ActionState` would also drop every tick before
         // the current one, and with them any input that arrives late: a late press would be lost.
         // The room reads the buffer itself (`frame_for`); the buffer is a ring of 64 ticks.
@@ -183,14 +178,6 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
         in_room: BTreeMap::new(),
         real,
     });
-    if let Some(path) = &opts.trace {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
-        commands.insert_resource(Trace(BufWriter::new(file)));
-    }
-    if let Some(path) = &opts.trace_hits {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
-        commands.insert_resource(HitTrace(BufWriter::new(file)));
-    }
 }
 
 pub fn conn_of(link: Entity) -> ConnId {
@@ -223,7 +210,8 @@ pub struct InputState {
     late: u8,
     /// Newest tick looked at for late presses.
     late_seen: u32,
-    /// What the last tick used (`--trace`).
+    /// What the last tick used (`--trace input`).
+    #[cfg(feature = "traces")]
     used: Option<(u32, InputFrame)>,
     /// Ticks run without the player's input since the last `metrics:` line (after their first input).
     pub missed: u32,
@@ -244,6 +232,7 @@ impl InputState {
             ack: now.0,
             late: 0,
             late_seen: now.0,
+            #[cfg(feature = "traces")]
             used: None,
             missed: 0,
             gap: 0,
@@ -357,7 +346,10 @@ impl Inputs for LinkInputs<'_, '_, '_> {
             return InputFrame::IDLE;
         };
         let f = frame_for(Tick(tick), buffer, &mut st);
-        st.used = Some((tick, f));
+        #[cfg(feature = "traces")]
+        {
+            st.used = Some((tick, f));
+        }
         f
     }
 
@@ -390,10 +382,11 @@ struct PawnsMut<'w, 's> {
 }
 
 /// The dev server's traces, when asked for.
+#[cfg(feature = "traces")]
 #[derive(SystemParam)]
 struct Traces<'w> {
-    ticks: Option<ResMut<'w, Trace>>,
-    hits: Option<ResMut<'w, HitTrace>>,
+    input: Option<ResMut<'w, trace::Input>>,
+    hits: Option<ResMut<'w, trace::Hits>>,
 }
 
 fn tick_rooms(
@@ -403,7 +396,7 @@ fn tick_rooms(
     mut commands: Commands,
     mut links: Links,
     pawns: PawnsMut,
-    traces: Traces,
+    #[cfg(feature = "traces")] traces: Traces,
 ) {
     let PawnsMut {
         mut inputs,
@@ -436,19 +429,8 @@ fn tick_rooms(
             views: &views,
         },
     );
-    if let Some(mut trace) = traces.ticks {
-        write_trace(&mut trace, rooms, &mut inputs, tick);
-    }
-    if let Some(mut out) = traces.hits {
-        for room in rooms.hub.rooms.values_mut() {
-            let hits = room.hits.get_or_insert_default();
-            for l in hits.drain(..) {
-                let _ = writeln!(out.0, "{} {l}", room.id);
-            }
-        }
-        // (The dev server is killed, not stopped: nothing may wait in the buffer.)
-        let _ = out.0.flush();
-    }
+    #[cfg(feature = "traces")]
+    trace::write(traces.input, traces.hits, rooms, &mut inputs, tick);
     for out in rooms.hub.take_out() {
         match out {
             Out::Msg(c, m) => {
@@ -476,33 +458,6 @@ fn receive(mut rooms: ResMut<Rooms>, mut receivers: Query<(Entity, &mut MessageR
         for msg in r.receive() {
             rooms.hub.message(conn_of(link), msg);
         }
-    }
-}
-
-fn write_trace(
-    trace: &mut Trace,
-    rooms: &Rooms,
-    inputs: &mut Query<(Option<&'static InputBuf>, &'static mut InputState), With<Pawn>>,
-    tick: Tick,
-) {
-    for (&(key, id), pe) in &rooms.pawns {
-        let Ok((_, mut st)) = inputs.get_mut(pe.entity) else {
-            continue;
-        };
-        let Some((t, f)) = st.used.take() else { continue };
-        let Some(room) = rooms.hub.rooms.get(&key) else {
-            continue;
-        };
-        let Some(p) = room.arena.pawn(id) else { continue };
-        if t != tick.0 {
-            continue;
-        }
-        let b = &p.body;
-        let _ = writeln!(
-            trace.0,
-            "S {} {} {id} {} {} {} {:.6} {:.6} {:.6}",
-            tick.0, room.id, f.mx, f.mz, f.buttons, b.pos.x, b.pos.y, b.pos.z
-        );
     }
 }
 

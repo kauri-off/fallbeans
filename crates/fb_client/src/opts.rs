@@ -152,9 +152,6 @@ pub struct Opts {
     /// Plays by itself: circles, hops, runs for bonuses.
     #[arg(long)]
     pub autopilot: bool,
-    /// Writes the own bean's input and position per predicted tick here (`cargo xtask stress` reads it).
-    #[arg(long)]
-    pub trace: Option<PathBuf>,
     /// Seconds between `stats:` lines in the log (default: 1 with `--headless`, which stress reads; else none).
     #[arg(long, hide = true)]
     pub stats_every: Option<f32>,
@@ -213,13 +210,9 @@ pub struct Opts {
     pub upscaler: Option<String>,
     #[arg(long, default_value = "Fall Beans")]
     pub title: String,
-    /// Writes the own bean's contacts, tackles and dives here, with the others as drawn (`cargo xtask play
-    /// --trace-hits` pairs it with the server's).
-    #[arg(long)]
-    pub trace_hits: Option<PathBuf>,
-    /// Logs every left click through window, picking, button and action, with a verdict (target `clicks`).
-    #[arg(long)]
-    pub trace_clicks: bool,
+    #[cfg(feature = "traces")]
+    #[command(flatten)]
+    pub traces: fb_net::trace::TraceOpts,
 }
 
 impl Opts {

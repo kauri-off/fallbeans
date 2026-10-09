@@ -76,6 +76,7 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
     assert!(!replay(&unskipped, |_| false).matches);
 }
 
+#[cfg(feature = "traces")]
 #[test]
 fn a_traced_round_logs_dives_and_tackles_and_leaves_the_state_alone() {
     let def = fb_maps::by_id(MapId::DoorDash);

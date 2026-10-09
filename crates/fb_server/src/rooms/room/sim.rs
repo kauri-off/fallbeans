@@ -69,6 +69,7 @@ impl Room {
 
     fn step(&mut self, k: i64, inputs: &mut dyn Inputs) {
         let tick = self.server_tick(k);
+        #[cfg(feature = "traces")]
         if self.hits.is_some() && self.arena.hit_log.is_none() {
             self.arena.hit_log = Some(Vec::new());
         }
@@ -92,6 +93,7 @@ impl Room {
                 .binary_search_by_key(&id, |f| f.0)
                 .map_or(InputFrame::IDLE, |i| frames[i].1)
         });
+        #[cfg(feature = "traces")]
         if let (Some(out), Some(log)) = (&mut self.hits, &mut self.arena.hit_log) {
             let (arena, map) = (self.arena_id, self.arena.map.meta().id);
             out.extend(log.drain(..).map(|l| format!("{arena} {map} {l}")));

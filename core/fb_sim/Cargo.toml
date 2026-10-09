@@ -14,5 +14,9 @@ serde.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 
+[features]
+# What happens between beans in detail (`StepEvents::notes`), for `--trace hits`: development builds only.
+traces = []
+
 [lints]
 workspace = true

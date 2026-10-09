@@ -160,7 +160,7 @@ pub enum Miss {
     Apart,
 }
 
-/// What happened between beans (and a bean's dives and bonks) in a step, for `--trace-hits`.
+/// What happened between beans (and a bean's dives and bonks) in a step, for `--trace hits`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Note {
     Tackle {
@@ -310,7 +310,7 @@ fn judge(
         _ => None,
     };
     if let Some(((why, at, closing), seen)) = miss {
-        ev.notes.push(Note::Miss {
+        ev.note(Note::Miss {
             on,
             why,
             at,
@@ -351,7 +351,7 @@ fn spend_tackle(att: &mut Body, ev: &mut StepEvents, on: PlayerId, victim_mass: 
 }
 
 fn note_tackle(ev: &mut StepEvents, on: PlayerId, hit: Tackle, knock: f64) {
-    ev.notes.push(Note::Tackle {
+    ev.note(Note::Tackle {
         on,
         closing: hit.closing,
         knock,
@@ -373,7 +373,7 @@ fn stand(b: &mut Body, ev: &mut StepEvents, on: PlayerId, depth: f64) {
     b.pos.y += depth.at_most(R * b.size * SUBSTEP_REACH);
     b.vel.y = 0.0;
     b.grounded = true;
-    ev.notes.push(Note::Stand { on });
+    ev.note(Note::Stand { on });
 }
 
 /// One bean of a pair, stepped this tick.
@@ -480,7 +480,7 @@ fn bounce(b: &mut Body, ev: &mut StepEvents, with: PlayerId, away: V3, closing: 
     ev.bumped = ev.bumped.at_least(closing);
     // (A steady push is a bump every tick: only those worth a sound.)
     if closing > 1.0 {
-        ev.notes.push(Note::Bump { with, closing });
+        ev.note(Note::Bump { with, closing });
     }
 }
 

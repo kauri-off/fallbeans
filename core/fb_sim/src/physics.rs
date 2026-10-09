@@ -151,11 +151,23 @@ pub struct StepEvents {
     pub tackled_by: Option<PlayerId>,
     /// Tackles this bean landed.
     pub tackles: u32,
-    /// Contacts, tackles and dives in detail (`--trace-hits`).
+    /// Contacts, tackles and dives in detail (`--trace hits`).
+    #[cfg(feature = "traces")]
     pub notes: Vec<Note>,
     pub hazard: Option<Hazard>,
     pub portal_in: bool,
     pub portal_out: bool,
+}
+
+impl StepEvents {
+    /// Kept for `--trace hits`; nothing without the `traces` feature.
+    #[inline]
+    pub fn note(&mut self, n: Note) {
+        #[cfg(feature = "traces")]
+        self.notes.push(n);
+        #[cfg(not(feature = "traces"))]
+        let _ = n;
+    }
 }
 
 /// A collider that reports touches was touched (`on_touch`: with the contact normal) or stood on
@@ -644,7 +656,7 @@ impl Body {
                         self.vel.y = 6.0 + plat_v.y.at_least(0.0);
                     }
                     self.grounded = false;
-                    ev.notes.push(Note::Dive {
+                    ev.note(Note::Dive {
                         air: !g,
                         speed: sp,
                         vy: self.vel.y,
@@ -770,7 +782,7 @@ impl Body {
                                 self.vel.y = self.vel.y.at_least(BONK_UP);
                                 self.stun(BONK_T);
                                 ev.hit_something = true;
-                                ev.notes.push(Note::Bonk { speed: -vn });
+                                ev.note(Note::Bonk { speed: -vn });
                             }
                         }
                         let fresh =
