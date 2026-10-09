@@ -347,16 +347,16 @@ fn fetch_and_install(
         })?;
     let want = expected_sum(&sums, name).ok_or_else(|| UpdateError::NotListed { name: name.into() })?;
     // (The release's name for the file, never a path of its own.)
-    let file = std::path::Path::new(name)
+    let file_name = std::path::Path::new(name)
         .file_name()
         .ok_or_else(|| UpdateError::NotAFileName { name: name.into() })?;
     let path = match install {
         Install::AppImage(old) => {
-            let mut n = old.with_file_name(file).into_os_string();
+            let mut n = old.with_file_name(file_name).into_os_string();
             n.push(".new");
             PathBuf::from(n)
         }
-        _ => std::env::temp_dir().join(file),
+        _ => std::env::temp_dir().join(file_name),
     };
     let mut resp = agent(None, Some(download_budget(size)))
         .get(url)
@@ -421,7 +421,7 @@ fn fetch_and_install(
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(file_error(&path))?;
             }
             // The new release keeps its own name (`FallBeans-0.2.3-x86_64.AppImage`) next to the old one, which goes.
-            let target = old.with_file_name(file);
+            let target = old.with_file_name(file_name);
             std::fs::rename(&path, &target).map_err(file_error(&target))?;
             if target != *old {
                 let _ = std::fs::remove_file(old);
