@@ -5,3 +5,8 @@ disallowed-methods = [
   { path = "bevy::text::EditableText::clear", allow-invalid = true, reason = "leaves the cursor past the end (panic on the next edit): use ui::set_field_text" },
   { path = "bevy::text::EditableText::editor_mut", allow-invalid = true, reason = "parley's set_text keeps a stale cursor: use ui::set_field_text or queue_edit" },
 ]
+
+# `clippy::unwrap_used`, `expect_used` and `panic` are on in these crates' roots; tests may.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

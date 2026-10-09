@@ -1,6 +1,5 @@
 //! Connecting: a connect token from the HTTP API, then UDP (WebSocket if UDP is silent for 2 s); after a drop, again.
 //! On WebSocket, `auto` checks UDP once a minute and moves back to it between rounds.
-use core::fmt;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::time::Duration;
 use std::sync::LazyLock;
@@ -234,25 +233,18 @@ pub fn agent() -> &'static ureq::Agent {
 }
 
 /// Why a session request brought no connection.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    #[error("{url}: {error}")]
     Http { url: String, error: ureq::Error },
+    #[error("no thread for the request: {0}")]
     NoThread(std::io::Error),
+    #[error("the request thread is gone")]
     ThreadGone,
+    #[error("no connect token from {http}")]
     NoToken { http: String },
-    Netcode(lightyear::netcode::Error),
-}
-
-impl fmt::Display for SessionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            SessionError::Http { url, error } => write!(f, "{url}: {error}"),
-            SessionError::NoThread(e) => write!(f, "no thread for the request: {e}"),
-            SessionError::ThreadGone => f.write_str("the request thread is gone"),
-            SessionError::NoToken { http } => write!(f, "no connect token from {http}"),
-            SessionError::Netcode(e) => write!(f, "netcode client: {e}"),
-        }
-    }
+    #[error("netcode client: {0}")]
+    Netcode(#[from] lightyear::netcode::Error),
 }
 
 /// `POST <url>` of the session API (blocking).
@@ -362,8 +354,7 @@ fn spawn_client(
     now: f32,
 ) -> Result<Entity, SessionError> {
     let transport = conn.transport;
-    let netcode =
-        NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default()).map_err(SessionError::Netcode)?;
+    let netcode = NetcodeClient::new(Authentication::Token(token), NetcodeConfig::default())?;
     // The server address comes from the token (`PeerAddr` set by `NetcodeClient`).
     let local = local_addr_for(netcode.inner.server_addr());
     let mut e = commands.spawn((

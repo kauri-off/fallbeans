@@ -206,6 +206,7 @@ impl Path {
         Self { pts: vec![p] }
     }
 
+    #[expect(clippy::unwrap_used, reason = "a path starts with a point and only grows")]
     fn last(&self) -> Vec2 {
         *self.pts.last().unwrap()
     }

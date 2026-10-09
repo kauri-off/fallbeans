@@ -2,7 +2,6 @@
 //! identity each server gave (`identity.json`). One folder per profile in the system's settings directory;
 //! `--profile b` is a second player on the same machine. Flags (`--name`, `--token`, `--color`) win over the
 //! files for the run and are not saved.
-use core::fmt;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::fs;
@@ -407,19 +406,12 @@ pub struct Identities {
 }
 
 /// Why the identity file was not written.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum SaveError {
-    Json(serde_json::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("{}: {error}", .path.display())]
     Write { path: PathBuf, error: std::io::Error },
-}
-
-impl fmt::Display for SaveError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            SaveError::Json(e) => e.fmt(f),
-            SaveError::Write { path, error } => write!(f, "{}: {error}", path.display()),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -450,7 +442,7 @@ impl Identities {
         let file = IdentityFile {
             servers: self.by_server.clone(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(SaveError::Json)?;
+        let json = serde_json::to_string_pretty(&file)?;
         write_atomic(path, json.as_bytes()).map_err(|error| SaveError::Write {
             path: path.clone(),
             error,

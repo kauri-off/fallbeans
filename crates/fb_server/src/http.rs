@@ -188,6 +188,11 @@ struct Api {
     resolved: Arc<Mutex<Resolved>>,
 }
 
+#[expect(
+    clippy::panic,
+    clippy::expect_used,
+    reason = "a server without its HTTP API does not start"
+)]
 fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<HttpShared>) {
     let addr = SocketAddr::new(opts.http_addr, opts.http_port);
     let listener = TcpListener::bind(addr).unwrap_or_else(|e| panic!("http {addr}: {e}"));
@@ -241,6 +246,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, keys: Res<Keys>, shared: Res<H
     info!("http: {addr}");
 }
 
+#[expect(clippy::expect_used, reason = "a server without its HTTP API does not start")]
 async fn serve(listener: TcpListener, api: Api) {
     let listener = Guarded {
         inner: TokioListener::from_std(listener).expect("tokio listener"),
@@ -329,6 +335,7 @@ impl axum::serve::Listener for Guarded {
     type Io = GuardedConn;
     type Addr = SocketAddr;
 
+    #[expect(clippy::expect_used, reason = "the semaphore is never closed")]
     async fn accept(&mut self) -> (GuardedConn, SocketAddr) {
         loop {
             let slot = self

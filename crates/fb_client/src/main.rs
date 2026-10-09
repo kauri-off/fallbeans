@@ -1,5 +1,6 @@
 //! Native client: connects, enters a room, predicts its bean, interpolates the others, draws the map.
 //! `--headless` runs the same game without a window or GPU (stress runs).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod assets;
 mod audio;
 mod backend;

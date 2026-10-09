@@ -9,7 +9,6 @@
 )]
 
 use core::ffi::{CStr, c_char, c_void};
-use core::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -649,23 +648,16 @@ impl Drop for Upscaler {
 }
 
 /// Why FidelityFX does not upscale.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum FfxError {
+    #[error("no {} beside the game", DLL)]
     NoDll,
+    #[error("{}: {error}", .path.display())]
     Load { path: PathBuf, error: libloading::Error },
+    #[error("not on Vulkan")]
     NotVulkan,
+    #[error("{call}: {}", code_name(*.code))]
     Code { call: &'static str, code: u32 },
-}
-
-impl fmt::Display for FfxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            FfxError::NoDll => write!(f, "no {DLL} beside the game"),
-            FfxError::Load { path, error } => write!(f, "{}: {error}", path.display()),
-            FfxError::NotVulkan => f.write_str("not on Vulkan"),
-            FfxError::Code { call, code } => write!(f, "{call}: {}", code_name(*code)),
-        }
-    }
 }
 
 /// `FfxApiReturnCodes` by name.

@@ -1,43 +1,35 @@
 //! Dev commands.
-use core::fmt;
-
 use super::*;
 
 /// Why a dev command did not run.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum DevError {
+    #[error("dev commands are off")]
     Off,
+    #[error("dev commands are the host's")]
     NotHost,
+    #[error("warp by some seconds")]
     BadWarp,
+    #[error("no round running")]
     NoRound,
+    #[error("not games: {}", join(.0))]
     NotGames(Vec<MapId>),
+    #[error("pause first (rate 0)")]
     NotPaused,
+    #[error("no bean #{0} in this arena")]
     NoBean(PlayerId),
+    #[error("this map has no checkpoint {0}")]
     NoCheckpoint(u32),
+    #[error("this map has no finish")]
     NoFinish,
+    #[error("room is full")]
     Full,
+    #[error("no such beans in play")]
     NoGrab,
 }
 
-impl fmt::Display for DevError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DevError::Off => f.write_str("dev commands are off"),
-            DevError::NotHost => f.write_str("dev commands are the host's"),
-            DevError::BadWarp => f.write_str("warp by some seconds"),
-            DevError::NoRound => f.write_str("no round running"),
-            DevError::NotGames(ids) => {
-                let ids: Vec<&str> = ids.iter().map(|m| m.as_str()).collect();
-                write!(f, "not games: {}", ids.join(", "))
-            }
-            DevError::NotPaused => f.write_str("pause first (rate 0)"),
-            DevError::NoBean(id) => write!(f, "no bean #{id} in this arena"),
-            DevError::NoCheckpoint(i) => write!(f, "this map has no checkpoint {i}"),
-            DevError::NoFinish => f.write_str("this map has no finish"),
-            DevError::Full => f.write_str("room is full"),
-            DevError::NoGrab => f.write_str("no such beans in play"),
-        }
-    }
+fn join(ids: &[MapId]) -> String {
+    ids.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
 }
 
 impl Room {

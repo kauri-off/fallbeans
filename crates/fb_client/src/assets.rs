@@ -54,7 +54,11 @@ fn report_models(
     for ((name, state), (_, h)) in states.iter().zip(&models.0) {
         match state {
             LoadState::Loaded => {
-                let g = gltfs.get(h).unwrap();
+                let Some(g) = gltfs.get(h) else {
+                    failed += 1;
+                    println!("FAILED  {name:<9} loaded, but not in Assets<Gltf>");
+                    continue;
+                };
                 let prims: usize = g
                     .meshes
                     .iter()

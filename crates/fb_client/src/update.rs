@@ -1,5 +1,4 @@
 //! Self-update from the latest GitHub release (NSIS and AppImage install it; Flatpak links to it).
-use core::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,27 +81,20 @@ pub enum State {
 }
 
 /// Why an update check or install failed.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
+    #[error("{url}: {error}")]
     Http { url: String, error: ureq::Error },
+    #[error("{name} is not in {}", SUMS)]
     NotListed { name: String },
+    #[error("{name}: not a file name")]
     NotAFileName { name: String },
+    #[error("{}: {error}", .path.display())]
     File { path: PathBuf, error: std::io::Error },
+    #[error("{name}: the download does not match the release")]
     Mismatch { name: String },
+    #[error("a Flatpak updates from its file")]
     Flatpak,
-}
-
-impl fmt::Display for UpdateError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            UpdateError::Http { url, error } => write!(f, "{url}: {error}"),
-            UpdateError::NotListed { name } => write!(f, "{name} is not in {SUMS}"),
-            UpdateError::NotAFileName { name } => write!(f, "{name}: not a file name"),
-            UpdateError::File { path, error } => write!(f, "{}: {error}", path.display()),
-            UpdateError::Mismatch { name } => write!(f, "{name}: the download does not match the release"),
-            UpdateError::Flatpak => f.write_str("a Flatpak updates from its file"),
-        }
-    }
 }
 
 #[derive(Resource)]

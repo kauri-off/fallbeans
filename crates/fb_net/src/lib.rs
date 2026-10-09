@@ -1,6 +1,7 @@
 //! The Lightyear protocol shared by server and client: replicated components, inputs, channels, plus
 //! the network tooling both sides use (link conditioner flags, traffic counters).
 #![warn(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use core::time::Duration;
 
 use bevy::prelude::*;

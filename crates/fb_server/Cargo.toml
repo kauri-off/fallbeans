@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 bevy = { workspace = true, features = ["std", "bevy_log"] }
 clap.workspace = true

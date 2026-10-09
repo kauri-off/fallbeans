@@ -67,6 +67,7 @@ impl TraceOpts {
     }
 
     /// The file of `kind` if traced (`side` names the default one); panics when it cannot be created.
+    #[expect(clippy::panic, reason = "a trace that cannot be written ends the run")]
     pub fn open(&self, kind: TraceKind, side: &str) -> Option<TraceFile> {
         let arg = self.trace.iter().rev().find(|a| a.kind == kind)?;
         let path = arg

@@ -39,6 +39,7 @@ pub fn secret() -> Vec<u8> {
     random_bytes::<32>().to_vec()
 }
 
+#[expect(clippy::expect_used, reason = "no system randomness: no secrets, no server")]
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     getrandom::fill(&mut b).expect("system randomness");
@@ -52,6 +53,7 @@ impl Auth {
         }
     }
 
+    #[expect(clippy::expect_used, reason = "HMAC takes any key length")]
     fn mac(&self) -> HmacSha256 {
         HmacSha256::new_from_slice(&self.secret).expect("any key length")
     }
@@ -271,6 +273,7 @@ impl Limiter {
 }
 
 /// Constant-time comparison of a secret (the debug key, a room's PIN) with the expected one.
+#[expect(clippy::expect_used, reason = "HMAC takes any key length")]
 pub fn same_key(given: &str, want: &str) -> bool {
     let digest = |s: &str| {
         let mut m = HmacSha256::new_from_slice(b"fb-debug").expect("any key length");
