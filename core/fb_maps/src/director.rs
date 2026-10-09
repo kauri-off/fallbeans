@@ -20,6 +20,7 @@ pub enum Mode {
 pub struct Playlist {
     pub mode: Mode,
     pub games: Vec<MapId>,
+    /// Unused by `Custom` while one of its games fits: the list is the game (`DevCmd::Start` cycles it to length).
     pub rounds: u32,
 }
 
