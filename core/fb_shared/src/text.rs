@@ -79,50 +79,70 @@ fn is_mark(c: char) -> bool {
 /// Combining marks kept on one character (more stack into text taller than the line).
 const MARKS_MAX: usize = 2;
 
-/// Drops `is_other` and `is_filler` characters (control characters become `control`) and combining marks
-/// past MARKS_MAX on one character, but keeps a zero-width joiner between two symbols: it is what holds
+/// Drops `is_other`, `is_filler` and `drop` characters (control characters become `control`) and combining
+/// marks past MARKS_MAX on one character, but keeps a zero-width joiner between two symbols: it is what holds
 /// emoji sequences like 👨‍👩‍👧 together.
-fn visible(raw: &str, control: Option<char>) -> String {
-    let symbol = |c: Option<&char>| c.is_some_and(|&c| !c.is_alphanumeric() && !c.is_whitespace() && !is_other(c));
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
+fn visible(raw: &str, control: Option<char>, drop: impl Fn(char) -> bool) -> String {
+    let kept: String = raw
+        .chars()
+        .filter_map(|c| {
+            if c == '\u{200d}' {
+                Some(c)
+            } else if c.is_control() {
+                control
+            } else if is_other(c) || is_filler(c) || drop(c) {
+                None
+            } else {
+                Some(c)
+            }
+        })
+        .collect();
+    let mut out = String::with_capacity(kept.len());
     // Marks on the character last kept.
     let mut marks = 0;
-    while let Some(c) = chars.next() {
+    for c in joined(&kept).chars() {
         if is_mark(c) {
             if marks < MARKS_MAX {
                 out.push(c);
                 marks += 1;
             }
-            continue;
-        }
-        if c == '\u{200d}' && symbol(out.chars().next_back().as_ref()) && symbol(chars.peek()) {
-            out.push(c);
-        } else if c.is_control() {
-            let Some(r) = control else { continue };
-            out.push(r);
-        } else if !is_other(c) && !is_filler(c) {
-            out.push(c);
         } else {
-            continue;
+            out.push(c);
+            marks = 0;
         }
-        marks = 0;
     }
     out
+}
+
+/// Drops zero-width joiners that do not stand between two symbols (not marks: a joiner must not stack them).
+fn joined(s: &str) -> String {
+    let symbol =
+        |c: Option<char>| c.is_some_and(|c| !c.is_alphanumeric() && !c.is_whitespace() && !is_other(c) && !is_mark(c));
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{200d}' || symbol(out.chars().next_back()) && symbol(chars.peek().copied()) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The first `max` characters, without a joiner left hanging at the cut or spaces after it.
+fn cut(s: &str, max: usize) -> String {
+    joined(&s.chars().take(max).collect::<String>()).trim_end().to_string()
 }
 
 fn collapse_spaces(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn angle(c: char) -> bool {
+    c == '<' || c == '>'
+}
+
 pub fn sanitize_name(raw: &str) -> String {
-    let s: String = visible(raw, None).chars().filter(|&c| c != '<' && c != '>').collect();
-    s.trim()
-        .chars()
-        .take(NAME_MAX)
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    cut(visible(raw, None, angle).trim(), NAME_MAX)
 }
 
 /// A person's name (`sanitize_name`): empty when it would pass for a bot's (bots are «Бот …»).
@@ -136,19 +156,12 @@ pub fn sanitize_person_name(raw: &str) -> String {
 }
 
 pub fn sanitize_title(raw: &str) -> String {
-    let s: String = visible(raw, None).chars().filter(|&c| c != '<' && c != '>').collect();
-    collapse_spaces(&s)
-        .chars()
-        .take(ROOM_TITLE_MAX)
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    cut(&collapse_spaces(&visible(raw, None, angle)), ROOM_TITLE_MAX)
 }
 
 /// One line, no control or invisible characters (bidi overrides, zero-width), at most CHAT_MAX characters.
 pub fn sanitize_chat(raw: &str) -> String {
-    let s = visible(raw, Some(' '));
-    collapse_spaces(&s).chars().take(CHAT_MAX).collect()
+    cut(&collapse_spaces(&visible(raw, Some(' '), |_| false)), CHAT_MAX)
 }
 
 #[cfg(test)]
@@ -168,6 +181,13 @@ mod tests {
         assert_eq!(sanitize_chat(family), family);
         assert_eq!(sanitize_name(&format!("Аня{family}")), format!("Аня{family}"));
         assert_eq!(sanitize_name("Bo\u{200d}b"), "Bob");
+        // A joiner whose neighbour goes (a filler, `<`, the cut at the length limit) goes too.
+        assert_eq!(sanitize_chat("\u{fe0f}\u{200d}\u{2800}\u{20000}"), "\u{fe0f}\u{20000}");
+        assert_eq!(sanitize_title("<\u{200d}\u{3347a}"), "\u{3347a}");
+        assert_eq!(
+            sanitize_name("абвгдежзиклмно\u{1f468}\u{200d}\u{1f469}"),
+            "абвгдежзиклмно\u{1f468}"
+        );
     }
 
     #[test]
