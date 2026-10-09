@@ -253,7 +253,7 @@ pub fn start_server(c: &mut Command) -> Result<Child> {
     Ok(server)
 }
 
-/// The client's `dlss` feature (NVIDIA DLSS 4.5 before AMD FSR 3.1): on when the DLSS SDK is there to build it
+/// The client's `dlss` feature (NVIDIA DLSS 4.5 beside AMD FSR 3.1): on when the DLSS SDK is there to build it
 /// with (`DLSS_SDK`; the build needs the Vulkan headers, `VULKAN_SDK`, and clang too: `README.md`).
 pub fn dlss() -> bool {
     let Some(sdk) = sdk::var("DLSS_SDK") else {
