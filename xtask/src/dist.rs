@@ -90,8 +90,8 @@ fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
-/// The client's features in the packages: no BRP probe, the profiler of F4, and DLSS when its SDK is there (the
-/// package carries NVIDIA's library then: `upscalers_into`).
+/// The client's features in the packages: no BRP probe or `--trace`, the profiler of F4, and DLSS when its SDK
+/// is there (the package carries NVIDIA's library then: `upscalers_into`).
 fn client_features() -> [&'static str; 3] {
     let features = if crate::dlss() { "profiler,dlss" } else { "profiler" };
     ["--no-default-features", "--features", features]
@@ -510,6 +510,7 @@ fn rpm() -> Result<()> {
         "dist",
         "-p",
         "fb_server",
+        "--no-default-features",
         "--target",
         MUSL,
     ]);

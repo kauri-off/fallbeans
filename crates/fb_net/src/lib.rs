@@ -16,6 +16,8 @@ pub mod logbook;
 #[cfg(test)]
 mod schema;
 mod stats;
+#[cfg(feature = "traces")]
+pub mod trace;
 mod visibility;
 mod wire;
 

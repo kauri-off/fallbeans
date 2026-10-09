@@ -1,8 +1,6 @@
 //! The client's copy of the round: the same map built from the seed, own-bean prediction, map events,
 //! and the input it sends.
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -14,7 +12,6 @@ use fb_net::*;
 use fb_proto::{ArenaInfo, PlayerId};
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::{DT, m};
-use fb_sim::beans;
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::map::{BeanDeco, MapOut, MapSfx, MapSpec};
 use fb_sim::math::V3;
@@ -317,33 +314,6 @@ pub struct Stats {
     pub hash_mismatch: bool,
 }
 
-/// `--trace`: one line per predicted tick while connected, `C tick room id mx mz buttons x y z` (rollback
-/// replays repeat ticks), and `R tick` before the first one of each connection.
-#[derive(Resource)]
-struct Trace {
-    out: BufWriter<File>,
-    fresh: bool,
-}
-
-/// `--trace-hits`: the own bean's notes per predicted tick, `C tick id …` (`c`: a rollback's replay), and while
-/// it tackles the others as drawn; the interpolation delay (`view`) when it changes.
-#[derive(Resource)]
-pub struct HitTrace {
-    out: BufWriter<File>,
-    view: Option<u32>,
-    quiet: beans::NoteQuiet,
-    /// The own bean as last predicted at each recent tick (pos, vel, yaw): a rollback's replay is compared with it.
-    pred: BTreeMap<i64, (V3, V3, f64)>,
-}
-
-impl HitTrace {
-    /// One line as it is (the drawing's `F` lines, `beans::animate_beans`).
-    pub fn line(&mut self, l: core::fmt::Arguments) {
-        let _ = self.out.write_fmt(l);
-        let _ = self.out.write_all(b"\n");
-    }
-}
-
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
@@ -356,7 +326,6 @@ impl Plugin for GamePlugin {
         app.init_resource::<Generations>();
         app.init_resource::<LastRollback>();
         app.add_message::<Cue>();
-        app.add_systems(Startup, open_trace);
         app.add_systems(
             PreUpdate,
             (
@@ -375,30 +344,6 @@ impl Plugin for GamePlugin {
             ((receive_map_events, apply_map_events, map_sounds).chain(), send_emotes),
         );
         app.add_observer(on_controlled);
-        app.add_observer(|_: On<Add, Connected>, trace: Option<ResMut<Trace>>| {
-            if let Some(mut t) = trace {
-                t.fresh = true;
-            }
-        });
-    }
-}
-
-fn open_trace(mut commands: Commands, opts: Res<Opts>) {
-    if let Some(path) = &opts.trace_hits {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace-hits {}: {e}", path.display()));
-        commands.insert_resource(HitTrace {
-            out: BufWriter::new(file),
-            view: None,
-            quiet: Default::default(),
-            pred: BTreeMap::new(),
-        });
-    }
-    if let Some(path) = &opts.trace {
-        let file = File::create(path).unwrap_or_else(|e| panic!("--trace {}: {e}", path.display()));
-        commands.insert_resource(Trace {
-            out: BufWriter::new(file),
-            fresh: true,
-        });
     }
 }
 
@@ -790,10 +735,13 @@ fn predict(
         With<Predicted>,
     >,
     others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
-    trace: Option<ResMut<Trace>>,
-    (hits, interp): (Option<ResMut<HitTrace>>, Option<Res<InterpolationTimeline>>),
+    #[cfg(feature = "traces")] traces: (
+        Option<ResMut<crate::trace::input::Input>>,
+        Option<ResMut<crate::trace::hits::Hits>>,
+        Query<(), (With<Client>, With<Connected>)>,
+    ),
+    interp: Option<Res<InterpolationTimeline>>,
     session: Res<Session>,
-    link: Query<(), (With<Client>, With<Connected>)>,
     rollback: Option<Res<Rollback>>,
     mut cues: MessageWriter<Cue>,
     rounds: Query<&Round>,
@@ -803,12 +751,14 @@ fn predict(
         return;
     };
     let frame = InputFrame::from(state.0);
-    let mut trace = trace.filter(|_| !link.is_empty());
+    #[cfg(feature = "traces")]
+    let (mut input_trace, mut hits) = (traces.0.filter(|_| !traces.2.is_empty()), traces.1);
     // Not on the last arena's ground and clock: the bean waits as the server last had it until the map is built,
     // and `reconcile` replays these ticks on it.
     if map.stale(&rounds, &session) {
-        if let Some(trace) = &mut trace {
-            write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
+        #[cfg(feature = "traces")]
+        if let Some(t) = &mut input_trace {
+            t.write(timeline.tick(), &session, id.0, frame, &full.body);
         }
         return;
     }
@@ -909,17 +859,9 @@ fn predict(
         &drawn,
         &mut run,
     );
-    if let Some(mut hits) = hits {
-        write_hits(
-            &mut hits,
-            k,
-            id.0,
-            rollback.is_some(),
-            Some(lag),
-            &full.body,
-            &ev.0,
-            &extra,
-        );
+    #[cfg(feature = "traces")]
+    if let Some(h) = &mut hits {
+        h.write(k, id.0, rollback.is_some(), Some(lag), &full.body, &ev.0, &extra);
     }
     if rollback.is_none() {
         cues.write_batch(out.iter().filter_map(|o| match o {
@@ -951,103 +893,10 @@ fn predict(
         ];
         cues.write_batch(said.into_iter().filter(|(on, _)| *on).map(|(_, c)| c));
     }
-    if let Some(trace) = &mut trace {
-        write_trace(trace, timeline.tick(), &session, id.0, frame, &full.body);
+    #[cfg(feature = "traces")]
+    if let Some(t) = &mut input_trace {
+        t.write(timeline.tick(), &session, id.0, frame, &full.body);
     }
-}
-
-/// The `--trace` line of the own bean at `tick`.
-fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: PlayerId, frame: InputFrame, b: &Body) {
-    if core::mem::take(&mut trace.fresh) {
-        let _ = writeln!(trace.out, "R {}", tick.0);
-    }
-    let _ = writeln!(
-        trace.out,
-        "C {} {} {} {} {} {} {:.6} {:.6} {:.6}",
-        tick.0,
-        session.room.as_deref().unwrap_or("?"),
-        id,
-        frame.mx,
-        frame.mz,
-        frame.buttons,
-        b.pos.x,
-        b.pos.y,
-        b.pos.z
-    );
-}
-
-/// `--trace-hits` lines of predicted tick k.
-#[allow(clippy::too_many_arguments)]
-fn write_hits(
-    hits: &mut HitTrace,
-    k: i64,
-    id: PlayerId,
-    replay: bool,
-    view: Option<u32>,
-    b: &Body,
-    ev: &StepEvents,
-    extra: &[OtherBody],
-) {
-    let c = if replay { 'c' } else { 'C' };
-    let v3 = |x: f64, y: f64, z: f64| format!("{x:.2},{y:.2},{z:.2}");
-    // A replay that ends elsewhere than the prediction it replaces: the correction the drawing jumps by.
-    let now = (b.pos, b.vel, b.yaw);
-    if let Some((p, v, y)) = hits.pred.insert(k, now).filter(|_| replay) {
-        let (dp, dv) = (b.pos - p, b.vel - v);
-        let dy = (b.yaw - y).sin().atan2((b.yaw - y).cos());
-        if dp.length() > 1e-3 || dv.length() > 1e-2 || dy.abs() > 1e-3 {
-            let _ = writeln!(
-                hits.out,
-                "c {k} {id} corr dpos={} dvel={} dyaw={dy:.3}",
-                v3(dp.x, dp.y, dp.z),
-                v3(dv.x, dv.y, dv.z)
-            );
-        }
-    }
-    while hits.pred.len() > 256 {
-        hits.pred.pop_first();
-    }
-    // (It swings a tick either way as frames and ticks beat: only a real change.)
-    if let Some(v) = view
-        && !replay
-        && hits.view.is_none_or(|w| v.abs_diff(w) >= 2)
-    {
-        hits.view = view;
-        let _ = writeln!(hits.out, "{c} {k} {id} view {v}");
-    }
-    for n in &ev.notes {
-        if replay || hits.quiet.fresh(k, id, n) {
-            let _ = writeln!(hits.out, "{c} {k} {id} {n}");
-        }
-    }
-    if ev.knocked {
-        let _ = writeln!(
-            hits.out,
-            "{c} {k} {id} state {:?} v={}",
-            b.state,
-            v3(b.vel.x, b.vel.y, b.vel.z)
-        );
-    }
-    if beans::tackling(b) {
-        let _ = writeln!(
-            hits.out,
-            "{c} {k} {id} {:?} pos={} v={}",
-            b.state,
-            v3(b.pos.x, b.pos.y, b.pos.z),
-            v3(b.vel.x, b.vel.y, b.vel.z)
-        );
-        let cb = beans::Capsule::of_body(b);
-        for o in extra.iter().filter(|o| m::hypot(o.x - b.pos.x, o.z - b.pos.z) <= 4.0) {
-            let _ = writeln!(
-                hits.out,
-                "{c} {k} {id}   near {} drawn={} gap={:.2}",
-                o.id,
-                v3(o.x, o.y, o.z),
-                beans::gap(&cb, &beans::Capsule::of_other(o))
-            );
-        }
-    }
-    let _ = hits.out.flush();
 }
 
 /// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall

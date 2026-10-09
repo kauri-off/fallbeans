@@ -30,5 +30,9 @@ bevy = { workspace = true, features = ["bevy_state"] }
 lightyear = { workspace = true, features = ["server"] }
 serde-reflection.workspace = true
 
+[features]
+# `--trace` files (`trace.rs`): development builds only.
+traces = []
+
 [lints]
 workspace = true

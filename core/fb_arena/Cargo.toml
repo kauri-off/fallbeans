@@ -13,5 +13,9 @@ fb_maps.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[features]
+# `Arena::hit_log`, for `--trace hits`: development builds only.
+traces = ["fb_sim/traces"]
+
 [lints]
 workspace = true

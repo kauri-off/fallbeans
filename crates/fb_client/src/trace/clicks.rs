@@ -1,6 +1,7 @@
-//! `--trace-clicks`: every left click traced through the window, picking, the button widget and the
-//! interface's actions into the log (target `clicks`), with a verdict a few frames after the release.
+//! `--trace clicks`: every left click traced through the window, picking, the button widget and the interface's
+//! actions, with a verdict a few frames after the release: `#<click> f<frame> …` lines.
 use std::collections::BTreeMap;
+use std::fmt;
 
 use bevy::diagnostic::FrameCount;
 use bevy::ecs::entity::EntityHashMap;
@@ -17,37 +18,40 @@ use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, Pressed, UiGlobalTransform};
 use bevy::ui_widgets::Activate;
 use bevy::window::{CursorOptions, PrimaryWindow};
+use fb_net::trace::TraceFile;
 
 use crate::ui::{Act, Layer, Ui, UiAction};
 
 /// Frames after the release the verdict waits for (the action reaches its system a frame or two later).
 const SETTLE: u32 = 4;
 
-pub struct ClickTracePlugin;
-
-impl Plugin for ClickTracePlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<Trace>();
-        app.add_systems(
-            PreUpdate,
-            raw_input
-                .in_set(PickingSystems::Hover)
-                .after(generate_hovermap)
-                .before(pointer_events),
-        );
-        app.add_systems(Update, (actions, menu_state, verdict, churn).chain());
-        app.add_observer(on_press)
-            .add_observer(on_release)
-            .add_observer(on_click)
-            .add_observer(on_cancel)
-            .add_observer(on_drag_start)
-            .add_observer(on_drag_end)
-            .add_observer(on_pressed_add)
-            .add_observer(on_pressed_remove)
-            .add_observer(on_activate)
-            .add_observer(on_button_gone);
-        info!(target: "clicks", "click trace on: left clicks are logged with target `clicks`");
-    }
+pub fn add(app: &mut App, out: TraceFile) {
+    app.insert_resource(Trace {
+        out,
+        n: 0,
+        cur: None,
+        churn: BTreeMap::new(),
+        churn_since: 0.0,
+        menu: None,
+    });
+    app.add_systems(
+        PreUpdate,
+        raw_input
+            .in_set(PickingSystems::Hover)
+            .after(generate_hovermap)
+            .before(pointer_events),
+    );
+    app.add_systems(Update, (actions, menu_state, verdict, churn).chain());
+    app.add_observer(on_press)
+        .add_observer(on_release)
+        .add_observer(on_click)
+        .add_observer(on_cancel)
+        .add_observer(on_drag_start)
+        .add_observer(on_drag_end)
+        .add_observer(on_pressed_add)
+        .add_observer(on_pressed_remove)
+        .add_observer(on_activate)
+        .add_observer(on_button_gone);
 }
 
 /// One left click, from the window's press to the verdict.
@@ -70,8 +74,9 @@ struct Attempt {
     actions: Vec<String>,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Trace {
+    out: TraceFile,
     n: u32,
     cur: Option<Attempt>,
     /// Buttons despawned this second, by the section they were under.
@@ -124,19 +129,19 @@ fn raw_input(
         match b.state {
             ButtonState::Pressed => {
                 if let Some(a) = trace.cur.take() {
-                    report(a, "next press came first");
+                    report(&mut trace.out, a, "next press came first");
                 }
                 trace.n += 1;
                 let n = trace.n;
-                info!(target: "clicks", "#{n} f{f} window: down at {at}, frame {dt:.1} ms, {state}");
                 trace.cur = Some(Attempt {
                     n,
                     down: f,
                     ..default()
                 });
+                trace.say(f, format_args!("window: down at {at}, frame {dt:.1} ms, {state}"));
             }
             ButtonState::Released => {
-                info!(target: "clicks", "#{} f{f} window: up at {at}, frame {dt:.1} ms, {state}", n_of(&trace));
+                trace.say(f, format_args!("window: up at {at}, frame {dt:.1} ms, {state}"));
                 if let Some(a) = &mut trace.cur {
                     a.up = Some(f);
                 }
@@ -149,13 +154,14 @@ fn raw_input(
             PointerAction::Press(PointerButton::Primary) => {
                 let hits = hits(world, world.resource::<HoverMap>().get(&PointerId::Mouse));
                 let mut trace = world.resource_mut::<Trace>();
-                info!(
-                    target: "clicks",
-                    "#{} f{f} picking: press at ({:.1}, {:.1}); under it now: {}",
-                    n_of(&trace),
-                    pos.x,
-                    pos.y,
-                    list(&hits)
+                trace.say(
+                    f,
+                    format_args!(
+                        "picking: press at ({:.1}, {:.1}); under it now: {}",
+                        pos.x,
+                        pos.y,
+                        list(&hits)
+                    ),
                 );
                 if let Some(a) = &mut trace.cur {
                     a.pick_down = true;
@@ -166,14 +172,15 @@ fn raw_input(
                 let before = hits(world, world.resource::<PreviousHoverMap>().get(&PointerId::Mouse));
                 let now = hits(world, world.resource::<HoverMap>().get(&PointerId::Mouse));
                 let mut trace = world.resource_mut::<Trace>();
-                info!(
-                    target: "clicks",
-                    "#{} f{f} picking: release at ({:.1}, {:.1}); hovered last frame (gets Click/Release): {}; now: {}",
-                    n_of(&trace),
-                    pos.x,
-                    pos.y,
-                    list(&before),
-                    list(&now)
+                trace.say(
+                    f,
+                    format_args!(
+                        "picking: release at ({:.1}, {:.1}); hovered last frame (gets Click/Release): {}; now: {}",
+                        pos.x,
+                        pos.y,
+                        list(&before),
+                        list(&now)
+                    ),
                 );
                 if let Some(a) = &mut trace.cur {
                     a.pick_up = true;
@@ -311,13 +318,22 @@ fn n_of(t: &Trace) -> u32 {
     t.cur.as_ref().map_or(0, |a| a.n)
 }
 
-fn on_press(ev: On<Pointer<Press>>, w: DeferredWorld) {
+impl Trace {
+    /// A line of the click under way at frame `f`.
+    fn say(&mut self, f: u32, l: fmt::Arguments) {
+        let n = n_of(self);
+        self.out.line(format_args!("#{n} f{f} {l}"));
+    }
+}
+
+fn on_press(ev: On<Pointer<Press>>, mut w: DeferredWorld) {
     if !mouse(&ev) || ev.event.button != PointerButton::Primary {
         return;
     }
     let d = describe(&w, ev.entity);
     let f = frame(&w);
-    info!(target: "clicks", "#{} f{f} Press → {d} at {}", n_of(w.resource::<Trace>()), at(&ev));
+    w.resource_mut::<Trace>()
+        .say(f, format_args!("Press → {d} at {}", at(&ev)));
 }
 
 fn on_release(ev: On<Pointer<Release>>, mut w: DeferredWorld) {
@@ -327,7 +343,7 @@ fn on_release(ev: On<Pointer<Release>>, mut w: DeferredWorld) {
     let d = describe(&w, ev.entity);
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} Release → {d}", n_of(&t));
+    t.say(f, format_args!("Release → {d}"));
     if let Some(a) = &mut t.cur {
         a.released_on.push(d);
     }
@@ -340,7 +356,10 @@ fn on_click(ev: On<Pointer<Click>>, mut w: DeferredWorld) {
     let d = describe(&w, ev.entity);
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} Click → {d} (held {:.0} ms)", n_of(&t), ev.event.duration.as_secs_f32() * 1000.0);
+    t.say(
+        f,
+        format_args!("Click → {d} (held {:.0} ms)", ev.event.duration.as_secs_f32() * 1000.0),
+    );
     if let Some(a) = &mut t.cur {
         a.clicked.push(d);
     }
@@ -353,23 +372,25 @@ fn on_cancel(ev: On<Pointer<Cancel>>, mut w: DeferredWorld) {
     let d = describe(&w, ev.entity);
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} Cancel → {d}", n_of(&t));
+    t.say(f, format_args!("Cancel → {d}"));
     if let Some(a) = &mut t.cur {
         a.cancelled = true;
     }
 }
 
-fn on_drag_start(ev: On<Pointer<DragStart>>, w: DeferredWorld) {
+fn on_drag_start(ev: On<Pointer<DragStart>>, mut w: DeferredWorld) {
     if mouse(&ev) && ev.event.button == PointerButton::Primary {
-        let d = describe(&w, ev.entity);
-        info!(target: "clicks", "#{} f{} DragStart → {d} at {}", n_of(w.resource::<Trace>()), frame(&w), at(&ev));
+        let (d, f) = (describe(&w, ev.entity), frame(&w));
+        w.resource_mut::<Trace>()
+            .say(f, format_args!("DragStart → {d} at {}", at(&ev)));
     }
 }
 
-fn on_drag_end(ev: On<Pointer<DragEnd>>, w: DeferredWorld) {
+fn on_drag_end(ev: On<Pointer<DragEnd>>, mut w: DeferredWorld) {
     if mouse(&ev) && ev.event.button == PointerButton::Primary {
-        let d = describe(&w, ev.entity);
-        info!(target: "clicks", "#{} f{} DragEnd → {d} (moved {:?})", n_of(w.resource::<Trace>()), frame(&w), ev.event.distance);
+        let (d, f) = (describe(&w, ev.entity), frame(&w));
+        w.resource_mut::<Trace>()
+            .say(f, format_args!("DragEnd → {d} (moved {:?})", ev.event.distance));
     }
 }
 
@@ -378,7 +399,7 @@ fn on_pressed_add(ev: On<Add, Pressed>, mut w: DeferredWorld) {
     let disabled = w.get::<InteractionDisabled>(ev.entity).is_some();
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} +Pressed {d}", n_of(&t));
+    t.say(f, format_args!("+Pressed {d}"));
     if let Some(a) = &mut t.cur {
         a.button = Some((ev.entity, d));
         a.disabled = disabled;
@@ -389,7 +410,7 @@ fn on_pressed_remove(ev: On<Remove, Pressed>, mut w: DeferredWorld) {
     let d = describe(&w, ev.entity);
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} -Pressed {d}", n_of(&t));
+    t.say(f, format_args!("-Pressed {d}"));
     if let Some(a) = &mut t.cur
         && a.button.as_ref().is_some_and(|b| b.0 == ev.entity)
     {
@@ -401,7 +422,7 @@ fn on_activate(ev: On<Activate>, mut w: DeferredWorld) {
     let d = describe(&w, ev.entity);
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
-    info!(target: "clicks", "#{} f{f} Activate {d}", n_of(&t));
+    t.say(f, format_args!("Activate {d}"));
     if let Some(a) = &mut t.cur {
         a.activated.push(d);
     }
@@ -420,14 +441,16 @@ fn on_button_gone(ev: On<Despawn, Act>, mut w: DeferredWorld) {
     let f = frame(&w);
     let mut t = w.resource_mut::<Trace>();
     *t.churn.entry(section.clone()).or_default() += 1;
-    let n = n_of(&t);
     let ours = t
         .cur
         .as_ref()
         .is_some_and(|a| a.button.as_ref().is_some_and(|b| b.0 == e));
     let held = t.cur.as_ref().is_some_and(|a| a.up.is_none());
     if ours || pressed || hovered || held {
-        info!(target: "clicks", "#{n} f{f} despawned {d} (hovered={hovered}) from section {section}");
+        t.say(
+            f,
+            format_args!("despawned {d} (hovered={hovered}) from section {section}"),
+        );
     }
     if ours && let Some(a) = &mut t.cur {
         a.gone = Some((f, section));
@@ -436,8 +459,7 @@ fn on_button_gone(ev: On<Despawn, Act>, mut w: DeferredWorld) {
 
 fn actions(mut read: MessageReader<UiAction>, frames: Res<FrameCount>, mut trace: ResMut<Trace>) {
     for UiAction(act) in read.read() {
-        let n = n_of(&trace);
-        info!(target: "clicks", "#{n} f{} UiAction {act:?}", frames.0);
+        trace.say(frames.0, format_args!("UiAction {act:?}"));
         if let Some(a) = &mut trace.cur {
             a.actions.push(format!("{act:?}"));
         }
@@ -448,7 +470,7 @@ fn menu_state(ui: Res<Ui>, frames: Res<FrameCount>, mut trace: ResMut<Trace>) {
     if trace.menu != Some(ui.menu) {
         if trace.menu.is_some() {
             let open = if ui.menu { "opened" } else { "closed" };
-            info!(target: "clicks", "#{} f{} menu {open}", n_of(&trace), frames.0);
+            trace.say(frames.0, format_args!("menu {open}"));
         }
         trace.menu = Some(ui.menu);
     }
@@ -461,11 +483,11 @@ fn verdict(frames: Res<FrameCount>, mut trace: ResMut<Trace>) {
         .and_then(|a| a.up)
         .is_some_and(|up| frames.0 >= up + SETTLE);
     if done && let Some(a) = trace.cur.take() {
-        report(a, "");
+        report(&mut trace.out, a, "");
     }
 }
 
-fn report(a: Attempt, note: &str) {
+fn report(out: &mut TraceFile, a: Attempt, note: &str) {
     let n = a.n;
     let span = a.up.map_or("not released".into(), |u| format!("{} frames", u - a.down));
     let why = if !a.pick_down {
@@ -510,7 +532,7 @@ fn report(a: Attempt, note: &str) {
     } else {
         format!(" ({note})")
     };
-    info!(target: "clicks", "#{n} VERDICT{note}: {why}; held {span}");
+    out.line(format_args!("#{n} VERDICT{note}: {why}; held {span}"));
 }
 
 fn churn(time: Res<Time<Real>>, mut trace: ResMut<Trace>) {
@@ -524,6 +546,9 @@ fn churn(time: Res<Time<Real>>, mut trace: ResMut<Trace>) {
     }
     let total: u32 = trace.churn.values().sum();
     let by: Vec<String> = trace.churn.iter().map(|(s, c)| format!("{c} under {s}")).collect();
-    info!(target: "clicks", "buttons despawned in the last second: {total} ({})", by.join("; "));
+    trace.out.line(format_args!(
+        "buttons despawned in the last second: {total} ({})",
+        by.join("; ")
+    ));
     trace.churn.clear();
 }

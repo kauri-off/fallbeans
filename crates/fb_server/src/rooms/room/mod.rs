@@ -276,7 +276,8 @@ pub struct Room {
     pub arena: Arena,
     /// Changes with every new arena (clients drop what belongs to an older one).
     pub arena_id: u32,
-    /// `--trace-hits`: the arenas' lines (`Arena::hit_log`), prefixed with the arena, for the server to take.
+    /// `--trace hits`: the arenas' lines (`Arena::hit_log`), prefixed with the arena, for the server to take.
+    #[cfg(feature = "traces")]
     pub hits: Option<Vec<String>>,
     /// Game tick of the arena's tick 0.
     zero: f64,
@@ -384,6 +385,7 @@ impl Room {
             stage: Stage::Lobby,
             arena,
             arena_id: 1,
+            #[cfg(feature = "traces")]
             hits: None,
             zero,
             playlist: Playlist::default(),

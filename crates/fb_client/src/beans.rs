@@ -16,7 +16,7 @@ use fb_sim::physics::{BodyState, Power};
 use lightyear::prelude::*;
 
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
-use crate::game::{Cue, HitTrace, Map, PrevPos, Smoothing};
+use crate::game::{Cue, Map, PrevPos, Smoothing};
 use crate::outfit::{Base, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
 use crate::session::{Outcome, Session};
 use crate::view::{color, power_color};
@@ -680,7 +680,11 @@ pub fn animate_beans(
     mut aura_mats: Query<&mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
     paints: Res<Paints>,
     mut scratch: Local<(Vec<Cue>, HashMap<PlayerId, (Vec3, f32)>)>,
-    (mut hits, timeline, fixed): (Option<ResMut<HitTrace>>, Res<LocalTimeline>, Res<Time<Fixed>>),
+    #[cfg(feature = "traces")] (mut hits, timeline, fixed): (
+        Option<ResMut<crate::trace::hits::Hits>>,
+        Res<LocalTimeline>,
+        Res<Time<Fixed>>,
+    ),
 ) {
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
@@ -790,7 +794,8 @@ pub fn animate_beans(
             },
         );
         let out = anim.out;
-        // `--trace-hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        // `--trace hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
+        #[cfg(feature = "traces")]
         if own && let (Some(h), Some(m)) = (hits.as_mut(), map.as_ref()) {
             let k = m.round.arena_tick(timeline.tick()) as f32 + fixed.overstep_fraction();
             let p = root.translation;
