@@ -2,7 +2,7 @@
 use bevy::math::Curve;
 use bevy::prelude::*;
 use fb_shared::PlayerId;
-use fb_shared::game::{ArenaKind, FallBehaviour};
+use fb_shared::game::{ArenaKind, FallBehaviour, MapId};
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyState, Power};
 use lightyear::prelude::*;
@@ -22,7 +22,7 @@ pub struct Round {
     /// Changes with every new arena of the room (`fb_proto::ArenaInfo::id`).
     pub arena: u32,
     pub kind: ArenaKind,
-    pub map: String,
+    pub map: MapId,
     pub seed: u32,
     pub zero_tick: i64,
     /// What a fall does here (a server run with `--respawn` keeps survival rounds respawning).

@@ -1,5 +1,5 @@
 //! Every map: one module per map, and the registry.
-use fb_sim::map::MapDef;
+use fb_sim::map::{MapDef, MapId};
 
 pub mod ball_hill;
 pub mod bounce_park;
@@ -67,8 +67,28 @@ pub static MAPS: &[&dyn MapDef] = &[
     &podium::Podium,
 ];
 
-pub fn by_id(id: &str) -> Option<&'static dyn MapDef> {
-    MAPS.iter().copied().find(|m| m.meta().id == id)
+pub fn by_id(id: MapId) -> &'static dyn MapDef {
+    match id {
+        MapId::DoorDash => &door_dash::DoorDash,
+        MapId::HammerSwing => &hammer_swing::HammerSwing,
+        MapId::BallHill => &ball_hill::BallHill,
+        MapId::HiddenBridge => &hidden_bridge::HiddenBridge,
+        MapId::DrumRoll => &drum_roll::DrumRoll,
+        MapId::JumpClub => &jump_club::JumpClub,
+        MapId::RollOut => &roll_out::RollOut,
+        MapId::WallRush => &wall_rush::WallRush,
+        MapId::TailTag => &tail_tag::TailTag,
+        MapId::HexAGone => &hex_a_gone::HexAGone,
+        MapId::CrownPeak => &crown_peak::CrownPeak,
+        MapId::PlateDrop => &plate_drop::PlateDrop,
+        MapId::PortalPanic => &portal_panic::PortalPanic,
+        MapId::BouncePark => &bounce_park::BouncePark,
+        MapId::CliffClimb => &cliff_climb::CliffClimb,
+        MapId::FrostSky => &frost_sky::FrostSky,
+        MapId::StarFall => &star_fall::StarFall,
+        MapId::Lobby => &lobby::Lobby,
+        MapId::Podium => &podium::Podium,
+    }
 }
 
 #[cfg(test)]
@@ -80,16 +100,13 @@ mod tests {
         let ids = |list: &[&dyn MapDef]| list.iter().map(|m| m.meta().id).collect::<Vec<_>>();
         let games = ids(GAMES);
         let mut all = games.clone();
-        all.extend(["lobby", "podium"]);
+        all.extend([MapId::Lobby, MapId::Podium]);
         assert_eq!(ids(MAPS), all);
-        let mut uniq = all.clone();
-        uniq.sort_unstable();
-        uniq.dedup();
-        assert_eq!(uniq.len(), all.len(), "a map id is used twice");
+        assert_eq!(all, MapId::ALL, "every map id has its map, in the order of MapId");
         for id in all {
-            assert_eq!(by_id(id).map(|m| m.meta().id), Some(id));
+            assert_eq!(by_id(id).meta().id, id);
+            assert_eq!(MapId::parse(id.as_str()), Some(id));
+            assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{id}\""));
         }
-        assert_eq!(lobby::META.id, "lobby");
-        assert_eq!(podium::META.id, "podium");
     }
 }

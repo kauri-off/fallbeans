@@ -3,7 +3,7 @@ use fb_shared::rng::Rng;
 use fb_shared::{Rgb, rgb};
 use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::m;
-use fb_sim::map::{GameMeta, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
@@ -13,7 +13,7 @@ use crate::util::{deco, o};
 
 pub struct Podium;
 
-pub static META: GameMeta = GameMeta::place("podium", "Итоги");
+pub static META: GameMeta = GameMeta::place(MapId::Podium, "Итоги");
 
 /// Podium x and top height for each final place (1st in the middle, then alternating sides).
 pub const PODIUM_SLOTS: [(f64, f64); 8] = [

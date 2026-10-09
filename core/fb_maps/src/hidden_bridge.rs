@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapSfx, MapSpec, SegEvent, Steer};
+use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapId, MapSfx, MapSpec, SegEvent, Steer};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
@@ -25,7 +25,7 @@ use crate::util::{deco, o};
 pub struct HiddenBridge;
 
 static META: GameMeta = GameMeta::new(
-    "hidden-bridge",
+    MapId::HiddenBridge,
     "Невидимый мост",
     Genre::Race,
     "Три стеклянных моста: ложная панель лопается от первого касания, и оттолкнуться от неё уже не выйдет. Смотрите, где упали другие, и идите по зелёным! Дальше мосты уже и с перчатками.",

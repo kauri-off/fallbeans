@@ -372,7 +372,7 @@ fn hud_state(
     } else {
         None
     };
-    let duration = fb_maps::by_id(&map.round.map).map_or(0.0, |d| d.meta().duration);
+    let duration = fb_maps::by_id(map.round.map).meta().duration;
     let next_in = session
         .lobby
         .as_ref()
@@ -450,7 +450,7 @@ fn panel(
     };
     let round = info.kind == ArenaKind::Round;
     let f = &*f;
-    let def = fb_maps::by_id(&info.game).map(|d| d.meta());
+    let def = fb_maps::by_id(info.game).meta();
     let mut players = session.lobby.as_ref().map_or_else(Vec::new, |l| l.players.clone());
     if info.kind == ArenaKind::Lobby {
         players.sort_by_key(|p| (core::cmp::Reverse(p.crowns), p.id));
@@ -458,19 +458,18 @@ fn panel(
         players.sort_by_key(|p| (core::cmp::Reverse(p.score), p.id));
     }
     let host = session.lobby.as_ref().and_then(|l| l.host);
-    let genre_points = def.is_some_and(|m| m.genre == Genre::Points);
+    let genre_points = def.genre == Genre::Points;
     rebuild(&mut commands, *q, |p| {
-        row(p, false, |r| match (round, def) {
-            (true, Some(m)) => {
+        row(p, false, |r| {
+            if round {
                 let s = if info.practice {
                     text::PRACTICE_TITLE.to_string()
                 } else {
                     format!("{}/{}", info.index, info.total)
                 };
-                genre_pill(r, f, m.genre, &s);
-                rich_in(r, f, m.title, 14.0, INK, true);
-            }
-            _ => {
+                genre_pill(r, f, def.genre, &s);
+                rich_in(r, f, def.title, 14.0, INK, true);
+            } else {
                 let s = if info.kind == ArenaKind::Podium {
                     text::GAME_SUMMARY.to_string()
                 } else {
@@ -702,9 +701,7 @@ fn intro(
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
         let Some(info) = info else { return };
-        let Some(m) = fb_maps::by_id(&info.game).map(|d| d.meta()) else {
-            return;
-        };
+        let m = fb_maps::by_id(info.game).meta();
         p.spawn((
             Node {
                 width: rem(32.5),
@@ -820,7 +817,7 @@ fn results(
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
         let Some(r) = &outcome.results else { return };
-        let title = fb_maps::by_id(&r.game).map_or(r.game.clone(), |d| d.meta().title.to_string());
+        let title = fb_maps::by_id(r.game).meta().title;
         let next = if r.practice {
             text::AGAIN
         } else if r.index < r.total {
@@ -848,7 +845,7 @@ fn results(
                 ..default()
             })
             .with_children(|h| {
-                heading(h, f, &title);
+                heading(h, f, title);
                 let s = if r.practice {
                     text::PRACTICE_SMALL.to_string()
                 } else {
@@ -1086,9 +1083,7 @@ fn keys(
     let line = match hud.kind {
         Some(ArenaKind::Round) if hud.on && !between && hud.status == Part::Play && (0.0..10.0).contains(&time.t) => {
             let practice = info.is_some_and(|i| i.practice);
-            let grab = info
-                .and_then(|i| fb_maps::by_id(&i.game))
-                .is_some_and(|d| d.meta().grab);
+            let grab = info.is_some_and(|i| fb_maps::by_id(i.game).meta().grab);
             let g = if grab {
                 "захват хвоста"
             } else {

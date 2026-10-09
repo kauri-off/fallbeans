@@ -522,7 +522,7 @@ fn publish(
         let round = || Round {
             arena: room.arena_id,
             kind: room.arena.kind,
-            map: map.into(),
+            map,
             seed: room.arena.seed,
             zero_tick,
             fall: room.arena.fall,

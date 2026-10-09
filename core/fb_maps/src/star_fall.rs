@@ -16,7 +16,7 @@ use fb_sim::builder::{Builder, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapLogic, MapSfx, MapSpec};
+use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSfx, MapSpec};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::BodyState;
@@ -33,7 +33,7 @@ pub struct StarFall;
 static META: GameMeta = GameMeta {
     grab: true,
     ..GameMeta::new(
-        "star-fall",
+        MapId::StarFall,
         "Звездопад",
         Genre::Points,
         "Звёзды сыплются на арену: собирайте! На башне и островах — крупные. Сбили вас — все звёзды достаются обидчику, упали сами — сгорают. Захват (Q / ПКМ) выхватывает звезду.",

@@ -3,9 +3,16 @@ use std::path::PathBuf;
 use bevy::prelude::Resource;
 use clap::{Parser, ValueEnum};
 use fb_net::{HTTP_PORT, NetSim, WS_PORT};
+use fb_proto::MapId;
 
-fn map_ids() -> clap::builder::PossibleValuesParser {
-    fb_maps::GAMES.iter().map(|m| m.meta().id).collect::<Vec<_>>().into()
+/// `--practice`, `--start`: a game's map id.
+fn game_id(s: &str) -> Result<MapId, String> {
+    MapId::parse(s)
+        .filter(|&m| fb_maps::director::game(m).is_some())
+        .ok_or_else(|| {
+            let ids: Vec<&str> = fb_maps::GAMES.iter().map(|m| m.meta().id.as_str()).collect();
+            format!("not a game; games: {}", ids.join(", "))
+        })
 }
 
 /// `--profile`: a name for the settings folder, never a path (`../x` would write outside it).
@@ -93,14 +100,14 @@ pub struct Opts {
     #[arg(long)]
     pub pin: Option<String>,
     /// A practice round of this map with bots.
-    #[arg(long)]
-    pub practice: Option<String>,
+    #[arg(long, value_name = "MAP", value_parser = game_id)]
+    pub practice: Option<MapId>,
     /// Suit colour for this run (index into the palette).
     #[arg(long)]
     pub color: Option<u8>,
     /// Map ids: if this client hosts the room, it starts a game of these maps in turn (`a,b,c`).
-    #[arg(long, value_name = "MAP", value_parser = map_ids(), value_delimiter = ',')]
-    pub start: Vec<String>,
+    #[arg(long, value_name = "MAP", value_parser = game_id, value_delimiter = ',')]
+    pub start: Vec<MapId>,
     /// With `--start`: wait until the room has this many players (default: 2, or 1 if the server runs with `--solo`; never fewer).
     #[arg(long, value_name = "N")]
     pub start_players: Option<usize>,

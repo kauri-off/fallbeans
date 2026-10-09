@@ -11,6 +11,7 @@ use fb_shared::rules::{RoundStats, RoundView, TOP_POINTS};
 use fb_shared::{DT, MAX_PLAYERS, PlayerId, m};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
+use fb_sim::map::MapId;
 use fb_sim::map::NoLogic;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyInput, BodyState, RUN_SPEED, StepEvents};
@@ -257,7 +258,7 @@ fn input(ctx: &Ctx, out: &mut Out) {
     }
 
     // The arena acts on a press in the tick it is for.
-    let map = fb_maps::by_id("jump-club").unwrap_or(fb_maps::GAMES[0]);
+    let map = fb_maps::by_id(MapId::JumpClub);
     let (mut a, _) = Arena::new(map, ArenaKind::Lobby, 1, 0, &[PlayerId(1)], false);
     a.add_pawn(PlayerId(1), false);
     for k in 1..=120 {
@@ -296,7 +297,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         plan.len()
                     ));
                 }
-                for id in &plan {
+                for &id in &plan {
                     match game(id) {
                         None => {
                             out.error(format!("planned an unknown game {id}"));
@@ -315,9 +316,12 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         }
                     }
                 }
-                let uniq: BTreeSet<&str> = plan.iter().copied().collect();
+                let uniq: BTreeSet<MapId> = plan.iter().copied().collect();
                 if uniq.len() < plan.len().min(5) {
-                    out.warn(format!("{name} {rounds} rounds repeats a game: {}", plan.join(", ")));
+                    out.warn(format!(
+                        "{name} {rounds} rounds repeats a game: {}",
+                        plan.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
                 }
             }
         }

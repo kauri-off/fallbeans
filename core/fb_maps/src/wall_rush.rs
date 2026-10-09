@@ -9,7 +9,7 @@ use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::{ColId, ColliderOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::MinMax;
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::scene::{Palette, pal};
@@ -19,7 +19,7 @@ use crate::util::{deco, freq, o};
 pub struct WallRush;
 
 static META: GameMeta = GameMeta::new(
-    "wall-rush",
+    MapId::WallRush,
     "Стенобой",
     Genre::Survival,
     "На платформу несутся стены — быстро и каждая по-своему: сплошные блоки, низкие стенки, балки сверху, окна и проёмы разной ширины. Найдите путь или перепрыгните — иначе снесёт!",

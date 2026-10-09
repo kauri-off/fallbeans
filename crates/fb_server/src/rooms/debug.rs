@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use fb_arena::{JournalEntry, Pawn, TraceEntry};
-use fb_proto::{Phase, PlayerId, Playlist};
+use fb_proto::{MapId, Phase, PlayerId, Playlist};
 use fb_shared::m;
 use fb_shared::rules::RoundStats;
 use serde::Serialize;
@@ -43,14 +43,14 @@ pub struct RoomState {
 
 #[derive(Serialize)]
 struct SessionState {
-    plan: Vec<&'static str>,
+    plan: Vec<MapId>,
     index: usize,
     started: usize,
 }
 
 #[derive(Serialize)]
 struct RoundState {
-    game: &'static str,
+    game: MapId,
     index: u32,
     total: u32,
     over: bool,
@@ -85,7 +85,7 @@ struct GameTotals {
 struct ArenaState {
     id: u32,
     kind: String,
-    game: &'static str,
+    game: MapId,
     seed: u32,
     tick: i64,
     t: f64,
@@ -238,7 +238,7 @@ pub fn room_state(room: &Room, i: usize) -> RoomState {
 
 #[derive(Serialize)]
 pub struct RoomTrace {
-    game: &'static str,
+    game: MapId,
     t: f64,
     journal: Vec<JournalLine>,
     /// By bean.

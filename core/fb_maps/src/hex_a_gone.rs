@@ -8,7 +8,7 @@ use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapLogic, MapSpec};
+use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
@@ -21,7 +21,7 @@ pub struct HexAGone;
 static META: GameMeta = GameMeta {
     finale: true,
     ..GameMeta::new(
-        "hex-a-gone",
+        MapId::HexAGone,
         "Хекс-а-гон",
         Genre::Survival,
         "Плитки исчезают у вас из-под ног, а этажей всего три. Чем дольше продержитесь, тем больше очков!",

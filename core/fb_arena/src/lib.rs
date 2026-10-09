@@ -23,7 +23,7 @@ use fb_sim::scene::SceneDesc;
 use fb_sim::world::World;
 use serde_json::{Value, json};
 
-pub use fb_shared::game::{ArenaKind, FallBehaviour, can_move, fall_behaviour};
+pub use fb_shared::game::{ArenaKind, FallBehaviour, MapId, can_move, fall_behaviour};
 pub use fb_shared::hash::{Fingerprint, StateHash};
 pub use fb_shared::rules::RoundStats;
 
@@ -495,7 +495,7 @@ impl Arena {
         self.recording = Some(Recording {
             // 5: ticks the server skipped (`Op::Skip`).
             v: 5,
-            game: self.map.meta().id.to_string(),
+            game: self.map.meta().id,
             kind: self.kind,
             seed: self.seed,
             tick0: self.tick,

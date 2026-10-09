@@ -12,7 +12,7 @@ use fb_sim::bots::{
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapLogic, MapSfx, MapSpec};
+use fb_sim::map::{Cx, DecoChange, GameMeta, Genre, MapCtx, MapDef, MapEvent, MapId, MapLogic, MapSfx, MapSpec};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::Body;
@@ -28,7 +28,7 @@ static META: GameMeta = GameMeta {
     min_players: 2,
     grab: true,
     ..GameMeta::new(
-        "tail-tag",
+        MapId::TailTag,
         "Хвостики",
         Genre::Points,
         "У половины игроков есть хвосты, и с хвостом бежится медленнее. Хватайте (Q / ПКМ) чужой хвост и не отдавайте свой: упавший отдаёт хвост тому, кто столкнул, или ближайшему. Батуты, портал и платформы помогут уйти.",

@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::{Palette, pal};
@@ -21,7 +21,7 @@ use crate::util::{deco, o};
 pub struct DrumRoll;
 
 static META: GameMeta = GameMeta::new(
-    "drum-roll",
+    MapId::DrumRoll,
     "Барабаны",
     Genre::Race,
     "Лестница из барабанов, которые то разгоняются, то замедляются (или батут на мостик над ними), барабаны с шипами, катки, брёвна, которые катят вбок и меняют направление. Порядок каждый раз свой!",

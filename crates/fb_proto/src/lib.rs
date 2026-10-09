@@ -3,6 +3,7 @@
 //! sends passes `ClientMsg::check` (bounds and shapes) before the server looks at it.
 pub use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::ArenaKind;
+pub use fb_shared::game::MapId;
 use fb_shared::rules::RoundRow;
 use fb_shared::{CHAT_MAX, COLORS, EMOTES, ROOM_PIN_DIGITS};
 pub use fb_sim::map::MapEvent;
@@ -78,7 +79,7 @@ pub struct Hello {
     pub room: Option<String>,
     pub pin: Option<String>,
     /// A practice round of this game, alone with bots.
-    pub practice: Option<String>,
+    pub practice: Option<MapId>,
     /// The suit colour picked last time (taken if nobody in the room has it) and the outfit.
     pub color: Option<u8>,
     pub outfit: Option<Outfit>,
@@ -103,7 +104,7 @@ pub enum DevCmd {
     EndRound,
     /// Start a game now: optional list of games, rounds, and exactly how many bots (replacing any).
     Start {
-        games: Vec<String>,
+        games: Vec<MapId>,
         rounds: Option<u32>,
         bots: Option<u32>,
     },
@@ -207,8 +208,8 @@ fn check_pid(id: PlayerId) -> Result<(), &'static str> {
     ensure(id.0 != 0, "player id")
 }
 
-fn check_games(games: &[String]) -> Result<(), &'static str> {
-    ensure(games.len() <= 12 && games.iter().all(|g| chars_max(g, 32)), "games")
+fn check_games(games: &[MapId]) -> Result<(), &'static str> {
+    ensure(games.len() <= 12, "games")
 }
 
 fn finite(v: &[f64]) -> bool {
@@ -281,7 +282,6 @@ impl ClientMsg {
                 ensure(chars_max(&h.name, 64), "name")?;
                 ensure(h.room.as_deref().is_none_or(valid_room_id), "room")?;
                 ensure(h.pin.as_deref().is_none_or(valid_pin), "pin")?;
-                ensure(h.practice.as_deref().is_none_or(|p| chars_max(p, 32)), "practice")?;
                 h.color.map_or(Ok(()), color)
             }
             ClientMsg::Name(name) => ensure(chars_max(name, 64), "name"),
@@ -383,7 +383,7 @@ pub struct ArenaInfo {
     /// Changes with every new arena (the replicated `Round` carries the same id).
     pub id: u32,
     pub kind: ArenaKind,
-    pub game: String,
+    pub game: MapId,
     pub participants: Vec<PlayerId>,
     /// Round number in the game (1-based) and the number of rounds; 0 outside rounds.
     pub index: u32,
@@ -482,7 +482,7 @@ pub enum ServerMsg {
     Lobby(Lobby),
     Arena(ArenaInfo),
     RoundEnd {
-        game: String,
+        game: MapId,
         index: u32,
         total: u32,
         rows: Vec<RoundRow>,
@@ -642,7 +642,7 @@ mod tests {
         assert!(ClientMsg::Color(12).check().is_ok());
         assert!(ClientMsg::Color(13).check().is_err());
         assert!(ClientMsg::Color(255).check().is_err());
-        let playlist = |games: Vec<String>, rounds| {
+        let playlist = |games: Vec<MapId>, rounds| {
             ClientMsg::Playlist(Playlist {
                 games,
                 rounds,
@@ -650,11 +650,10 @@ mod tests {
             })
             .check()
         };
-        assert!(playlist(vec!["door-dash".into()], 5).is_ok());
+        assert!(playlist(vec![MapId::DoorDash], 5).is_ok());
         assert!(playlist(Vec::new(), 0).is_err());
         assert!(playlist(Vec::new(), 13).is_err());
-        assert!(playlist(vec!["door-dash".into(); 13], 5).is_err());
-        assert!(playlist(vec!["ы".repeat(33)], 5).is_err());
+        assert!(playlist(vec![MapId::DoorDash; 13], 5).is_err());
         assert!(ClientMsg::RemoveBot(PlayerId(0)).check().is_err());
         assert!(ClientMsg::RemoveBot(PlayerId(3)).check().is_ok());
         assert!(ClientMsg::Host(PlayerId(0)).check().is_err());
@@ -662,14 +661,6 @@ mod tests {
         assert!(
             ClientMsg::Hello(Hello {
                 name: long,
-                ..Default::default()
-            })
-            .check()
-            .is_err()
-        );
-        assert!(
-            ClientMsg::Hello(Hello {
-                practice: Some("ы".repeat(33)),
                 ..Default::default()
             })
             .check()
@@ -688,11 +679,11 @@ mod tests {
         assert!(!ok(DevCmd::Step { ticks: 1201 }));
         assert!(ok(DevCmd::Seed { seed: 1 << 31 }));
         assert!(!ok(DevCmd::Seed { seed: (1 << 31) + 1 }));
-        let start = |games: Vec<String>, rounds, bots| DevCmd::Start { games, rounds, bots };
+        let start = |games: Vec<MapId>, rounds, bots| DevCmd::Start { games, rounds, bots };
         assert!(ok(start(Vec::new(), Some(12), Some(7))));
         assert!(!ok(start(Vec::new(), Some(0), None)));
         assert!(!ok(start(Vec::new(), None, Some(8))));
-        assert!(!ok(start(vec!["x".into(); 13], None, None)));
+        assert!(!ok(start(vec![MapId::DoorDash; 13], None, None)));
         let goto = |to| DevCmd::Goto { id: None, to };
         assert!(ok(goto(Goto::Checkpoint(64))));
         assert!(!ok(goto(Goto::Checkpoint(65))));

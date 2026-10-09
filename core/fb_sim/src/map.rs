@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use fb_shared::PlayerId;
-pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, can_move, fall_behaviour};
+pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, MapId, can_move, fall_behaviour};
 use serde::{Deserialize, Serialize};
 
 use crate::bots::{BotBrain, BotInput, BotView};

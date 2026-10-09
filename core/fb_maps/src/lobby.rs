@@ -12,7 +12,7 @@ use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
 use fb_sim::looks::Pattern;
 use fb_sim::m;
-use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapLogic, MapSpec};
+use fb_sim::map::{Cx, GameMeta, MapCtx, MapDef, MapId, MapLogic, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Model;
@@ -23,7 +23,7 @@ use crate::util::{deco, o};
 
 pub struct Lobby;
 
-pub static META: GameMeta = GameMeta::place("lobby", "Лобби");
+pub static META: GameMeta = GameMeta::place(MapId::Lobby, "Лобби");
 
 const FLOOR_R: f64 = 24.0;
 /// The bell tower: x, z, top, half width.

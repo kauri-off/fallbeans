@@ -4,7 +4,7 @@ use fb_sim::bots::{ArenaOpts, BOT_DT, BotInput, BotView, Note, arena_brain};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::physics::BodyState;
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -13,7 +13,7 @@ use fb_sim::scene::pal;
 pub struct JumpClub;
 
 static META: GameMeta = GameMeta::new(
-    "jump-club",
+    MapId::JumpClub,
     "Прыг-клуб",
     Genre::Survival,
     "Перепрыгивайте нижнюю балку и не попадайтесь под верхнюю. Со временем обе крутятся всё быстрее!",

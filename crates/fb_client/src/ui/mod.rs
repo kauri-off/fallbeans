@@ -31,6 +31,7 @@ use bevy::text::{EditableText, EditableTextFilter, TextCursorStyle, TextEdit};
 use bevy::ui::{InteractionDisabled, Pressed, UiSystems};
 use bevy::ui_widgets::{Activate, Slider, SliderRange, SliderStep, SliderThumb, SliderValue, ValueChange};
 use bevy::window::PrimaryWindow;
+use fb_proto::MapId;
 use fb_proto::{ClientMsg, Outfit};
 
 use crate::keys::Bind;
@@ -192,7 +193,7 @@ pub enum Action {
     CancelPin,
     CreatePrivate,
     CreateRoom,
-    Practice(&'static str),
+    Practice(MapId),
     EndPractice,
     Update,
     ReleasePage,

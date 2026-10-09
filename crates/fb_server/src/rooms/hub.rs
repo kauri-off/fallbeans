@@ -286,7 +286,7 @@ impl Hub {
         // (The panic, its place and backtrace are in the log just above: `panic` in `main.rs`.)
         error!(
             room = room.id,
-            arena = room.arena.map.meta().id,
+            arena = %room.arena.map.meta().id,
             phase = ?room.phase(),
             tick = room.arena.tick,
             players = ?room.players.iter().map(|p| p.id).collect::<Vec<_>>(),
@@ -446,7 +446,7 @@ impl Hub {
             color: h.color,
             outfit: h.outfit.unwrap_or_default(),
         };
-        if let Some(game) = &h.practice {
+        if let Some(game) = h.practice {
             return self.enter_practice(conn, m, game);
         }
         let old = self.live.get(&uid).copied().filter(|&c| c != conn);
@@ -770,7 +770,7 @@ impl Hub {
         self.out.push(Out::Close(conn));
     }
 
-    fn enter_practice(&mut self, conn: ConnId, m: Member, game: &str) {
+    fn enter_practice(&mut self, conn: ConnId, m: Member, game: MapId) {
         let Some(game) = Game::by_id(game) else {
             return self.refuse(conn, RejectReason::Bad, "Нет такой карты");
         };

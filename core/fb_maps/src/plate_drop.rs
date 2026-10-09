@@ -9,7 +9,7 @@ use fb_sim::builder::Builder;
 use fb_sim::collider::ColId;
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::{NodeId, ROOT};
 use fb_sim::props::{SpinUp, arm_contact_eta};
@@ -22,7 +22,7 @@ pub struct PlateDrop;
 static META: GameMeta = GameMeta {
     finale: true,
     ..GameMeta::new(
-        "plate-drop",
+        MapId::PlateDrop,
         "Падающие плиты",
         Genre::Survival,
         "Плиты обрушиваются по две-три сразу и быстро, а над ними крутятся балки-шлагбаумы, сбивающие с ног. Продержитесь дольше всех!",

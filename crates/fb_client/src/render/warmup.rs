@@ -27,7 +27,7 @@ use fb_arena::ArenaKind;
 use fb_shared::DT;
 use fb_shared::outfit::{GLASSES, Glasses, HATS, Hat};
 use fb_sim::looks::{LOOKS, Look, Pattern};
-use fb_sim::map::MapDef;
+use fb_sim::map::{MapDef, MapId};
 use lightyear::prelude::LocalTimeline;
 
 use super::EnvLights;
@@ -264,9 +264,9 @@ fn count_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
 /// is lit as it is afterwards).
 fn plan() -> Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> {
     let classic = fb_sim::looks::classic().look;
-    let kind = |id: &str| match id {
-        "lobby" => ArenaKind::Lobby,
-        "podium" => ArenaKind::Podium,
+    let kind = |id: MapId| match id {
+        MapId::Lobby => ArenaKind::Lobby,
+        MapId::Podium => ArenaKind::Podium,
         _ => ArenaKind::Round,
     };
     let own_look = |d: &dyn MapDef| d.looks().first().map_or(classic, |id| id.look());
@@ -274,7 +274,7 @@ fn plan() -> Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> {
     let mut lobby = None;
     for &d in fb_maps::MAPS {
         let id = d.meta().id;
-        if id == "lobby" {
+        if id == MapId::Lobby {
             lobby = Some(d);
             continue;
         }

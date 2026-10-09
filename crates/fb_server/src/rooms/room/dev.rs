@@ -41,8 +41,8 @@ impl Room {
             DevCmd::Start { games, rounds, bots } => {
                 let bad: Vec<&str> = games
                     .iter()
-                    .filter(|g| Game::by_id(g).is_none())
-                    .map(String::as_str)
+                    .filter(|&&g| Game::by_id(g).is_none())
+                    .map(|g| g.as_str())
                     .collect();
                 if !bad.is_empty() {
                     return Err(format!("unknown games: {}", bad.join(", ")));
@@ -81,7 +81,7 @@ impl Room {
                 self.start_game();
                 let plan: Vec<&str> = self
                     .session()
-                    .map_or(Vec::new(), |s| s.plan.iter().map(|g| g.id()).collect());
+                    .map_or(Vec::new(), |s| s.plan.iter().map(|g| g.id().as_str()).collect());
                 Ok(format!("started: {}", plan.join(", ")))
             }
             DevCmd::Lobby => {

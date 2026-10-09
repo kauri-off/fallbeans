@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use fb_proto::{AwardKind, Cause, DenyReason, DevCmd, Goto, Hazard, MapEvent, MapEventKind, Mode, Phase, RejectReason};
 use fb_shared::TICK_RATE;
-use fb_shared::game::{ArenaKind, FallBehaviour};
+use fb_shared::game::{ArenaKind, FallBehaviour, MapId};
 use fb_shared::outfit::{Glasses, Hat, Tint};
 use fb_shared::rules::RoundNote;
 use fb_sim::map::SegEvent;
@@ -150,6 +150,7 @@ fn types() -> Vec<String> {
     trace::<Goto>(&mut tracer);
     trace::<Hat>(&mut tracer);
     trace::<MapEvent>(&mut tracer);
+    trace::<MapId>(&mut tracer);
     trace::<MapEventKind>(&mut tracer);
     trace::<Mode>(&mut tracer);
     trace::<Phase>(&mut tracer);

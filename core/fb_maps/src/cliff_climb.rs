@@ -10,7 +10,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::Surface;
@@ -21,7 +21,7 @@ use crate::util::o;
 pub struct CliffClimb;
 
 static META: GameMeta = GameMeta::new(
-    "cliff-climb",
+    MapId::CliffClimb,
     "Скалолазы",
     Genre::Race,
     "Всё выше и выше! Запрыгивайте на уступы и цепляйтесь за край, лезьте по лестницам (прыжок — соскочить) и не попадитесь под маятник. Наверху ждёт финиш.",

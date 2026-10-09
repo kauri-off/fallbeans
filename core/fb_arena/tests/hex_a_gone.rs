@@ -5,12 +5,13 @@ use fb_shared::PlayerId;
 use fb_shared::TICK_RATE;
 use fb_shared::input::InputFrame;
 use fb_sim::map::MapEvent;
+use fb_sim::map::MapId;
 
 const FALL_DELAY: f64 = 0.42;
 
 #[test]
 fn a_bean_standing_still_drops_through_every_floor() {
-    let map = fb_maps::by_id("hex-a-gone").unwrap();
+    let map = fb_maps::by_id(MapId::HexAGone);
     for seed in [1, 4, 9] {
         let (mut arena, _) = Arena::new(map, ArenaKind::Round, seed, 0, &[1, 2].map(PlayerId), false);
         arena.add_pawn_at(PlayerId(1), false, Some(0));

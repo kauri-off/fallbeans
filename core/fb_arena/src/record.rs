@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use fb_shared::PlayerId;
+use fb_shared::game::MapId;
 use fb_shared::hash::StateHash;
 use fb_shared::input::InputFrame;
 use fb_sim::math::V3;
@@ -14,7 +15,7 @@ use crate::{Arena, ArenaKind};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Recording {
     pub v: u32,
-    pub game: String,
+    pub game: MapId,
     #[serde(with = "kind_name")]
     pub kind: ArenaKind,
     pub seed: u32,
@@ -166,7 +167,7 @@ pub struct Replay {
 
 /// Plays a recorded round again; `each` sees the arena after every tick (returning true stops).
 pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<Replay, String> {
-    let map = fb_maps::by_id(&rec.game).ok_or_else(|| format!("unknown map {}", rec.game))?;
+    let map = fb_maps::by_id(rec.game);
     let (mut a, _) = Arena::new(map, rec.kind, rec.seed, rec.tick0, &rec.participants, false);
     let first = a.tick;
     for p in rec.pawns.iter().filter(|p| p.at <= first) {

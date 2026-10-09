@@ -12,7 +12,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::arm_contact_eta;
@@ -23,7 +23,7 @@ use crate::util::o;
 pub struct PortalPanic;
 
 static META: GameMeta = GameMeta::new(
-    "portal-panic",
+    MapId::PortalPanic,
     "Портальный переполох",
     Genre::Race,
     "Пропасти, которые не перепрыгнуть: только порталы! Обычные ведут туда и обратно, односторонние — только вперёд (выход со стрелкой), одни открываются по очереди, другие швыряют через стену.",

@@ -196,7 +196,7 @@ impl Room {
             let bot = self.player(*id).is_some_and(Player::is_bot);
             arena.add_pawn_at(*id, bot, Some(i));
         }
-        info!(room = %self.id, game = game.id(), seed, players = participants.len(), "round");
+        info!(room = %self.id, game = %game.id(), seed, players = participants.len(), "round");
         let bots = participants
             .iter()
             .any(|&id| self.player(id).is_some_and(Player::is_bot));
@@ -316,9 +316,9 @@ impl Room {
             }
         }
         let deltas: Vec<(PlayerId, i64)> = rows.iter().map(|r| (r.id, r.delta)).collect();
-        info!(room = %self.id, game = game.id(), rows = ?deltas, "round over");
+        info!(room = %self.id, game = %game.id(), rows = ?deltas, "round over");
         self.broadcast(ServerMsg::RoundEnd {
-            game: game.id().into(),
+            game: game.id(),
             index,
             total,
             rows,

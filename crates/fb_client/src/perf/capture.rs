@@ -327,7 +327,7 @@ fn scene_name(map: Option<&Map>) -> String {
         Some(m) => match m.round.kind {
             ArenaKind::Lobby => "lobby".into(),
             ArenaKind::Podium => "podium".into(),
-            ArenaKind::Round => m.round.map.clone(),
+            ArenaKind::Round => m.round.map.to_string(),
         },
     }
 }

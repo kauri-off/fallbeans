@@ -161,7 +161,7 @@ impl Map {
             round: Round {
                 arena: 0,
                 kind,
-                map: meta.id.to_string(),
+                map: meta.id,
                 seed: SEED,
                 zero_tick,
                 fall: fb_arena::fall_behaviour(meta.genre),
@@ -179,7 +179,7 @@ impl Map {
             info: ArenaInfo {
                 id: 0,
                 kind,
-                game: meta.id.to_string(),
+                game: meta.id,
                 participants,
                 index: 0,
                 total: 0,
@@ -419,7 +419,6 @@ fn build_round(
     map: Option<ResMut<Map>>,
     mut session: ResMut<Session>,
     mut stats: ResMut<Stats>,
-    mut unknown: Local<Option<u32>>,
     mut generations: ResMut<Generations>,
 ) {
     // (Out of the room, its arena may linger a moment: `drop_map`.)
@@ -448,13 +447,7 @@ fn build_round(
     let Some(info) = session.arena.clone().filter(|a| a.id == round.arena) else {
         return;
     };
-    let Some(def) = fb_maps::by_id(&round.map) else {
-        // (Once per arena: this runs every frame.)
-        if unknown.replace(round.arena) != Some(round.arena) {
-            error!("unknown map {} (arena {})", round.map, round.arena);
-        }
-        return;
-    };
+    let def = fb_maps::by_id(round.map);
     let (mut b, mut spec) = build_map(def, round.seed, true, &info.participants);
     let meta = def.meta();
     let bonuses = if round.kind == ArenaKind::Round {

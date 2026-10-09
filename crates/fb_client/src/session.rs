@@ -7,6 +7,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_proto::MapId;
 use fb_proto::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
@@ -75,7 +76,7 @@ pub struct Denied {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Results {
-    pub game: String,
+    pub game: MapId,
     pub index: u32,
     pub total: u32,
     pub rows: Vec<fb_shared::rules::RoundRow>,
@@ -223,7 +224,7 @@ fn say_hello(
             .filter(|r| !r.is_empty())
             .or_else(|| opts.room.clone()),
         pin: opts.pin.clone(),
-        practice: opts.practice.clone(),
+        practice: opts.practice,
         color: me.color(),
         outfit: Some(me.player.outfit()),
     };
@@ -454,7 +455,8 @@ fn start_game(
         return;
     }
     session.started = true;
-    info!("starting {} with {n} players", opts.start.join(","));
+    let games: Vec<&str> = opts.start.iter().map(|m| m.as_str()).collect();
+    info!("starting {} with {n} players", games.join(","));
     if opts.fill {
         send(&mut senders, ClientMsg::Fill(true));
     }
@@ -467,7 +469,7 @@ fn start_game(
                 .iter()
                 .cycle()
                 .take(opts.start_rounds as usize)
-                .cloned()
+                .copied()
                 .collect(),
             rounds: opts.start_rounds,
         }),

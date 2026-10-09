@@ -86,7 +86,7 @@ enum Anim {
 struct ArenaInfo {
     id: u32
     kind: ArenaKind
-    game: str
+    game: MapId
     participants: Vec<PlayerId>
     index: u32
     total: u32
@@ -165,7 +165,7 @@ enum DevCmd {
     0 SkipIntro
     1 Warp { s: f64 }
     2 EndRound
-    3 Start { games: Vec<str>, rounds: Option<u32>, bots: Option<u32> }
+    3 Start { games: Vec<MapId>, rounds: Option<u32>, bots: Option<u32> }
     4 Lobby
     5 Rate { k: f64 }
     6 Step { ticks: u32 }
@@ -258,7 +258,7 @@ struct Hello {
     name: str
     room: Option<str>
     pin: Option<str>
-    practice: Option<str>
+    practice: Option<MapId>
     color: Option<u8>
     outfit: Option<Outfit>
 }
@@ -311,6 +311,27 @@ struct MapEventMsg {
     ev: MapEventKind
     history: bool
 }
+enum MapId {
+    0 door-dash
+    1 hammer-swing
+    2 ball-hill
+    3 hidden-bridge
+    4 drum-roll
+    5 jump-club
+    6 roll-out
+    7 wall-rush
+    8 tail-tag
+    9 hex-a-gone
+    10 crown-peak
+    11 plate-drop
+    12 portal-panic
+    13 bounce-park
+    14 cliff-climb
+    15 frost-sky
+    16 star-fall
+    17 lobby
+    18 podium
+}
 enum Mode {
     0 Mix
     1 Races
@@ -333,7 +354,7 @@ enum Phase {
 struct PlayerId(u32)
 struct Playlist {
     mode: Mode
-    games: Vec<str>
+    games: Vec<MapId>
     rounds: u32
 }
 struct Pose {
@@ -380,7 +401,7 @@ struct RoomRef {
 struct Round {
     arena: u32
     kind: ArenaKind
-    map: str
+    map: MapId
     seed: u32
     zero_tick: i64
     fall: FallBehaviour
@@ -416,7 +437,7 @@ enum ServerMsg {
     5 Welcome { id: PlayerId, room: str, solo: bool, practice: bool, resumed: bool }
     6 Lobby(Lobby)
     7 Arena(ArenaInfo)
-    8 RoundEnd { game: str, index: u32, total: u32, rows: Vec<RoundRow>, practice: bool }
+    8 RoundEnd { game: MapId, index: u32, total: u32, rows: Vec<RoundRow>, practice: bool }
     9 GameEnd { standings: Vec<Standing>, awards: Vec<Award> }
     10 Scores(Vec<(PlayerId, i64)>)
     11 Emote { id: PlayerId, e: u8 }

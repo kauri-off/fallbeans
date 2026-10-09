@@ -4,6 +4,7 @@ use fb_arena::{Arena, ArenaKind};
 use fb_shared::PlayerId;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
+use fb_sim::map::MapId;
 
 const DIRS: [(i8, i8); 9] = [
     (127, 0),
@@ -34,8 +35,8 @@ fn script(id: u32, k: i64) -> InputFrame {
     }
 }
 
-fn run(map: &str, seed: u32) -> String {
-    let def = fb_maps::by_id(map).unwrap();
+fn run(map: MapId, seed: u32) -> String {
+    let def = fb_maps::by_id(map);
     let ids: Vec<PlayerId> = (1..=8).map(PlayerId).collect();
     let (mut arena, _) = Arena::new(def, ArenaKind::Round, seed, -720, &ids, false);
     for &id in &ids {

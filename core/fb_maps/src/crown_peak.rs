@@ -11,7 +11,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, GloveOpts, arm_contact_eta, glove_puncher, rolling_balls, sweep_eta, y_on_ramp};
@@ -25,7 +25,7 @@ pub struct CrownPeak;
 static META: GameMeta = GameMeta {
     finale: true,
     ..GameMeta::new(
-        "crown-peak",
+        MapId::CrownPeak,
         "Гора короны",
         Genre::Race,
         "Долгий подъём: склон с шарами или скользящие ступени, мосты под молотами, перчатки и батуты, дальше — испытания в случайном порядке. Кто первым коснётся короны на вершине, тот и победил!",

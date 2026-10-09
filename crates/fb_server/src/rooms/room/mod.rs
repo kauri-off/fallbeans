@@ -53,15 +53,15 @@ pub struct Game(&'static dyn MapDef);
 
 impl Game {
     /// The game (not the lobby or the podium) of this id.
-    pub fn by_id(id: &str) -> Option<Self> {
-        fb_maps::GAMES.iter().copied().find(|m| m.meta().id == id).map(Self)
+    pub fn by_id(id: MapId) -> Option<Self> {
+        fb_maps::director::game(id).map(|_| Self(fb_maps::by_id(id)))
     }
 
     pub fn meta(self) -> &'static GameMeta {
         self.0.meta()
     }
 
-    pub fn id(self) -> &'static str {
+    pub fn id(self) -> MapId {
         self.meta().id
     }
 
@@ -86,7 +86,7 @@ impl PartialEq for Game {
 
 impl core::fmt::Debug for Game {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.id())
+        f.write_str(self.id().as_str())
     }
 }
 
@@ -153,7 +153,7 @@ pub struct Session {
 
 impl Session {
     /// Planned games that need more players than there are now are skipped (one of two left: no tail tag).
-    fn skip_unfit(&mut self, players: usize) -> Vec<&'static str> {
+    fn skip_unfit(&mut self, players: usize) -> Vec<MapId> {
         let mut skipped = Vec::new();
         while let Some(&g) = self.plan.get(self.index) {
             if director::fits(g.meta(), players as u32) {
@@ -539,7 +539,7 @@ impl Room {
         ArenaInfo {
             id: self.arena_id,
             kind: a.kind,
-            game: a.map.meta().id.into(),
+            game: a.map.meta().id,
             participants: a.participants.clone(),
             index: round.map_or(0, |r| r.index),
             total: round.map_or(0, |r| r.total),

@@ -2,6 +2,7 @@
 use fb_arena::{Arena, ArenaKind, FallBehaviour, PawnStatus, fell, respawn, respawn_point};
 use fb_shared::PlayerId;
 use fb_shared::input::InputFrame;
+use fb_sim::map::MapId;
 use fb_sim::math::V3;
 use fb_sim::physics::Body;
 
@@ -53,7 +54,7 @@ fn predicted_respawn_matches_the_arena() {
 
 #[test]
 fn the_lobby_respawns_where_nobody_stands() {
-    let lobby = fb_maps::by_id("lobby").unwrap();
+    let lobby = fb_maps::by_id(MapId::Lobby);
     let (arena, _) = Arena::new(lobby, ArenaKind::Lobby, 1, -1, &[1].map(PlayerId), false);
     assert_eq!(respawn_point(&arena.spec, ArenaKind::Lobby, arena.fall, None, 0), None);
 }

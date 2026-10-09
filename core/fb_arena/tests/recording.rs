@@ -2,12 +2,13 @@
 use fb_arena::{Arena, ArenaKind, replay};
 use fb_shared::PlayerId;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
+use fb_sim::map::MapId;
 use fb_sim::math::V3;
 
 #[test]
 fn replays_end_in_the_recorded_state() {
-    for map in ["door-dash", "tail-tag", "hex-a-gone"] {
-        let def = fb_maps::by_id(map).unwrap();
+    for map in [MapId::DoorDash, MapId::TailTag, MapId::HexAGone] {
+        let def = fb_maps::by_id(map);
         let ids: Vec<PlayerId> = (1..=6).map(PlayerId).collect();
         let (mut a, _) = Arena::new(def, ArenaKind::Round, 42, -360, &ids, false);
         a.record();
@@ -39,6 +40,7 @@ fn replays_end_in_the_recorded_state() {
         }
         let rec = a.take_recording().unwrap();
         let json = serde_json::to_string(&rec).unwrap();
+        assert!(json.contains(&format!("\"game\":\"{map}\"")), "{map}");
         let rec = serde_json::from_str(&json).unwrap();
         let r = replay(&rec, |_| false).unwrap();
         assert!(r.matches, "{map}: replay {} vs recorded {}", r.hash, a.state_hash());
@@ -47,7 +49,7 @@ fn replays_end_in_the_recorded_state() {
 
 #[test]
 fn ticks_the_server_skipped_are_skipped_on_replay() {
-    let def = fb_maps::by_id("door-dash").unwrap();
+    let def = fb_maps::by_id(MapId::DoorDash);
     let ids: Vec<PlayerId> = (1..=4).map(PlayerId).collect();
     let (mut a, _) = Arena::new(def, ArenaKind::Round, 5, -360, &ids, false);
     a.record();
@@ -76,7 +78,7 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
 
 #[test]
 fn a_traced_round_logs_dives_and_tackles_and_leaves_the_state_alone() {
-    let def = fb_maps::by_id("door-dash").unwrap();
+    let def = fb_maps::by_id(MapId::DoorDash);
     let ids: Vec<PlayerId> = (1..=8).map(PlayerId).collect();
     let run = |traced: bool| {
         let (mut a, _) = Arena::new(def, ArenaKind::Round, 7, -360, &ids, false);

@@ -5,6 +5,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use fb_sim::map::MapDef;
+use fb_sim::map::MapId;
 use fb_sim::math::V3;
 use rayon::prelude::*;
 use serde::{Serialize, Serializer};
@@ -260,8 +261,9 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
     let clock = clock::Clock::start();
     let mut results = Vec::new();
     for id in &o.maps {
-        if fb_maps::GAMES.iter().all(|m| m.meta().id != id) {
-            let msg = if fb_maps::by_id(id).is_some() {
+        let map = MapId::parse(id);
+        if map.and_then(fb_maps::director::game).is_none() {
+            let msg = if map.is_some() {
                 format!("{id} is not a game: map audits run on games only")
             } else {
                 format!("unknown map {id}")
@@ -284,7 +286,7 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
     let maps: Vec<&'static dyn MapDef> = fb_maps::GAMES
         .iter()
         .copied()
-        .filter(|m| o.maps.is_empty() || o.maps.iter().any(|id| id == m.meta().id))
+        .filter(|m| o.maps.is_empty() || o.maps.iter().any(|id| id == m.meta().id.as_str()))
         .collect();
     let mut jobs: Vec<(Audit, Option<&'static dyn MapDef>)> = Vec::new();
     for a in systems::AUDITS.iter().filter(|a| picked(a)) {

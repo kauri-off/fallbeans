@@ -9,7 +9,7 @@ use fb_sim::bots::{HumanOpts, Note, humanize, init_bot};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::looks::LookId;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::RUN_SPEED;
@@ -21,7 +21,7 @@ use crate::util::deco;
 pub struct RollOut;
 
 static META: GameMeta = GameMeta::new(
-    "roll-out",
+    MapId::RollOut,
     "Перекати-поле",
     Genre::Survival,
     "Огромные барабаны с дырами вращаются под ногами. Бегите против вращения и перепрыгивайте провалы!",

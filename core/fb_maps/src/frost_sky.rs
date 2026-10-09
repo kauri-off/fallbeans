@@ -12,7 +12,7 @@ use fb_sim::course::{
 };
 use fb_sim::looks::LookId;
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapSpec};
+use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::physics::BodyState;
 use fb_sim::props::arm_contact_eta;
@@ -24,7 +24,7 @@ use crate::util::{deco, dynamic, o, rot};
 pub struct FrostSky;
 
 static META: GameMeta = GameMeta::new(
-    "frost-sky",
+    MapId::FrostSky,
     "Ледяные небеса",
     Genre::Race,
     "Скользкие ледяные склоны, пропасти, которые берутся только прыжком с нырком (E или ЛКМ в полёте), низкие перекладины — под ними только проскользить, и летающие платформы над облаками.",

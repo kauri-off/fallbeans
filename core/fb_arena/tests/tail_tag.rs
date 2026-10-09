@@ -2,6 +2,7 @@
 //! immunity is over.
 use core::f64::consts::FRAC_PI_2;
 use fb_shared::PlayerId;
+use fb_sim::map::MapId;
 
 use fb_arena::{Arena, ArenaEvent, ArenaKind};
 use fb_shared::TICK_RATE;
@@ -11,7 +12,7 @@ use fb_sim::math::V3;
 
 #[test]
 fn a_leaving_holder_hands_the_tail_on() {
-    let map = fb_maps::by_id("tail-tag").unwrap();
+    let map = fb_maps::by_id(MapId::TailTag);
     for seed in 1..=8 {
         let (mut arena, _) = Arena::new(map, ArenaKind::Round, seed, 0, &[1, 2, 3, 4].map(PlayerId), false);
         for id in (1..=4).map(PlayerId) {
@@ -55,7 +56,7 @@ fn run(arena: &mut Arena, k: &mut i64, ticks: i64, grab: Option<PlayerId>) -> Ve
 
 #[test]
 fn a_tail_held_through_its_immunity_changes_hands_as_it_ends() {
-    let map = fb_maps::by_id("tail-tag").unwrap();
+    let map = fb_maps::by_id(MapId::TailTag);
     let (mut arena, _) = Arena::new(map, ArenaKind::Round, 3, 0, &[1, 2].map(PlayerId), false);
     for id in (1..=2).map(PlayerId) {
         arena.add_pawn_at(id, false, Some(id.0 as usize - 1));
@@ -91,7 +92,7 @@ fn a_client_predicts_the_tail_slowing_its_holder() {
     use fb_shared::DT;
     use fb_sim::physics::StepEvents;
 
-    let map = fb_maps::by_id("tail-tag").unwrap();
+    let map = fb_maps::by_id(MapId::TailTag);
     let (mut arena, _) = Arena::new(map, ArenaKind::Round, 5, 0, &[1].map(PlayerId), false);
     arena.add_pawn_at(PlayerId(1), false, Some(0));
     let (mut b, mut spec) = build_map(map, 5, true, &[1].map(PlayerId));

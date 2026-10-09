@@ -10,8 +10,8 @@ pub struct MapEventsChannel;
 mod tests {
     use bevy_replicon::postcard;
     use fb_proto::{
-        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, PlayerId, Playlist, RejectReason,
-        ServerMsg,
+        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, MapId, PlayerId, Playlist,
+        RejectReason, ServerMsg,
     };
     use serde::Serialize;
     use serde::de::DeserializeOwned;
@@ -37,7 +37,7 @@ mod tests {
                 name: "Боб 🫘".into(),
                 room: Some("k7qxm".into()),
                 pin: Some("0042".into()),
-                practice: Some("hex-a-gone".into()),
+                practice: Some(MapId::HexAGone),
                 color: Some(3),
                 outfit: Some(Default::default()),
             }),
@@ -53,7 +53,7 @@ mod tests {
             ClientMsg::Leave,
             ClientMsg::Color(12),
             ClientMsg::Playlist(Playlist {
-                games: vec!["door-dash".into(), "star-fall".into()],
+                games: vec![MapId::DoorDash, MapId::StarFall],
                 ..Default::default()
             }),
             ClientMsg::RemoveBot(PlayerId(u32::MAX)),
@@ -188,7 +188,7 @@ mod tests {
                 .collect(),
             playlist: Playlist {
                 mode: Mode::Custom,
-                games: vec![text(32); 12],
+                games: vec![MapId::Podium; 12],
                 rounds: u32::MAX,
             },
             fill: true,
@@ -215,7 +215,7 @@ mod tests {
             ServerMsg::Arena(ArenaInfo {
                 id: u32::MAX,
                 kind: ArenaKind::Podium,
-                game: text(32),
+                game: MapId::Podium,
                 participants: pids(),
                 index: u32::MAX,
                 total: u32::MAX,
@@ -226,7 +226,7 @@ mod tests {
                 scores: pids().into_iter().map(|id| (id, i64::MIN)).collect(),
             }),
             ServerMsg::RoundEnd {
-                game: text(32),
+                game: MapId::Podium,
                 index: u32::MAX,
                 total: u32::MAX,
                 rows: pids().into_iter().map(row).collect(),
