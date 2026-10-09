@@ -1237,16 +1237,17 @@ fn hub_changes_a_rooms_pin_while_it_is_being_guessed() {
     }
     assert!(t.last(host, |m| matches!(m, ServerMsg::Notice(_))).is_some());
     let new_pin = t.hub.listed().next().unwrap().1.pin.clone().expect("still private");
-    // The right PIN still gets in, from an address nobody guessed from.
+    // The room takes no guesses for a minute; then the right PIN gets in, from an address nobody guessed from.
     let friend = t.open_from("192.0.2.7", "friend");
     t.send(friend, ClientMsg::Hello(Hello::default()));
-    t.send(
-        friend,
-        ClientMsg::Join {
-            room,
-            pin: Some(new_pin),
-        },
-    );
+    let join = ClientMsg::Join {
+        room,
+        pin: Some(new_pin),
+    };
+    t.send(friend, join.clone());
+    assert!(t.last(friend, |m| matches!(m, ServerMsg::Welcome { .. })).is_none());
+    t.advance(61.0);
+    t.send(friend, join);
     assert!(t.last(friend, |m| matches!(m, ServerMsg::Welcome { .. })).is_some());
 }
 
@@ -1262,6 +1263,32 @@ fn hub_closes_a_practice_nobody_plays() {
     t.advance(4.0);
     assert_eq!(t.hub.rooms.values().filter(|r| r.practice()).count(), 0);
     assert!(t.closed(p));
+}
+
+#[test]
+fn hub_closes_a_room_nobody_plays_and_sends_its_players_home() {
+    let mut t = HubBench::new(false);
+    t.hub.room_idle_s = 2.0;
+    let host = t.hello(Hello::default());
+    t.send(
+        host,
+        ClientMsg::Create {
+            title: String::new(),
+            private: false,
+        },
+    );
+    assert_eq!(t.hub.listed().count(), 1);
+    t.advance(1.5);
+    t.send(host, ClientMsg::Chat("hi".into()));
+    t.advance(1.5);
+    assert_eq!(t.hub.listed().count(), 1);
+    t.advance(2.0);
+    assert_eq!(t.hub.listed().count(), 0);
+    assert!(!t.closed(host));
+    assert!(
+        t.last(host, |m| matches!(m, ServerMsg::Home { msg: Some(_) }))
+            .is_some()
+    );
 }
 
 #[test]

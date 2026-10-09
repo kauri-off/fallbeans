@@ -1141,7 +1141,7 @@ impl Body {
     fn grab_ladder(&mut self, col: &Collider, input: BodyInput) {
         let dir = col.cur.transform_vector3(V3::new(0.0, 0.0, 1.0)).normalize_or_zero();
         let h = m::hypot(dir.x, dir.z);
-        let crate::collider::Shape::Box { hy, .. } = col.shape else {
+        let crate::collider::Shape::Box { hy, .. } = col.sized() else {
             return;
         };
         if h < 1e-3 {

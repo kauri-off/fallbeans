@@ -366,6 +366,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
             connected: &|_| true,
             finished,
             out: outs,
+            out_at: &|id| outs.iter().position(|&o| o == id).map(|i| i as f64),
             scores: &scores,
             progress: &|id| f64::from(id.0) * 3.0,
             time_up: true,

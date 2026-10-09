@@ -33,6 +33,9 @@ const LIST_EVERY_S: f64 = 0.5;
 /// A practice room nobody has pressed anything in for this long closes (s): there are only
 /// MAX_PRACTICE_ROOMS on the server.
 const PRACTICE_IDLE_S: f64 = 300.0;
+/// A room nobody has pressed anything or chatted in for this long closes (s): its seats count against
+/// ROOMS_PER_ADDRESS and `--max-rooms`, and somebody who only holds them should not keep them.
+const ROOM_IDLE_S: f64 = 900.0;
 
 /// A player behind a connection, as they travel from room to room.
 #[derive(Clone, Debug)]
@@ -168,8 +171,9 @@ pub struct Hub {
     list_sent: u64,
     /// Listed rooms open at once at most (`--max-rooms`).
     pub max_rooms: usize,
-    /// PRACTICE_IDLE_S (tests wait less).
+    /// PRACTICE_IDLE_S and ROOM_IDLE_S (tests wait less).
     pub(super) practice_idle_s: f64,
+    pub(super) room_idle_s: f64,
     guesses: Limiter,
     /// Refused or silent connections (no identity, too many from an address, no hello): a flood says it rarely.
     refusals: Backoff,
@@ -190,6 +194,7 @@ impl Hub {
             list_sent: 0,
             max_rooms: DEFAULT_MAX_ROOMS,
             practice_idle_s: PRACTICE_IDLE_S,
+            room_idle_s: ROOM_IDLE_S,
             guesses: Limiter::default(),
             refusals: Backoff::default(),
             real,
@@ -560,9 +565,9 @@ impl Hub {
                 self.guesses.failed(ip, id, now);
                 warn!(room = id, ip = ip.map(display), "wrong room pin");
                 // Somebody is going through the PINs (from many addresses: each one is limited): the room
-                // takes a new one, and what they ruled out no longer helps.
+                // takes a new one, what they ruled out no longer helps, and the room takes no guesses a while.
                 if self.guesses.misses_at(id, now) >= GUESSES_PER_TARGET {
-                    self.guesses.forget_target(id);
+                    self.guesses.rotated(id, now);
                     self.with_room(key, Room::new_pin);
                 }
                 return Err(Denial::of(id, DenyReason::Pin, "Неверный PIN-код"));
@@ -635,6 +640,7 @@ impl Hub {
         if real.is_multiple_of(ticks(1.0)) {
             self.sweep();
             self.close_idle_practice();
+            self.close_idle_rooms();
         }
         let keys: Vec<u32> = self.rooms.keys().copied().collect();
         for key in keys {
@@ -666,6 +672,32 @@ impl Hub {
                     RejectReason::Busy,
                     "Тренировка закрылась: в ней давно ничего не нажимали",
                 );
+            }
+        }
+    }
+
+    /// Rooms nobody has pressed anything in for ROOM_IDLE_S: their players go back to the room list.
+    fn close_idle_rooms(&mut self) {
+        let real = self.real;
+        let idle: Vec<u32> = self
+            .rooms
+            .iter()
+            .filter(|(_, r)| {
+                !r.practice() && !r.permanent() && real.saturating_sub(r.active_at()) > ticks(self.room_idle_s)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for key in idle {
+            let seated = self.seated_in(key);
+            if let Some(room) = self.rooms.get(&key) {
+                info!(room = %room.id, "room closed: nobody played in it");
+            }
+            self.close_room(key);
+            for c in seated {
+                self.unseat(c, false);
+                let msg = "Комната закрылась: в ней давно ничего не нажимали";
+                self.send(c, ServerMsg::Home { msg: Some(msg.into()) });
+                self.send_directory(c, None);
             }
         }
     }

@@ -53,12 +53,12 @@ struct Span {
 
 /// Where a downward ray enters and leaves a collider (world y), with the entry normal's y.
 fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
-    let o = c.inv.transform_point3(V3::new(x, top, z));
-    let d = c.inv.transform_vector3(DOWN).normalize_or_zero();
+    let o = c.frame_point(V3::new(x, top, z));
+    let d = c.frame_vector(DOWN).normalize_or_zero();
     let mut t0 = f64::NEG_INFINITY;
     let mut t1 = f64::INFINITY;
     let mut n;
-    match c.shape {
+    match c.sized() {
         Shape::Box { hx, hy, hz } => {
             let half = [hx, hy, hz];
             let oo = [o.x, o.y, o.z];
@@ -154,7 +154,7 @@ fn ray_down(c: &Collider, x: f64, z: f64, top: f64) -> Option<Span> {
     if t1 < 0.0 {
         return None;
     }
-    n = c.cur.transform_vector3(n).normalize_or_zero();
+    n = c.world_normal(n);
     Some(Span {
         hi: top - t0.at_least(0.0),
         lo: top - t1,

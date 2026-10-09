@@ -131,12 +131,22 @@ const LOCKOUT_MS: u64 = 60_000;
 const LOCKOUT_MAX_MS: u64 = 3_600_000;
 
 /// Rate limit for wrong guesses (room PINs, debug key): 5 a minute per guesser, then doubling lockouts up to an hour.
-/// A target takes 30 misses a minute, so spread-out guessers cannot lock out the right PIN.
+/// A target takes 30 misses a minute, so spread-out guessers cannot lock out the right PIN; once it takes a new
+/// one (`rotated`) nobody may guess at it for a while, doubling in a row like lockouts.
 #[derive(Default)]
 pub struct Limiter {
     /// None: guessers whose address is unknown, together.
     per_ip: BTreeMap<Option<AddrKey>, Guesser>,
     per_target: BTreeMap<String, Vec<u64>>,
+    paused: BTreeMap<String, Pause>,
+}
+
+#[derive(Default)]
+struct Pause {
+    until: u64,
+    /// Pauses in a row, and when the last one began.
+    strikes: u32,
+    at: u64,
 }
 
 #[derive(Default)]
@@ -216,7 +226,7 @@ impl Limiter {
             g.misses.retain(fresh);
             (now < g.locked_until, !g.misses.is_empty())
         });
-        if locked {
+        if locked || self.paused.get(target).is_some_and(|p| now < p.until) {
             return false;
         }
         let busy = self.per_target.get_mut(target).is_some_and(|v| {
@@ -259,9 +269,20 @@ impl Limiter {
         })
     }
 
-    /// The target changed (a room's new PIN): its misses no longer count.
-    pub fn forget_target(&mut self, target: &str) {
+    /// The target changed after too many misses (a room's new PIN): those no longer count, and nobody may guess at
+    /// it for a while, so that guessers from many addresses still get few tries an hour.
+    pub fn rotated(&mut self, target: &str, now: u64) {
         self.per_target.remove(target);
+        let p = self.paused.entry(target.to_string()).or_default();
+        if now.saturating_sub(p.at) > LOCKOUT_MAX_MS {
+            p.strikes = 0;
+        }
+        p.at = now;
+        p.until = now + (LOCKOUT_MS << p.strikes.min(6)).min(LOCKOUT_MAX_MS);
+        p.strikes += 1;
+        if self.paused.len() > 10_000 {
+            self.paused.retain(|_, p| now.saturating_sub(p.at) < LOCKOUT_MAX_MS);
+        }
     }
 }
 
@@ -367,8 +388,13 @@ mod tests {
         assert!(l.allow(ip("10.0.2.1"), "r3", now));
         l.failed(ip("10.0.2.1"), "r3", now);
         assert!(!l.allow(ip("10.0.2.1"), "r3", now));
-        l.forget_target("r3");
-        assert!(l.allow(ip("10.0.2.1"), "r3", now));
+        // A new PIN: nobody guesses for a minute, then a fresh count; the next pause in a row is longer.
+        l.rotated("r3", now);
+        assert!(!l.allow(ip("10.0.3.1"), "r3", now + 59_000));
+        assert!(l.allow(ip("10.0.2.1"), "r3", now + 61_000));
+        l.rotated("r3", now + 61_000);
+        assert!(!l.allow(ip("10.0.3.1"), "r3", now + 61_000 + 119_000));
+        assert!(l.allow(ip("10.0.3.1"), "r3", now + 61_000 + 120_000));
     }
 
     #[test]

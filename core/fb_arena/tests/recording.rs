@@ -60,6 +60,8 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
     while k <= 1500 {
         if k == 600 {
             a.skip_to(700);
+            a.remove_pawn(PlayerId(3));
+            a.dev_knock(PlayerId(1), V3::new(3.0, 4.0, 0.0));
             k = 701;
         }
         a.step(k, |_| InputFrame {

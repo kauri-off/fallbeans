@@ -21,6 +21,7 @@ pub struct Player {
     /// Control messages in the current second.
     pub msgs: RateWindow,
     pub chat_at: Option<u64>,
+    pub emote_at: Option<u64>,
     /// The "rate limited" warning about this player.
     pub rate_log: Backoff,
     /// Round trip (ms), as the network layer measures it.
@@ -53,6 +54,7 @@ impl Player {
             spectator: false,
             msgs: RateWindow::default(),
             chat_at: None,
+            emote_at: None,
             rate_log: Backoff::default(),
             rtt: 0,
         }

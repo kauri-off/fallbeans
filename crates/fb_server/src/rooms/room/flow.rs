@@ -254,12 +254,14 @@ impl Room {
         let arena = &self.arena;
         let connected = |id: PlayerId| players.iter().any(|p| p.id == id);
         let progress = |id: PlayerId| arena.pawn(id).map_or(f64::NEG_INFINITY, |p| p.progress);
+        let out_at = |id: PlayerId| arena.pawn(id).and_then(|p| p.stats.out_at);
         let view = RoundView {
             genre: game.meta().genre,
             participants: &arena.participants,
             connected: &connected,
             finished: &arena.finished,
             out: &arena.out,
+            out_at: &out_at,
             scores: &arena.scores,
             progress: &progress,
             time_up,

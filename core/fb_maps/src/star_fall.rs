@@ -197,7 +197,8 @@ impl Stars {
 
 impl MapLogic for Stars {
     fn tick(&mut self, cx: &mut Cx, t: f64) {
-        if t < 0.0 {
+        // (A client hears of stars taken from the server's events: here it would count them every tick.)
+        if t < 0.0 || !cx.server {
             return;
         }
         let n = self.sky.stars.len();

@@ -398,12 +398,13 @@ impl Arena {
         let spawn = spawns[spawn_i];
         let mut body = Body::new(id.0 as i32);
         body.reset(spawn, self.face_yaw(spawn));
-        // By slot in the round, not id: the same seed plays out the same whoever joined when.
+        // By slot in the round, not id: the same seed plays out the same whoever joined when; others after them.
+        let n = self.participants.len() as u64;
         let slot = self
             .participants
             .iter()
             .position(|&p| p == id)
-            .map_or(u64::from(id), |k| k as u64 + 1);
+            .map_or(n + 1 + u64::from(id), |k| k as u64 + 1);
         #[expect(clippy::cast_possible_truncation, reason = "the low bits of a mixed slot")]
         let bot = bot.then(|| BotState {
             mem: BotMem::default(),
