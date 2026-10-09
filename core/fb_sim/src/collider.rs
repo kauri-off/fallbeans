@@ -58,6 +58,8 @@ pub struct Collider {
     pub inv: Affine,
     pub center: V3,
     pub radius: f64,
+    /// The node's world scale along its own axes: `sized` and the frame are in metres.
+    pub scale: V3,
     synced: bool,
     /// Scaled to nothing (no inverse): touches nothing instead of poisoning beans with NaN depths.
     degenerate: bool,
@@ -65,11 +67,6 @@ pub struct Collider {
 
 impl Collider {
     pub fn new(index: ColId, node: NodeId, shape: Shape, opts: ColliderOpts) -> Self {
-        let radius = match shape {
-            Shape::Box { hx, hy, hz } => m::hypot3(hx, hy, hz),
-            Shape::Cyl { r, hh } => m::hypot(r, hh),
-            Shape::Sphere { r } => r,
-        };
         Self {
             node,
             shape,
@@ -83,7 +80,8 @@ impl Collider {
             prev: Affine::IDENTITY,
             inv: Affine::IDENTITY,
             center: V3::ZERO,
-            radius,
+            radius: bound(shape),
+            scale: V3::ONE,
             synced: false,
             degenerate: false,
         }
@@ -101,7 +99,43 @@ impl Collider {
         self.inv = w.inverse();
         self.degenerate = w.matrix3.determinant() == 0.0 || !self.inv.is_finite();
         self.center = w.translation;
+        let m3 = w.matrix3;
+        self.scale = V3::new(m3.x_axis.length(), m3.y_axis.length(), m3.z_axis.length());
+        self.radius = bound(self.sized());
         self.synced = true;
+    }
+
+    /// The shape in metres, with the node's scale.
+    pub fn sized(&self) -> Shape {
+        let s = self.scale;
+        match self.shape {
+            Shape::Box { hx, hy, hz } => Shape::Box {
+                hx: hx * s.x,
+                hy: hy * s.y,
+                hz: hz * s.z,
+            },
+            Shape::Cyl { r, hh } => Shape::Cyl {
+                r: r * s.x.at_least(s.z),
+                hh: hh * s.y,
+            },
+            Shape::Sphere { r } => Shape::Sphere {
+                r: r * s.x.at_least(s.y).at_least(s.z),
+            },
+        }
+    }
+
+    /// A world point in the collider's frame: turned and moved like the node, but in metres.
+    pub fn frame_point(&self, p: V3) -> V3 {
+        self.inv.transform_point3(p) * self.scale
+    }
+
+    pub fn frame_vector(&self, v: V3) -> V3 {
+        self.inv.transform_vector3(v) * self.scale
+    }
+
+    /// A normal in the collider's frame, in the world.
+    pub fn world_normal(&self, n: V3) -> V3 {
+        self.cur.transform_vector3(n / self.scale).normalize_or_zero()
     }
 
     /// Half extents of the world-space AABB in x and z (for the static grid).
@@ -127,11 +161,11 @@ impl Collider {
         if self.degenerate || center.distance_squared(self.center) > reach * reach {
             return false;
         }
-        let l = self.inv.transform_point3(center);
+        let l = self.frame_point(center);
         let mut q;
         let n;
         let depth;
-        match self.shape {
+        match self.sized() {
             Shape::Box { hx, hy, hz } => {
                 q = V3::new(m::clamp(l.x, -hx, hx), m::clamp(l.y, -hy, hy), m::clamp(l.z, -hz, hz));
                 let d0 = l - q;
@@ -211,9 +245,9 @@ impl Collider {
                 depth = sr + r - d;
             }
         }
-        out.local = q;
-        out.point = self.cur.transform_point3(q);
-        out.normal = self.cur.transform_vector3(n).normalize_or_zero();
+        out.local = q / self.scale;
+        out.point = self.cur.transform_point3(out.local);
+        out.normal = self.world_normal(n);
         out.depth = depth;
         true
     }
@@ -223,11 +257,11 @@ impl Collider {
         if self.degenerate {
             return None;
         }
-        let o = self.inv.transform_point3(origin);
-        let d = self.inv.transform_vector3(dir).normalize_or_zero();
+        let o = self.frame_point(origin);
+        let d = self.frame_vector(dir).normalize_or_zero();
         let t;
         let mut nl = V3::ZERO;
-        match self.shape {
+        match self.sized() {
             Shape::Box { hx, hy, hz } => {
                 let h = [hx, hy, hz];
                 let oa = [o.x, o.y, o.z];
@@ -317,13 +351,21 @@ impl Collider {
                 nl = (o + d * t) / r;
             }
         }
-        Some((t, self.cur.transform_vector3(nl).normalize_or_zero()))
+        Some((t, self.world_normal(nl)))
     }
 
     pub fn surface_velocity(&self, local: V3, dt: f64) -> V3 {
         let p = self.cur.transform_point3(local);
         let w = self.prev.transform_point3(local);
         (p - w) / (dt.at_least(1e-4))
+    }
+}
+
+fn bound(shape: Shape) -> f64 {
+    match shape {
+        Shape::Box { hx, hy, hz } => m::hypot3(hx, hy, hz),
+        Shape::Cyl { r, hh } => m::hypot(r, hh),
+        Shape::Sphere { r } => r,
     }
 }
 
@@ -365,5 +407,24 @@ mod tests {
         c.sync(&nodes);
         assert!(!c.contact(V3::new(0.0, 0.2, 0.0), 0.5, &mut hit));
         assert_eq!(c.raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0), None);
+    }
+
+    #[test]
+    fn a_scaled_collider_measures_in_metres() {
+        let mut nodes = Nodes::default();
+        let n = nodes.add(ROOT, V3::ZERO);
+        nodes.get_mut(n).scale = V3::splat(0.5);
+        let mut c = Collider::new(0, n, Shape::Sphere { r: 1.0 }, ColliderOpts::default());
+        nodes.update_all();
+        c.sync(&nodes);
+        assert!((c.radius - 0.5).abs() < 1e-9);
+        let mut hit = Contact::default();
+        assert!(!c.contact(V3::new(0.0, 0.8, 0.0), 0.2, &mut hit));
+        assert!(c.contact(V3::new(0.0, 0.6, 0.0), 0.2, &mut hit));
+        assert!((hit.depth - 0.1).abs() < 1e-9 && (hit.point.y - 0.5).abs() < 1e-9);
+        let (t, n) = c
+            .raycast(V3::new(0.0, 5.0, 0.0), V3::new(0.0, -1.0, 0.0), 10.0)
+            .unwrap();
+        assert!((t - 4.5).abs() < 1e-9 && (n.y - 1.0).abs() < 1e-9);
     }
 }
