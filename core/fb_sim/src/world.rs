@@ -65,18 +65,29 @@ impl<'a> MoveCtx<'a> {
 /// Pure function of sim time: positions the moving parts of a map. Runs on server and client.
 pub type Mover = Box<dyn Fn(f64, &mut MoveCtx) + Send + Sync>;
 
-/// Uniform x/z grid of static colliders: a dense block of cells over their extent.
+/// Cells per axis before the grid wraps: a map wider than this shares slots, so memory stays bounded.
+const WRAP: u64 = 256;
+/// Colliders over more cells than this skip the grid and are checked on every query.
+const WIDE: u64 = 1024;
+
+/// Uniform x/z grid of static colliders: cell (ix, iz) lives in slot (ix mod w, iz mod h), a dense block
+/// while the map fits in `WRAP` cells per axis.
 #[derive(Default)]
 pub struct ColliderGrid {
     cell: f64,
     /// Every collider inserted, in order, with its cells [x0, x1, z0, z1] (inclusive).
     placed: Vec<(ColId, [i64; 4])>,
-    /// The block (from `build`): cells x0.. and z0.., nx × nz of them; cell (ix, iz) is number
-    /// c = (ix − x0)·nz + (iz − z0), its colliders `items[start[c]..start[c + 1]]` in insertion order.
+    /// Colliders over more than `WIDE` cells, in order, with their x/z bounds [x0, x1, z0, z1].
+    wide: Vec<(ColId, [f64; 4])>,
+    /// The cells that hold colliders (from `build`).
     x0: i64,
+    x1: i64,
     z0: i64,
-    nx: i64,
-    nz: i64,
+    z1: i64,
+    /// Slots: w × h of them; slot (sx, sz) is number c = sx·h + sz, its colliders
+    /// `items[start[c]..start[c + 1]]` in insertion order.
+    w: i64,
+    h: i64,
     start: Vec<u32>,
     items: Vec<GridItem>,
 }
@@ -84,9 +95,17 @@ pub struct ColliderGrid {
 #[derive(Clone, Copy, Default)]
 struct GridItem {
     col: ColId,
+    /// The cell this entry is for (cells that share a slot are told apart by it).
+    ix: i64,
+    iz: i64,
     /// The collider's first cell: its lowest x and z.
     x0: i64,
     z0: i64,
+}
+
+/// Cells from a to b inclusive, saturating.
+fn span(a: i64, b: i64) -> u64 {
+    b.abs_diff(a).saturating_add(1)
 }
 
 impl ColliderGrid {
@@ -113,15 +132,30 @@ impl ColliderGrid {
     fn insert(&mut self, col: &Collider) {
         let (ex, ez) = col.extent_xz();
         let c = col.center;
-        let cells = self.cells(c.x - ex, c.x + ex, c.z - ez, c.z + ez);
-        self.placed.push((col.index, cells));
+        let bounds = [c.x - ex, c.x + ex, c.z - ez, c.z + ez];
+        let cells = self.cells(bounds[0], bounds[1], bounds[2], bounds[3]);
+        if span(cells[0], cells[1]).saturating_mul(span(cells[2], cells[3])) > WIDE {
+            self.wide.push((col.index, bounds));
+        } else {
+            self.placed.push((col.index, cells));
+        }
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "slots inside w × h, which fits in usize"
+    )]
+    fn slot(&self, ix: i64, iz: i64) -> usize {
+        (ix.rem_euclid(self.w) * self.h + iz.rem_euclid(self.h)) as usize
     }
 
     /// Lays out every collider inserted so far.
     #[expect(
         clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
         clippy::cast_sign_loss,
-        reason = "cells inside the block, which fits in usize"
+        reason = "w and h are at most WRAP"
     )]
     fn build(&mut self) {
         let Some(&(_, first)) = self.placed.first() else {
@@ -134,19 +168,20 @@ impl ColliderGrid {
             z0 = z0.min(b0);
             z1 = z1.max(b1);
         }
-        let (nx, nz) = (x1 - x0 + 1, z1 - z0 + 1);
-        let n = usize::try_from(nx.checked_mul(nz).expect("collider grid too large")).expect("collider grid too large");
-        let at = |ix: i64, iz: i64| ((ix - x0) * nz + (iz - z0)) as usize;
+        (self.x0, self.x1, self.z0, self.z1) = (x0, x1, z0, z1);
+        self.w = span(x0, x1).min(WRAP) as i64;
+        self.h = span(z0, z1).min(WRAP) as i64;
+        let n = (self.w * self.h) as usize;
         let mut start = vec![0u32; n + 1];
         for &(_, [a0, a1, b0, b1]) in &self.placed {
             for ix in a0..=a1 {
                 for iz in b0..=b1 {
-                    start[at(ix, iz) + 1] += 1;
+                    start[self.slot(ix, iz) + 1] += 1;
                 }
             }
         }
         let mut sum = 0;
-        for s in start.iter_mut() {
+        for s in &mut start {
             sum += *s;
             *s = sum;
         }
@@ -155,47 +190,50 @@ impl ColliderGrid {
         for &(col, [a0, a1, b0, b1]) in &self.placed {
             for ix in a0..=a1 {
                 for iz in b0..=b1 {
-                    let c = at(ix, iz);
-                    items[fill[c] as usize] = GridItem { col, x0: a0, z0: b0 };
+                    let c = self.slot(ix, iz);
+                    items[fill[c] as usize] = GridItem {
+                        col,
+                        ix,
+                        iz,
+                        x0: a0,
+                        z0: b0,
+                    };
                     fill[c] += 1;
                 }
             }
         }
-        (self.x0, self.z0, self.nx, self.nz) = (x0, z0, nx, nz);
         self.start = start;
         self.items = items;
     }
 
     /// Colliders in the cells within r of (x, z), each once, in the order a walk over those cells (by x, then
-    /// by z; in a cell, in insertion order) first meets them.
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "cells clamped to the block"
-    )]
+    /// by z; in a cell, in insertion order) first meets them; then the wide ones within r, in insertion order.
     fn query(&self, x: f64, z: f64, r: f64, out: &mut Vec<ColId>) {
-        if self.items.is_empty() {
-            return;
-        }
         let [qx0, qx1, qz0, qz1] = self.cells(x - r, x + r, z - r, z + r);
-        let (x0, x1) = (qx0.max(self.x0), qx1.min(self.x0 + self.nx - 1));
-        let (z0, z1) = (qz0.max(self.z0), qz1.min(self.z0 + self.nz - 1));
-        for ix in x0..=x1 {
-            let row = (ix - self.x0) * self.nz - self.z0;
-            for iz in z0..=z1 {
-                let c = (row + iz) as usize;
-                for it in &self.items[self.start[c] as usize..self.start[c + 1] as usize] {
-                    // The walk meets a collider over several cells first in the lowest x, then the lowest z,
-                    // of its cells within the query: it is taken there and only there.
-                    if ix == it.x0.max(x0) && iz == it.z0.max(z0) {
-                        out.push(it.col);
+        if !self.items.is_empty() {
+            let (x0, x1) = (qx0.max(self.x0), qx1.min(self.x1));
+            let (z0, z1) = (qz0.max(self.z0), qz1.min(self.z1));
+            for ix in x0..=x1 {
+                for iz in z0..=z1 {
+                    let c = self.slot(ix, iz);
+                    for it in &self.items[self.start[c] as usize..self.start[c + 1] as usize] {
+                        // The walk meets a collider over several cells first in the lowest x, then the lowest
+                        // z, of its cells within the query: it is taken there and only there.
+                        if it.ix == ix && it.iz == iz && ix == it.x0.max(x0) && iz == it.z0.max(z0) {
+                            out.push(it.col);
+                        }
                     }
                 }
             }
         }
+        for &(col, [bx0, bx1, bz0, bz1]) in &self.wide {
+            if bx0 <= x + r && x - r <= bx1 && bz0 <= z + r && z - r <= bz1 {
+                out.push(col);
+            }
+        }
     }
 
-    /// Cells that hold a collider.
+    /// Slots that hold a collider.
     pub fn size(&self) -> usize {
         self.start.windows(2).filter(|w| w[1] > w[0]).count()
     }
@@ -275,7 +313,7 @@ impl World {
             self.colliders[i].sync(&self.nodes);
             let c = &self.colliders[i];
             if c.opts.is_static {
-                // (A non-finite extent would make the grid loop over cells for ever.)
+                // (A non-finite collider would fall through the grid unseen.)
                 let (ex, ez) = c.extent_xz();
                 assert!(
                     c.center.is_finite() && ex.is_finite() && ez.is_finite(),
