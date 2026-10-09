@@ -411,6 +411,20 @@ impl NetcodeServerPlugin {
         )
     }
 
+    /// fallbeans patch: a link that goes (despawned before its handshake finished, or after it left) takes
+    /// along what the netcode server kept for it.
+    fn forget(
+        trigger: On<Remove, LinkOf>,
+        links: Query<&LinkOf>,
+        mut servers: Query<&mut NetcodeServer>,
+    ) {
+        if let Ok(link_of) = links.get(trigger.entity)
+            && let Ok(mut server) = servers.get_mut(link_of.server)
+        {
+            server.inner.forget_entity(trigger.entity);
+        }
+    }
+
     fn start(trigger: On<Start>, query: Query<(), With<NetcodeServer>>, mut commands: Commands) {
         if query.get(trigger.entity).is_ok() {
             commands.entity(trigger.entity).insert(Started);
@@ -510,5 +524,6 @@ impl Plugin for NetcodeServerPlugin {
         app.add_observer(Self::start);
         app.add_observer(Self::stop);
         app.add_observer(Self::reset_on_stopped);
+        app.add_observer(Self::forget);
     }
 }

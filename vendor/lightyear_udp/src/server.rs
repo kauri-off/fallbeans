@@ -125,6 +125,26 @@ impl ServerUdpPlugin {
         }
     }
 
+    /// fallbeans patch: a link that goes takes its address along. Upstream kept the entry until the address
+    /// wrote again, so every source address (scanners, spoofed packets) stayed in the map for good.
+    fn forget(
+        trigger: On<Remove, UdpLinkOfIO>,
+        links: Query<(&LinkOf, &PeerAddr)>,
+        mut servers: Query<&mut ServerUdpIo>,
+    ) {
+        let Ok((link_of, addr)) = links.get(trigger.entity) else {
+            return;
+        };
+        let Ok(mut udp_io) = servers.get_mut(link_of.server) else {
+            return;
+        };
+        if let Entry::Occupied(entry) = udp_io.connected_addresses.entry(addr.0)
+            && matches!(*entry.get(), LinkOfStatus::Spawning(e) | LinkOfStatus::Spawned(e) if e == trigger.entity)
+        {
+            entry.remove();
+        }
+    }
+
     fn send(
         mut server_query: Query<(&mut ServerUdpIo, &Server), With<Linked>>,
         mut link_query: Query<(&mut Link, &PeerAddr), With<UdpLinkOfIO>>,
@@ -300,6 +320,7 @@ impl Plugin for ServerUdpPlugin {
         }
         app.add_observer(Self::link);
         app.add_observer(Self::unlink);
+        app.add_observer(Self::forget);
         app.add_systems(PreUpdate, Self::receive.in_set(LinkSystems::Receive));
         app.add_systems(PostUpdate, Self::send.in_set(LinkSystems::Send));
     }
@@ -328,5 +349,42 @@ mod tests {
         assert_eq!(bound_addr.ip(), requested_addr.ip());
         assert_ne!(bound_addr.port(), 0);
         assert!(app.world().get::<Linked>(server).is_some());
+    }
+
+    #[test]
+    fn a_despawned_link_takes_its_address_along() {
+        let mut app = App::new();
+        app.add_plugins(ServerUdpPlugin);
+        let server = app
+            .world_mut()
+            .spawn((
+                LocalAddr(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)),
+                ServerUdpIo::default(),
+            ))
+            .id();
+        app.world_mut().trigger(LinkStart { entity: server });
+        app.world_mut().flush();
+        let bound = app.world().get::<LocalAddr>(server).unwrap().0;
+
+        let peer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        peer.send_to(&[1, 2, 3], bound).unwrap();
+        let mut link = None;
+        for _ in 0..100 {
+            app.update();
+            let udp_io = app.world().get::<ServerUdpIo>(server).unwrap();
+            if let Some(LinkOfStatus::Spawned(e)) =
+                udp_io.connected_addresses.get(&peer.local_addr().unwrap())
+            {
+                link = Some(*e);
+                break;
+            }
+            std::thread::sleep(core::time::Duration::from_millis(10));
+        }
+        let link = link.expect("the datagram made a link");
+
+        app.world_mut().despawn(link);
+
+        let udp_io = app.world().get::<ServerUdpIo>(server).unwrap();
+        assert!(udp_io.connected_addresses.is_empty());
     }
 }

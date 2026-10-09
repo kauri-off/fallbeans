@@ -122,7 +122,8 @@ type Unconnected = (With<LinkOf>, Without<Connected>);
 
 /// Links that never connect go after LINK_CONNECT_S, and the oldest beyond MAX_PENDING_LINKS: UDP makes one
 /// per source address before any token is checked (spoofed packets, scanners), WebSocket one per finished
-/// handshake, and neither ever lets go of one that stays silent.
+/// handshake, and neither ever lets go of one that stays silent. Its UDP address and netcode handshake go with it
+/// (patched `lightyear_udp`, `lightyear_netcode`).
 fn reap_links(
     time: Res<Time<Real>>,
     opts: Res<Opts>,

@@ -5191,8 +5191,6 @@ dependencies = [
 [[package]]
 name = "lightyear_netcode"
 version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60aa8d7222f683e7f6f7a091863004eeea96039de2db868098d006e3bbd3395d"
 dependencies = [
  "aeronet_io",
  "bevy_app",
@@ -5445,8 +5443,6 @@ dependencies = [
 [[package]]
 name = "lightyear_udp"
 version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66975f1a554eb3b2108d262d5fa4f7b4238a5a82a8a5d97c6e33ece9a8f4e2d7"
 dependencies = [
  "aeronet_io",
  "bevy_app",

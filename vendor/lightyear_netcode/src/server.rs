@@ -1149,6 +1149,25 @@ impl<Ctx> Server<Ctx> {
         result
     }
 
+    /// fallbeans patch: what the server keeps for a link that is gone. A handshake that never finishes left its
+    /// connection (with its replay window) and its entity's mapping for good, and every link its send queue.
+    pub(crate) fn forget_entity(&mut self, entity: Entity) {
+        self.send_queue.remove(&entity);
+        let Some(&id) = self.conn_cache.client_id_map.get(&entity) else {
+            return;
+        };
+        match self.conn_cache.clients.get(&id) {
+            // A connected client goes through `disconnect` or its timeout, which need the mapping.
+            Some(conn) if conn.entity == entity && conn.is_connected() => return,
+            Some(conn) if conn.entity == entity => {
+                self.conn_cache.clients.remove(&id);
+                self.conn_cache.replay_protection.remove(&id);
+            }
+            _ => {}
+        }
+        self.conn_cache.client_id_map.remove(&entity);
+    }
+
     pub fn connected_client_ids(&self) -> impl Iterator<Item = ClientId> + '_ {
         self.conn_cache
             .clients
@@ -1447,6 +1466,65 @@ mod tests {
 
         assert!(world.get::<Connecting>(client).is_some());
         assert!(server.conn_cache.find_by_entity(&client).is_some());
+    }
+
+    #[test]
+    fn a_gone_link_takes_its_unfinished_handshake_along() {
+        let server_addr = SocketAddr::from(([127, 0, 0, 1], 5000));
+        let (mut server, _world, client) = process_request(Some(server_addr), &[server_addr], None);
+        assert!(server.conn_cache.find_by_entity(&client).is_some());
+        assert!(server.send_queue.contains_key(&client));
+
+        server.forget_entity(client);
+
+        assert!(server.conn_cache.clients.is_empty());
+        assert!(server.conn_cache.client_id_map.is_empty());
+        assert!(server.conn_cache.replay_protection.is_empty());
+        assert!(server.send_queue.is_empty());
+    }
+
+    #[test]
+    fn a_connected_client_is_not_forgotten() {
+        let server_addr = SocketAddr::from(([127, 0, 0, 1], 5000));
+        let (mut server, _world, client) = process_request(Some(server_addr), &[server_addr], None);
+        server.conn_cache.mut_by_entity(&client).unwrap().connect();
+
+        server.forget_entity(client);
+
+        assert!(server.conn_cache.find_by_entity(&client).is_some());
+    }
+
+    #[test]
+    fn despawning_a_link_forgets_its_handshake() {
+        use lightyear_link::prelude::LinkOf;
+
+        let mut app = App::new();
+        app.add_plugins(NetcodeServerPlugin);
+        let server = app
+            .world_mut()
+            .spawn(NetcodeServer::new(NetcodeConfig::default()))
+            .id();
+        let client = app.world_mut().spawn(LinkOf { server }).id();
+        app.world_mut()
+            .get_mut::<NetcodeServer>(server)
+            .unwrap()
+            .inner
+            .conn_cache
+            .add(
+                1,
+                client,
+                10,
+                [1; PRIVATE_KEY_BYTES],
+                [2; PRIVATE_KEY_BYTES],
+                [0; USER_DATA_BYTES],
+            );
+
+        app.world_mut().despawn(client);
+
+        let inner = &app.world().get::<NetcodeServer>(server).unwrap().inner;
+        assert!(inner.conn_cache.clients.is_empty());
+        assert!(inner.conn_cache.client_id_map.is_empty());
+        assert!(inner.conn_cache.replay_protection.is_empty());
     }
 
     #[test]
