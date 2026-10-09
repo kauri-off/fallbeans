@@ -48,8 +48,11 @@ impl Room {
         info!(room = %self.id, %id, name = p.name, practice = self.practice(), "player joined");
         self.players.push(p);
         // (Only behind a PIN: a public room would keep every identity that ever came.)
-        if self.pin.is_some() {
-            self.admitted.insert(who.uid);
+        if self.pin.is_some() && !self.admitted.contains(&who.uid) {
+            if self.admitted.len() >= ADMITTED_MAX {
+                self.admitted.pop_front();
+            }
+            self.admitted.push_back(who.uid);
         }
         self.seat_host(id);
         if self.arena.kind == ArenaKind::Lobby {
@@ -220,9 +223,17 @@ impl Room {
                 }
             }
             ClientMsg::Emote(e) => {
-                if self.arena.pawn(id).is_some_and(|p| p.status == PawnStatus::Play) {
-                    self.broadcast(ServerMsg::Emote { id, e: *e });
+                if !self.arena.pawn(id).is_some_and(|p| p.status == PawnStatus::Play) {
+                    return;
                 }
+                let Some(p) = self.player_mut(id) else { return };
+                if p.emote_at
+                    .is_some_and(|at| real.saturating_sub(at) < ticks(EMOTE_GAP_S))
+                {
+                    return;
+                }
+                p.emote_at = Some(real);
+                self.broadcast(ServerMsg::Emote { id, e: *e });
             }
             ClientMsg::Chat(text) => {
                 let text = sanitize_chat(text);
@@ -232,6 +243,7 @@ impl Room {
                 }
                 p.chat_at = Some(real);
                 let name = p.name.clone();
+                self.active_at = real;
                 self.broadcast(ServerMsg::Chat { id, name, text });
             }
             ClientMsg::Dev { q, cmd } => {

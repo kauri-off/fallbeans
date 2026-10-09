@@ -38,6 +38,10 @@ pub use dev::DevError;
 const MSG_RATE: u32 = 60;
 /// Shortest time between two chat lines of one player (s).
 const CHAT_GAP_S: f64 = 0.7;
+/// Shortest time between two emotes of one player (s): each one goes to everybody in the room.
+const EMOTE_GAP_S: f64 = 0.5;
+/// Identities a room behind a PIN remembers as let in; past that the oldest need the PIN again.
+const ADMITTED_MAX: usize = 64;
 /// Ticks the arena may fall behind before it skips ahead instead of catching up.
 const MAX_CATCHUP: i64 = 60;
 /// Shortest time between two starts by the host (s): building a round's arena costs the shared tick up to ≈6 ms.
@@ -263,8 +267,8 @@ pub struct Room {
     intro_ticks: u32,
     dev: bool,
     eliminate: bool,
-    /// Identities the room let in: they come back without the PIN.
-    pub admitted: BTreeSet<Uid>,
+    /// Identities the room let in, oldest first (ADMITTED_MAX): they come back without the PIN.
+    pub admitted: VecDeque<Uid>,
     /// In the order they came.
     pub players: Vec<Player>,
     /// The acting host: the owner whenever they are in the room; while they are away (or after they handed
@@ -309,7 +313,7 @@ pub struct Room {
     /// A name, colour or outfit changed since the last lobby; and the real tick that change last went out.
     lobby_due: bool,
     profile_sent: u64,
-    /// Real tick of the last input from a person that was not idle (practice rooms close without one).
+    /// Real tick of the last input from a person that was not idle, or chat (rooms close without one, `Hub`).
     active_at: u64,
     /// Server tick since which nobody is in the room (it closes after ROOM_EMPTY_S, `Hub::sweep`).
     pub empty_since: Option<u64>,
@@ -378,7 +382,7 @@ impl Room {
             intro_ticks,
             dev,
             eliminate,
-            admitted: BTreeSet::new(),
+            admitted: VecDeque::new(),
             players: Vec::new(),
             host: None,
             handed_over: false,
