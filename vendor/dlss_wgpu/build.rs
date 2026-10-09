@@ -34,7 +34,10 @@ fn main() {
     #[cfg(target_os = "windows")]
     let vulkan_sdk_include = "Include";
     bindgen::Builder::default()
-        .header(format!("{}/src/wrapper.h", env!("CARGO_MANIFEST_DIR")))
+        .header(format!(
+            "{}/src/wrapper.h",
+            env::var("CARGO_MANIFEST_DIR").unwrap()
+        ))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("wrap_static_fns"))
