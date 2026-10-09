@@ -83,8 +83,8 @@ fn climb_fork(rise: f64) -> Segment {
                 let w = 0.8 + s.rng() * 0.6;
                 let ph = s.rng() * 6.0;
                 (
-                    z0 + 3.0 + k as f64 * 5.4,
-                    y + 1.3 + k as f64 * ((rise - 1.3) / 4.0),
+                    z0 + 3.0 + f64::from(k) * 5.4,
+                    y + 1.3 + f64::from(k) * ((rise - 1.3) / 4.0),
                     w,
                     ph,
                 )
@@ -214,7 +214,7 @@ fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     let slide_x = |k: f64, t: f64| m::sin(t * (0.8 + k * 0.25) + k * 2.0) * 1.6;
     b.box_(0.0, y0 - 1.0, z0 + 1.5, 8.0, 2.0, 3.0, pal::PURPLE, o());
     for k in 0..3 {
-        let kf = k as f64;
+        let kf = f64::from(k);
         let p = if k % 2 == 1 { pal::ORANGE } else { pal::GREEN };
         let node = b
             .box_(

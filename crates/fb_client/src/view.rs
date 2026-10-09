@@ -786,7 +786,7 @@ pub fn prim_spec(
 
 /// The frame's sim time: the predicted tick plus how far into the next one the frame is.
 pub fn frame_tick(timeline: &LocalTimeline, fixed: &Time<Fixed>) -> f64 {
-    timeline.tick().0 as f64 + fixed.overstep_fraction() as f64
+    f64::from(timeline.tick().0) + f64::from(fixed.overstep_fraction())
 }
 
 /// What `pose_map` saw of each node the frame before, so that only what moves is posed again.
@@ -901,7 +901,7 @@ fn place_bonuses(
         let grow = ((t - b.appear_at) / 0.5 + if b.appear_at <= 0.0 { 1.0 } else { 0.0 }).min(1.0);
         let gone = b.taken.map_or(0.0, |(_, at)| (t - at) / 0.35);
         let s = (grow * (1.0 + gone * 0.8) * (1.0 - gone)).max(0.01) as f32;
-        let i = v.0 as f64;
+        let i = f64::from(v.0);
         let bob = ((t * 2.4 + i).sin() * 0.15) as f32;
         for &c in children {
             let Ok((part, mut tf)) = parts.get_mut(c) else {

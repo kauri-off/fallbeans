@@ -70,7 +70,7 @@ fn ice_slope(drop: f64, len: f64) -> Segment {
         }
         let y_at = |z: f64| y0 + ((z - z0) / len) * (y1 - y0);
         for k in 0..4 {
-            let bz = z0 + 5.0 + k as f64 * 5.5;
+            let bz = z0 + 5.0 + f64::from(k) * 5.5;
             let x = (if k % 2 == 1 { 1.0 } else { -1.0 }) * (1.2 + s.rng() * 2.8);
             s.b.bumper(x, y_at(bz) - 0.1, bz, 0.8, 9.0);
         }
@@ -147,12 +147,12 @@ fn dive_bars(n: u32) -> Segment {
         let gap_z = 11.0;
         let y = s.y;
         let z0 = s.z;
-        let len = n as f64 * gap_z + 4.0;
+        let len = f64::from(n) * gap_z + 4.0;
         s.b.box_(0.0, y - 1.0, z0 + len / 2.0, w, 2.0, len, ICE_PAL, ice(0.5));
         s.b.rails(z0, z0 + len, w / 2.0, y, pal::PINK);
         let mut route = Vec::new();
         for k in 0..n {
-            let bz = z0 + 9.0 + k as f64 * gap_z;
+            let bz = z0 + 9.0 + f64::from(k) * gap_z;
             let p = if k % 2 == 1 { pal::ORANGE } else { pal::PURPLE };
             s.b.box_(0.0, y + 1.2 + 1.5, bz, w + 1.6, 3.0, 0.8, p, o());
             // Where to dive from.

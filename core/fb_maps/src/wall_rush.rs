@@ -85,7 +85,7 @@ impl MapDef for WallRush {
             b.box_(sx * (W / 2.0 + 0.4), 0.6, 0.0, 0.8, 1.2, 16.0, pal::PINK, o());
         }
         for k in 0..4 {
-            b.bonus(-6.0 + k as f64 * 4.0, 0.0, -3.0 + (k % 2) as f64 * 6.0);
+            b.bonus(-6.0 + f64::from(k) * 4.0, 0.0, -3.0 + f64::from(k % 2) * 6.0);
         }
 
         let mut walls: Vec<Wall> = Vec::new();
@@ -195,7 +195,7 @@ impl MapDef for WallRush {
         });
         b.clouds(0.0, -20.0, 50.0);
 
-        let spawns = (0..8).map(|i| V3::new(-7.0 + i as f64 * 2.0, 0.1, 2.0)).collect();
+        let spawns = (0..8).map(|i| V3::new(-7.0 + f64::from(i) * 2.0, 0.1, 2.0)).collect();
         MapSpec {
             spawns,
             kill_y: -8.0,

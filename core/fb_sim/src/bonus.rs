@@ -49,7 +49,7 @@ impl Bonuses {
         });
         let mut pool: Vec<usize> = (0..spots.len()).collect();
         let kinds = Power::ALL;
-        for k in 0..count {
+        for i in (0u32..).take(count) {
             let pick = pool.remove(rng.index(pool.len()));
             let s = spots[pick];
             let kind = kinds[rng.index(kinds.len())];
@@ -59,7 +59,7 @@ impl Bonuses {
                 0.0
             };
             list.push(Bonus {
-                i: k as u32,
+                i,
                 pos: s,
                 kind,
                 appear_at,

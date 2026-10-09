@@ -535,7 +535,7 @@ pub fn round_note(n: RoundNote) -> String {
 
 /// Seconds with a decimal comma: «12,3 с».
 pub fn fmt_sec(s: f64) -> String {
-    format!("{:.1} с", s).replace('.', ",")
+    format!("{s:.1} с").replace('.', ",")
 }
 
 pub fn finish_note(name: &str, place: usize, time: f64) -> String {

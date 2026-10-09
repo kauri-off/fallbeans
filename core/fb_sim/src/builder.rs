@@ -20,7 +20,7 @@ use crate::scene::{
 };
 use crate::world::{MoveCtx, PORTAL_CLOSED, PortalGate, PortalPair, World};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct PrimOpts {
     pub col: ColliderOpts,
     pub freq: Option<f64>,
@@ -143,7 +143,7 @@ pub fn enter_gate(cx: &mut Cx, col: ColId, body: &mut Body, ev: &mut StepEvents)
         cx.world.portal_used(k, end, t);
         cx.out.push(MapOut::Event {
             ev: MapEvent::Portal {
-                pair: k as u32,
+                pair: u32::try_from(k).expect("fewer than 2³² portals"),
                 from: end,
                 t,
             },
@@ -335,7 +335,7 @@ impl Builder {
     }
 
     pub fn cyl(&mut self, x: f64, y: f64, z: f64, r: f64, h: f64, p: Palette, o: PrimOpts) -> Prim {
-        let seg = o.seg as f64;
+        let seg = f64::from(o.seg);
         let node = self.prim(PrimKind::Cyl, [r, h, seg], p, x, y, z, &o, None);
         self.result(node, Shape::Cyl { r, hh: h / 2.0 }, o)
     }
@@ -434,7 +434,7 @@ impl Builder {
         let rotor = self.anchor(x, y, z, ROOT);
         for k in 0..count {
             let pivot = self.world.nodes.add(rotor, V3::ZERO);
-            self.world.nodes.get_mut(pivot).rot.y = (k as f64 / count as f64) * m::PI * 2.0;
+            self.world.nodes.get_mut(pivot).rot.y = (f64::from(k) / f64::from(count)) * m::PI * 2.0;
             let arm = self.model(Model::Arm, pivot);
             self.world.nodes.get_mut(arm).scale = V3::new(len, 1.0, 1.0);
             let a = self.anchor(len / 2.0 + 0.3, 0.0, 0.0, pivot);
@@ -576,6 +576,11 @@ impl Builder {
     }
 
     /// A ladder up a wall: its foot at (x, y0, z) on the wall's face, up to y1, the rungs facing `yaw`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a ladder's rungs, at least 2"
+    )]
     pub fn ladder(&mut self, x: f64, y0: f64, z: f64, y1: f64, yaw: f64, color: Rgb) {
         let h = y1 - y0;
         let holder = self.anchor(x, y0, z, ROOT);
@@ -606,13 +611,13 @@ impl Builder {
             ..Default::default()
         };
         for sx in [-0.45, 0.45] {
-            self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco.clone());
+            self.box_(sx, (h + 0.7) / 2.0, 0.14, 0.11, h + 0.7, 0.11, wood, deco);
         }
         let rungs = (h / 0.38).round().at_least(2.0) as u32;
         for k in 1..rungs {
             self.cyl(
                 0.0,
-                (k as f64 / rungs as f64) * h,
+                (f64::from(k) / f64::from(rungs)) * h,
                 0.14,
                 0.045,
                 0.9,
@@ -620,7 +625,7 @@ impl Builder {
                 PrimOpts {
                     rot: Some(V3::new(0.0, 0.0, m::PI / 2.0)),
                     seg: 8,
-                    ..deco.clone()
+                    ..deco
                 },
             );
         }
@@ -630,7 +635,7 @@ impl Builder {
     pub fn trampoline(&mut self, x: f64, y: f64, z: f64, r: f64, power: f64) -> Prim {
         let legs = 6;
         for k in 0..legs {
-            let a = (k as f64 / legs as f64) * m::PI * 2.0;
+            let a = (f64::from(k) / f64::from(legs)) * m::PI * 2.0;
             self.cyl(
                 x + m::cos(a) * (r + 0.1),
                 y - 0.65,
@@ -774,13 +779,19 @@ impl Builder {
             ctx.set_enabled(col, t < 0.0);
             ctx.node(node).visible = t < 0.0;
         });
-        (0..8).map(|i| V3::new(-7.0 + i as f64 * 2.0, 0.05, z0 - 2.0)).collect()
+        (0..8)
+            .map(|i| V3::new(-7.0 + f64::from(i) * 2.0, 0.05, z0 - 2.0))
+            .collect()
     }
 
     /// Two linked portals (rings standing up, facing yaw): running into either takes PORTAL_T, out of
     /// sight, and comes out in front of the other, facing its way, with at least 6 m/s. Each trip closes
     /// both ends (solid sashes) until a moment after the traveller is out. One-way: only `a` takes beans
     /// in. Returns the pair's index.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "options built for the call, like the other builders'"
+    )]
     pub fn portal(&mut self, a: PortalEnd, b: PortalEnd, color: Rgb, o: PortalOpts) -> usize {
         let k = self.world.portals.len();
         self.world.portals.push(PortalPair {
@@ -791,6 +802,7 @@ impl Builder {
         });
         let ends = [a, b];
         for (i, e) in ends.iter().enumerate() {
+            let end = u32::from(i == 1);
             let other = ends[1 - i];
             let exit_only = o.one_way && i == 1;
             let to = V3::new(
@@ -819,7 +831,7 @@ impl Builder {
                 self.world.colliders[trigger as usize].opts.on_touch = true;
                 let gate = PortalGate {
                     pair: k,
-                    end: i as u32,
+                    end,
                     to,
                     yaw: other.yaw,
                     speed: o.speed,
@@ -852,7 +864,7 @@ impl Builder {
             if self.server() {
                 continue;
             }
-            self.portal_look(ring, k, i as u32, exit_only, color, o.open.clone());
+            self.portal_look(ring, k, end, exit_only, color, o.open.clone());
             for sx in [-1.0, 1.0] {
                 let deco = PrimOpts {
                     no_collide: true,
@@ -911,7 +923,7 @@ impl Builder {
             let span = if into { 0.4 } else { 0.6 };
             let f = if age >= 0.0 && age < span { age / span } else { -1.0 };
             out.pieces.push(Piece::at(0, 0.0, 1.4, 0.0));
-            let pulse = 1.0 + m::sin(t * 4.0 + i as f64) * 0.03;
+            let pulse = 1.0 + m::sin(t * 4.0 + f64::from(i)) * 0.03;
             let disc = Piece::at(1, 0.0, 1.4, 0.0)
                 .rot(0.0, 0.0, t * spin)
                 .scale(pulse * (1.0 - shut * 0.6))
@@ -951,7 +963,7 @@ impl Builder {
     pub fn ring_spawns(&self, n: u32, radius: f64, y: f64, offset: f64) -> Vec<V3> {
         (0..n)
             .map(|k| {
-                let a = (k as f64 / n as f64) * m::PI * 2.0 + offset;
+                let a = (f64::from(k) / f64::from(n)) * m::PI * 2.0 + offset;
                 V3::new(m::cos(a) * radius, y, m::sin(a) * radius)
             })
             .collect()

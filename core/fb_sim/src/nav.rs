@@ -323,6 +323,11 @@ impl NavGrid {
     }
 
     /// Builds the grid from the world's static, solid colliders as they are now.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "grid sizes and cells, at least 1 and checked against nx and nz"
+    )]
     pub fn build(world: &World, forbidden: Option<&dyn Fn(V3) -> bool>) -> NavGrid {
         let mut x0 = f64::INFINITY;
         let mut x1 = f64::NEG_INFINITY;
@@ -433,8 +438,8 @@ impl NavGrid {
                             edge += 1;
                         }
                     }
-                    let p =
-                        (if wall > 0 { 1.5 } else { 0.0 }) + (if edge > 0 { 1.0 + edge as f64 * 0.25 } else { 0.0 });
+                    let p = (if wall > 0 { 1.5 } else { 0.0 })
+                        + (if edge > 0 { 1.0 + f64::from(edge) * 0.25 } else { 0.0 });
                     nav.pen[id] = p;
                 }
             }
@@ -470,6 +475,11 @@ impl NavGrid {
         self.z0 + (iz as f64 + 0.5) * NAV_CELL
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "grid cells, checked against nx and nz"
+    )]
     fn cell_of(&self, x: f64, z: f64) -> Option<usize> {
         let ix = ((x - self.x0) / NAV_CELL).floor();
         let iz = ((z - self.z0) / NAV_CELL).floor();
@@ -558,6 +568,11 @@ impl<'a> Nav<'a> {
     }
 
     /// The node a body at p stands on (or the nearest one close by).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "grid cells, checked against nx and nz"
+    )]
     fn node_at(&self, x: f64, y: f64, z: f64) -> Option<usize> {
         let g = self.grid;
         if let Some(id) = g.cell_of(x, z).and_then(|cell| g.layer_below(self.world, cell, y)) {
@@ -598,6 +613,11 @@ impl<'a> Nav<'a> {
 
     /// A* from p to (tx, tz) (any layer; the one nearest ty when given). Returns a smoothed list of
     /// points to run through (the first one is where to head now), or None when there is no route.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "grid cells, checked against nx and nz"
+    )]
     pub fn path(&self, p: V3, tx: f64, tz: f64, ty: Option<f64>, opts: &PathOpts) -> Option<Vec<NavPoint>> {
         let g = self.grid;
         let world = self.world;
@@ -775,6 +795,7 @@ impl<'a> Nav<'a> {
         out
     }
 
+    #[expect(clippy::cast_possible_truncation, reason = "a step count along a short line")]
     fn straight(&self, a: usize, b: usize) -> bool {
         let g = self.grid;
         let pa = g.point(a, false);

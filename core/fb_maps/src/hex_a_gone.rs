@@ -47,6 +47,7 @@ struct Tiles {
 
 impl Tiles {
     /// The tile under (x, z) on a floor, if any (axial rounding).
+    #[expect(clippy::cast_possible_truncation, reason = "hex coordinates, rounded")]
     fn at(&self, x: f64, z: f64, floor: usize) -> Option<usize> {
         let sq3 = m::sqrt(3.0);
         let qf = ((sq3 / 3.0) * x - z / 3.0) / SIZE;
@@ -111,7 +112,8 @@ impl MapLogic for Floors {
         // would drop for it alone, for good.)
         if cx.server {
             let at = cx.t + FALL_DELAY;
-            self.emit(cx, MapEvent::Tile { i: i as u32, at });
+            let i = u32::try_from(i).expect("fewer than 2³² tiles");
+            self.emit(cx, MapEvent::Tile { i, at });
         }
     }
 
@@ -168,7 +170,7 @@ impl MapLogic for Floors {
         let mut best = heading;
         let mut best_score = -1e9;
         for k in 0..12 {
-            let a = heading + (k as f64 / 12.0) * m::PI * 2.0;
+            let a = heading + (f64::from(k) / 12.0) * m::PI * 2.0;
             let mut score = 0.0;
             let mut d = 1.4;
             while d <= 5.6 {
@@ -245,7 +247,7 @@ impl MapDef for HexAGone {
                     let x = SIZE * sq3 * (q as f64 + r as f64 / 2.0);
                     let z = SIZE * 1.5 * r as f64;
                     let i = tiles.cols.len();
-                    spots.push((floor as u8, x, y, z));
+                    spots.push((u8::try_from(floor).expect("fewer than 256 floors"), x, y, z));
                     let at = b.anchor(x, y - THICK / 2.0, z, ROOT);
                     let col = b.collider(
                         at,
@@ -266,7 +268,7 @@ impl MapDef for HexAGone {
         }
         for &fy in &FLOORS[..2] {
             for k in 0..3 {
-                let a = (k as f64 / 3.0) * m::PI * 2.0 + fy;
+                let a = (f64::from(k) / 3.0) * m::PI * 2.0 + fy;
                 b.bonus(m::cos(a) * 7.0, fy, m::sin(a) * 7.0);
             }
         }

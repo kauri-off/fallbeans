@@ -33,7 +33,7 @@ pub struct Round {
 
 impl Round {
     pub fn arena_tick(&self, tick: Tick) -> i64 {
-        tick.0 as i64 - self.zero_tick
+        i64::from(tick.0) - self.zero_tick
     }
 
     /// The same map (a new zero tick is the same arena, shifted).
@@ -168,6 +168,7 @@ pub struct RemotePose {
 }
 
 impl RemotePose {
+    #[expect(clippy::cast_possible_truncation, reason = "f32 is plenty for drawing")]
     pub fn of(b: &BodyFull, hold: &Hold) -> Self {
         let body = &b.body;
         Self {

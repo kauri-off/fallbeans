@@ -131,6 +131,7 @@ pub fn tick_bodies_with(
     // At a tick time the world goes by the tick number: (k − 1)·DT is the server's previous time, and
     // k·DT − DT may differ from it in the last bit.
     let k = (t / DT).round();
+    #[expect(clippy::cast_possible_truncation, reason = "a whole tick number")]
     let tick = (t.is_finite() && k * DT == t).then_some(k as i64);
     match tick {
         Some(k) => world.goto_tick(k - 1, &*map.logic),

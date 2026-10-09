@@ -43,6 +43,11 @@ fn best(
 }
 
 /// Each award goes to the single best player for it.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "small award values"
+)]
 pub fn compute_awards(players: &[(PlayerId, &GameStats)]) -> Vec<Award> {
     let rank = |s: &GameStats| {
         (!s.race_ranks.is_empty()).then(|| 1.0 - s.race_ranks.iter().sum::<f64>() / s.race_ranks.len() as f64)

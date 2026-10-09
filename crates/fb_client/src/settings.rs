@@ -567,7 +567,7 @@ fn sanitize(world: &mut World) {
     let fixed = Controls {
         mouse_sensitivity: fit(c.mouse_sensitivity, SENS_RANGE, dc.mouse_sensitivity),
         stick_sensitivity: fit(c.stick_sensitivity, SENS_RANGE, dc.stick_sensitivity),
-        ..c.clone()
+        ..c
     };
     if fixed != c {
         *world.resource_mut::<Controls>() = fixed;
@@ -583,7 +583,7 @@ fn sanitize(world: &mut World) {
     let fixed = Display {
         fov: fit(d.fov, FOV_RANGE, dd.fov),
         ui_scale: fit(d.ui_scale, UI_SCALE_RANGE, dd.ui_scale),
-        ..d.clone()
+        ..d
     };
     if fixed != d {
         *world.resource_mut::<Display>() = fixed;

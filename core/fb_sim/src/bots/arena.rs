@@ -235,7 +235,9 @@ fn arena_step(opts: &ArenaOpts, bot: &mut BotView, out: &mut BotInput) {
         avoid_holes(bot, out, floor.as_ref());
     }
     if opts.social && d < 1.5 && b.grounded && bot.rng.unit() < 0.12 * BOT_DT {
-        out.emote = 1 + bot.rng.index(EMOTES as usize) as u32;
+        #[expect(clippy::cast_possible_truncation, reason = "an index below EMOTES")]
+        let e = bot.rng.index(EMOTES as usize) as u32;
+        out.emote = 1 + e;
     }
     // `jump_when` models reaction time itself. Just before landing counts too: the jump is kept for a
     // moment and goes off on touchdown.

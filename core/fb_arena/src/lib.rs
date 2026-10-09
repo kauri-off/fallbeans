@@ -2,6 +2,11 @@
 //! grabs and tackles, finishes, checkpoints, falls and knockouts, bonuses, the map's own logic, the
 //! debug journal and trace, and recording for replays. The network side (inputs from packets,
 //! snapshots) stays in the server.
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 use std::collections::{BTreeMap, VecDeque};
 
 use fb_shared::NEVER;
@@ -396,6 +401,7 @@ impl Arena {
             .iter()
             .position(|&p| p == id)
             .map_or(u64::from(id), |k| k as u64 + 1);
+        #[expect(clippy::cast_possible_truncation, reason = "the low bits of a mixed slot")]
         let bot = bot.then(|| BotState {
             mem: BotMem::default(),
             plan: BotPlan::default(),
@@ -807,9 +813,10 @@ impl Arena {
     }
 
     /// A bot's input frame (None for a player).
+    #[expect(clippy::cast_possible_truncation, reason = "rounded and clamped to ±127 first")]
     fn bot_frame(&mut self, i: usize, k: i64, events: &mut Vec<ArenaEvent>) -> Option<InputFrame> {
         self.pawns[i].bot.as_ref()?;
-        let fresh = k % BOT_EVERY as i64 == 0;
+        let fresh = k % i64::from(BOT_EVERY) == 0;
         if fresh {
             self.think(i, events);
         }

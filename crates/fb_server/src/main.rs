@@ -1,3 +1,4 @@
+#![warn(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 use bevy::prelude::*;
 use clap::Parser;
 use fb_server::Opts;

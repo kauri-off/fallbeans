@@ -168,7 +168,7 @@ impl Rig {
             'arm: for i in 1..=STEPS {
                 let d = DISTANCE * i as f32 / STEPS as f32;
                 let p = self.smooth_target + dir * d;
-                let probe = V3::new(p.x as f64, p.y as f64, p.z as f64);
+                let probe = V3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
                 world.query(probe.x, probe.z, 0.6, &mut self.near);
                 for &ci in &self.near {
                     let c = world.col(ci);

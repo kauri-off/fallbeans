@@ -601,10 +601,10 @@ pub fn place_beans(
     let out = |p: Vec3, tilt: f32, dir: f32, size: f32| match map.as_ref() {
         Some(m) => fb_sim::physics::push_out(
             &m.world,
-            fb_sim::math::V3::new(p.x as f64, p.y as f64, p.z as f64),
-            tilt as f64,
-            dir as f64,
-            size as f64,
+            fb_sim::math::V3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)),
+            f64::from(tilt),
+            f64::from(dir),
+            f64::from(size),
         )
         .as_vec3(),
         None => p,

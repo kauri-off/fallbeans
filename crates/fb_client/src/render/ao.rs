@@ -1132,7 +1132,7 @@ mod tests {
         assert_eq!(half(1.0 + 3.0 / 2048.0), 0x3c02);
         // Decoded: multiples of the anchor's grid out to 8 km are exact.
         let decode = |h: u16| {
-            let (s, e, m) = ((h >> 15) as i32, ((h >> 10) & 0x1f) as i32, (h & 0x3ff) as f32);
+            let (s, e, m) = (i32::from(h >> 15), i32::from((h >> 10) & 0x1f), f32::from(h & 0x3ff));
             let v = if e == 0 {
                 m * 2f32.powi(-24)
             } else {

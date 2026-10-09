@@ -362,7 +362,7 @@ fn hud_state(
         Part::Spectating
     };
     let bonus = body.and_then(|b| {
-        let left = (b.power_until - timeline.tick().0 as f64 * DT + map.round.zero_tick as f64 * DT).ceil();
+        let left = (b.power_until - f64::from(timeline.tick().0) * DT + map.round.zero_tick as f64 * DT).ceil();
         let (icon, title) = text::bonus(b.power?);
         (left > 0.0).then(|| format!("{icon} {title} · {left:.0} с"))
     });
@@ -377,7 +377,7 @@ fn hud_state(
         .lobby
         .as_ref()
         .and_then(|l| l.next)
-        .map(|n| ((n as f64 - timeline.tick().0 as f64) * DT).max(0.0));
+        .map(|n| ((f64::from(n) - f64::from(timeline.tick().0)) * DT).max(0.0));
     let spectating = spectate
         .and_then(|s| s.target)
         .filter(|_| status != Part::Play)

@@ -1,4 +1,9 @@
 //! Deterministic simulation core: no Bevy, f64 everywhere, maths only through `m`.
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 pub mod beans;
 pub mod bonus;
 pub mod bots;

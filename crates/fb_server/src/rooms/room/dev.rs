@@ -54,14 +54,14 @@ impl Room {
                     return Ok("already started".into());
                 }
                 self.warp(left.ceil() + 1.0);
-                Ok(format!("skipped {:.0} ms", left * 1000.0 / TICK_RATE as f64))
+                Ok(format!("skipped {:.0} ms", left * 1000.0 / f64::from(TICK_RATE)))
             }
             DevCmd::Warp { s } => {
                 if !s.is_finite() || *s <= 0.0 {
                     return Err(DevError::BadWarp);
                 }
                 let capped = s.min(WARP_MAX_S);
-                self.warp((capped * TICK_RATE as f64).round());
+                self.warp((capped * f64::from(TICK_RATE)).round());
                 Ok(if capped < *s {
                     format!("warped {capped} s (at most {WARP_MAX_S} s at once)")
                 } else {
@@ -108,7 +108,7 @@ impl Room {
                             Some(n) => games.iter().cycle().take(*n as usize).cloned().collect(),
                             None => games.clone(),
                         },
-                        rounds: rounds.unwrap_or(games.len() as u32),
+                        rounds: rounds.unwrap_or(count(games.len())),
                     }
                 };
                 self.start_game();

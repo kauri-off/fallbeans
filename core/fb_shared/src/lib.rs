@@ -1,3 +1,8 @@
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 pub mod cause;
 pub mod color;
 pub mod consts;

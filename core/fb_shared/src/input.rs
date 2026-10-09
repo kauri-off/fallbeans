@@ -32,6 +32,7 @@ impl InputFrame {
     /// The stick clamped to unit length (127), as the server applies it to every frame. Idempotent: a
     /// client sending clamped frames predicts with exactly the input the server uses. (Rounding a
     /// rescaled stick may leave it a hair over 127; scaling again would then move it once more.)
+    #[expect(clippy::cast_possible_truncation, reason = "rounded and clamped to ±127 first")]
     pub fn clamped(self) -> Self {
         const MAX: i32 = 127 * 127;
         let len2 = |x: i8, z: i8| i32::from(x) * i32::from(x) + i32::from(z) * i32::from(z);
@@ -67,6 +68,7 @@ impl InputFrame {
     }
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "rounded and clamped to ±127 first")]
 pub fn quantize_axis(v: f64) -> i8 {
     let q = (v * 127.0).round();
     if q.is_nan() { 0 } else { q.clamp(-127.0, 127.0) as i8 }

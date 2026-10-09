@@ -24,7 +24,7 @@ use serde_json::json;
 use super::awards::{GameStats, compute_awards};
 use super::clock::GameClock;
 use super::players::{Kind, Player, bot_name};
-use super::{ConnId, Inputs, NoInputs, Out, Uid, secs, ticks};
+use super::{ConnId, Inputs, NoInputs, Out, Uid, count, secs, ticks};
 use crate::auth::{AddrKey, random_bytes};
 
 mod connections;
@@ -130,7 +130,7 @@ impl Default for RoomOptions {
             max_players: MAX_PLAYERS,
             practice: None,
             seed: None,
-            intro_ticks: ticks(INTRO_S) as u32,
+            intro_ticks: u32::try_from(ticks(INTRO_S)).unwrap_or(u32::MAX),
             dev: false,
             eliminate: true,
             id: String::new(),
@@ -158,7 +158,7 @@ impl Session {
     fn skip_unfit(&mut self, players: usize) -> Vec<MapId> {
         let mut skipped = Vec::new();
         while let Some(&g) = self.plan.get(self.index) {
-            if director::fits(g.meta(), players as u32) {
+            if director::fits(g.meta(), count(players)) {
                 break;
             }
             skipped.push(g.id());
@@ -174,7 +174,7 @@ impl Session {
             return Some((*self.plan.first()?, 1, 1));
         }
         let game = *self.plan.get(self.index)?;
-        Some((game, self.index as u32 + 1, self.plan.len() as u32))
+        Some((game, count(self.index + 1), count(self.plan.len())))
     }
 }
 
@@ -242,7 +242,9 @@ impl From<DevReply> for ServerMsg {
 
 pub fn make_pin() -> String {
     let n = u32::from_le_bytes(random_bytes());
-    format!("{:04}", n % 10u32.pow(ROOM_PIN_DIGITS as u32))
+    #[expect(clippy::cast_possible_truncation, reason = "a few digits")]
+    let digits = ROOM_PIN_DIGITS as u32;
+    format!("{:04}", n % 10u32.pow(digits))
 }
 
 pub struct Room {
@@ -490,6 +492,7 @@ impl Room {
     }
 
     /// Server tick of the arena's tick 0 (what clients map their timeline with).
+    #[expect(clippy::cast_possible_truncation, reason = "a tick number")]
     pub fn zero_tick(&self) -> i64 {
         (self.zero - self.clock.offset()).round() as i64
     }
@@ -515,14 +518,14 @@ impl Room {
 
     /// Seconds of game time until the room's timer (next round, back to the lobby) goes off.
     pub fn timer_in(&self) -> Option<f64> {
-        self.timer().map(|at| (at - self.now()) / TICK_RATE as f64)
+        self.timer().map(|at| (at - self.now()) / f64::from(TICK_RATE))
     }
 
     /// Seconds of game time until the round's time is up (rounds with a time limit).
     pub fn ends_in(&self) -> Option<f64> {
         let d = self.arena.map.meta().duration;
         (self.arena.kind == ArenaKind::Round && d > 0.0)
-            .then(|| (self.zero + ticks(d) as f64 - self.now()) / TICK_RATE as f64)
+            .then(|| (self.zero + ticks(d) as f64 - self.now()) / f64::from(TICK_RATE))
     }
 
     /// A recorded round: the last finished ones (0 newest), or (`None`) the one running now.
@@ -561,13 +564,18 @@ impl Room {
             title: self.title.clone(),
             private: self.pin.is_some(),
             host: self.host.and_then(|h| self.player(h)).map(|p| p.name.clone()),
-            players: humans as u32,
-            bots: (self.players.len() - humans) as u32,
-            max: self.max as u32,
+            players: count(humans),
+            bots: count(self.players.len() - humans),
+            max: count(self.max),
             phase: self.phase(),
         }
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a tick, at least 0"
+    )]
     pub fn lobby_msg(&self) -> Lobby {
         Lobby {
             room: RoomRef {
@@ -577,8 +585,8 @@ impl Room {
             },
             phase: self.phase(),
             host: self.host,
-            min: self.min_players as u32,
-            max: self.max as u32,
+            min: count(self.min_players),
+            max: count(self.max),
             players: self
                 .players
                 .iter()

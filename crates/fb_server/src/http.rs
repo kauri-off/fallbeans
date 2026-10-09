@@ -736,7 +736,7 @@ async fn session(
 ) -> Response {
     let (ip, proxied) = client_ip(peer.remote, &headers);
     api.check_proxy(peer.remote, &headers);
-    let now_ms = api.started.elapsed().as_millis() as u64;
+    let now_ms = u64::try_from(api.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let allowed = api.sessions.lock().unwrap_or_else(|e| e.into_inner()).allow(ip, now_ms);
     if !allowed {
         // (The client takes any error for a failed attempt and asks again in a few seconds.)
@@ -935,7 +935,7 @@ async fn login(
     api.check_proxy(peer.remote, &headers);
     let key = body.trim();
     let key = key.strip_prefix("key=").unwrap_or(key);
-    let now_ms = api.started.elapsed().as_millis() as u64;
+    let now_ms = u64::try_from(api.started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let mut guesses = api.guesses.lock().unwrap_or_else(|e| e.into_inner());
     if !guesses.allow(Some(ip), "debug", now_ms) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts").into_response();

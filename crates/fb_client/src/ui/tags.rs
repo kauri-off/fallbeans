@@ -341,15 +341,15 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
     }
     let dir = span / len;
     let (o, d) = (
-        V3::new(from.x as f64, from.y as f64, from.z as f64),
-        V3::new(dir.x as f64, dir.y as f64, dir.z as f64),
+        V3::new(f64::from(from.x), f64::from(from.y), f64::from(from.z)),
+        V3::new(f64::from(dir.x), f64::from(dir.y), f64::from(dir.z)),
     );
     const STEP: f32 = 2.0;
     checked.clear();
     let n = (len / STEP).ceil() as usize;
     for i in 0..=n {
         let p = from + dir * (i as f32 * STEP).min(len);
-        world.query(p.x as f64, p.z as f64, STEP as f64, near);
+        world.query(f64::from(p.x), f64::from(p.z), f64::from(STEP), near);
         for &ci in near.iter() {
             if checked.contains(&ci) {
                 continue;
@@ -359,7 +359,7 @@ fn blocked(world: &World, from: Vec3, to: Vec3, near: &mut Vec<ColId>, checked: 
             if !c.enabled || c.opts.trigger || c.opts.hit > 0.0 || c.opts.sweep {
                 continue;
             }
-            if c.raycast(o, d, (len - 0.3) as f64).is_some() {
+            if c.raycast(o, d, f64::from(len - 0.3)).is_some() {
                 return true;
             }
         }

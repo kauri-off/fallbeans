@@ -77,14 +77,24 @@ impl Inputs for NoInputs {
     }
 }
 
+/// A count for messages and plans: never near 2³², saturating rather than wrapping.
+pub fn count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
 /// Seconds in server ticks.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "rounded, saturating"
+)]
 pub fn ticks(s: f64) -> u64 {
-    (s * TICK_RATE as f64).round() as u64
+    (s * f64::from(TICK_RATE)).round() as u64
 }
 
 /// Server ticks in seconds.
 pub fn secs(ticks: u64) -> f64 {
-    ticks as f64 / TICK_RATE as f64
+    ticks as f64 / f64::from(TICK_RATE)
 }
 
 /// A warning that backs off while it keeps coming: logged at once, then at most after 1 s, 2 s, 4 s … (up to

@@ -27,11 +27,11 @@ fn replays_end_in_the_recorded_state() {
                 a.set_view(PlayerId(2), 7);
             }
             a.step(k, |id| InputFrame {
-                mx: ((k / 50 + id.0 as i64) % 3 * 60 - 60) as i8,
+                mx: ((k / 50 + i64::from(id.0)) % 3 * 60 - 60) as i8,
                 mz: 100,
                 buttons: if k % 90 == 0 {
                     BTN_JUMP
-                } else if k % 170 == id.0 as i64 * 20 {
+                } else if k % 170 == i64::from(id.0) * 20 {
                     BTN_DIVE
                 } else {
                     0
@@ -71,7 +71,7 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
     }
     let rec = a.take_recording().unwrap();
     assert!(replay(&rec, |_| false).matches);
-    let mut unskipped = rec.clone();
+    let mut unskipped = rec;
     unskipped.ops.retain(|o| !matches!(o.1, fb_arena::Op::Skip(_)));
     assert!(!replay(&unskipped, |_| false).matches);
 }

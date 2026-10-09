@@ -96,8 +96,9 @@ impl Harness {
     }
 
     /// Advances to sim time `t` seconds (every tick simulated).
+    #[expect(clippy::cast_possible_truncation, reason = "a tick number")]
     pub fn run_to(&mut self, t: f64) {
-        let target = (t * TICK_RATE as f64 + 0.5).floor() as i64;
+        let target = (t * f64::from(TICK_RATE) + 0.5).floor() as i64;
         while self.arena.tick < target {
             self.step();
         }
@@ -123,6 +124,11 @@ pub fn median(xs: &[f64]) -> f64 {
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "an index below len"
+)]
 pub fn quantile(xs: &[f64], q: f64) -> f64 {
     if xs.is_empty() {
         return f64::NAN;

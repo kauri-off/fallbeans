@@ -231,6 +231,11 @@ pub(crate) fn physics(_: &Ctx, out: &mut Out) {
 
 /// What of input handling the core owns: frames clamped as the server takes them, and a press acted on
 /// in the tick it is for. (The wire format and the room's input buffer are tested in fb_net/fb_server.)
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "random frames within the type's range"
+)]
 fn input(ctx: &Ctx, out: &mut Out) {
     let mut rng = Rng::new(ctx.seed);
     let n = if ctx.quick { 2000 } else { 20000 };
@@ -277,6 +282,11 @@ fn input(ctx: &Ctx, out: &mut Out) {
 
 // ------------------------------------------------------------------ game rules and planning
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "small random counts"
+)]
 fn rules(ctx: &Ctx, out: &mut Out) {
     let mut rng = Rng::new(ctx.seed);
     // Planning: every player count, mode and length gives a valid game.

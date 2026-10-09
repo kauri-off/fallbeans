@@ -70,17 +70,18 @@ impl MapDef for RollOut {
             let mut missing = BTreeSet::new();
             // The outer drums lose one slat more than the middle one.
             while missing.len() < if z == 0.0 { 4 } else { 5 } {
+                #[expect(clippy::cast_possible_truncation, reason = "an index below N")]
                 let k = b.rng.index(N as usize) as u32;
                 if k > 2 && k < N - 2 {
                     missing.insert(k);
                 }
             }
-            let width = ((2.0 * m::PI * R) / N as f64) * 0.96;
+            let width = ((2.0 * m::PI * R) / f64::from(N)) * 0.96;
             for k in 0..N {
                 if missing.contains(&k) {
                     continue;
                 }
-                let a = (k as f64 / N as f64) * m::PI * 2.0;
+                let a = (f64::from(k) / f64::from(N)) * m::PI * 2.0;
                 let o = PrimOpts {
                     parent: Some(group),
                     rot: Some(V3::new(0.0, 0.0, -a)),
@@ -117,7 +118,7 @@ impl MapDef for RollOut {
             b.mover(move |t, ctx| ctx.node(group).rot.z = angle(t));
             let mut holes: Vec<(f64, f64)> = Vec::new();
             for &k in &missing {
-                let k = k as f64;
+                let k = f64::from(k);
                 match holes.last_mut() {
                     Some(last) if k - 0.5 == last.1 => last.1 = k + 0.5,
                     _ => holes.push((k - 0.5, k + 0.5)),
@@ -133,7 +134,7 @@ impl MapDef for RollOut {
                     for k in 0..3 {
                         let o = PrimOpts {
                             parent: Some(group),
-                            rot: Some(V3::new(0.0, 0.0, (k as f64 / 3.0) * m::PI)),
+                            rot: Some(V3::new(0.0, 0.0, (f64::from(k) / 3.0) * m::PI)),
                             ..deco()
                         };
                         b.box_(
@@ -184,7 +185,7 @@ impl MapDef for RollOut {
                 // The top of the drum carries us sideways at −ω·R; "up" is against it.
                 let carry = -omega * rs * mirror;
                 let up = if carry == 0.0 { 0.0 } else { -m::sign(carry) };
-                let lane = ring.z + ((bot.id.0 % 3) as f64 - 1.0) * 1.5 + bot.mem.traits().off * 0.4;
+                let lane = ring.z + (f64::from(bot.id.0 % 3) - 1.0) * 1.5 + bot.mem.traits().off * 0.4;
                 // Holes as intervals along the surface, in metres towards "up" from the bot.
                 let theta = ring.angle(t);
                 let phi = m::atan2(p.x, p.y - CY);

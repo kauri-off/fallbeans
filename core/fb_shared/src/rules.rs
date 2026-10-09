@@ -200,7 +200,7 @@ impl RoundView<'_> {
             if self.succeeded(id) {
                 TOP_POINTS
             } else {
-                (TOP_POINTS as f64 / 2.0).round() as i64
+                (TOP_POINTS + 1) / 2
             }
         };
         let mut rows = Vec::new();
@@ -255,6 +255,7 @@ fn group_by(ids: &[PlayerId], key: impl Fn(PlayerId) -> f64) -> Vec<Vec<PlayerId
 }
 
 /// Placement points: ties share the average of the places they occupy. Returns (id, place, points).
+#[expect(clippy::cast_possible_truncation, reason = "rounded points within 0…TOP_POINTS")]
 pub fn placement_points(groups: &[Vec<PlayerId>]) -> BTreeMap<PlayerId, (usize, i64)> {
     let n: usize = groups.iter().map(Vec::len).sum();
     let mut out = BTreeMap::new();

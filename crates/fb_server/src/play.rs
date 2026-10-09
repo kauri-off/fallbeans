@@ -168,7 +168,7 @@ fn start(mut commands: Commands, opts: Res<Opts>, timeline: Res<LocalTimeline>) 
     let base = RoomOptions {
         min_players: if opts.solo { 1 } else { 2 },
         seed: opts.seed,
-        intro_ticks: ticks(opts.intro) as u32,
+        intro_ticks: u32::try_from(ticks(opts.intro)).unwrap_or(u32::MAX),
         dev: opts.dev,
         eliminate: !opts.respawn,
         ..default()
@@ -375,7 +375,6 @@ type Bodies = (
     &'static mut RemotePose,
     &'static mut Hold,
 );
-
 fn tick_rooms(
     timeline: Res<LocalTimeline>,
     mut rooms: ResMut<Rooms>,
@@ -398,6 +397,11 @@ fn tick_rooms(
         .values()
         .filter_map(|p| Some((p.owner?, p.entity)))
         .collect();
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "milliseconds of delay"
+    )]
     let views: BTreeMap<ConnId, u32> = delays
         .iter()
         .map(|(link, d)| (conn_of(link), d.delay.value.to_num::<f64>().round() as u32))
@@ -570,8 +574,8 @@ fn publish(
             let full = BodyFull {
                 body: p.body.clone(),
                 teleports: p.teleports,
-                checkpoint: p.checkpoint.map(|c| c as u16),
-                spawn: p.spawn_i as u16,
+                checkpoint: p.checkpoint.and_then(|c| u16::try_from(c).ok()),
+                spawn: u16::try_from(p.spawn_i).unwrap_or(u16::MAX),
             };
             let hold = Hold {
                 target: p.grabbing,
@@ -678,7 +682,7 @@ fn measure_rtt(rooms: Option<ResMut<Rooms>>, links: Query<(Entity, &Link), With<
         let Some((key, id)) = rooms.hub.seat(conn_of(link)) else {
             continue;
         };
-        let rtt = l.stats.rtt.as_millis() as u32;
+        let rtt = u32::try_from(l.stats.rtt.as_millis()).unwrap_or(u32::MAX);
         if let Some(r) = rooms.hub.rooms.get_mut(&key) {
             r.set_rtt(id, rtt);
         }

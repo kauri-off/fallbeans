@@ -131,7 +131,7 @@ fn confetti(b: &mut Builder) {
         for (i, &[x, z, speed, phase, spin]) in seeds.iter().enumerate() {
             let y = 14.0 - ((t * speed + phase) % 16.0);
             let p = Piece::at(
-                (i % COLORS.len()) as u8,
+                u8::try_from(i % COLORS.len()).expect("fewer than 256 colours"),
                 x + m::sin(t * 1.3 + phase) * 0.6,
                 y,
                 z + m::cos(t + phase) * 0.4,

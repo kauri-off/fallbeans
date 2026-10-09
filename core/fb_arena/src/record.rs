@@ -1,6 +1,7 @@
 //! Recorded rounds and replays: enough
 //! to simulate a round again tick by tick and get the same result. Human input is stored as the frames
 //! the simulation actually used, run-length encoded; bots replay from the seed.
+use core::num::TryFromIntError;
 use std::collections::BTreeMap;
 
 use fb_shared::PlayerId;
@@ -60,22 +61,24 @@ impl From<PawnRec> for (PlayerId, bool, Option<usize>, i64) {
 
 /// A human's input from `tick` on: `[tick, mx, mz, buttons]` in JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "[i64; 4]", into = "[i64; 4]")]
+#[serde(try_from = "[i64; 4]", into = "[i64; 4]")]
 pub struct FrameRec {
     pub tick: i64,
     pub input: InputFrame,
 }
 
-impl From<[i64; 4]> for FrameRec {
-    fn from([tick, mx, mz, buttons]: [i64; 4]) -> Self {
-        Self {
+impl TryFrom<[i64; 4]> for FrameRec {
+    type Error = TryFromIntError;
+
+    fn try_from([tick, mx, mz, buttons]: [i64; 4]) -> Result<Self, Self::Error> {
+        Ok(Self {
             tick,
             input: InputFrame {
-                mx: mx as i8,
-                mz: mz as i8,
-                buttons: buttons as u8,
+                mx: i8::try_from(mx)?,
+                mz: i8::try_from(mz)?,
+                buttons: u8::try_from(buttons)?,
             },
-        }
+        })
     }
 }
 

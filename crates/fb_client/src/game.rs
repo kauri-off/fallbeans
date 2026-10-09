@@ -620,7 +620,7 @@ fn autopilot(k: u32, map: Option<&Map>, own: Option<(&BeanId, &BodyFull)>) -> St
     let buttons = if p % (89 + id % 13) < 2 { BTN_JUMP } else { 0 };
     if let (Some(map), Some((_, own))) = (map, own) {
         let p = own.body.pos;
-        if let Some(b) = map.bonuses.available(map.time(k as f64)).next() {
+        if let Some(b) = map.bonuses.available(map.time(f64::from(k))).next() {
             let (dx, dz) = (b.pos.x - p.x, b.pos.z - p.z);
             let l = (dx * dx + dz * dz).sqrt().max(1e-6);
             return Steer::World(InputFrame::from_stick(dx / l, dz / l, buttons));
@@ -763,7 +763,7 @@ fn write_input(
         }
         (f, r, held | pressed)
     };
-    let (fx, fz) = (cam.yaw.sin() as f64, cam.yaw.cos() as f64);
+    let (fx, fz) = (f64::from(cam.yaw.sin()), f64::from(cam.yaw.cos()));
     let (mut mx, mut mz) = (f * fx - r * fz, f * fz + r * fx);
     let l = (mx * mx + mz * mz).sqrt();
     if l > 1.0 {
@@ -842,15 +842,15 @@ fn predict(
                     .filter(|(o, p)| p.anim != Anim::Portal && !map.gone(o.0))
                     .map(|(o, p)| OtherBody {
                         id: o.0,
-                        x: p.pos.x as f64,
-                        y: p.pos.y as f64,
-                        z: p.pos.z as f64,
-                        vx: p.vel.x as f64,
+                        x: f64::from(p.pos.x),
+                        y: f64::from(p.pos.y),
+                        z: f64::from(p.pos.z),
+                        vx: f64::from(p.vel.x),
                         vy: 0.0,
-                        vz: p.vel.y as f64,
-                        tilt: p.tilt as f64,
-                        tilt_dir: p.tilt_dir as f64,
-                        size: p.size as f64,
+                        vz: f64::from(p.vel.y),
+                        tilt: f64::from(p.tilt),
+                        tilt_dir: f64::from(p.tilt_dir),
+                        size: f64::from(p.size),
                     }),
             );
             // (By id: the query's order may change between a tick and its replay.)

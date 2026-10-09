@@ -163,7 +163,7 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
         surface: Some(Surface::Wood),
         ..Default::default()
     };
-    b.box_(x, 1.25, z, 0.22, 2.5, 0.22, wood, post.clone());
+    b.box_(x, 1.25, z, 0.22, 2.5, 0.22, wood, post);
     let board = PrimOpts {
         rot: Some(V3::new(0.0, yaw, 0.0)),
         ..post
@@ -285,7 +285,7 @@ impl MapDef for Lobby {
         };
         for sx in [-1.0, 1.0] {
             let y = top + BELL_HANG / 2.0;
-            b.box_(tx + sx * 1.75, y, tz, 0.3, BELL_HANG, 0.3, pal::WHITE, metal.clone());
+            b.box_(tx + sx * 1.75, y, tz, 0.3, BELL_HANG, 0.3, pal::WHITE, metal);
         }
         b.box_(tx, top + BELL_HANG + 0.15, tz, 3.8, 0.3, 0.3, pal::WHITE, metal);
         // (The bell swings a little: a still collider round where it hangs.)
@@ -366,7 +366,7 @@ impl MapDef for Lobby {
         b.bumper(rx - 1.6, 0.12, rz - 1.4, 0.8, 11.0);
         b.bumper(rx + 2.0, 0.12, rz + 1.5, 0.8, 11.0);
         for k in 0..10 {
-            let a = (k as f64 / 10.0) * m::PI * 2.0;
+            let a = (f64::from(k) / 10.0) * m::PI * 2.0;
             let cone = PropOpts {
                 scale: 0.7,
                 ..Default::default()

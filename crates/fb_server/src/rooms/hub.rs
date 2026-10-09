@@ -259,7 +259,7 @@ impl Hub {
     }
 
     fn real_ms(&self) -> u64 {
-        self.real * 1000 / TICK_RATE as u64
+        self.real * 1000 / u64::from(TICK_RATE)
     }
 
     fn send(&mut self, conn: ConnId, msg: ServerMsg) {

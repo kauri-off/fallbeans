@@ -80,7 +80,7 @@ impl Sim {
     /// n ticks after t0.
     fn run(&mut self, t0: f64, n: u32, input: BodyInput) {
         for i in 1..=n {
-            self.tick(t0 + i as f64 * DT, input);
+            self.tick(t0 + f64::from(i) * DT, input);
         }
     }
 
@@ -185,7 +185,7 @@ fn carries_on_from_the_full_body_state() {
             jump: i == 31,
             dive: false,
         };
-        a.tick(i as f64 * DT, input);
+        a.tick(f64::from(i) * DT, input);
     }
     let mut b = Builder::new(1, false);
     block(&mut b, 0.0, -1.0, 0.0, 10.0, 2.0, 10.0);
@@ -197,8 +197,8 @@ fn carries_on_from_the_full_body_state() {
             dive: i == 91,
             ..IDLE
         };
-        a.tick(i as f64 * DT, input);
-        c.tick(i as f64 * DT, input);
+        a.tick(f64::from(i) * DT, input);
+        c.tick(f64::from(i) * DT, input);
     }
     assert_eq!(c.body, a.body);
 }
@@ -240,7 +240,7 @@ fn falls_through_a_fake_pane_keeping_its_speed() {
     s.body.vel = V3::new(0.0, -6.0, 4.0);
     let mut jumped = false;
     for i in 1..=40 {
-        s.tick(i as f64 * DT, BodyInput { jump: true, ..FORWARD });
+        s.tick(f64::from(i) * DT, BodyInput { jump: true, ..FORWARD });
         jumped |= s.ev.jumped;
     }
     assert!(touched.load(Ordering::Relaxed) > 0);
@@ -265,7 +265,7 @@ fn a_sweeping_arm_knocks_a_bean_over_and_never_passes_through_it() {
     let start = s.body.pos;
     let (mut knocked, mut drag, mut overlap) = (false, 0.0f64, 0.0f64);
     for i in 1..=360 {
-        s.tick(i as f64 * DT, IDLE);
+        s.tick(f64::from(i) * DT, IDLE);
         knocked |= s.ev.knocked;
         drag = drag.at_least(m::sqrt(s.body.pos.distance_squared(start)));
         overlap = overlap.at_least(s.arm_overlap());
@@ -284,7 +284,7 @@ fn a_sweeping_arm_tosses_a_lying_bean_up_and_over_itself() {
     let start = s.body.pos;
     let (mut top, mut overlap, mut drag) = (0.0f64, 0.0f64, 0.0f64);
     for i in 1..=240 {
-        s.tick(i as f64 * DT, IDLE);
+        s.tick(f64::from(i) * DT, IDLE);
         if i > 30 {
             overlap = overlap.at_least(s.arm_overlap());
         }
@@ -314,7 +314,7 @@ fn running_into_the_back_of_a_leaving_arm_does_not_knock_over() {
     s.reset(3.0, 0.02, 1.5);
     let mut knocked = false;
     for i in 1..=96 {
-        s.tick(i as f64 * DT, BodyInput { mz: -1.0, ..IDLE });
+        s.tick(f64::from(i) * DT, BodyInput { mz: -1.0, ..IDLE });
         knocked |= s.ev.knocked;
     }
     assert!(!knocked);
@@ -335,7 +335,7 @@ fn a_dive_lays_the_body_along_its_flight_and_stays_out_of_a_wall() {
     assert!(s.body.tilt > 0.8, "{}", s.body.tilt);
     let mut deepest = -9.0f64;
     for i in 0..120 {
-        s.run((33 + i) as f64 * DT, 1, FORWARD);
+        s.run(f64::from(33 + i) * DT, 1, FORWARD);
         deepest = deepest
             .at_least(s.body.sphere(1).z + 0.5 - 5.5)
             .at_least(s.body.pos.z + 0.5 - 5.5);
@@ -394,7 +394,7 @@ fn a_dive_into_a_wall_bonks_and_a_glancing_one_slides_on() {
         s.run(10.0 * DT, 1, BodyInput { dive: true, ..dir });
         let mut stunned = false;
         for i in 0..60 {
-            s.run((11 + i) as f64 * DT, 1, dir);
+            s.run(f64::from(11 + i) * DT, 1, dir);
             stunned |= s.body.state == BodyState::Stun;
         }
         assert_eq!(stunned, bonks, "yaw {yaw}");
@@ -411,18 +411,18 @@ fn a_dive_in_the_air_adds_no_height_but_a_jump_and_a_dive_clear_nine_metres() {
     let mut k = 0;
     while s.body.pos.z < -0.35 {
         k += 1;
-        s.run(k as f64 * DT, 1, FORWARD);
+        s.run(f64::from(k) * DT, 1, FORWARD);
     }
     k += 1;
-    s.run(k as f64 * DT, 1, BodyInput { jump: true, ..FORWARD });
+    s.run(f64::from(k) * DT, 1, BodyInput { jump: true, ..FORWARD });
     let vy = s.body.vel.y;
     k += 1;
-    s.run(k as f64 * DT, 1, BodyInput { dive: true, ..FORWARD });
+    s.run(f64::from(k) * DT, 1, BodyInput { dive: true, ..FORWARD });
     assert_eq!(s.body.state, BodyState::Dive);
     assert!(s.body.vel.y < vy, "{} {vy}", s.body.vel.y);
     for _ in 0..120 {
         k += 1;
-        s.run(k as f64 * DT, 1, FORWARD);
+        s.run(f64::from(k) * DT, 1, FORWARD);
     }
     assert!(s.body.pos.y > -0.1 && s.body.pos.z > 9.0, "{:?}", s.body.pos);
 }
@@ -447,7 +447,7 @@ fn down_the_slope(s: &mut Sim, input: BodyInput) -> (f64, f64) {
     s.reset(0.0, 5.7, 0.8);
     let (mut on, mut all, mut speed) = (0, 0, 0.0);
     for i in 1..=360 {
-        s.tick(i as f64 * DT, input);
+        s.tick(f64::from(i) * DT, input);
         let z = s.body.pos.z;
         if (2.0..9.5).contains(&z) {
             all += 1;
@@ -456,7 +456,7 @@ fn down_the_slope(s: &mut Sim, input: BodyInput) -> (f64, f64) {
         }
     }
     assert!(all > 0, "never went down");
-    (on as f64 / all as f64, speed)
+    (f64::from(on) / f64::from(all), speed)
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn keeps_its_feet_on_a_slope_and_slides_down_ice() {
     s.reset(0.0, 0.0, 13.0);
     let mut top = 0.0f64;
     for i in 1..=360 {
-        s.tick(i as f64 * DT, BodyInput { mz: -1.0, ..IDLE });
+        s.tick(f64::from(i) * DT, BodyInput { mz: -1.0, ..IDLE });
         top = top.at_least(s.body.pos.y);
     }
     assert!(top < 3.0, "{top}");
@@ -497,7 +497,7 @@ fn jump_at(s: &mut Sim, hold: BodyInput) -> (bool, Vec<bool>) {
     let mut t = 0.0;
     let mut step = |s: &mut Sim, n: u32, input: BodyInput| {
         s.run(t, n, input);
-        t += n as f64 * DT;
+        t += f64::from(n) * DT;
     };
     step(s, 24, FORWARD);
     step(s, 1, BodyInput { jump: true, ..FORWARD });
@@ -611,7 +611,7 @@ fn portals_send_a_bean_out_of_the_other_end_facing_its_way() {
     // In, half a second inside (out of play), then out at the other end.
     let mut out = false;
     for i in 0..240 {
-        s.run(i as f64 * DT, 1, FORWARD);
+        s.run(f64::from(i) * DT, 1, FORWARD);
         out = s.ev.portal_out;
         if out {
             break;

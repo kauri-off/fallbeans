@@ -79,7 +79,7 @@ pub fn hop_chain(key: Note<usize>, hops: Vec<Hop>, land: V3, edge: f64, ready: O
                 let mut lo = f64::INFINITY;
                 let mut hi = f64::NEG_INFINITY;
                 for k in 0..40 {
-                    let x = hop_x(h, bot.t + k as f64 * 0.25);
+                    let x = hop_x(h, bot.t + f64::from(k) * 0.25);
                     lo = lo.at_most(x);
                     hi = hi.at_least(x);
                 }

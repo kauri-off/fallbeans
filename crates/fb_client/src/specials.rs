@@ -131,14 +131,14 @@ fn part_material(part: &Part, look: &ResolvedLook, tone: i8, alpha: i8) -> Stand
     if let Some([c, _]) = part.pal.and_then(|p| look.repaint(p)) {
         a = LinearRgba::from(color(c));
     }
-    let k = tone as f32 / STEPS;
+    let k = f32::from(tone) / STEPS;
     let mut c = if k >= 0.0 {
         a.mix(&b, k)
     } else {
         let d = 1.0 + k;
         LinearRgba::new(a.red * d, a.green * d, a.blue * d, a.alpha)
     };
-    c.alpha *= alpha as f32 / STEPS;
+    c.alpha *= f32::from(alpha) / STEPS;
     let mut m = StandardMaterial {
         base_color: c.into(),
         perceptual_roughness: 0.6,
@@ -183,12 +183,12 @@ fn portal_disc(part: &Part, tone: i8, alpha: i8) -> Option<PortalMaterial> {
         _ => return None,
     };
     let c = color(part.colors[0]);
-    let a = c.alpha() * alpha as f32 / STEPS;
+    let a = c.alpha() * f32::from(alpha) / STEPS;
     let phase = part.colors[0].bytes().into_iter().map(u32::from).sum::<u32>() % 7;
     Some(PortalMaterial::new(
         c,
         exit,
-        tone.max(0) as f32 / STEPS,
+        f32::from(tone.max(0)) / STEPS,
         a,
         phase as f32,
     ))
@@ -384,7 +384,7 @@ pub fn pose_specials(
                     .entry((prim.1.id(), tint.to, k))
                     .or_insert_with(|| {
                         let to = LinearRgba::from(color(tint.to));
-                        let f = k as f32 / STEPS;
+                        let f = f32::from(k) / STEPS;
                         let mut spec = prim.0.clone();
                         match &mut spec.paint {
                             Some(p) => {

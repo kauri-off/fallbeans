@@ -345,6 +345,11 @@ impl MapDef for TailTag {
         &[LookId::Jungle, LookId::Meadow, LookId::Candy]
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a count between 1 and the participants"
+    )]
     fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
         let flee_x: Note<f64> = b.note();
         let flee_z: Note<f64> = b.note();
@@ -413,7 +418,7 @@ impl MapDef for TailTag {
         for k in 0..2 {
             let p = if k == 1 { pal::ORANGE } else { pal::PINK };
             let node = b.box_(0.0, -0.5, 0.0, 3.2, 1.0, 3.2, p, dynamic()).node;
-            let ph = k as f64 * m::PI + b.rng.unit();
+            let ph = f64::from(k) * m::PI + b.rng.unit();
             b.mover(move |t, ctx| {
                 let a = ph + t.at_least(0.0) * orbit;
                 let n = ctx.node(node);

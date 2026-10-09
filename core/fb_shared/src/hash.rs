@@ -49,6 +49,10 @@ impl Default for Fnv {
 
 impl Fnv {
     /// Mixes in `v` rounded to a multiple of `1 / scale`. NaN mixes in as a value no number rounds to.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rounded; beyond i64 saturates, as a hash may"
+    )]
     pub fn mix(&mut self, v: f64, scale: f64) {
         // (`as` turns NaN into 0; a rounded f64 is never i64::MIN + 1: near 2⁶³ they are 1024 apart.)
         let q = if v.is_nan() {

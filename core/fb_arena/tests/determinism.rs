@@ -20,12 +20,13 @@ const DIRS: [(i8, i8); 9] = [
 const SEEDS: [u32; 3] = [1, 777, 123_456_789];
 
 fn script(id: u32, k: i64) -> InputFrame {
-    let d = DIRS[((k.div_euclid(90 + id as i64 * 7) * 5 + id as i64 * 3).rem_euclid(DIRS.len() as i64)) as usize];
+    let d =
+        DIRS[((k.div_euclid(90 + i64::from(id) * 7) * 5 + i64::from(id) * 3).rem_euclid(DIRS.len() as i64)) as usize];
     let mut buttons = 0;
-    if k.rem_euclid(70 + id as i64) == id as i64 * 7 {
+    if k.rem_euclid(70 + i64::from(id)) == i64::from(id) * 7 {
         buttons |= BTN_JUMP;
     }
-    if k.rem_euclid(250) == id as i64 * 31 {
+    if k.rem_euclid(250) == i64::from(id) * 31 {
         buttons |= BTN_DIVE;
     }
     InputFrame {

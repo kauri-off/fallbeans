@@ -333,7 +333,7 @@ pub fn limit_fps(g: Res<Graphics>, mut last: Local<Option<std::time::Instant>>, 
     if g.fps_limit > 0
         && let Some(prev) = *last
     {
-        let want = Duration::from_secs_f64(1.0 / g.fps_limit.max(10) as f64);
+        let want = Duration::from_secs_f64(1.0 / f64::from(g.fps_limit.max(10)));
         let spent = now - prev;
         if spent < want {
             std::thread::sleep(want - spent);

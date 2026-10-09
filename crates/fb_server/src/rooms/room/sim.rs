@@ -33,7 +33,6 @@ impl Room {
             self.send_lobby();
         }
     }
-
     pub(super) fn tick_room(&mut self, inputs: &mut dyn Inputs, all: bool) {
         self.take_nav();
         if self.timer().is_some_and(|at| self.now() >= at) {
@@ -45,6 +44,7 @@ impl Room {
                 _ => self.back_to_lobby(),
             }
         }
+        #[expect(clippy::cast_possible_truncation, reason = "a tick number")]
         let target = (self.now() - self.zero).floor() as i64;
         if !all && target - self.arena.tick > MAX_CATCHUP {
             warn!(room = %self.id, behind = target - self.arena.tick, "arena fell behind");
@@ -58,6 +58,11 @@ impl Room {
     }
 
     /// Server tick of arena tick `k`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "server ticks wrap after 414 days, as the wire's do"
+    )]
     fn server_tick(&self, k: i64) -> u32 {
         (self.zero_tick() + k).max(0) as u32
     }
@@ -106,7 +111,7 @@ impl Room {
                     if !live {
                         continue;
                     }
-                    let place = self.arena.finished.len() as u32;
+                    let place = count(self.arena.finished.len());
                     self.map_event(tick, MapEventKind::Finish { id, place, time: t }, false);
                     self.check_round();
                 }
@@ -126,7 +131,11 @@ impl Room {
                         self.check_round();
                     }
                 }
-                ArenaEvent::Emote { id, e } => self.broadcast(ServerMsg::Emote { id, e: e as u8 }),
+                ArenaEvent::Emote { id, e } => {
+                    if let Ok(e) = u8::try_from(e) {
+                        self.broadcast(ServerMsg::Emote { id, e });
+                    }
+                }
                 ArenaEvent::Event { ev, keep } => self.map_event(tick, MapEventKind::Map(ev), keep),
                 ArenaEvent::Score { id, v } => self.broadcast(ServerMsg::Scores(vec![(id, v)])),
             }

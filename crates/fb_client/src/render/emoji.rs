@@ -87,14 +87,14 @@ fn draw(text: &str, bg: Color) -> Image {
             for x in 0..ow {
                 let (sx, sy) = (((x as f32 + 0.5) / k) as usize, ((y as f32 + 0.5) / k) as usize);
                 let s = &data[(sy.min(h - 1) * w + sx.min(w - 1)) * 4..][..4];
-                let alpha = s[3] as f32 / 255.0;
+                let alpha = f32::from(s[3]) / 255.0;
                 let (tx, ty) = (x0 + x as i64, y0 + y as i64);
                 if alpha <= 0.0 || tx < 0 || ty < 0 || tx >= SIZE as i64 || ty >= SIZE as i64 {
                     continue;
                 }
                 let p = &mut px[ty as usize * SIZE + tx as usize];
                 for c in 0..3 {
-                    p[c] = p[c] * (1.0 - alpha) + s[c] as f32 / 255.0 * alpha;
+                    p[c] = p[c] * (1.0 - alpha) + f32::from(s[c]) / 255.0 * alpha;
                 }
             }
         }

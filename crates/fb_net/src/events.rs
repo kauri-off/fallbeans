@@ -133,6 +133,7 @@ mod tests {
     /// The fullest message each kind can be stays well under what a peer reassembles: past it the message is
     /// refused and the link dropped (`Transport::receive_failed`).
     #[test]
+    #[expect(clippy::cast_possible_truncation, reason = "test data")]
     fn largest_messages_fit_a_fragmented_message() {
         use fb_proto::{
             ArenaInfo, Award, AwardKind, Lobby, LobbyPlayer, Mode, Phase, Playlist, RoomInfo, RoomRef, Standing,
@@ -268,6 +269,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::cast_possible_truncation, reason = "random bytes: the low byte")]
     fn garbage_does_not_panic() {
         let mut x = 0x2545_f491_u32;
         for len in 0..64 {

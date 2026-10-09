@@ -78,7 +78,7 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
         Some(cur) => dist_xz(cur.pos, b.pos) > 6.0 || cur.pos.y - b.pos.y > 2.5,
         None => true,
     };
-    let stale = bot.t - bot.plan.at > 0.6 + (bot.id.0 % 5) as f64 * 0.07;
+    let stale = bot.t - bot.plan.at > 0.6 + f64::from(bot.id.0 % 5) * 0.07;
     if b.grounded && (off || stale || m::hypot(bot.plan.tx - tx, bot.plan.tz - tz) > 1.0) {
         // Extra route cost near other beans on the ground: bots run around a crowd instead of into it.
         let y = b.pos.y;
@@ -181,6 +181,7 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
 }
 
 /// Walkable all the way along a straight line from `from` to (x, z) (samples every half metre)?
+#[expect(clippy::cast_possible_truncation, reason = "a step count along a short distance")]
 fn clear_to(nav: Nav, from: V3, x: f64, z: f64) -> bool {
     let d = m::hypot(x - from.x, z - from.z);
     let n = (d / 0.5).ceil() as i64;
@@ -427,7 +428,7 @@ pub(super) fn edge_dir(o: V3, ok: &dyn Fn(f64, f64) -> bool) -> Option<(f64, f64
     let mut sx = 0.0;
     let mut sz = 0.0;
     for k in 0..12 {
-        let a = (k as f64 / 12.0) * m::PI * 2.0;
+        let a = (f64::from(k) / 12.0) * m::PI * 2.0;
         let ax = m::sin(a);
         let az = m::cos(a);
         for r in [1.5, 2.5, 3.5] {

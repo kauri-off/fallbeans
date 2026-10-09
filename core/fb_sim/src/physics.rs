@@ -104,8 +104,8 @@ pub struct BodyInput {
 impl From<fb_shared::input::InputFrame> for BodyInput {
     fn from(f: fb_shared::input::InputFrame) -> Self {
         Self {
-            mx: f.mx as f64 / 127.0,
-            mz: f.mz as f64 / 127.0,
+            mx: f64::from(f.mx) / 127.0,
+            mz: f64::from(f.mz) / 127.0,
             jump: f.jump(),
             dive: f.dive(),
         }
@@ -677,6 +677,11 @@ impl Body {
             self.vel.y = (self.vel.y - GRAVITY * dt).at_least(-32.0);
         }
         let travel = if still { 0.0 } else { self.vel.length() * dt };
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 1…MAX_SUBSTEPS first"
+        )]
         let substeps = MAX_SUBSTEPS.at_most(1f64.at_least((travel / (r * SUBSTEP_REACH)).ceil())) as usize;
 
         let vy_before = self.vel.y;

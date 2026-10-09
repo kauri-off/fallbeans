@@ -291,7 +291,7 @@ impl Room {
         if let Some(w) = wish.filter(|&w| (w as usize) < COLORS.len() && !used(w)) {
             return w;
         }
-        (0..COLORS.len() as u8).find(|&c| !used(c)).unwrap_or(0)
+        (0u8..).take(COLORS.len()).find(|&c| !used(c)).unwrap_or(0)
     }
 
     pub(super) fn add_bot(&mut self, auto: bool) -> PlayerId {

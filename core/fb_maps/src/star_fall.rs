@@ -232,7 +232,13 @@ impl MapLogic for Stars {
                 if dist_xz(body.pos, sp.pos) > REACH + 0.3 * body.size {
                     continue;
                 }
-                self.emit(cx, MapEvent::Star { k: s.k as u32, id });
+                self.emit(
+                    cx,
+                    MapEvent::Star {
+                        k: u32::try_from(s.k).expect("fewer than 2³² stars"),
+                        id,
+                    },
+                );
                 let v = cx.score(id) + s.value;
                 cx.set_score(id, v);
                 break;
@@ -573,7 +579,7 @@ impl MapDef for StarFall {
         let sweeper = b.anchor(0.0, 0.6, 0.0, ROOT);
         for k in 0..2 {
             let pivot = b.anchor(0.0, 0.0, 0.0, sweeper);
-            b.world.nodes.get_mut(pivot).rot.y = k as f64 * m::PI;
+            b.world.nodes.get_mut(pivot).rot.y = f64::from(k) * m::PI;
             let holder = b.anchor(SWEEP_IN, 0.0, 0.0, pivot);
             let arm = b.model(Model::Arm, holder);
             b.world.nodes.get_mut(arm).scale = V3::new(SWEEP_OUT - SWEEP_IN, 1.0, 1.0);
@@ -616,7 +622,7 @@ impl MapDef for StarFall {
             b.bumper(x, 0.0, z, 0.8, 8.0);
         }
         for k in 0..4 {
-            let a = k as f64 * 1.57 + 0.4;
+            let a = f64::from(k) * 1.57 + 0.4;
             b.bonus(m::cos(a) * 11.8, 0.0, m::sin(a) * 11.8);
         }
         b.clouds(0.0, 0.0, 50.0);
@@ -625,7 +631,7 @@ impl MapDef for StarFall {
         let mut spots: Vec<Spot> = Vec::new();
         for (r, n, off) in [(5.4, 8, 0.2), (10.0, 12, 0.13), (12.8, 14, 0.3)] {
             for k in 0..n {
-                let a = off + (k as f64 / n as f64) * m::PI * 2.0;
+                let a = off + (f64::from(k) / f64::from(n)) * m::PI * 2.0;
                 let x = m::cos(a) * r;
                 let z = m::sin(a) * r;
                 if x.abs() > TRAMP_X - 2.2 && z.abs() < 2.4 {

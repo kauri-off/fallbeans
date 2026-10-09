@@ -13,7 +13,7 @@ pub enum Shape {
     Sphere { r: f64 },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ColliderOpts {
     pub is_static: bool,
     pub bounce: f64,

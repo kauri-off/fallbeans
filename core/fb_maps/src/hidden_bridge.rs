@@ -95,7 +95,11 @@ impl GlassBridge {
         let pane = self.panes[i];
         if self.tiles[i].real {
             if !pane.trusted && cx.server {
-                self.emit(cx, self.seg, SegEvent::Safe(i as u32));
+                self.emit(
+                    cx,
+                    self.seg,
+                    SegEvent::Safe(u32::try_from(i).expect("fewer than 2³² panes")),
+                );
             }
             return;
         }
@@ -106,7 +110,8 @@ impl GlassBridge {
         // when the server disagrees).
         if cx.server {
             let now = cx.t;
-            self.emit(cx, self.seg, SegEvent::Fall { i: i as u32, at: now });
+            let i = u32::try_from(i).expect("fewer than 2³² panes");
+            self.emit(cx, self.seg, SegEvent::Fall { i, at: now });
         }
     }
 }
@@ -290,6 +295,7 @@ impl Section for GlassBridge {
     }
 }
 
+#[expect(clippy::cast_possible_truncation, reason = "a column below cols")]
 fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segment {
     Box::new(move |s| {
         let y = s.y;

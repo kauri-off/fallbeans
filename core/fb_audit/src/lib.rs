@@ -2,6 +2,11 @@
 //! spawns, clipping, reachability, balance), physics feel, determinism, input handling and budgets.
 //! Each audit returns findings (problems, by severity) and metrics (numbers worth tracking). Run them
 //! with `cargo xtask audit`, or the quick subset from tests.
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use fb_sim::map::MapDef;
@@ -77,12 +82,24 @@ macro_rules! metric_from_num {
     ($($t:ty),*) => {
         $(impl From<$t> for Metric {
             fn from(v: $t) -> Self {
+                Metric::Num(f64::from(v))
+            }
+        })*
+    };
+}
+metric_from_num!(f64, i32, u32);
+
+/// (Counts and ticks: far below 2^53, where an f64 still holds every integer.)
+macro_rules! metric_from_wide {
+    ($($t:ty),*) => {
+        $(impl From<$t> for Metric {
+            fn from(v: $t) -> Self {
                 Metric::Num(v as f64)
             }
         })*
     };
 }
-metric_from_num!(f64, i32, u32, i64, u64, usize);
+metric_from_wide!(i64, u64, usize);
 
 impl From<bool> for Metric {
     fn from(v: bool) -> Self {
@@ -223,6 +240,7 @@ fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "panic".into())
 }
 
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "milliseconds")]
 fn run_one(a: &Audit, map: Option<&'static dyn MapDef>, ctx: &Ctx) -> AuditResult {
     let mut out = Out::default();
     let clock = clock::Clock::start();
@@ -245,6 +263,7 @@ fn run_one(a: &Audit, map: Option<&'static dyn MapDef>, ctx: &Ctx) -> AuditResul
 
 /// Runs the audits (map audits for every game, or the ones in `o.maps`) on all cores; the results come
 /// in a fixed order: global audits, then map by map.
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "milliseconds")]
 pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>) -> Report {
     let ctx = Ctx {
         quick: o.quick,

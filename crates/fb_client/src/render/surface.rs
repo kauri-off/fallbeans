@@ -251,7 +251,7 @@ fn vnoise2(u: f32, v: f32, pu: i64, pv: i64, seed: i64) -> f32 {
 fn fbm(u: f32, v: f32, period: i64, octaves: u32, seed: i64) -> f32 {
     let (mut sum, mut amp, mut norm) = (0.0, 0.5, 0.0);
     for o in 0..octaves {
-        sum += vnoise(u, v, period << o, seed + o as i64 * 17) * amp;
+        sum += vnoise(u, v, period << o, seed + i64::from(o) * 17) * amp;
         norm += amp;
         amp *= 0.5;
     }
@@ -564,9 +564,9 @@ fn mip_chain(level0: Vec<u8>, size: usize, srgb: bool) -> (Vec<u8>, u32) {
                     ((2 * y + 1) * size + 2 * x) * 4,
                     ((2 * y + 1) * size + 2 * x + 1) * 4,
                 ];
-                let sum = |c: usize| quad.iter().map(|&i| level[i + c] as u32).sum::<u32>();
+                let sum = |c: usize| quad.iter().map(|&i| u32::from(level[i + c])).sum::<u32>();
                 if srgb {
-                    let alpha = quad.map(|i| level[i + 3] as f32);
+                    let alpha = quad.map(|i| f32::from(level[i + 3]));
                     let total: f32 = alpha.iter().sum();
                     for c in 0..3 {
                         let lin = quad.iter().zip(alpha).fold(0.0, |acc, (&i, a)| {
@@ -1041,7 +1041,7 @@ mod tests {
             (1023, 1023, 45, 0.855865815654397),
             (5, 7, 0, 0.9253859769087285),
         ] {
-            assert!((hash(x, y, seed) as f64 - want).abs() < 1e-6, "{x} {y} {seed}");
+            assert!((f64::from(hash(x, y, seed)) - want).abs() < 1e-6, "{x} {y} {seed}");
         }
     }
 
@@ -1092,7 +1092,7 @@ mod tests {
         let a = Spec::plain(LinearRgba::WHITE, Some(Kind::Plastic));
         let b = Spec {
             alpha: AlphaMode::Blend,
-            ..a.clone()
+            ..a
         };
         let c = Spec {
             paint: Some(Paint {
@@ -1103,9 +1103,9 @@ mod tests {
                 speed: 0.0,
                 kind: Pattern::Dots,
             }),
-            ..a.clone()
+            ..a
         };
-        assert_eq!(a.key(), a.clone().key());
+        assert_eq!(a.key(), a.key());
         assert_ne!(a.key(), b.key());
         assert_ne!(a.key(), c.key());
         assert_ne!(a.key(), Spec::plain(LinearRgba::WHITE, None).key());

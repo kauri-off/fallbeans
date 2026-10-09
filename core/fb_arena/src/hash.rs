@@ -43,7 +43,7 @@ impl Arena {
                 h.bits(v);
             }
             for v in [
-                b.actor as i64 as u64,
+                i64::from(b.actor).cast_unsigned(),
                 u64::from(b.grounded),
                 b.ground_col.map_or(u64::MAX, u64::from),
                 b.state as u64,
@@ -71,7 +71,7 @@ impl Arena {
         }
         h.int(self.seen.len() as u64);
         for (k, list) in &self.seen {
-            h.int(*k as u64);
+            h.int(k.cast_unsigned());
             h.int(list.len() as u64);
             // (Not the teleports: like the pawns' own, a room may shift them; only their changes count.)
             for (id, _, down, o) in list {
@@ -85,7 +85,7 @@ impl Arena {
         h.int(self.scores.len() as u64);
         for (&id, &v) in &self.scores {
             h.int(u64::from(id));
-            h.int(v as u64);
+            h.int(v.cast_unsigned());
         }
         for list in [&self.finished, &self.out] {
             h.int(list.len() as u64);

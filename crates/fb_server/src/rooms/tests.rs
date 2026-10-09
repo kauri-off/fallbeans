@@ -46,7 +46,7 @@ fn opts() -> RoomOptions {
     RoomOptions {
         min_players: 2,
         seed: Some(7),
-        intro_ticks: ticks(1.0) as u32,
+        intro_ticks: u32::try_from(ticks(1.0)).unwrap_or(u32::MAX),
         ..Default::default()
     }
 }
@@ -486,6 +486,7 @@ fn ignores_dev_commands_unless_the_server_runs_with_dev() {
 }
 
 #[test]
+#[expect(clippy::cast_possible_truncation, reason = "rounded within ±127")]
 fn replays_a_recorded_round_to_exactly_the_same_state() {
     let mut t = Bench::new(RoomOptions {
         min_players: 1,

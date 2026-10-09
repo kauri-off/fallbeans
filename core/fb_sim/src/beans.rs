@@ -130,7 +130,7 @@ fn forward(b: &Body) -> V3 {
 
 /// Which way two beans in the same spot part (by the first one's actor, as both sides agree on).
 fn apart(b: &Body) -> V3 {
-    V3::new(m::sin(b.actor as f64 * 2.4), 0.0, m::cos(b.actor as f64 * 2.4))
+    V3::new(m::sin(f64::from(b.actor) * 2.4), 0.0, m::cos(f64::from(b.actor) * 2.4))
 }
 
 /// A dive, or a slide still fast enough to knock over.
@@ -390,6 +390,7 @@ pub enum Other<'a> {
 }
 
 /// `x` against another bean; `x_saw`/`y_saw`: where each one's player saw the other (lag compensation).
+#[expect(clippy::needless_pass_by_value, reason = "a bundle of borrows, built for the call")]
 pub fn resolve(x: Side, y: Other, x_saw: Option<&OtherBody>, y_saw: Option<&OtherBody>) {
     let cx = Capsule::of_body(x.body);
     let (cy, y_id) = match &y {

@@ -52,7 +52,7 @@ impl Room {
         }
         let plan = match &self.practice {
             Some(pr) => vec![pr.game],
-            None => Game::plan(ids.len() as u32, &self.playlist, &mut self.rng),
+            None => Game::plan(count(ids.len()), &self.playlist, &mut self.rng),
         };
         info!(room = %self.id, players = ids.len(), plan = ?plan, "game started");
         self.next_round(Session {
@@ -74,12 +74,18 @@ impl Room {
     }
 
     /// Arena tick a round is made at (the intro runs before tick 0).
+    #[expect(clippy::cast_possible_truncation, reason = "a tick number")]
     fn round_start(&self) -> i64 {
         let zero = self.now().floor() + f64::from(self.intro_ticks);
         (self.now() - zero).floor() as i64 - 1
     }
 
     /// The map's seed and the spawn order.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a seed below 10⁹"
+    )]
     fn draw_round(&mut self, mut ids: Vec<PlayerId>) -> (u32, Vec<PlayerId>) {
         let seed = self.next_seed.unwrap_or_else(|| (self.rng.unit() * 1e9).floor() as u32);
         // A dev seed fixes the spawn order too (screenshots, repeatable tests).
@@ -344,7 +350,7 @@ impl Room {
                 id: p.id,
                 name: p.name.clone(),
                 color: p.color,
-                place: i as u32 + 1,
+                place: count(i + 1),
                 total: p.score,
                 wins: p.stats.wins,
                 falls: p.stats.falls,

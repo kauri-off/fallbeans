@@ -76,7 +76,7 @@ fn state(
             "map": m.round.map,
             "kind": m.round.kind,
             "seed": m.round.seed,
-            "t": m.time(timeline.tick().0 as f64),
+            "t": m.time(f64::from(timeline.tick().0)),
             "index": a.map(|a| a.index),
             "total": a.map(|a| a.total),
             "participants": m.info.participants,

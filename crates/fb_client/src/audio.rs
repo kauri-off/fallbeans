@@ -344,7 +344,7 @@ fn countdown(
         heard.count = None;
         return;
     }
-    let n = (-map.time(timeline.tick().0 as f64)).ceil() as i64;
+    let n = (-map.time(f64::from(timeline.tick().0))).ceil() as i64;
     if heard.count == Some(n) {
         return;
     }

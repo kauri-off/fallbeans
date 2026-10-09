@@ -568,7 +568,7 @@ fn report(a: &StressArgs, dir: &Path) -> Result<()> {
     let metrics: Vec<Metrics> = slog
         .lines()
         .filter_map(Metrics::parse)
-        .filter(|m| m.players == Some(a.clients as f64))
+        .filter(|m| m.players == Some(f64::from(a.clients)))
         .collect();
     println!("server  (steady-state metric lines: {})", metrics.len());
     let p99 = worst(metrics.iter().map(|m| m.tick_p99));

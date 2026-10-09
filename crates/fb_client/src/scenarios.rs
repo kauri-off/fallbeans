@@ -293,7 +293,7 @@ fn private_room_pin_and_a_second_player() {
     let guest = g.add_peer(wgpu::DeviceType::IntegratedGpu, &["--name", "Гость"]);
     g.as_peer(guest);
     on_room_list(&mut g);
-    let r = room.clone();
+    let r = room;
     g.press(5.0, "Войти", move |a| matches!(a, Action::Join(id) if *id == r));
     g.until(5.0, "the PIN asked", |w| {
         w.resource::<Session>()

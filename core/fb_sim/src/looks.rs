@@ -1081,6 +1081,11 @@ fn linear(c: Rgb) -> [f64; 3] {
     c.bytes().map(|b| srgb_to_linear(f64::from(b) / 255.0))
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped to 0…255 first"
+)]
 fn from_linear(c: [f64; 3]) -> Rgb {
     Rgb::from_bytes(c.map(|x| m::clamp(linear_to_srgb(x) * 255.0, 0.0, 255.0).round() as u8))
 }

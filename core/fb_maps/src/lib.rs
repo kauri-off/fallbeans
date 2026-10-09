@@ -1,4 +1,9 @@
 //! Every map: one module per map, and the registry.
+#![warn(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 use fb_sim::map::{MapDef, MapId};
 
 pub mod ball_hill;
@@ -99,7 +104,7 @@ mod tests {
     fn maps_are_the_games_then_the_lobby_and_the_podium() {
         let ids = |list: &[&dyn MapDef]| list.iter().map(|m| m.meta().id).collect::<Vec<_>>();
         let games = ids(GAMES);
-        let mut all = games.clone();
+        let mut all = games;
         all.extend([MapId::Lobby, MapId::Podium]);
         assert_eq!(ids(MAPS), all);
         assert_eq!(all, MapId::ALL, "every map id has its map, in the order of MapId");
