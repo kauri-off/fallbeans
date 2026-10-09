@@ -1,5 +1,5 @@
 //! Audits of one map: meta and spec rules, spawns and respawns, clipping, navigation, determinism,
-//! budgets and bot balance.
+//! budgets and bot balance. The lobby and the podium get those that are not about a round.
 use std::collections::{BTreeMap, BTreeSet};
 
 use fb_arena::StateHash;
@@ -10,7 +10,7 @@ use fb_shared::hash::Fingerprint;
 use fb_shared::m::MinMax;
 use fb_shared::{DT, MAX_PLAYERS, PlayerId, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
-use fb_sim::map::MapDef;
+use fb_sim::map::{MapDef, MapId};
 use fb_sim::math::{V3, dist_xz};
 use fb_sim::nav::{Nav, NavGrid, PathOpts};
 use fb_sim::nodes::{NodeId, ROOT};
@@ -26,32 +26,41 @@ use crate::{Audit, Ctx, Out, Run, r1, r3};
 const MIN_SPAWN_GAP: f64 = 1.1;
 
 pub const AUDITS: [Audit; 9] = [
-    audit("meta", meta),
-    audit("spec", spec),
-    audit("spawn", spawn),
-    audit("respawn", respawn),
-    audit("clip", clip),
-    audit("nav", nav),
-    audit("determinism", determinism),
+    audit("meta", Run::EveryMap(meta)),
+    audit("spec", Run::EveryMap(spec)),
+    audit("spawn", Run::EveryMap(spawn)),
+    audit("respawn", Run::Map(respawn)),
+    audit("clip", Run::EveryMap(clip)),
+    audit("nav", Run::EveryMap(nav)),
+    audit("determinism", Run::EveryMap(determinism)),
     Audit {
         name: "limits",
-        run: Run::Map(limits),
+        run: Run::EveryMap(limits),
         timed: true,
     },
-    audit("balance", balance),
+    audit("balance", Run::Map(balance)),
 ];
 
-const fn audit(name: &'static str, f: fn(&'static dyn MapDef, &Ctx, &mut Out)) -> Audit {
+const fn audit(name: &'static str, run: Run) -> Audit {
     Audit {
         name,
-        run: Run::Map(f),
+        run,
         timed: false,
+    }
+}
+
+/// The arena the map is played in: a round, or the lobby or the podium.
+pub fn kind(map: &'static dyn MapDef) -> ArenaKind {
+    match map.meta().id {
+        MapId::Lobby => ArenaKind::Lobby,
+        MapId::Podium => ArenaKind::Podium,
+        _ => ArenaKind::Round,
     }
 }
 
 /// A map built on its own (no beans), for geometry checks.
 fn built(map: &'static dyn MapDef, seed: u32) -> Arena {
-    Arena::new(map, ArenaKind::Round, seed, -INTRO, &[], false).0
+    Arena::new(map, kind(map), seed, -INTRO, &[], false).0
 }
 
 /// Steps a lone bean as the arena does (map touch handlers included), from sim time t0 for `seconds`;
@@ -145,17 +154,22 @@ fn label(arena: &Arena, c: Option<ColId>) -> String {
 
 fn meta(map: &'static dyn MapDef, _: &Ctx, out: &mut Out) {
     let meta = map.meta();
-    for p in meta.problems() {
-        out.error(p);
+    if kind(map) == ArenaKind::Round {
+        for p in meta.problems() {
+            out.error(p);
+        }
+        out.metric("duration", meta.duration);
+        out.metric("genre", meta.genre.id());
+    } else if !(2..=24).contains(&meta.title.chars().count()) {
+        // (Not a game: no description, goal or duration.)
+        out.error(format!("meta.title: {} characters (2…24)", meta.title.chars().count()));
     }
-    if fb_maps::GAMES.iter().filter(|g| g.meta().title == meta.title).count() > 1 {
+    if fb_maps::MAPS.iter().filter(|g| g.meta().title == meta.title).count() > 1 {
         out.error(format!("title \"{}\" is used twice", meta.title));
     }
     if fb_maps::MAPS.iter().filter(|g| g.meta().id == meta.id).count() != 1 {
         out.error(format!("id \"{}\" is not in fb_maps::MAPS exactly once", meta.id));
     }
-    out.metric("duration", meta.duration);
-    out.metric("genre", meta.genre.id());
 }
 
 fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
@@ -237,7 +251,8 @@ fn spec(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             out.warn("arena without a view point: the camera looks at the origin");
         }
     }
-    if !spec.logic.bots() {
+    // (Nobody moves on the podium.)
+    if !spec.logic.bots() && kind(map) != ArenaKind::Podium {
         out.error("no bot brain: bots will stand still");
     }
     out.metric("colliders", world.colliders.len());
@@ -545,6 +560,9 @@ fn clip(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 
 fn nav(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
     let mut a = built(map, ctx.seed);
+    if !a.spec.logic.bots() {
+        return;
+    }
     a.world.goto(0.0, &*a.spec.logic);
     let clock = Clock::start();
     let logic = &*a.spec.logic;
@@ -595,6 +613,7 @@ fn determinism(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
                 map,
                 &Opts {
                     seed: ctx.seed,
+                    kind: kind(map),
                     ..Default::default()
                 },
             );
@@ -634,6 +653,7 @@ fn limits(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
         map,
         &Opts {
             seed: ctx.seed,
+            kind: kind(map),
             ..Default::default()
         },
     );
@@ -663,6 +683,14 @@ pub(crate) struct SeedRun {
     pub bot_seconds: f64,
     sim_ms: f64,
     ticks: i64,
+}
+
+impl SeedRun {
+    /// A bot's time in play, on average: until it went out, or the whole round.
+    pub fn survival(&self, duration: f64) -> f64 {
+        let kept = (8 - self.out_times.len()) as f64 * duration;
+        (self.out_times.iter().sum::<f64>() + kept) / 8.0
+    }
 }
 
 #[expect(clippy::cast_possible_truncation, reason = "a round's whole seconds")]
@@ -799,8 +827,11 @@ fn balance(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
             }
         }
         Genre::Survival => {
-            // The mean over seeds of the first elimination (the whole round where nobody went out), as
-            // in the baseline.
+            out.metric(
+                "survival",
+                r1(runs.iter().map(|r| r.survival(meta.duration)).sum::<f64>() / n),
+            );
+            // The mean over seeds of the first elimination (the whole round where nobody went out).
             let firsts: Vec<f64> = runs
                 .iter()
                 .map(|r| r.out_times.iter().copied().fold(meta.duration, m::min))

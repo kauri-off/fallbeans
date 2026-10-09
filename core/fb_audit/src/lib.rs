@@ -9,6 +9,7 @@
 )]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use fb_shared::game::ArenaKind;
 use fb_sim::map::MapDef;
 use fb_sim::map::MapId;
 use fb_sim::math::V3;
@@ -168,8 +169,10 @@ pub struct Ctx {
 
 #[derive(Clone, Copy)]
 pub enum Run {
-    /// Runs once per map.
+    /// Runs once per game.
     Map(fn(&'static dyn MapDef, &Ctx, &mut Out)),
+    /// Runs once per map, the lobby and the podium included.
+    EveryMap(fn(&'static dyn MapDef, &Ctx, &mut Out)),
     Global(fn(&Ctx, &mut Out)),
 }
 
@@ -245,9 +248,9 @@ fn run_one(a: &Audit, map: Option<&'static dyn MapDef>, ctx: &Ctx) -> AuditResul
     let mut out = Out::default();
     let clock = clock::Clock::start();
     let res = catch_unwind(AssertUnwindSafe(|| match (a.run, map) {
-        (Run::Map(f), Some(m)) => f(m, ctx, &mut out),
+        (Run::Map(f) | Run::EveryMap(f), Some(m)) => f(m, ctx, &mut out),
         (Run::Global(f), _) => f(ctx, &mut out),
-        (Run::Map(_), None) => unreachable!("a map audit without a map"),
+        (Run::Map(_) | Run::EveryMap(_), None) => unreachable!("a map audit without a map"),
     }));
     if let Err(e) = res {
         out.error(format!("audit crashed: {}", panic_text(&*e)));
@@ -261,7 +264,7 @@ fn run_one(a: &Audit, map: Option<&'static dyn MapDef>, ctx: &Ctx) -> AuditResul
     }
 }
 
-/// Runs the audits (map audits for every game, or the ones in `o.maps`) on all cores; the results come
+/// Runs the audits (map audits for every map, or the ones in `o.maps`) on all cores; the results come
 /// in a fixed order: global audits, then map by map.
 #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "milliseconds")]
 pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>) -> Report {
@@ -279,30 +282,22 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
     };
     let clock = clock::Clock::start();
     let mut results = Vec::new();
-    for id in &o.maps {
-        let map = MapId::parse(id);
-        if map.and_then(fb_maps::director::game).is_none() {
-            let msg = if map.is_some() {
-                format!("{id} is not a game: map audits run on games only")
-            } else {
-                format!("unknown map {id}")
-            };
-            results.push(AuditResult {
-                audit: "maps",
-                map: id.clone(),
-                ms: 0,
-                findings: vec![Finding {
-                    severity: Severity::Error,
-                    msg,
-                    at: None,
-                    t: None,
-                    data: None,
-                }],
-                metrics: Vec::new(),
-            });
-        }
+    for id in o.maps.iter().filter(|id| MapId::parse(id).is_none()) {
+        results.push(AuditResult {
+            audit: "maps",
+            map: id.clone(),
+            ms: 0,
+            findings: vec![Finding {
+                severity: Severity::Error,
+                msg: format!("unknown map {id}"),
+                at: None,
+                t: None,
+                data: None,
+            }],
+            metrics: Vec::new(),
+        });
     }
-    let maps: Vec<&'static dyn MapDef> = fb_maps::GAMES
+    let maps: Vec<&'static dyn MapDef> = fb_maps::MAPS
         .iter()
         .copied()
         .filter(|m| o.maps.is_empty() || o.maps.iter().any(|id| id == m.meta().id.as_str()))
@@ -312,7 +307,11 @@ pub fn run_audits(o: &RunOpts, on_result: Option<&(dyn Fn(&AuditResult) + Sync)>
         jobs.push((*a, None));
     }
     for &map in &maps {
-        for a in maps::AUDITS.iter().filter(|a| picked(a)) {
+        let game = maps::kind(map) == ArenaKind::Round;
+        for a in maps::AUDITS
+            .iter()
+            .filter(|a| picked(a) && (game || matches!(a.run, Run::EveryMap(_))))
+        {
             jobs.push((*a, Some(map)));
         }
     }
