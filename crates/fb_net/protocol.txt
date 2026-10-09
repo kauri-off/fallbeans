@@ -297,7 +297,7 @@ enum MapEvent {
     3 Star { k: u32, id: PlayerId }
     4 Drop { from: PlayerId, to: Option<PlayerId>, n: i64 }
     5 Snatch { from: PlayerId, to: PlayerId }
-    6 Tails { ids: Vec<PlayerId>, by: PlayerId }
+    6 Tails { ids: Vec<PlayerId>, by: PlayerId, t: f64 }
 }
 enum MapEventKind {
     0 Bonus { i: u32, id: PlayerId, at: f64 }
