@@ -9,7 +9,9 @@
 )]
 
 use core::ffi::{CStr, c_char, c_void};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use ash::vk::Handle;
@@ -473,11 +475,16 @@ unsafe extern "system" fn device_proc_addr(
     Some(unsafe { core::mem::transmute::<unsafe extern "system" fn() -> i32, unsafe extern "system" fn()>(nothing) })
 }
 
+/// `FFX_MAX_QUEUED_FRAMES`: a dispatch ends by destroying the image views FidelityFX made for the one 3 back.
+const QUEUED_FRAMES: usize = 4;
+
 /// An FSR 3.1 upscaling context for one output size.
 pub struct Upscaler {
     api: Arc<Api>,
     ctx: Context,
     device: wgpu::Device,
+    /// Set once the GPU has run all work submitted before each of the last dispatches (oldest first).
+    ran: VecDeque<Arc<AtomicBool>>,
     /// The jitter sequence's length for the render size made with.
     pub phases: i32,
     pub render: UVec2,
@@ -528,6 +535,7 @@ impl Upscaler {
             api,
             ctx,
             device: device.clone(),
+            ran: VecDeque::new(),
             phases: 0,
             render,
             out,
@@ -609,16 +617,32 @@ impl Upscaler {
         }
     }
 
-    /// Records the upscale into `command_buffer` (a `VkCommandBuffer` being recorded).
+    /// Waits until the GPU has run the dispatch `QUEUED_FRAMES - 1` back, whose image views this one destroys.
+    fn wait_queued(&mut self, queue: &wgpu::Queue) {
+        if self.ran.len() == QUEUED_FRAMES - 2
+            && let Some(oldest) = self.ran.pop_front()
+            && !oldest.load(Ordering::Acquire)
+        {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        queue.on_submitted_work_done(move || flag.store(true, Ordering::Release));
+        self.ran.push_back(ran);
+    }
+
+    /// Records the upscale into `command_buffer` (a `VkCommandBuffer` being recorded, to be submitted to `queue`).
     ///
     /// # Safety
     /// `command_buffer` must be a Vulkan command buffer of this context's device in the recording state, and every
     /// resource of `d` an image of that device in the state it names, alive until that command buffer has run.
     pub unsafe fn dispatch(
         &mut self,
+        queue: &wgpu::Queue,
         command_buffer: ash::vk::CommandBuffer,
         d: &mut DispatchUpscale,
     ) -> Result<(), FfxError> {
+        self.wait_queued(queue);
         d.header = Header::of(DISPATCH_UPSCALE);
         d.command_list = command_buffer.as_raw() as usize as *mut c_void;
         // SAFETY: as the caller promises; the descriptor is `ffx_upscale.h`'s and lives through the call.

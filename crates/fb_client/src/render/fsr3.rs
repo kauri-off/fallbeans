@@ -23,7 +23,7 @@ use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy::render::camera::TemporalJitter;
 use bevy::render::diagnostic::RecordDiagnostics;
-use bevy::render::renderer::{RenderContext, RenderDevice, ViewQuery};
+use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::view::{ViewTarget, prepare_view_targets};
 use bevy::render::{Render, RenderApp, RenderSystems};
 use wgpu::hal::api::Vulkan;
@@ -202,7 +202,13 @@ type Fsr3View = (
     clippy::field_reassign_with_default,
     reason = "the descriptor has private fields: no struct update"
 )]
-fn upscale(view: ViewQuery<Fsr3View>, device: Res<RenderDevice>, faults: Res<Faults>, mut ctx: RenderContext) {
+fn upscale(
+    view: ViewQuery<Fsr3View>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+    faults: Res<Faults>,
+    mut ctx: RenderContext,
+) {
     let (v, fsr, size, jitter, target, prepass, mask) = view.into_inner();
     if v.kind != Upscaler::Fsr3 || faults.failed(Upscaler::Fsr3) {
         return;
@@ -292,7 +298,7 @@ fn upscale(view: ViewQuery<Fsr3View>, device: Res<RenderDevice>, faults: Res<Fau
     // put every image in the state the descriptor names. The images are the view's, alive through the frame.
     let done = unsafe {
         encoder.as_hal_mut::<Vulkan, _, _>(|e| match e {
-            Some(e) => fsr.dispatch(e.raw_handle(), &mut d),
+            Some(e) => fsr.dispatch(&queue, e.raw_handle(), &mut d),
             None => Err(ffx::FfxError::NotVulkan),
         })
     };
