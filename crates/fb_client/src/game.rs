@@ -451,7 +451,7 @@ fn build_round(
     let Some(def) = fb_maps::by_id(&round.map) else {
         // (Once per arena: this runs every frame.)
         if unknown.replace(round.arena) != Some(round.arena) {
-            error!("unknown map {}", round.map);
+            error!("unknown map {} (arena {})", round.map, round.arena);
         }
         return;
     };
@@ -466,7 +466,10 @@ fn build_round(
     let static_hash = b.world.hash(true).to_string();
     if static_hash != round.static_hash {
         // The client would predict against a different map: a bug in determinism, never expected.
-        error!("map hash {static_hash} differs from the server's {}", round.static_hash);
+        error!(
+            "map hash {static_hash} differs from the server's {} (arena {} {} seed {})",
+            round.static_hash, round.arena, round.map, round.seed
+        );
         stats.hash_mismatch = true;
     }
     info!(

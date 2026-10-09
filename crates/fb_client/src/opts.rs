@@ -128,8 +128,8 @@ pub struct Opts {
     pub spike: u64,
     #[arg(long, default_value_t = 10.0)]
     pub spike_every: f32,
-    /// Graphics API for this run, over the settings' (default: DirectX 12 on Windows, Vulkan without a DX12 GPU;
-    /// Vulkan elsewhere).
+    /// Graphics API for this run, over the settings' (default: Vulkan, on Windows DirectX 12 without a usable
+    /// Vulkan 1.2).
     #[arg(long, value_enum)]
     pub backend: Option<Backend>,
     /// No window and no GPU: simulation and network only, driven by the autopilot (stress runs).

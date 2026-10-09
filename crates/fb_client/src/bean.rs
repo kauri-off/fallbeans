@@ -10,7 +10,7 @@ use fb_net::Anim;
 use fb_sim::physics::Power;
 
 /// Height of the tip-over pivot (the lower collision sphere).
-pub const PIVOT_Y: f32 = 0.5;
+pub const PIVOT_Y: f32 = fb_sim::physics::SPHERES[0] as f32;
 /// Ground covered by one full run cycle (two steps), m.
 const STRIDE: f32 = 2.2;
 /// Shoulders (model space) and the length from shoulder to hand.

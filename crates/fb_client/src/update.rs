@@ -116,7 +116,7 @@ fn start(mut commands: Commands, opts: Res<Opts>) {
         spawn_named("update-check", move || {
             let r = latest(&i);
             if let Err(e) = &r {
-                warn!("update check: {e}");
+                info!("update check: {e}");
             }
             r.ok().flatten()
         })

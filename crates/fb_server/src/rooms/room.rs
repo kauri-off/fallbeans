@@ -553,7 +553,10 @@ impl Room {
         self.active_at = self.clock.real();
         info!(room = %self.id, id, name = p.name, practice = self.practice(), "player joined");
         self.players.push(p);
-        self.admitted.insert(who.uid);
+        // (Only behind a PIN: a public room would keep every identity that ever came.)
+        if self.pin.is_some() {
+            self.admitted.insert(who.uid);
+        }
         self.seat_host(id);
         if self.arena.kind == ArenaKind::Lobby {
             self.arena.add_pawn(id, false);

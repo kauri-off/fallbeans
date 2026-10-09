@@ -50,6 +50,7 @@ pub const PROBLEMS_NOTE: &str = "F8 в игре сохраняет отчёт: �
 pub fn report_saved(path: &str) -> String {
     format!("Отчёт сохранён: {path}")
 }
+pub const REPORT_FAILED: &str = "Отчёт не сохранился: нет доступа к папке с логами.";
 pub const TO_SERVERS: &str = "‹ К серверам";
 pub const SERVERS: &str = "Серверы";
 pub const NO_SERVERS: &str = "Добавьте сервер: его адрес скажет тот, кто его запустил.";
@@ -449,7 +450,7 @@ pub fn hat(h: Hat) -> &'static str {
         Hat::Beanie => "🧶 Шапка",
         Hat::Party => "🥳 Колпак",
         Hat::Tophat => "🎩 Цилиндр",
-        Hat::Cowboy => "🤠 Ковбойская",
+        Hat::Cowboy => "🤠 Ковбойская шляпа",
         Hat::Viking => "⚔ Викинг",
         Hat::Propeller => "🚁 Пропеллер",
         Hat::Bunny => "🐰 Ушки зайки",
@@ -476,7 +477,9 @@ pub fn glasses(g: Glasses) -> &'static str {
 pub fn keys(pad: bool, binds: &crate::settings::Bindings, grab: &str, chat: bool, lead: &str) -> String {
     use crate::keys::{Bind, label};
     let body = if pad {
-        format!("Левый стик — бег · Правый — камера · A — прыжок · X/B — нырок · RB/RT — {grab} · Крестовина — эмоции")
+        format!(
+            "Левый стик — бег · Правый стик — камера · A — прыжок · X/B — нырок · RB/RT — {grab} · Крестовина — эмоции"
+        )
     } else if binds.is_default() {
         format!("WASD — бег · Мышь — камера · Пробел — прыжок · E/ЛКМ — нырок · Q/ПКМ — {grab} · 1–5 — эмоции")
     } else {

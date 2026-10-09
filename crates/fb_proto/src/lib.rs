@@ -612,4 +612,110 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn checks_the_other_messages() {
+        let long = "ы".repeat(65);
+        assert!(ClientMsg::Name("Боб".into()).check().is_ok());
+        assert!(ClientMsg::Name(long.clone()).check().is_err());
+        assert!(ClientMsg::Name("a".repeat(257)).check().is_err());
+        let create = |title: &str| {
+            ClientMsg::Create {
+                title: title.into(),
+                private: true,
+            }
+            .check()
+        };
+        assert!(create("Комната").is_ok());
+        assert!(create(&long).is_err());
+        let join = |room: &str, pin: Option<&str>| {
+            ClientMsg::Join {
+                room: room.into(),
+                pin: pin.map(Into::into),
+            }
+            .check()
+        };
+        assert!(join("k7qxm", None).is_ok());
+        assert!(join("k7qxm", Some("0042")).is_ok());
+        assert!(join("k", None).is_err());
+        assert!(join("k7qxm9abc", None).is_err());
+        assert!(join("k7-xm", None).is_err());
+        assert!(join("k7qxm", Some("004")).is_err());
+        assert!(ClientMsg::Color(12).check().is_ok());
+        assert!(ClientMsg::Color(13).check().is_err());
+        assert!(ClientMsg::Color(255).check().is_err());
+        let playlist = |games: Vec<String>, rounds| {
+            ClientMsg::Playlist(Playlist {
+                games,
+                rounds,
+                ..Default::default()
+            })
+            .check()
+        };
+        assert!(playlist(vec!["door-dash".into()], 5).is_ok());
+        assert!(playlist(Vec::new(), 0).is_err());
+        assert!(playlist(Vec::new(), 13).is_err());
+        assert!(playlist(vec!["door-dash".into(); 13], 5).is_err());
+        assert!(playlist(vec!["ы".repeat(33)], 5).is_err());
+        assert!(ClientMsg::RemoveBot(0).check().is_err());
+        assert!(ClientMsg::RemoveBot(3).check().is_ok());
+        assert!(ClientMsg::Host(0).check().is_err());
+        assert!(ClientMsg::Emote(6).check().is_err());
+        assert!(
+            ClientMsg::Hello(Hello {
+                name: long,
+                ..Default::default()
+            })
+            .check()
+            .is_err()
+        );
+        assert!(
+            ClientMsg::Hello(Hello {
+                practice: Some("ы".repeat(33)),
+                ..Default::default()
+            })
+            .check()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn checks_dev_commands() {
+        let ok = |cmd: DevCmd| cmd.check().is_ok();
+        assert!(ok(DevCmd::Warp { s: 180.0 }));
+        assert!(!ok(DevCmd::Warp { s: -1.0 }));
+        assert!(!ok(DevCmd::Warp { s: f64::NAN }));
+        assert!(ok(DevCmd::Step { ticks: 1200 }));
+        assert!(!ok(DevCmd::Step { ticks: 0 }));
+        assert!(!ok(DevCmd::Step { ticks: 1201 }));
+        assert!(ok(DevCmd::Seed { seed: 1 << 31 }));
+        assert!(!ok(DevCmd::Seed { seed: (1 << 31) + 1 }));
+        let start = |games: Vec<String>, rounds, bots| DevCmd::Start { games, rounds, bots };
+        assert!(ok(start(Vec::new(), Some(12), Some(7))));
+        assert!(!ok(start(Vec::new(), Some(0), None)));
+        assert!(!ok(start(Vec::new(), None, Some(8))));
+        assert!(!ok(start(vec!["x".into(); 13], None, None)));
+        let goto = |to| DevCmd::Goto { id: None, to };
+        assert!(ok(goto(Goto::Checkpoint(64))));
+        assert!(!ok(goto(Goto::Checkpoint(65))));
+        assert!(!ok(DevCmd::Goto {
+            id: Some(0),
+            to: Goto::Spawn
+        }));
+        let teleport = |p, yaw| DevCmd::Teleport { id: None, p, yaw };
+        assert!(ok(teleport([1.0, 2.0, 3.0], Some(0.5))));
+        assert!(!ok(teleport([1.0, f64::INFINITY, 3.0], None)));
+        assert!(!ok(teleport([1.0, 2.0, 3.0], Some(f64::NAN))));
+        let grab = |target, s| DevCmd::Grab { actor: None, target, s };
+        assert!(ok(grab(2, Some(10.0))));
+        assert!(!ok(grab(0, None)));
+        assert!(!ok(grab(2, Some(10.5))));
+        assert!(ok(DevCmd::Bot { n: Some(7), near: true }));
+        assert!(!ok(DevCmd::Bot {
+            n: Some(0),
+            near: false
+        }));
+        assert!(!ok(DevCmd::Kill { id: Some(0) }));
+        assert!(!ok(DevCmd::Rate { k: -0.5 }));
+    }
 }

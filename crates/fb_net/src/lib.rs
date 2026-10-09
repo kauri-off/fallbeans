@@ -53,6 +53,9 @@ pub const INPUT_SEND_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 6
 /// A jump or dive that reaches the server up to this many ticks after its tick still happens, on the next
 /// tick (`fb_server::play::frame_for`); older inputs are of no use to the server.
 pub const LATE_TICKS: u32 = 30;
+/// Lightyear's server takes input messages at most this many ticks ahead of or behind its tick, and its input
+/// buffer is a ring of as many (`MAX_INPUT_LOOKAHEAD_TICKS`, `MAX_INPUT_PAST_TICKS`: private there).
+pub const INPUT_RING: u32 = 64;
 /// Each input message repeats the inputs of this many before it (two ticks a message): a loss burst of up
 /// to LATE_TICKS (250 ms, a Wi-Fi hiccup) loses no press. Lightyear's default, 5, covers 83 ms.
 pub const INPUT_REDUNDANCY: u16 = (LATE_TICKS / 2) as u16;

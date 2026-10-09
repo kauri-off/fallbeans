@@ -12,6 +12,7 @@ use fb_sim::m::{self, MinMax};
 use fb_sim::map::{Brain, GameMeta, Genre, MapCtx, MapDef, MapSpec};
 use fb_sim::math::V3;
 use fb_sim::nodes::ROOT;
+use fb_sim::physics::RUN_SPEED;
 use fb_sim::scene::Surface;
 use fb_sim::scene::{Finish, Form, Part, Piece, pal};
 
@@ -206,7 +207,7 @@ impl MapDef for RollOut {
                 }
                 // On the ground: hold our place against the carry and drift back to the crest, but never
                 // towards a hole that just went by under us.
-                let mut mx = -carry / 8.5;
+                let mut mx = -carry / RUN_SPEED;
                 let to_top = -p.x;
                 let into_behind = up != 0.0 && m::sign(to_top) == -up && behind < 2.8;
                 if !into_behind {
@@ -232,7 +233,7 @@ impl MapDef for RollOut {
                     mx = up
                         * 1f64
                             .at_most(room)
-                            .at_most(0.2f64.at_least((span - carry.abs() * 0.75) / 0.75 / 8.5));
+                            .at_most(0.2f64.at_least((span - carry.abs() * 0.75) / 0.75 / RUN_SPEED));
                     bot.mem.set(hop_mx, mx);
                     bot.mem.set(hop_until, bot.t + 0.7);
                 } else if !grounded && bot.mem.get(hop_until).unwrap_or(NEVER) > bot.t {

@@ -72,7 +72,7 @@ impl RealTick {
 
 /// How far from the server's tick Lightyear takes an input message (`end_tick − tick`, its
 /// `MAX_INPUT_PAST_TICKS` and `MAX_INPUT_LOOKAHEAD_TICKS`): it drops the others without a word.
-const INPUT_WINDOW: core::ops::RangeInclusive<i32> = -64..=64;
+const INPUT_WINDOW: core::ops::RangeInclusive<i32> = -(fb_net::INPUT_RING as i32)..=fb_net::INPUT_RING as i32;
 
 /// Input messages Lightyear is about to drop for being too far from the server's tick: a client that leads
 /// by more than ~0.5 s (a slow VPN) and whose bean then stands still. Counted for a warning that backs off.

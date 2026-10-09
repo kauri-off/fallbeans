@@ -119,14 +119,18 @@ fn write_report(dir: &Path, what: &str, gpu_lost: bool) {
     } else {
         what.to_string()
     };
-    if file.write_all(redact(&report(&what)).as_bytes()).is_ok() {
-        let mut marker = path.to_string_lossy().into_owned();
-        if gpu_lost {
-            marker = format!("{marker}\n{GPU_LOST}");
-        }
-        let _ = fs::write(dir.join(MARKER), marker.as_bytes());
-        eprintln!("crash report: {}", path.display());
+    if let Err(e) = file.write_all(redact(&report(&what)).as_bytes()) {
+        eprintln!("crash report: {}: {e}", path.display());
+        return;
     }
+    let mut marker = path.to_string_lossy().into_owned();
+    if gpu_lost {
+        marker = format!("{marker}\n{GPU_LOST}");
+    }
+    if let Err(e) = fs::write(dir.join(MARKER), marker.as_bytes()) {
+        eprintln!("crash marker: {e}");
+    }
+    eprintln!("crash report: {}", path.display());
 }
 
 fn panic_text(info: &PanicHookInfo) -> String {

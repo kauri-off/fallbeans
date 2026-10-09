@@ -173,6 +173,8 @@ pub struct Hub {
     /// PRACTICE_IDLE_S (tests wait less).
     pub(super) practice_idle_s: f64,
     guesses: Limiter,
+    /// Refused or silent connections (no identity, too many from an address, no hello): a flood says it rarely.
+    refusals: Backoff,
     real: u64,
     pub out: Vec<Out>,
 }
@@ -191,6 +193,7 @@ impl Hub {
             max_rooms: DEFAULT_MAX_ROOMS,
             practice_idle_s: PRACTICE_IDLE_S,
             guesses: Limiter::default(),
+            refusals: Backoff::default(),
             real,
             out: Vec::new(),
         };
@@ -312,14 +315,23 @@ impl Hub {
     /// A connection of player `uid` (None: the token had no identity, the connection is refused) from `ip`.
     pub fn open(&mut self, conn: ConnId, ip: Option<IpAddr>, uid: Option<Uid>) {
         let Some(uid) = uid else {
-            warn!(ip = ip.map(display), "connection without an identity");
+            if let Some(hushed) = self.refusals.hit(secs(self.real)) {
+                warn!(ip = ip.map(display), ?conn, hushed, "connection without an identity");
+            }
             return self.refuse(conn, RejectReason::Auth, "Нет входа: перезапустите игру");
         };
         let key = ip.and_then(address_key);
         if let Some(key) = key
             && self.connections_from(key) >= SESSIONS_PER_ADDRESS
         {
-            warn!(ip = ip.map(display), "too many connections from one address");
+            if let Some(hushed) = self.refusals.hit(secs(self.real)) {
+                warn!(
+                    ip = ip.map(display),
+                    ?conn,
+                    hushed,
+                    "too many connections from one address"
+                );
+            }
             return self.refuse(conn, RejectReason::Busy, "С этого адреса уже слишком много подключений");
         }
         self.sessions.insert(
@@ -598,6 +610,7 @@ impl Hub {
     /// Server tick: hello timeouts, empty rooms, and every room's simulation.
     pub fn update(&mut self, real: u64, inputs: &mut dyn Inputs) {
         self.real = real;
+        let refusals = &mut self.refusals;
         let late: Vec<ConnId> = self
             .sessions
             .iter_mut()
@@ -606,7 +619,9 @@ impl Hub {
             })
             .map(|(c, s)| {
                 s.stand = Stand::Gone;
-                warn!(ip = s.ip.map(display), "no hello");
+                if let Some(hushed) = refusals.hit(secs(real)) {
+                    warn!(ip = s.ip.map(display), conn = ?c, hushed, "no hello");
+                }
                 *c
             })
             .collect();
@@ -638,8 +653,8 @@ impl Hub {
             .map(|(k, _)| *k)
             .collect();
         for key in idle {
-            self.rooms.remove(&key);
-            info!("practice closed: nobody played in it");
+            let Some(room) = self.rooms.remove(&key) else { continue };
+            info!(room = %room.id, "practice closed: nobody played in it");
             for c in self.seated_in(key) {
                 self.unseat(c, true);
                 self.refuse(

@@ -73,11 +73,20 @@ impl Out {
         }
         let mut old = OsString::from(self.path.as_os_str());
         old.push(".1");
-        let _ = fs::rename(&self.path, PathBuf::from(old));
+        if let Err(e) = fs::rename(&self.path, PathBuf::from(old)) {
+            eprintln!("log: {} not moved to .1, it starts over: {e}", self.path.display());
+        }
         self.bytes = 0;
-        self.w = File::create(&self.path)
-            .ok()
-            .map(|f| BufWriter::with_capacity(64 * 1024, f));
+        self.w = match File::create(&self.path) {
+            Ok(f) => Some(BufWriter::with_capacity(64 * 1024, f)),
+            Err(e) => {
+                eprintln!(
+                    "log: {} cannot be written, further lines are lost: {e}",
+                    self.path.display()
+                );
+                None
+            }
+        };
         self.header(" | continued: the lines before are in the .1 file");
     }
 

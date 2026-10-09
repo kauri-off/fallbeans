@@ -49,6 +49,8 @@ fn report(
     warn!("F8: the player marks a problem | {} | {}", net.transport, net.line(now));
     let Some(dir) = &logs.0 else { return };
     let Some((mut file, path)) = logs::create(dir, "report", "txt") else {
+        warn!("F8 report: cannot create a file in {}", dir.display());
+        feed.note(time.elapsed_secs(), text::REPORT_FAILED.to_string());
         return;
     };
     let mut s = String::new();
@@ -123,8 +125,14 @@ fn report(
         let _ = writeln!(s, "{}", crate::crash::line(&l));
     }
     // (Sent to whoever fixes it: without the player's home folder, the user name in it.)
-    if file.write_all(crate::crash::redact(&s).as_bytes()).is_ok() {
-        info!("F8 report: {}", path.display());
-        feed.note(time.elapsed_secs(), text::report_saved(&path.display().to_string()));
+    match file.write_all(crate::crash::redact(&s).as_bytes()) {
+        Ok(()) => {
+            info!("F8 report: {}", path.display());
+            feed.note(time.elapsed_secs(), text::report_saved(&path.display().to_string()));
+        }
+        Err(e) => {
+            warn!("F8 report: {}: {e}", path.display());
+            feed.note(time.elapsed_secs(), text::REPORT_FAILED.to_string());
+        }
     }
 }

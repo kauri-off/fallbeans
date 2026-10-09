@@ -237,7 +237,7 @@ impl MapLogic for Tails {
         Some(if self.mine(cx.me) {
             format!("У вас хвост — убегайте! Очки: {pts}")
         } else {
-            format!("Отнимите чужой хвост (Q или ПКМ). Очки: {pts}")
+            format!("Отнимите чужой хвост (Q / ПКМ). Очки: {pts}")
         })
     }
 

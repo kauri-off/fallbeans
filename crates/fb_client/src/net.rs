@@ -463,8 +463,8 @@ fn receive_session(
         return;
     }
     let Some(token) = token_of(&reply) else {
-        warn!("session: no connect token");
-        conn.next_try = Some(now + RETRY_S);
+        let e = format!("no connect token from {}", conn.http);
+        failed(&mut conn, e, now);
         return;
     };
     match spawn_client(&mut commands, &opts, &conn, token, now) {

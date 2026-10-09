@@ -867,7 +867,13 @@ fn dev(
                 Look::Chip(false),
                 d(DevCmd::Bots { on: false }),
             );
-            button(r, f, "Разморозить", Look::Chip(false), d(DevCmd::Bots { on: true }));
+            button(
+                r,
+                f,
+                "Разморозить ботов",
+                Look::Chip(false),
+                d(DevCmd::Bots { on: true }),
+            );
             button(
                 r,
                 f,

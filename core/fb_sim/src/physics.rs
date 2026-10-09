@@ -11,7 +11,6 @@ use crate::world::World;
 
 pub const R: f64 = 0.5;
 pub const SPHERES: [f64; 2] = [0.5, 1.1];
-pub const HEIGHT: f64 = 1.6;
 pub const GRAVITY: f64 = 28.0;
 pub const RUN_SPEED: f64 = 8.5;
 pub const JUMP_V: f64 = 10.5;

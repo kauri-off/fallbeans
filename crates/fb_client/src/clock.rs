@@ -35,10 +35,10 @@ const STALL_QUIET: f32 = 5.0;
 /// Most ticks an input may arrive ahead of the server's tick (the margin plus a clock error short of a
 /// jump): Lightyear's server drops input messages more than 64 ticks ahead (`MAX_INPUT_LOOKAHEAD_TICKS`),
 /// and then the bean stands still. Past it presses arrive late instead (`fb_net::LATE_TICKS` recovers them).
-const MAX_AHEAD: f32 = 60.0;
+const MAX_AHEAD: f32 = (fb_net::INPUT_RING - 4) as f32;
 /// Above this margin a late press can be lost: the server's input buffer is a ring of 64 ticks ending at
 /// the newest input, and it must still hold the ticks up to LATE_TICKS behind the server's.
-const LATE_LEAD: f32 = (63 - fb_net::LATE_TICKS) as f32;
+const LATE_LEAD: f32 = (fb_net::INPUT_RING - 1 - fb_net::LATE_TICKS) as f32;
 /// How often the warning about a margin above LATE_LEAD may repeat, s.
 const WARN_EVERY_S: f32 = 30.0;
 

@@ -577,7 +577,11 @@ fn net_line(
         .entity
         .and_then(|e| links.get(e).ok())
         .map_or(0.0, |l| l.stats.rtt.as_secs_f32() * 1000.0);
-    let transport = if conn.transport == Transport::Ws { "TCP" } else { "UDP" };
+    let transport = if conn.transport == Transport::Ws {
+        "WebSocket"
+    } else {
+        "UDP"
+    };
     let mut s = format!("{transport} · {}", text::ping(rtt.round() as u32));
     if display.show_fps {
         let fps = diag
@@ -1086,7 +1090,7 @@ fn keys(
                 .and_then(|i| fb_maps::by_id(&i.game))
                 .is_some_and(|d| d.meta().grab);
             let g = if grab {
-                "схватить хвост"
+                "захват хвоста"
             } else {
                 "захват"
             };
