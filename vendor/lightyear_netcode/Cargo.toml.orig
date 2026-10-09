@@ -1,0 +1,73 @@
+[package]
+name = "lightyear_netcode"
+version = "0.30.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Connection handling for the lightyear networking library"
+repository = "https://github.com/cBournhonesque/lightyear"
+
+[features]
+default = [
+  "std",
+  # TODO: split between client/server features
+  "client",
+  "server",
+]
+std = ["no_std_io2/std", "chacha20poly1305/std", "lightyear_transport?/std"]
+client = [
+  "lightyear_connection/client",
+  "lightyear_transport",
+  "aeronet_io",
+  "bevy_ecs/std",
+  "bevy_reflect",
+  "bevy_time",
+]
+server = [
+  "lightyear_connection/server",
+  "lightyear_transport",
+  "aeronet_io",
+  "rand",
+  "bevy_ecs/std",
+  "bevy_time",
+]
+trace = []
+
+[dependencies]
+# local crates
+lightyear_connection.workspace = true
+lightyear_core.workspace = true
+lightyear_link.workspace = true
+lightyear_transport = { workspace = true, optional = true }
+lightyear_serde.workspace = true
+lightyear_utils.workspace = true
+
+# bevy
+bevy_app.workspace = true
+bevy_ecs.workspace = true
+bevy_reflect = { workspace = true, optional = true }
+bevy_time = { workspace = true, optional = true }
+
+# no_std
+no_std_io2.workspace = true
+
+# utils
+aeronet_io = { workspace = true, optional = true }
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rand = { workspace = true, optional = true }
+chacha20poly1305.workspace = true
+
+[target."cfg(target_family = \"wasm\")".dependencies]
+web-time.workspace = true
+
+[dev-dependencies]
+lightyear_serde = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

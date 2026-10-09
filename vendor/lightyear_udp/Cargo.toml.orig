@@ -1,0 +1,40 @@
+[package]
+name = "lightyear_udp"
+version = "0.30.1"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "IO primitives for the lightyear networking library"
+repository = "https://github.com/cBournhonesque/lightyear"
+
+[features]
+default = []
+server = ["bevy_platform"]
+metrics = ["dep:metrics"]
+test_utils = []
+
+[dependencies]
+lightyear_core.workspace = true
+lightyear_link.workspace = true
+lightyear_utils.workspace = true
+
+aeronet_io.workspace = true
+
+metrics = { workspace = true, optional = true }
+tracing.workspace = true
+
+# bevy
+bevy_app.workspace = true
+bevy_ecs = { workspace = true, features = ["std"] }
+bevy_platform = { workspace = true, optional = true }
+
+# utils
+bytes.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
