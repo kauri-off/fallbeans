@@ -55,8 +55,8 @@ pub enum MapEvent {
     },
     /// Bean `to` snatched a star from `from`.
     Snatch { from: PlayerId, to: PlayerId },
-    /// Who has a tail now; `by` has just got one.
-    Tails { ids: Vec<PlayerId>, by: PlayerId },
+    /// Who has a tail from `t` on; `by` has just got one.
+    Tails { ids: Vec<PlayerId>, by: PlayerId, t: f64 },
 }
 
 /// An event of one section of a course.

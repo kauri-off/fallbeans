@@ -44,10 +44,14 @@ const ARENA_R: f64 = 15.0;
 const TAIL_SLOW: f64 = 0.86;
 /// A hold lets go after this long (fb_arena).
 const HOLD_MAX: f64 = 3.0;
+/// Seconds of past tails kept for a client's rollbacks to replay (well over their reach).
+const KEEP: f64 = 5.0;
 
 struct Tails {
     /// Who has a tail, in the order they got it.
     tails: Vec<PlayerId>,
+    /// Who had one from when on, oldest first (the last: `tails`): a client replays its bean's past ticks by them.
+    past: Vec<(f64, Vec<PlayerId>)>,
     immune: BTreeMap<PlayerId, f64>,
     /// Tails grabbed while immune (grabber, holder, since): the tail goes when the immunity ends, if the
     /// grabber still holds on.
@@ -67,6 +71,12 @@ impl Tails {
         self.tails.contains(&id)
     }
 
+    /// `id` had a tail at `t`.
+    fn had(&self, id: PlayerId, t: f64) -> bool {
+        let i = self.past.iter().rposition(|p| p.0 <= t).unwrap_or(0);
+        self.past.get(i).is_some_and(|p| p.1.contains(&id))
+    }
+
     /// The local player has a tail (client).
     fn mine(&self, me: Option<PlayerId>) -> bool {
         me.is_some_and(|me| self.has(me))
@@ -79,7 +89,14 @@ impl Tails {
             next.push(to);
         }
         self.immune.insert(to, cx.t + IMMUNE);
-        self.emit(cx, MapEvent::Tails { ids: next, by: to });
+        self.emit(
+            cx,
+            MapEvent::Tails {
+                ids: next,
+                by: to,
+                t: cx.t,
+            },
+        );
     }
 
     fn decorate_all(&self, cx: &mut Cx) {
@@ -155,7 +172,7 @@ impl MapLogic for Tails {
 
     /// Tails weigh you down a little: the chasers can catch up.
     fn bean(&self, id: PlayerId, body: &mut Body, t: f64) {
-        if t < 0.0 || !self.has(id) {
+        if t < 0.0 || !self.had(id, t) {
             return;
         }
         body.slow_k = if t < body.slow_until {
@@ -215,7 +232,9 @@ impl MapLogic for Tails {
     }
 
     fn event(&mut self, cx: &mut Cx, ev: &MapEvent) {
-        let MapEvent::Tails { ids, by } = ev else { return };
+        let &MapEvent::Tails { ref ids, by, t } = ev else {
+            return;
+        };
         let before = self.mine(cx.me);
         let mut tails: Vec<PlayerId> = Vec::new();
         for &id in ids {
@@ -223,8 +242,13 @@ impl MapLogic for Tails {
                 tails.push(id);
             }
         }
-        self.tails = tails;
-        self.immune.insert(*by, cx.t + IMMUNE);
+        let at = self.past.partition_point(|p| p.0 <= t);
+        self.past.insert(at, (t, tails));
+        let last = self.past.last().map_or(t, |p| p.0);
+        let old = self.past.iter().skip(1).take_while(|p| p.0 <= last - KEEP).count();
+        self.past.drain(..old);
+        self.tails = self.past.last().map(|p| p.1.clone()).unwrap_or_default();
+        self.immune.insert(by, t + IMMUNE);
         // (The old tail holder's slow-down wears off by itself within a quarter of a second.)
         let after = self.mine(cx.me);
         self.decorate_all(cx);
@@ -436,8 +460,10 @@ impl MapDef for TailTag {
         shuffle(&mut order, &mut b.rng);
         let len = order.len() as f64;
         let n = 1f64.at_least((len - 1.0).at_most((len / 2.0).ceil())) as usize;
+        let first: Vec<PlayerId> = order.into_iter().take(n).collect();
         let tails = Tails {
-            tails: order.into_iter().take(n).collect(),
+            past: vec![(NEVER, first.clone())],
+            tails: first,
             immune: BTreeMap::new(),
             held: Vec::new(),
             last_second: 0.0,
