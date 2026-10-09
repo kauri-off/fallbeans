@@ -1581,7 +1581,7 @@ impl Room {
         let target = (self.now() - self.zero).floor() as i64;
         if !all && target - self.arena.tick > MAX_CATCHUP {
             warn!(room = %self.id, behind = target - self.arena.tick, "arena fell behind");
-            self.arena.tick = target - MAX_CATCHUP;
+            self.arena.skip_to(target - MAX_CATCHUP);
         }
         while self.arena.tick < target {
             let k = self.arena.tick + 1;

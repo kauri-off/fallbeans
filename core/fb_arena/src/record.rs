@@ -139,6 +139,8 @@ pub enum Op {
         id: u32,
         ticks: u32,
     },
+    /// The arena jumped to this tick without simulating the ones between (`Arena::skip_to`).
+    Skip(i64),
 }
 
 impl Recording {
@@ -166,7 +168,7 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
     for p in rec.pawns.iter().filter(|p| p.at <= first) {
         a.add_pawn_at(p.id, p.bot, p.spawn);
     }
-    let later: Vec<_> = rec.pawns.iter().filter(|p| p.at > first).collect();
+    let mut later = rec.pawns.iter().filter(|p| p.at > first).peekable();
     let mut cursor: BTreeMap<u32, usize> = BTreeMap::new();
     let mut ops = rec.ops.iter().peekable();
     let mut stopped = false;
@@ -175,10 +177,12 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
         while let Some(op) = ops.next_if(|o| o.0 < k) {
             a.apply_op(&op.1);
         }
-        for p in &later {
-            if p.at == k - 1 {
-                a.add_pawn_at(p.id, p.bot, p.spawn);
-            }
+        k = a.tick + 1;
+        if k > rec.end_tick {
+            break;
+        }
+        while let Some(p) = later.next_if(|p| p.at < k) {
+            a.add_pawn_at(p.id, p.bot, p.spawn);
         }
         let mut frames: BTreeMap<u32, InputFrame> = BTreeMap::new();
         for (&id, list) in &rec.frames {

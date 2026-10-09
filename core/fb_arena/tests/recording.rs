@@ -45,6 +45,31 @@ fn replays_end_in_the_recorded_state() {
 }
 
 #[test]
+fn ticks_the_server_skipped_are_skipped_on_replay() {
+    let def = fb_maps::by_id("door-dash").unwrap();
+    let ids: Vec<u32> = (1..=4).collect();
+    let (mut a, _) = Arena::new(def, ArenaKind::Round, 5, -360, &ids, false);
+    a.record();
+    for &id in &ids {
+        a.add_pawn(id, id > 1);
+    }
+    let mut k = -359;
+    while k <= 1500 {
+        if k == 600 {
+            a.skip_to(700);
+            k = 701;
+        }
+        a.step(k, |_| InputFrame { mx: 40, mz: 100, buttons: 0 });
+        k += 1;
+    }
+    let rec = a.take_recording().unwrap();
+    assert!(replay(&rec, |_| false).unwrap().matches);
+    let mut unskipped = rec.clone();
+    unskipped.ops.retain(|o| !matches!(o.1, fb_arena::Op::Skip(_)));
+    assert!(!replay(&unskipped, |_| false).unwrap().matches);
+}
+
+#[test]
 fn a_traced_round_logs_dives_and_tackles_and_leaves_the_state_alone() {
     let def = fb_maps::by_id("door-dash").unwrap();
     let ids: Vec<u32> = (1..=8).collect();

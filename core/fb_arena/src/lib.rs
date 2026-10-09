@@ -733,6 +733,12 @@ impl Arena {
         self.frozen = true;
     }
 
+    /// Jumps to tick `k` without simulating the ones between (a server that fell too far behind).
+    pub fn skip_to(&mut self, k: i64) {
+        self.op(Op::Skip(k));
+        self.tick = k;
+    }
+
     /// Dev: bot brains run (false: bots stand still).
     pub fn set_bots_on(&mut self, on: bool) {
         self.op(Op::Bots(on));
@@ -750,8 +756,8 @@ impl Arena {
     /// Starts recording the round for replays (before pawns are added).
     pub fn record(&mut self) {
         self.recording = Some(Recording {
-            // 4: tackles are judged by where the player saw the others (`Op::View`).
-            v: 4,
+            // 5: ticks the server skipped (`Op::Skip`).
+            v: 5,
             game: self.map.meta().id.to_string(),
             kind: self.kind,
             seed: self.seed,
@@ -1654,6 +1660,7 @@ impl Arena {
             Op::Bots(on) => self.set_bots_on(on),
             Op::Freeze => self.freeze(),
             Op::View { id, ticks } => self.set_view(id, ticks),
+            Op::Skip(k) => self.skip_to(k),
         }
     }
 }
