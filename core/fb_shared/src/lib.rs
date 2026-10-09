@@ -6,9 +6,11 @@ pub mod hash;
 pub mod input;
 pub mod m;
 pub mod outfit;
+pub mod player;
 pub mod rng;
 pub mod rules;
 pub mod text;
 
 pub use color::{Rgb, rgb, rgba};
 pub use consts::*;
+pub use player::PlayerId;

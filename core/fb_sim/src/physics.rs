@@ -1,5 +1,6 @@
 //! The bean: a kinematic character of two spheres with a small state machine.
 use fb_shared::NEVER;
+use fb_shared::PlayerId;
 use fb_shared::cause::Hazard;
 use serde::{Deserialize, Serialize};
 
@@ -113,7 +114,7 @@ impl From<fb_shared::input::InputFrame> for BodyInput {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OtherBody {
-    pub id: u32,
+    pub id: PlayerId,
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -148,7 +149,7 @@ pub struct StepEvents {
     pub knocked: bool,
     pub bumped: f64,
     /// Knocked over by this bean's tackle.
-    pub tackled_by: Option<u32>,
+    pub tackled_by: Option<PlayerId>,
     /// Tackles this bean landed.
     pub tackles: u32,
     /// Contacts, tackles and dives in detail (`--trace-hits`).
@@ -202,7 +203,7 @@ pub struct Body {
     pub size: f64,
     pub climb_to: V3,
     /// The last bean this dive (and the slide after it) knocked over: it is not knocked over again.
-    pub tackled: Option<u32>,
+    pub tackled: Option<PlayerId>,
 }
 
 /// Centre of collision sphere i of a body with its feet at `pos`, tipped by `tilt` towards `tilt_dir`.

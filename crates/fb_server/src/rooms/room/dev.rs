@@ -3,8 +3,8 @@ use super::*;
 
 impl Room {
     /// Runs a dev command for player `by`: a short result, or why it cannot.
-    pub fn dev_command(&mut self, by: Pid, cmd: &DevCmd) -> Result<String, String> {
-        let target = |a: &Arena, id: Option<Pid>| {
+    pub fn dev_command(&mut self, by: PlayerId, cmd: &DevCmd) -> Result<String, String> {
+        let target = |a: &Arena, id: Option<PlayerId>| {
             let tid = id.unwrap_or(by);
             a.pawn(tid)
                 .map(|_| tid)
@@ -53,7 +53,7 @@ impl Room {
                 // `bots`: exactly that many (the ones left from before are replaced).
                 if bots.is_some() {
                     self.fill = false;
-                    let old: Vec<Pid> = self.players.iter().filter(|p| p.is_bot()).map(|p| p.id).collect();
+                    let old: Vec<PlayerId> = self.players.iter().filter(|p| p.is_bot()).map(|p| p.id).collect();
                     for b in old {
                         self.remove_player(b);
                     }

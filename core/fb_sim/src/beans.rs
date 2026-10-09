@@ -1,6 +1,8 @@
 //! Beans against each other after every body has stepped: capsule contacts, bumps, and tackles.
 use std::collections::BTreeMap;
 
+use fb_shared::PlayerId;
+
 use crate::m::{self, MinMax};
 use crate::math::V3;
 use crate::physics::{BEAN_GAP, Body, BodyState, OtherBody, R, SUBSTEP_REACH, StepEvents, sphere_at};
@@ -162,25 +164,25 @@ pub enum Miss {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Note {
     Tackle {
-        on: u32,
+        on: PlayerId,
         closing: f64,
         knock: f64,
         sweep: bool,
         seen: bool,
     },
     Miss {
-        on: u32,
+        on: PlayerId,
         why: Miss,
         at: f64,
         closing: f64,
         seen: bool,
     },
     Bump {
-        with: u32,
+        with: PlayerId,
         closing: f64,
     },
     Stand {
-        on: u32,
+        on: PlayerId,
     },
     Bonk {
         speed: f64,
@@ -197,7 +199,7 @@ pub const NOTE_QUIET: i64 = 12;
 
 impl Note {
     /// What a steady contact repeats every tick (standing, pushing, a tackler touching and missing), else None.
-    pub fn repeats(&self) -> Option<(u8, u32, u8)> {
+    pub fn repeats(&self) -> Option<(u8, PlayerId, u8)> {
         match *self {
             Note::Stand { on } => Some((0, on, 0)),
             Note::Bump { with, .. } => Some((1, with, 0)),
@@ -209,10 +211,10 @@ impl Note {
 
 /// Which notes of a bean to log: a repeat of a steady one within NOTE_QUIET ticks of the last is not.
 #[derive(Default)]
-pub struct NoteQuiet(BTreeMap<(u32, (u8, u32, u8)), i64>);
+pub struct NoteQuiet(BTreeMap<(PlayerId, (u8, PlayerId, u8)), i64>);
 
 impl NoteQuiet {
-    pub fn fresh(&mut self, k: i64, id: u32, n: &Note) -> bool {
+    pub fn fresh(&mut self, k: i64, id: PlayerId, n: &Note) -> bool {
         let Some(key) = n.repeats() else { return true };
         let last = self.0.insert((id, key), k);
         last.is_none_or(|l| k - l > NOTE_QUIET || k < l)
@@ -291,7 +293,7 @@ fn judge(
     now: &Capsule,
     saw: Option<&OtherBody>,
     ev: &mut StepEvents,
-    on: u32,
+    on: PlayerId,
 ) -> Option<Tackle> {
     if att.tackled == Some(on) {
         return None;
@@ -321,7 +323,7 @@ fn judge(
 
 /// Knocked over by a tackle; its speed at the tackler is stopped first, so a head-on hit is as hard as any.
 /// Returns the knock's speed.
-fn take_tackle(v: &mut Body, ev: &mut StepEvents, by: u32, by_mass: f64, by_fwd: V3, hit: Tackle) -> f64 {
+fn take_tackle(v: &mut Body, ev: &mut StepEvents, by: PlayerId, by_mass: f64, by_fwd: V3, hit: Tackle) -> f64 {
     let n = hit.n;
     let toward = v.vel.x * n.x + v.vel.z * n.z;
     if toward < 0.0 {
@@ -336,7 +338,7 @@ fn take_tackle(v: &mut Body, ev: &mut StepEvents, by: u32, by_mass: f64, by_fwd:
 }
 
 /// The tackler spends its momentum on the hit.
-fn spend_tackle(att: &mut Body, ev: &mut StepEvents, on: u32, victim_mass: f64) {
+fn spend_tackle(att: &mut Body, ev: &mut StepEvents, on: PlayerId, victim_mass: f64) {
     att.tackled = Some(on);
     let keep = if victim_mass > att.mass() {
         TACKLE_KEEP_HEAVY
@@ -348,7 +350,7 @@ fn spend_tackle(att: &mut Body, ev: &mut StepEvents, on: u32, victim_mass: f64) 
     ev.tackles += 1;
 }
 
-fn note_tackle(ev: &mut StepEvents, on: u32, hit: Tackle, knock: f64) {
+fn note_tackle(ev: &mut StepEvents, on: PlayerId, hit: Tackle, knock: f64) {
     ev.notes.push(Note::Tackle {
         on,
         closing: hit.closing,
@@ -364,7 +366,7 @@ fn fixed(b: &Body) -> bool {
 }
 
 /// The upper bean of a contact stands on the other: lifted out of it, its fall stopped.
-fn stand(b: &mut Body, ev: &mut StepEvents, on: u32, depth: f64) {
+fn stand(b: &mut Body, ev: &mut StepEvents, on: PlayerId, depth: f64) {
     if b.vel.y > 0.0 || fixed(b) {
         return;
     }
@@ -376,7 +378,7 @@ fn stand(b: &mut Body, ev: &mut StepEvents, on: u32, depth: f64) {
 
 /// One bean of a pair, stepped this tick.
 pub struct Side<'a> {
-    pub id: u32,
+    pub id: PlayerId,
     pub body: &'a mut Body,
     pub ev: &'a mut StepEvents,
 }
@@ -464,7 +466,7 @@ pub fn resolve(x: Side, y: Other, x_saw: Option<&OtherBody>, y_saw: Option<&Othe
 }
 
 /// A bump: pushed `away` by its share of the closing speed; a hard one lifts it off its feet a little.
-fn bounce(b: &mut Body, ev: &mut StepEvents, with: u32, away: V3, closing: f64, share: f64) {
+fn bounce(b: &mut Body, ev: &mut StepEvents, with: PlayerId, away: V3, closing: f64, share: f64) {
     if fixed(b) {
         return;
     }
@@ -514,12 +516,12 @@ mod tests {
         let (mut ex, mut ey) = (StepEvents::default(), StepEvents::default());
         resolve(
             Side {
-                id: 1,
+                id: PlayerId(1),
                 body: x,
                 ev: &mut ex,
             },
             Other::Stepped(Side {
-                id: 2,
+                id: PlayerId(2),
                 body: y,
                 ev: &mut ey,
             }),
@@ -548,7 +550,7 @@ mod tests {
         let mut y = bean(2, 0.0, 1.4);
         let (ex, ey) = pair(&mut x, &mut y);
         assert_eq!(y.state, BodyState::Tumble);
-        assert_eq!(ey.tackled_by, Some(1));
+        assert_eq!(ey.tackled_by, Some(PlayerId(1)));
         assert_eq!(ex.tackles, 1);
         assert!(x.vel.z < DIVE_SPEED * 0.5, "{}", x.vel.z);
         assert!(y.vel.z > 5.0, "{}", y.vel.z);
@@ -575,7 +577,7 @@ mod tests {
         y.grounded = false;
         let (ex, ey) = pair(&mut x, &mut y);
         assert_eq!(y.state, BodyState::Tumble);
-        assert_eq!((ex.tackles, ey.tackled_by), (1, Some(1)));
+        assert_eq!((ex.tackles, ey.tackled_by), (1, Some(PlayerId(1))));
         assert!(y.vel.z > 5.0 && !y.grounded, "{:?}", y.vel);
     }
 
@@ -625,7 +627,7 @@ mod tests {
     #[test]
     fn a_tackle_connects_with_where_its_player_saw_the_other() {
         let saw = OtherBody {
-            id: 2,
+            id: PlayerId(2),
             z: 1.4,
             size: 1.0,
             ..Default::default()
@@ -636,12 +638,12 @@ mod tests {
             let (mut ex, mut ey) = (StepEvents::default(), StepEvents::default());
             resolve(
                 Side {
-                    id: 1,
+                    id: PlayerId(1),
                     body: &mut x,
                     ev: &mut ex,
                 },
                 Other::Stepped(Side {
-                    id: 2,
+                    id: PlayerId(2),
                     body: &mut y,
                     ev: &mut ey,
                 }),
@@ -656,7 +658,7 @@ mod tests {
     #[test]
     fn a_dive_that_really_runs_into_someone_knocks_them_over_though_its_player_saw_it_miss() {
         let saw = OtherBody {
-            id: 2,
+            id: PlayerId(2),
             z: 3.0,
             size: 1.0,
             ..Default::default()
@@ -666,12 +668,12 @@ mod tests {
         let (mut ex, mut ey) = (StepEvents::default(), StepEvents::default());
         resolve(
             Side {
-                id: 1,
+                id: PlayerId(1),
                 body: &mut x,
                 ev: &mut ex,
             },
             Other::Stepped(Side {
-                id: 2,
+                id: PlayerId(2),
                 body: &mut y,
                 ev: &mut ey,
             }),
@@ -686,7 +688,7 @@ mod tests {
     fn a_seen_bean_moves_only_the_one_stepped() {
         let mut x = diving(1, 0.0, 0.0, 0.0);
         let o = OtherBody {
-            id: 2,
+            id: PlayerId(2),
             z: 1.4,
             size: 1.0,
             ..Default::default()
@@ -694,7 +696,7 @@ mod tests {
         let mut ex = StepEvents::default();
         resolve(
             Side {
-                id: 1,
+                id: PlayerId(1),
                 body: &mut x,
                 ev: &mut ex,
             },

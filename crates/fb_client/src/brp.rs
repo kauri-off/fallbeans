@@ -56,8 +56,8 @@ fn state(
     stats: Res<Stats>,
     timeline: Res<LocalTimeline>,
     links: Query<&Link>,
-    own: Query<(&PlayerId, &BodyFull), With<Predicted>>,
-    others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
+    own: Query<(&BeanId, &BodyFull), With<Predicted>>,
+    others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     metrics: Option<Res<PredictionMetrics>>,
 ) -> BrpResult {
     let lobby = session.lobby.as_ref().map(|l| {

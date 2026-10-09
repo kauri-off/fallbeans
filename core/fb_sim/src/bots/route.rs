@@ -360,7 +360,7 @@ mod tests {
             body.grounded = true;
             let scores = BTreeMap::new();
             let mut view = BotView {
-                id: 1,
+                id: PlayerId(1),
                 body: &body,
                 t,
                 rng: &mut self.rng,

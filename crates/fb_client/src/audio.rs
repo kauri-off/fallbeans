@@ -8,6 +8,7 @@ use bevy::audio::Volume;
 use bevy::prelude::*;
 use fb_arena::ArenaKind;
 use fb_net::*;
+use fb_shared::PlayerId;
 use fb_sim::map::MapSfx;
 use lightyear::prelude::*;
 
@@ -209,7 +210,7 @@ struct Sounds(HashMap<Sfx, Handle<AudioSource>>);
 #[derive(Resource, Default)]
 struct Heard {
     count: Option<i64>,
-    holding: Option<u32>,
+    holding: Option<PlayerId>,
     jingle: Option<(Sfx, f32)>,
     rng: u32,
 }
@@ -280,7 +281,7 @@ fn on_cues(
     mut heard: ResMut<Heard>,
     session: Res<Session>,
     mut cues: MessageReader<Cue>,
-    beans: Query<(&PlayerId, &GlobalTransform), With<crate::beans::BeanView>>,
+    beans: Query<(&BeanId, &GlobalTransform), With<crate::beans::BeanView>>,
     time: Res<Time<Real>>,
 ) {
     let Some(sounds) = sounds else {
@@ -288,7 +289,7 @@ fn on_cues(
         return;
     };
     let me = session.me;
-    let at = |id: u32| {
+    let at = |id: PlayerId| {
         (Some(id) != me)
             .then(|| beans.iter().find(|(p, _)| p.0 == id).map(|(_, t)| t.translation()))
             .flatten()

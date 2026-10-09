@@ -3,7 +3,7 @@ use super::*;
 
 /// One body for `tick_bodies`.
 pub struct Stepper<'a> {
-    pub id: u32,
+    pub id: PlayerId,
     pub body: &'a mut Body,
     pub ev: &'a mut StepEvents,
     pub input: BodyInput,
@@ -19,8 +19,8 @@ pub struct MapRun<'a> {
     /// Events the logic emits are applied at once (the server's arena; not client prediction or a bare step).
     pub apply: bool,
     /// Client: the local player.
-    pub me: Option<u32>,
-    pub scores: &'a mut BTreeMap<u32, i64>,
+    pub me: Option<PlayerId>,
+    pub scores: &'a mut BTreeMap<PlayerId, i64>,
     pub out: &'a mut Vec<MapOut>,
 }
 
@@ -47,8 +47,8 @@ impl MapRun<'_> {
 pub fn client_event(
     world: &mut World,
     spec: &mut MapSpec,
-    scores: &mut BTreeMap<u32, i64>,
-    me: Option<u32>,
+    scores: &mut BTreeMap<PlayerId, i64>,
+    me: Option<PlayerId>,
     ev: &MapEvent,
     out: &mut Vec<MapOut>,
 ) {
@@ -67,8 +67,8 @@ pub fn client_event(
 pub fn client_start(
     world: &mut World,
     spec: &mut MapSpec,
-    scores: &mut BTreeMap<u32, i64>,
-    me: Option<u32>,
+    scores: &mut BTreeMap<PlayerId, i64>,
+    me: Option<PlayerId>,
     out: &mut Vec<MapOut>,
 ) {
     let mut none = NoBodies;
@@ -80,8 +80,8 @@ pub fn client_start(
 pub fn client_hud(
     world: &mut World,
     spec: &MapSpec,
-    scores: &mut BTreeMap<u32, i64>,
-    me: Option<u32>,
+    scores: &mut BTreeMap<PlayerId, i64>,
+    me: Option<PlayerId>,
 ) -> Option<String> {
     let mut out = Vec::new();
     let mut none = NoBodies;
@@ -123,7 +123,7 @@ pub fn tick_bodies_with(
     t: f64,
     bodies: &mut [Stepper],
     extra: &[OtherBody],
-    seen: &dyn Fn(u32, u32) -> Option<OtherBody>,
+    seen: &dyn Fn(PlayerId, PlayerId) -> Option<OtherBody>,
     map: &mut MapRun,
 ) {
     // Where a body stands on a moving platform is read in the world of the previous tick. The server's
@@ -236,13 +236,13 @@ pub fn respawn_point(
 }
 
 /// Puts a bean that fell back at `to`, a little aside by its id (beans respawning together do not stack).
-pub fn respawn(spec: &MapSpec, id: u32, body: &mut Body, to: V3) {
+pub fn respawn(spec: &MapSpec, id: PlayerId, body: &mut Body, to: V3) {
     // In u64: client ids use all 32 bits.
-    let jitter = ((id as u64 * 7919) % 100) as f64 / 100.0 - 0.5;
+    let jitter = ((u64::from(id) * 7919) % 100) as f64 / 100.0 - 0.5;
     body.reset(V3::new(to.x + jitter * 2.0, to.y + 0.5, to.z), face_yaw(spec, to));
 }
 
-pub fn other_of(id: u32, b: &Body) -> OtherBody {
+pub fn other_of(id: PlayerId, b: &Body) -> OtherBody {
     OtherBody {
         id,
         x: b.pos.x,
@@ -258,7 +258,12 @@ pub fn other_of(id: u32, b: &Body) -> OtherBody {
 }
 
 /// Builds a map's world the way server and clients both do.
-pub fn build_map(map: &'static dyn MapDef, seed: u32, with_scene: bool, participants: &[u32]) -> (Builder, MapSpec) {
+pub fn build_map(
+    map: &'static dyn MapDef,
+    seed: u32,
+    with_scene: bool,
+    participants: &[PlayerId],
+) -> (Builder, MapSpec) {
     let mut b = Builder::new(seed, with_scene);
     let ctx = MapCtx {
         server: !with_scene,

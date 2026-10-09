@@ -1,5 +1,6 @@
 //! A fall as the client predicts it (`fb_client::game::predict_respawn`) ends where the arena puts the bean.
 use fb_arena::{Arena, ArenaKind, FallBehaviour, PawnStatus, fell, respawn, respawn_point};
+use fb_shared::PlayerId;
 use fb_shared::input::InputFrame;
 use fb_sim::math::V3;
 use fb_sim::physics::Body;
@@ -9,16 +10,16 @@ fn predicted_respawn_matches_the_arena() {
     let mut checked = 0;
     for map in fb_maps::GAMES {
         let id = map.meta().id;
-        let (mut arena, _) = Arena::new(*map, ArenaKind::Round, 7, 0, &[3, 8], false);
+        let (mut arena, _) = Arena::new(*map, ArenaKind::Round, 7, 0, &[3, 8].map(PlayerId), false);
         if arena.fall == FallBehaviour::Out {
             arena.fall = FallBehaviour::Spawn;
         }
-        arena.add_pawn_at(3, false, Some(0));
-        arena.add_pawn_at(8, false, Some(1));
+        arena.add_pawn_at(PlayerId(3), false, Some(0));
+        arena.add_pawn_at(PlayerId(8), false, Some(1));
         for k in 0..30 {
             arena.step(k, |_| InputFrame::IDLE);
         }
-        for (i, pid) in [3u32, 8].into_iter().enumerate() {
+        for (i, pid) in [3, 8].map(PlayerId).into_iter().enumerate() {
             let Some(p) = arena.pawn(pid).filter(|p| p.status == PawnStatus::Play) else {
                 continue;
             };
@@ -35,7 +36,7 @@ fn predicted_respawn_matches_the_arena() {
             arena.step(30 + i as i64, |_| InputFrame::IDLE);
             let p = arena.pawn(pid).unwrap();
             let to = respawn_point(&arena.spec, ArenaKind::Round, arena.fall, checkpoint, spawn_i).unwrap();
-            let mut predicted = Body::new(pid as i32);
+            let mut predicted = Body::new(pid.0 as i32);
             assert!(fell(&arena.spec, low), "{id}");
             respawn(&arena.spec, pid, &mut predicted, to);
             assert_eq!(p.teleports, teleports + 1, "{id}: respawned");
@@ -53,6 +54,6 @@ fn predicted_respawn_matches_the_arena() {
 #[test]
 fn the_lobby_respawns_where_nobody_stands() {
     let lobby = fb_maps::by_id("lobby").unwrap();
-    let (arena, _) = Arena::new(lobby, ArenaKind::Lobby, 1, -1, &[1], false);
+    let (arena, _) = Arena::new(lobby, ArenaKind::Lobby, 1, -1, &[1].map(PlayerId), false);
     assert_eq!(respawn_point(&arena.spec, ArenaKind::Lobby, arena.fall, None, 0), None);
 }

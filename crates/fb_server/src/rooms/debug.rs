@@ -2,7 +2,7 @@
 use std::collections::BTreeMap;
 
 use fb_arena::{JournalEntry, Pawn, TraceEntry};
-use fb_proto::{Phase, Pid, Playlist};
+use fb_proto::{Phase, PlayerId, Playlist};
 use fb_shared::m;
 use fb_shared::rules::RoundStats;
 use serde::Serialize;
@@ -29,7 +29,7 @@ pub struct RoomState {
     phase: Phase,
     practice: bool,
     permanent: bool,
-    host: Option<Pid>,
+    host: Option<PlayerId>,
     fill: bool,
     rate: f64,
     timer_in: Option<f64>,
@@ -58,7 +58,7 @@ struct RoundState {
 
 #[derive(Serialize)]
 struct PlayerState {
-    id: Pid,
+    id: PlayerId,
     name: String,
     bot: bool,
     owner: bool,
@@ -94,9 +94,9 @@ struct ArenaState {
     ends_in: Option<f64>,
     frozen: bool,
     bots_on: bool,
-    finished: Vec<Pid>,
-    out: Vec<Pid>,
-    scores: BTreeMap<Pid, i64>,
+    finished: Vec<PlayerId>,
+    out: Vec<PlayerId>,
+    scores: BTreeMap<PlayerId, i64>,
     events: usize,
     static_hash: String,
     pawns: Vec<PawnState>,
@@ -104,7 +104,7 @@ struct ArenaState {
 
 #[derive(Serialize)]
 struct PawnState {
-    id: Pid,
+    id: PlayerId,
     bot: bool,
     status: String,
     pos: [f64; 3],
@@ -113,7 +113,7 @@ struct PawnState {
     grounded: bool,
     progress: f64,
     checkpoint: Option<usize>,
-    grabbing: Option<Pid>,
+    grabbing: Option<PlayerId>,
     teleports: u32,
     stats: RoundTotals,
 }
@@ -242,14 +242,14 @@ pub struct RoomTrace {
     t: f64,
     journal: Vec<JournalLine>,
     /// By bean.
-    trace: BTreeMap<Pid, Vec<TraceLine>>,
+    trace: BTreeMap<PlayerId, Vec<TraceLine>>,
 }
 
 #[derive(Serialize)]
 struct JournalLine {
     t: f64,
     what: &'static str,
-    id: Option<Pid>,
+    id: Option<PlayerId>,
     data: Option<Value>,
 }
 
@@ -272,7 +272,7 @@ struct TraceLine {
     state: String,
     grounded: bool,
     input: [i32; 3],
-    grabbing: Option<Pid>,
+    grabbing: Option<PlayerId>,
     hazard: Option<fb_proto::Hazard>,
 }
 
@@ -292,7 +292,7 @@ impl From<&TraceEntry> for TraceLine {
 }
 
 /// The last `seconds` of one bean's history (or every bean's) and of the arena's journal.
-pub fn room_trace(room: &Room, id: Option<Pid>, seconds: f64) -> RoomTrace {
+pub fn room_trace(room: &Room, id: Option<PlayerId>, seconds: f64) -> RoomTrace {
     let a = &room.arena;
     let from = a.time() - seconds;
     let trace = a

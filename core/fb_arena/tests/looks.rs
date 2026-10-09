@@ -1,5 +1,6 @@
 //! The specials of every map as a client builds them: each look runs through the round without
 //! panicking, places only parts its special has, and every kind turns up.
+use fb_shared::PlayerId;
 use std::collections::BTreeSet;
 
 use fb_arena::build_map;
@@ -12,7 +13,7 @@ fn looks_run_through_rounds() {
     for &map in fb_maps::MAPS {
         let end = map.meta().duration.at_most(150.0);
         for seed in 1..=4 {
-            let (mut b, spec) = build_map(map, seed, true, &[1, 2]);
+            let (mut b, spec) = build_map(map, seed, true, &[1, 2].map(PlayerId));
             b.world.finalize(0.0, &*spec.logic);
             let scene = b.scene.take().expect("a client build has a scene");
             let mut out = LookOut::default();

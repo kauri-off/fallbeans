@@ -3,17 +3,17 @@
 use fb_arena::{Arena, ArenaEvent, ArenaKind, PawnStatus};
 use fb_shared::cause::Cause;
 use fb_shared::input::InputFrame;
-use fb_shared::{DT, TICK_RATE};
+use fb_shared::{DT, PlayerId, TICK_RATE};
 use fb_sim::map::{MapDef, MapEvent};
 use fb_sim::math::V3;
 
 #[derive(Clone, Debug)]
 pub struct Fall {
-    pub id: u32,
+    pub id: PlayerId,
     pub t: f64,
     pub out: bool,
     pub cause: Cause,
-    pub by: Option<u32>,
+    pub by: Option<PlayerId>,
     /// Progress (z, or the map's progress) reached before the fall.
     pub progress: f64,
     pub pos: V3,
@@ -27,7 +27,7 @@ pub struct Opts {
     /// Number of pawns (ids 1…n).
     pub players: u32,
     /// Which of them are bots (the others stand idle).
-    pub bots: fn(u32) -> bool,
+    pub bots: fn(PlayerId) -> bool,
     pub kind: ArenaKind,
     /// Intro before t = 0, in ticks.
     pub intro: i64,
@@ -48,15 +48,15 @@ impl Default for Opts {
 pub struct Harness {
     pub arena: Arena,
     pub map: &'static dyn MapDef,
-    pub ids: Vec<u32>,
-    pub finishes: Vec<(u32, f64)>,
+    pub ids: Vec<PlayerId>,
+    pub finishes: Vec<(PlayerId, f64)>,
     pub falls: Vec<Fall>,
     pub events: Vec<MapEvent>,
 }
 
 impl Harness {
     pub fn new(map: &'static dyn MapDef, o: &Opts) -> Self {
-        let ids: Vec<u32> = (1..=o.players).collect();
+        let ids: Vec<PlayerId> = (1..=o.players).map(PlayerId).collect();
         let (mut arena, _) = Arena::new(map, o.kind, o.seed, -o.intro, &ids, false);
         for (i, &id) in ids.iter().enumerate() {
             arena.add_pawn_at(id, (o.bots)(id), Some(i));

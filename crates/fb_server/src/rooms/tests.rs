@@ -19,12 +19,12 @@ fn conn(n: u32) -> ConnId {
 /// What every client holds down, and one-tick presses on top.
 #[derive(Default)]
 struct Script {
-    held: BTreeMap<Pid, InputFrame>,
-    press: BTreeMap<Pid, u8>,
+    held: BTreeMap<PlayerId, InputFrame>,
+    press: BTreeMap<PlayerId, u8>,
 }
 
 impl Inputs for Script {
-    fn frame(&mut self, id: Pid, _: ConnId, _: u32) -> InputFrame {
+    fn frame(&mut self, id: PlayerId, _: ConnId, _: u32) -> InputFrame {
         let f = self.held.get(&id).copied().unwrap_or(InputFrame::IDLE);
         InputFrame {
             buttons: f.buttons | self.press.remove(&id).unwrap_or(0),
@@ -54,7 +54,7 @@ fn opts() -> RoomOptions {
 #[derive(Clone, Copy)]
 struct Client {
     conn: ConnId,
-    id: Pid,
+    id: PlayerId,
 }
 
 impl Bench {
@@ -166,7 +166,7 @@ impl Bench {
         self.inputs.held.insert(c.id, InputFrame { mx: 0, mz, buttons });
     }
 
-    fn body(&mut self, id: Pid) -> &mut fb_sim::physics::Body {
+    fn body(&mut self, id: PlayerId) -> &mut fb_sim::physics::Body {
         &mut self
             .room
             .arena
@@ -188,7 +188,7 @@ fn assigns_host_and_colors_and_puts_players_into_the_lobby_world() {
     assert_ne!(lobby.players[0].color, lobby.players[1].color);
     assert_eq!(t.arena_msg(b).map(|a| a.kind), Some(ArenaKind::Lobby));
     t.advance(0.2);
-    let ids: Vec<Pid> = t.room.arena.pawns.iter().map(|p| p.id).collect();
+    let ids: Vec<PlayerId> = t.room.arena.pawns.iter().map(|p| p.id).collect();
     assert_eq!(ids, [a.id, b.id]);
 }
 
@@ -203,7 +203,7 @@ fn keeps_the_wished_colour_when_free_and_passes_outfits_on() {
     };
     let a = t.hello_with(who("wa"));
     let b = t.hello_with(who("wb"));
-    let colors: BTreeMap<Pid, u8> = t.lobby(b).players.iter().map(|p| (p.id, p.color)).collect();
+    let colors: BTreeMap<PlayerId, u8> = t.lobby(b).players.iter().map(|p| (p.id, p.color)).collect();
     assert_eq!(colors[&a.id], 4);
     assert_ne!(colors[&b.id], 4);
     let o = Outfit {
@@ -1128,7 +1128,7 @@ fn names_are_unique_in_a_room_and_people_are_not_bots() {
     let a = t.hello("Аня", "u1");
     let b = t.hello("аня", "u2");
     let c = t.hello("Бот Кекс", "u3");
-    let name = |t: &Bench, id: Pid| t.room.player(id).unwrap().name.clone();
+    let name = |t: &Bench, id: PlayerId| t.room.player(id).unwrap().name.clone();
     assert_eq!(name(&t, a.id), "Аня");
     assert_eq!(name(&t, b.id), "аня 2");
     assert_eq!(name(&t, c.id), format!("Боб {}", c.id));

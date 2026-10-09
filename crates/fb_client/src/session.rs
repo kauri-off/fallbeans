@@ -20,12 +20,12 @@ use crate::settings::Me;
 pub struct Session {
     pub dev: bool,
     /// Player id in the room, and the room's id.
-    pub me: Option<Pid>,
+    pub me: Option<PlayerId>,
     pub room: Option<String>,
     pub lobby: Option<Lobby>,
     pub arena: Option<ArenaInfo>,
     /// Points of the current arena (the map's own scoring: stars, tails).
-    pub scores: BTreeMap<Pid, i64>,
+    pub scores: BTreeMap<PlayerId, i64>,
     /// The server sent the client away (another window) or it is out of date: no more reconnecting.
     pub refused: bool,
     /// The host already asked to start the game in this lobby.
@@ -92,7 +92,7 @@ pub struct GameEnd {
 pub struct ChatLine {
     pub n: u32,
     /// None: the server.
-    pub id: Option<Pid>,
+    pub id: Option<PlayerId>,
     pub name: String,
     pub text: String,
     /// Real time it came (seconds since start).
@@ -102,8 +102,8 @@ pub struct ChatLine {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Feed {
     Ko {
-        victim: Pid,
-        by: Option<Pid>,
+        victim: PlayerId,
+        by: Option<PlayerId>,
         cause: Cause,
         out: bool,
         shortcut: bool,
@@ -125,11 +125,11 @@ const CHAT_MAX_LINES: usize = 50;
 pub const FEED_SECS: f32 = 6.0;
 
 impl Session {
-    pub fn player(&self, id: Pid) -> Option<&LobbyPlayer> {
+    pub fn player(&self, id: PlayerId) -> Option<&LobbyPlayer> {
         self.lobby.as_ref()?.players.iter().find(|p| p.id == id)
     }
 
-    pub fn name_of(&self, id: Pid) -> String {
+    pub fn name_of(&self, id: PlayerId) -> String {
         self.player(id).map_or_else(|| format!("#{id}"), |p| p.name.clone())
     }
 
@@ -147,7 +147,7 @@ impl Session {
 }
 
 impl ChatLog {
-    pub fn push(&mut self, now: f32, id: Option<Pid>, name: String, text: String) {
+    pub fn push(&mut self, now: f32, id: Option<PlayerId>, name: String, text: String) {
         let n = self.0.back().map_or(0, |l| l.n + 1);
         if self.0.len() >= CHAT_MAX_LINES {
             self.0.pop_front();

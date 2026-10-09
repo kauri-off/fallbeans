@@ -6,7 +6,7 @@
 //! south-west blocks to climb, west the spinner, north-west a launch pad; planters round the edge.
 use std::collections::BTreeSet;
 
-use fb_shared::{Rgb, rgb};
+use fb_shared::{PlayerId, Rgb, rgb};
 use fb_sim::bots::{ArenaOpts, BotBrain, BotInput, BotView, arena_brain};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, PropOpts};
 use fb_sim::collider::{ColliderOpts, Shape};
@@ -180,7 +180,7 @@ fn sign(b: &mut Builder, x: f64, z: f64, emoji: &'static str, bg: Rgb) {
 /// The lobby's game: ring the bell.
 struct Bell {
     /// Who has been down on the floor since they last rang it.
-    armed: BTreeSet<u32>,
+    armed: BTreeSet<PlayerId>,
     brain: BotBrain,
 }
 

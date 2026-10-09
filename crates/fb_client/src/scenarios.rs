@@ -1022,7 +1022,7 @@ rounds! {
 #[test]
 fn the_own_bean_is_at_its_spawn_in_the_intro() {
     use bevy::prelude::*;
-    use fb_net::{BodyFull, PlayerId};
+    use fb_net::{BeanId, BodyFull};
     use lightyear::prelude::Predicted;
 
     // (A real network's delay: on the bench's loopback the server's spawn came back before anything moved.)
@@ -1041,11 +1041,11 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
     g.frames(90);
     let me = g.res::<Session>().me.expect("in a room");
     let mine = |w: &mut World| {
-        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let mut q = w.query_filtered::<(&BeanId, &BodyFull), With<Predicted>>();
         q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos)
     };
     let client = mine(g.client().world_mut()).expect("the own bean is predicted");
-    let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+    let mut q = g.server.world_mut().query::<(&BeanId, &BodyFull)>();
     let server: Vec<_> = q
         .iter(g.server.world())
         .filter(|(p, _)| p.0 == me)
@@ -1064,7 +1064,7 @@ fn the_own_bean_is_at_its_spawn_in_the_intro() {
 #[test]
 fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
     use bevy::prelude::*;
-    use fb_net::{BodyFull, PlayerId};
+    use fb_net::{BeanId, BodyFull};
     use lightyear::prelude::{Predicted, PredictionHistory};
 
     #[rustfmt::skip]
@@ -1090,9 +1090,9 @@ fn the_own_bean_is_at_its_spawn_once_the_clock_is_set() {
     for _ in 0..60 {
         g.step();
         let w = g.client().world_mut();
-        let mut q = w.query_filtered::<(&PlayerId, &BodyFull), With<Predicted>>();
+        let mut q = w.query_filtered::<(&BeanId, &BodyFull), With<Predicted>>();
         let client = q.iter(w).find(|(p, _)| p.0 == me).map(|(_, f)| f.body.pos);
-        let mut q = g.server.world_mut().query::<(&PlayerId, &BodyFull)>();
+        let mut q = g.server.world_mut().query::<(&BeanId, &BodyFull)>();
         let server = q
             .iter(g.server.world())
             .find(|(p, _)| p.0 == me)

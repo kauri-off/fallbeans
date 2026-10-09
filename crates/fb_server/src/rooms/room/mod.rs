@@ -209,7 +209,7 @@ struct Upcoming {
     game: Game,
     seed: u32,
     start: i64,
-    participants: Vec<Pid>,
+    participants: Vec<PlayerId>,
     dev_seed: Option<u32>,
     arena: std::thread::JoinHandle<Arena>,
 }
@@ -265,7 +265,7 @@ pub struct Room {
     pub players: Vec<Player>,
     /// The acting host: the owner whenever they are in the room; while they are away (or after they handed
     /// the role over) another connected player.
-    pub host: Option<Pid>,
+    pub host: Option<PlayerId>,
     /// The owner handed the host role over (`Host`): coming back they do not take it back.
     handed_over: bool,
     pub stage: Stage,
@@ -282,7 +282,7 @@ pub struct Room {
     /// Game time: timers and arenas run on it (dev commands slow, pause or warp it).
     pub clock: GameClock,
     pub max: usize,
-    next_id: Pid,
+    next_id: PlayerId,
     arena_seq: u32,
     /// Real tick of the host's last start.
     started_at: Option<u64>,
@@ -333,7 +333,7 @@ pub fn prebuild_lobby_nav() {
 }
 
 /// A lobby's arena, with the bots' grid from the start if it is built.
-fn lobby_arena(ids: &[Pid]) -> Arena {
+fn lobby_arena(ids: &[PlayerId]) -> Arena {
     let (mut arena, _) = Arena::new(&LobbyMap, ArenaKind::Lobby, 1, -1, ids, false);
     if let Some(pre) = LOBBY_NAV.get() {
         arena.give_nav(pre.clone());
@@ -386,7 +386,7 @@ impl Room {
             fill: false,
             clock,
             max: max_players.min(MAX_PLAYERS),
-            next_id: 1,
+            next_id: PlayerId(1),
             arena_seq: 1,
             started_at: None,
             rng: Rng::new(seed.unwrap_or_else(|| u32::from_le_bytes(random_bytes()))),
@@ -492,11 +492,11 @@ impl Room {
         (self.zero - self.clock.offset()).round() as i64
     }
 
-    pub fn player(&self, id: Pid) -> Option<&Player> {
+    pub fn player(&self, id: PlayerId) -> Option<&Player> {
         self.players.iter().find(|p| p.id == id)
     }
 
-    fn player_mut(&mut self, id: Pid) -> Option<&mut Player> {
+    fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
         self.players.iter_mut().find(|p| p.id == id)
     }
 
@@ -505,7 +505,7 @@ impl Room {
         self.players.iter().find(|p| p.uid() == Some(uid))
     }
 
-    pub fn set_rtt(&mut self, id: Pid, rtt: u32) {
+    pub fn set_rtt(&mut self, id: PlayerId, rtt: u32) {
         if let Some(p) = self.player_mut(id) {
             p.rtt = rtt;
         }
@@ -617,7 +617,7 @@ impl Room {
         self.lobby_due = false;
     }
 
-    fn send_to(&mut self, id: Pid, msg: ServerMsg) {
+    fn send_to(&mut self, id: PlayerId, msg: ServerMsg) {
         if let Some(c) = self.player(id).and_then(Player::conn) {
             self.out.push(Out::Msg(c, msg));
         }

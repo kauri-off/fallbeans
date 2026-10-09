@@ -9,7 +9,7 @@ impl Room {
 
     fn make_lobby_arena(&mut self) -> (Arena, f64) {
         let zero = self.now().floor();
-        let ids: Vec<Pid> = self.players.iter().map(|p| p.id).collect();
+        let ids: Vec<PlayerId> = self.players.iter().map(|p| p.id).collect();
         let mut arena = lobby_arena(&ids);
         for p in &self.players {
             arena.add_pawn(p.id, p.is_bot());
@@ -38,7 +38,7 @@ impl Room {
     }
 
     /// Players who take part in the next round: bots and connected humans.
-    pub(super) fn roster(&self) -> Vec<Pid> {
+    pub(super) fn roster(&self) -> Vec<PlayerId> {
         self.players.iter().filter(|p| p.present()).map(|p| p.id).collect()
     }
 
@@ -80,7 +80,7 @@ impl Room {
     }
 
     /// The map's seed and the spawn order.
-    fn draw_round(&mut self, mut ids: Vec<Pid>) -> (u32, Vec<Pid>) {
+    fn draw_round(&mut self, mut ids: Vec<PlayerId>) -> (u32, Vec<PlayerId>) {
         let seed = self.next_seed.unwrap_or_else(|| (self.rng.unit() * 1e9).floor() as u32);
         // A dev seed fixes the spawn order too (screenshots, repeatable tests).
         match self.next_seed.take() {
@@ -209,7 +209,7 @@ impl Room {
 
     /// A round's arena built on the tick (none drawn ahead for these players): its bots' grid is built from a
     /// twin of it on another thread meanwhile and handed over when done (`take_nav`), before the intro ends.
-    fn nav_ahead(&mut self, game: Game, seed: u32, start: i64, ids: Vec<Pid>) {
+    fn nav_ahead(&mut self, game: Game, seed: u32, start: i64, ids: Vec<PlayerId>) {
         let map = game.map();
         let built = std::thread::Builder::new().name("round nav".into()).spawn(move || {
             let (mut twin, _) = Arena::new(map, ArenaKind::Round, seed, start, &ids, false);
@@ -243,11 +243,11 @@ impl Room {
     fn with_view<R>(&mut self, f: impl FnOnce(&RoundView, &mut Rng) -> R) -> Option<R> {
         let game = self.round()?.game;
         let time_up = self.time_up();
-        let bots: BTreeSet<Pid> = self.players.iter().filter(|p| p.is_bot()).map(|p| p.id).collect();
+        let bots: BTreeSet<PlayerId> = self.players.iter().filter(|p| p.is_bot()).map(|p| p.id).collect();
         let players = &self.players;
         let arena = &self.arena;
-        let connected = |id: Pid| players.iter().any(|p| p.id == id);
-        let progress = |id: Pid| arena.pawn(id).map_or(f64::NEG_INFINITY, |p| p.progress);
+        let connected = |id: PlayerId| players.iter().any(|p| p.id == id);
+        let progress = |id: PlayerId| arena.pawn(id).map_or(f64::NEG_INFINITY, |p| p.progress);
         let view = RoundView {
             genre: game.meta().genre,
             participants: &arena.participants,
@@ -281,8 +281,8 @@ impl Room {
         *step = Step::Results { round, next };
         let RoundInfo { game, index, total } = round;
         self.arena.freeze();
-        let stats: BTreeMap<Pid, RoundStats> = self.arena.pawns.iter().map(|p| (p.id, p.stats)).collect();
-        let totals: BTreeMap<Pid, i64> = self.players.iter().map(|p| (p.id, p.score)).collect();
+        let stats: BTreeMap<PlayerId, RoundStats> = self.arena.pawns.iter().map(|p| (p.id, p.stats)).collect();
+        let totals: BTreeMap<PlayerId, i64> = self.players.iter().map(|p| (p.id, p.score)).collect();
         let rows = self
             .with_view(|v, rng| v.score_round(&stats, &totals, Some(rng)))
             .unwrap_or_default();
@@ -315,7 +315,7 @@ impl Room {
                 g.survived += s.out_at.unwrap_or(round_secs);
             }
         }
-        let deltas: Vec<(Pid, i64)> = rows.iter().map(|r| (r.id, r.delta)).collect();
+        let deltas: Vec<(PlayerId, i64)> = rows.iter().map(|r| (r.id, r.delta)).collect();
         info!(room = %self.id, game = game.id(), rows = ?deltas, "round over");
         self.broadcast(ServerMsg::RoundEnd {
             game: game.id().into(),
@@ -367,9 +367,9 @@ impl Room {
             p.crowns += 1;
         }
         let awards = compute_awards(&self.players.iter().map(|p| (p.id, &p.stats)).collect::<Vec<_>>());
-        let totals: Vec<(Pid, i64)> = standings.iter().map(|s| (s.id, s.total)).collect();
-        info!(room = %self.id, winner, standings = ?totals, "game over");
-        let order: Vec<Pid> = standings.iter().map(|s| s.id).collect();
+        let totals: Vec<(PlayerId, i64)> = standings.iter().map(|s| (s.id, s.total)).collect();
+        info!(room = %self.id, %winner, standings = ?totals, "game over");
+        let order: Vec<PlayerId> = standings.iter().map(|s| s.id).collect();
         let zero = self.now().floor();
         let (mut arena, _) = Arena::new(&PodiumMap, ArenaKind::Podium, 1, -1, &order, false);
         for (i, id) in order.iter().enumerate() {
@@ -384,7 +384,7 @@ impl Room {
     pub(super) fn back_to_lobby(&mut self) {
         self.stage = Stage::Lobby;
         if !self.practice() {
-            let gone: Vec<Pid> = self
+            let gone: Vec<PlayerId> = self
                 .players
                 .iter()
                 .filter(|p| !p.is_bot() && p.conn().is_none())

@@ -20,7 +20,7 @@ use bevy::log::Level;
 use bevy::prelude::*;
 use fb_net::logbook;
 use fb_net::{PROTOCOL_ID, PROTOCOL_VERSION};
-use fb_proto::{Health, Pid, SessionReply, SessionRequest, TransportKind};
+use fb_proto::{Health, PlayerId, SessionReply, SessionRequest, TransportKind};
 use fb_shared::text::sanitize_title;
 use lightyear::netcode::ConnectToken;
 use serde::{Deserialize, Deserializer};
@@ -799,7 +799,7 @@ struct DebugQuery {
     n: Option<usize>,
     #[serde(default, deserialize_with = "level")]
     level: Option<Level>,
-    id: Option<Pid>,
+    id: Option<PlayerId>,
     s: Option<f64>,
     /// A replay's number, or `current`.
     i: Option<String>,

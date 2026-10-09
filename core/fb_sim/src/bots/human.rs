@@ -46,7 +46,7 @@ struct Threat {
     ax: f64,
     az: f64,
     dive: bool,
-    id: u32,
+    id: PlayerId,
 }
 
 /// The most urgent attack coming at the bot: a dive whose line passes within tackle reach soon, or

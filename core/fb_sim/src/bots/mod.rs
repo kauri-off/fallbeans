@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use fb_shared::EMOTES;
 use fb_shared::NEVER;
+use fb_shared::PlayerId;
 use fb_shared::rng::Rng;
 
 use crate::m::{self, MinMax};
@@ -68,7 +69,7 @@ impl Default for BotPlan {
 /// Another bean as a bot sees it.
 #[derive(Clone, Copy, Debug)]
 pub struct OtherView {
-    pub id: u32,
+    pub id: PlayerId,
     pub pos: V3,
     pub vel: V3,
     pub down: bool,
@@ -189,7 +190,7 @@ pub struct BotMem {
     pub dodge_until: f64,
     pub dodge_seen: f64,
     /// The bean it is fighting, until when.
-    pub foe: Option<u32>,
+    pub foe: Option<PlayerId>,
     pub foe_until: f64,
     /// Holding the grab until.
     pub grab_until: f64,
@@ -219,7 +220,7 @@ pub struct WaypointMem {
 pub struct ArenaMem {
     pub pref: Option<f64>,
     pub gy: Option<f64>,
-    pub hunt: Option<u32>,
+    pub hunt: Option<PlayerId>,
     pub hunt_until: f64,
     pub next_hunt: Option<f64>,
     pub target: Option<(f64, f64)>,
@@ -287,7 +288,7 @@ impl BotMem {
 
 /// What a brain sees.
 pub struct BotView<'a> {
-    pub id: u32,
+    pub id: PlayerId,
     pub body: &'a Body,
     /// Sim time.
     pub t: f64,
@@ -302,11 +303,11 @@ pub struct BotView<'a> {
     /// The map's world (moving parts, portals); the map's own state is its logic's.
     pub world: &'a World,
     /// Points of everybody in the round (points games).
-    pub scores: &'a BTreeMap<u32, i64>,
+    pub scores: &'a BTreeMap<PlayerId, i64>,
 }
 
 impl BotView<'_> {
-    pub fn score(&self, id: u32) -> i64 {
+    pub fn score(&self, id: PlayerId) -> i64 {
         self.scores.get(&id).copied().unwrap_or(0)
     }
 }

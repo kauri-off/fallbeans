@@ -9,7 +9,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
-use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, Pid, Playlist};
+use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, PlayerId, Playlist};
 use fb_shared::COLORS;
 use fb_shared::outfit::{GLASSES, HATS, Hat, Tint};
 use lightyear::prelude::client::Client;
@@ -558,7 +558,7 @@ fn player_row(
     f: &Fonts,
     l: &Lobby,
     pl: &fb_proto::LobbyPlayer,
-    me: Option<Pid>,
+    me: Option<PlayerId>,
     host: bool,
 ) {
     p.spawn((

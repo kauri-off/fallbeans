@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::time::common_conditions::on_real_timer;
 use fb_arena::{ArenaKind, client_hud};
 use fb_net::*;
-use fb_proto::Pid;
+use fb_proto::PlayerId;
 use fb_shared::DT;
 use fb_shared::game::Genre;
 use lightyear::prelude::*;
@@ -55,7 +55,7 @@ impl Plugin for HudPlugin {
 /// A player in the round: how they are doing, and their finishing place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
-    pub id: Pid,
+    pub id: PlayerId,
     pub part: Part,
     pub place: Option<usize>,
 }
@@ -403,7 +403,7 @@ fn root(hud: Res<Hud>, mut q: Single<&mut Node, With<HudRoot>>) {
     show(&mut q, hud.on);
 }
 
-fn name_tag(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, id: Pid, size: f32) {
+fn name_tag(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, id: PlayerId, size: f32) {
     let me = session.me == Some(id);
     let (name, color) = match session.player(id) {
         Some(pl) => (pl.name.clone(), Some(pl.color)),

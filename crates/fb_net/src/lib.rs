@@ -105,7 +105,7 @@ impl Plugin for ProtocolPlugin {
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
-        app.component::<PlayerId>().replicate();
+        app.component::<BeanId>().replicate();
         app.component::<BeanColor>().replicate();
         app.component::<Round>().replicate();
         app.component::<BodyFull>()

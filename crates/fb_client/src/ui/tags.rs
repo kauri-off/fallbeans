@@ -6,7 +6,7 @@ use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use fb_net::*;
-use fb_proto::Pid;
+use fb_proto::PlayerId;
 use fb_sim::collider::ColId;
 use fb_sim::math::V3;
 use fb_sim::world::World;
@@ -45,7 +45,7 @@ impl Plugin for TagsPlugin {
 
 #[derive(Component)]
 struct Tag {
-    id: Pid,
+    id: PlayerId,
     /// What it shows: the name with its badge, and the suit colour (rebuilt when that changes).
     name: String,
     color: u8,
@@ -61,7 +61,7 @@ struct Tag {
 }
 
 struct Seen {
-    id: Pid,
+    id: PlayerId,
     /// The head on screen (px of the interface), the tag's bottom middle.
     at: Vec2,
     d: f32,
@@ -74,10 +74,7 @@ struct Seen {
 fn place_tags(
     mut commands: Commands,
     layers: Res<Layers>,
-    beans: Query<
-        (&PlayerId, &GlobalTransform, &InheritedVisibility, &RemotePose),
-        (With<BeanView>, With<Interpolated>),
-    >,
+    beans: Query<(&BeanId, &GlobalTransform, &InheritedVisibility, &RemotePose), (With<BeanView>, With<Interpolated>)>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut tags: Query<(
         Entity,
@@ -187,7 +184,7 @@ fn place_tags(
             });
             continue;
         };
-        if (*frame).wrapping_add(s.id) % 4 == 0 {
+        if (*frame).wrapping_add(s.id.0) % 4 == 0 {
             tag.blocked = map.as_ref().is_some_and(|m| look(&m.world));
         }
         // Change size only when clearly nearer another step: no flicker between two.

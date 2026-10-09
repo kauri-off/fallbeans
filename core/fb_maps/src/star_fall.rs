@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use fb_shared::NEVER;
 use fb_shared::cause::Hazard;
-use fb_shared::{rgb, rgba};
+use fb_shared::{PlayerId, rgb, rgba};
 use fb_sim::bots::{
     ArenaOpts, BOT_DT, BotBrain, BotInput, BotView, HumanOpts, Note, aim_landing, arena_brain, humanize, init_bot,
     nav_to, steer, unstick,
@@ -94,10 +94,10 @@ struct Sky {
 
 /// Who took which star (from the server's events).
 struct Taken {
-    taken: BTreeMap<usize, (u32, f64)>,
+    taken: BTreeMap<usize, (PlayerId, f64)>,
     /// Stars before this one are gone (server).
     first: usize,
-    immune: BTreeMap<u32, f64>,
+    immune: BTreeMap<PlayerId, f64>,
     /// What happened to me lately (client): a line on the HUD for a few seconds.
     flash: Option<(String, f64)>,
 }
@@ -181,7 +181,7 @@ fn go_to(bot: &mut BotView, sp: &Spot, out: &mut BotInput) {
 struct Stars {
     sky: Sky,
     taken: Taken,
-    participants: Vec<u32>,
+    participants: Vec<PlayerId>,
     /// Client: the stars' special.
     look: Option<Hook>,
     sweep: Sweep,
@@ -240,7 +240,7 @@ impl MapLogic for Stars {
         }
     }
 
-    fn fall(&mut self, cx: &mut Cx, id: u32, by: Option<u32>) {
+    fn fall(&mut self, cx: &mut Cx, id: PlayerId, by: Option<PlayerId>) {
         let n = cx.score(id);
         if n <= 0 {
             return;
@@ -254,7 +254,7 @@ impl MapLogic for Stars {
         self.emit(cx, MapEvent::Drop { from: id, to, n });
     }
 
-    fn grab(&mut self, cx: &mut Cx, actor: u32, target: u32) {
+    fn grab(&mut self, cx: &mut Cx, actor: PlayerId, target: PlayerId) {
         let t = cx.t;
         if t < 0.0 || cx.score(target) <= 0 || self.taken.immune.get(&target).copied().unwrap_or(NEVER) > t {
             return;
@@ -281,7 +281,7 @@ impl MapLogic for Stars {
     fn event(&mut self, cx: &mut Cx, ev: &MapEvent) {
         let t = cx.t;
         let me = cx.me;
-        let is_me = |id: u32| me == Some(id);
+        let is_me = |id: PlayerId| me == Some(id);
         match *ev {
             MapEvent::Star { k, id } => {
                 let k = k as usize;
@@ -327,7 +327,7 @@ impl MapLogic for Stars {
         {
             return Some(text.clone());
         }
-        let me = cx.me.unwrap_or(0);
+        let me = cx.me.unwrap_or(PlayerId(0));
         Some(format!("Ваши звёзды: {} · Q / ПКМ — выхватить звезду", cx.score(me)))
     }
 

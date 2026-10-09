@@ -4,7 +4,7 @@ use super::*;
 impl Room {
     /// A player enters: someone new, or (same identity) the one who is already here, on a new connection.
     /// Returns the player id, or None when the room is full.
-    pub fn join(&mut self, conn: ConnId, who: Who) -> Option<Pid> {
+    pub fn join(&mut self, conn: ConnId, who: Who) -> Option<PlayerId> {
         if let Some(id) = self.player_of(&who.uid).map(|p| p.id) {
             let p = self.player_mut(id)?;
             let Kind::Human {
@@ -24,7 +24,7 @@ impl Room {
             if let Some(old) = old.filter(|&c| c != conn) {
                 self.out.push(Out::Close(old));
             }
-            info!(room = %self.id, id, name, "player resumed");
+            info!(room = %self.id, %id, name, "player resumed");
             self.seat_host(id);
             self.welcome(id, true);
             return Some(id);
@@ -35,7 +35,7 @@ impl Room {
             self.drop_player(bot);
         }
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id.0 += 1;
         let name = Some(sanitize_person_name(&who.name))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Боб {id}"));
@@ -45,7 +45,7 @@ impl Room {
         let mut p = Player::human(id, name, color, outfit, who.uid.clone(), conn);
         p.spectator = !matches!(self.stage, Stage::Lobby);
         self.active_at = self.clock.real();
-        info!(room = %self.id, id, name = p.name, practice = self.practice(), "player joined");
+        info!(room = %self.id, %id, name = p.name, practice = self.practice(), "player joined");
         self.players.push(p);
         // (Only behind a PIN: a public room would keep every identity that ever came.)
         if self.pin.is_some() {
@@ -76,7 +76,7 @@ impl Room {
 
     /// The connection of player `id` is gone: they keep their place a while to come back to (LOBBY_GRACE_S in
     /// the lobby, RECONNECT_GRACE_S in a game; `update`).
-    pub fn leave(&mut self, id: Pid, conn: ConnId) {
+    pub fn leave(&mut self, id: PlayerId, conn: ConnId) {
         let real = self.clock.real();
         let Some(p) = self.player_mut(id).filter(|p| p.conn() == Some(conn)) else {
             return;
@@ -88,23 +88,23 @@ impl Room {
             *conn = None;
             *disconnected_at = Some(real);
         }
-        info!(room = %self.id, id, "player disconnected");
+        info!(room = %self.id, %id, "player disconnected");
         self.update_host();
         self.send_lobby();
     }
 
     /// Player `id` leaves for good (back to the room list, or into another room).
-    pub fn quit(&mut self, id: Pid) {
+    pub fn quit(&mut self, id: PlayerId) {
         let Some(p) = self.player_mut(id) else { return };
         let Kind::Human { conn, .. } = &mut p.kind else {
             return;
         };
         *conn = None;
-        info!(room = %self.id, id, "player left");
+        info!(room = %self.id, %id, "player left");
         self.remove_player(id);
     }
 
-    pub fn control(&mut self, id: Pid, conn: ConnId, m: &ClientMsg) {
+    pub fn control(&mut self, id: PlayerId, conn: ConnId, m: &ClientMsg) {
         let real = self.clock.real();
         let Some(p) = self.player_mut(id).filter(|p| p.conn() == Some(conn)) else {
             return;
@@ -113,7 +113,7 @@ impl Room {
         // (Once a second at most while it lasts, and less often the longer it goes on.)
         let hushed = (count == MSG_RATE + 1).then(|| p.rate_log.hit(secs(real))).flatten();
         if let Some(hushed) = hushed {
-            warn!(room = %self.id, id, hushed, "rate limited");
+            warn!(room = %self.id, %id, hushed, "rate limited");
         }
         if count > MSG_RATE {
             return;
@@ -185,7 +185,7 @@ impl Room {
                     self.fill = *on;
                     // Off: the bots that only filled places go; the ones the host added stay.
                     if !on {
-                        let autos: Vec<Pid> = self.players.iter().filter(|b| b.auto()).map(|b| b.id).collect();
+                        let autos: Vec<PlayerId> = self.players.iter().filter(|b| b.auto()).map(|b| b.id).collect();
                         for b in autos {
                             self.drop_player(b);
                         }
@@ -201,7 +201,7 @@ impl Room {
                     self.pin = private.then(make_pin);
                     // A new PIN: whoever is here stays welcome, those who left need it.
                     self.admitted = self.players.iter().filter_map(|h| h.uid().cloned()).collect();
-                    info!(room = %self.id, by = id, private, "room access changed");
+                    info!(room = %self.id, by = %id, private, "room access changed");
                     self.send_lobby();
                 }
             }
@@ -243,7 +243,7 @@ impl Room {
                     let result = self.dev_command(id, cmd);
                     let ok = result.is_ok();
                     let (Ok(msg) | Err(msg)) = &result;
-                    info!(room = %self.id, id, cmd = cmd.name(), ok, msg, "dev");
+                    info!(room = %self.id, %id, cmd = cmd.name(), ok, msg, "dev");
                     self.arena.note(
                         "dev",
                         Some(id),
@@ -256,7 +256,7 @@ impl Room {
         }
     }
 
-    fn welcome(&mut self, id: Pid, resumed: bool) {
+    fn welcome(&mut self, id: PlayerId, resumed: bool) {
         self.send_to(
             id,
             ServerMsg::Welcome {
@@ -293,9 +293,9 @@ impl Room {
         (0..COLORS.len() as u8).find(|&c| !used(c)).unwrap_or(0)
     }
 
-    pub(super) fn add_bot(&mut self, auto: bool) -> Pid {
+    pub(super) fn add_bot(&mut self, auto: bool) -> PlayerId {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id.0 += 1;
         let name = bot_name(self.players.iter().map(|p| p.name.as_str()), id);
         let p = Player::bot(id, name, self.free_color(None), bot_outfit(id), auto);
         self.players.push(p);
@@ -319,8 +319,8 @@ impl Room {
     }
 
     /// The bot that gives up its place to a person: in a round, one that no longer plays if there is one.
-    fn spare_bot(&self) -> Option<Pid> {
-        let bots: Vec<Pid> = self.players.iter().rev().filter(|p| p.is_bot()).map(|p| p.id).collect();
+    fn spare_bot(&self) -> Option<PlayerId> {
+        let bots: Vec<PlayerId> = self.players.iter().rev().filter(|p| p.is_bot()).map(|p| p.id).collect();
         bots.iter()
             .copied()
             .find(|&b| self.arena.pawn(b).is_none_or(|p| p.status != PawnStatus::Play))
@@ -329,7 +329,7 @@ impl Room {
 
     /// `id` just connected: the room's owner takes the host role back (unless they gave it away), anyone else
     /// may fill a vacancy.
-    fn seat_host(&mut self, id: Pid) {
+    fn seat_host(&mut self, id: PlayerId) {
         if self.is_owner(id) && !self.handed_over {
             self.host = Some(id);
         } else {
@@ -338,7 +338,7 @@ impl Room {
     }
 
     /// Player `id` is the person who owns the room.
-    fn is_owner(&self, id: Pid) -> bool {
+    fn is_owner(&self, id: PlayerId) -> bool {
         self.owner.is_some() && self.player(id).and_then(Player::uid) == self.owner.as_ref()
     }
 
@@ -362,7 +362,7 @@ impl Room {
     }
 
     /// `name`, or with a number after it when someone else in the room is already called so.
-    fn unique_name(&self, id: Pid, name: String) -> String {
+    fn unique_name(&self, id: PlayerId, name: String) -> String {
         let taken = |n: &str| {
             let n = n.to_lowercase();
             self.players.iter().any(|p| p.id != id && p.name.to_lowercase() == n)
@@ -398,7 +398,7 @@ impl Room {
     }
 
     /// Takes a player out of the room and its arena (what that means for the room: `remove_player`).
-    fn drop_player(&mut self, id: Pid) -> bool {
+    fn drop_player(&mut self, id: PlayerId) -> bool {
         let Some(i) = self.players.iter().position(|p| p.id == id) else {
             return false;
         };
@@ -408,7 +408,7 @@ impl Room {
         true
     }
 
-    pub(super) fn remove_player(&mut self, id: Pid) {
+    pub(super) fn remove_player(&mut self, id: PlayerId) {
         let bot = self.player(id).is_some_and(Player::is_bot);
         if !self.drop_player(id) {
             return;

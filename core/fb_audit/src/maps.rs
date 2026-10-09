@@ -8,7 +8,7 @@ use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::Genre;
 use fb_shared::hash::Fingerprint;
 use fb_shared::m::MinMax;
-use fb_shared::{DT, MAX_PLAYERS, m};
+use fb_shared::{DT, MAX_PLAYERS, PlayerId, m};
 use fb_sim::collider::{ColId, Collider, Contact, Shape};
 use fb_sim::map::MapDef;
 use fb_sim::math::{V3, dist_xz};
@@ -82,7 +82,7 @@ fn simulate(
                 out: &mut out,
             };
             let mut one = [Stepper {
-                id: 99,
+                id: PlayerId(99),
                 body: &mut *body,
                 ev: &mut ev,
                 input,
@@ -651,7 +651,7 @@ fn limits(map: &'static dyn MapDef, ctx: &Ctx, out: &mut Out) {
 
 #[derive(Default)]
 pub(crate) struct SeedRun {
-    stuck: Vec<(u32, V3, f64)>,
+    stuck: Vec<(PlayerId, V3, f64)>,
     pub finish_times: Vec<f64>,
     pub out_times: Vec<f64>,
     pub survivors: usize,
@@ -672,7 +672,7 @@ pub(crate) fn play_seed(map: &'static dyn MapDef, seed: u32) -> SeedRun {
         },
     );
     let mut r = SeedRun::default();
-    let mut last: BTreeMap<u32, (V3, f64)> = BTreeMap::new();
+    let mut last: BTreeMap<PlayerId, (V3, f64)> = BTreeMap::new();
     let end = map.meta().duration as i64;
     let tick0 = h.arena.tick;
     let clock = Clock::start();

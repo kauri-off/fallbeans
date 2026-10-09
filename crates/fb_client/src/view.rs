@@ -11,7 +11,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::world_serialization::WorldAssetRoot;
 use fb_arena::ArenaKind;
 use fb_net::*;
-use fb_shared::Rgb;
+use fb_shared::{PlayerId, Rgb};
 use fb_sim::V3;
 use fb_sim::looks::{Pattern, ResolvedLook};
 use fb_sim::math::Affine;
@@ -99,7 +99,7 @@ pub struct MainCamera;
 #[derive(Resource, Default)]
 pub struct Spectate {
     /// None: the overview of the map.
-    pub target: Option<u32>,
+    pub target: Option<PlayerId>,
     /// The player picked the target; until then (or until it leaves) the first bean in play is followed.
     manual: bool,
     generation: u32,
@@ -928,8 +928,8 @@ const NEXT_KEYS: [KeyCode; 3] = [KeyCode::ArrowRight, KeyCode::KeyD, KeyCode::Ke
 /// (and, with the mouse captured, its buttons) go through the beans and the overview.
 fn spectate(
     map: Option<Res<Map>>,
-    own: Query<(), (With<Predicted>, With<PlayerId>)>,
-    beans: Query<&PlayerId, (With<Interpolated>, Without<Predicted>)>,
+    own: Query<(), (With<Predicted>, With<BeanId>)>,
+    beans: Query<&BeanId, (With<Interpolated>, Without<Predicted>)>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     pads: Query<&Gamepad>,
@@ -948,7 +948,7 @@ fn spectate(
         spec.target = None;
         return;
     }
-    let mut ids: Vec<u32> = beans.iter().map(|p| p.0).filter(|id| !map.gone(*id)).collect();
+    let mut ids: Vec<PlayerId> = beans.iter().map(|p| p.0).filter(|id| !map.gone(*id)).collect();
     ids.sort_unstable();
     ids.dedup();
     if spec.target.is_some_and(|t| !ids.contains(&t)) {
@@ -973,7 +973,7 @@ fn spectate(
         0
     };
     if dir != 0 {
-        let all: Vec<Option<u32>> = core::iter::once(None).chain(ids.iter().copied().map(Some)).collect();
+        let all: Vec<Option<PlayerId>> = core::iter::once(None).chain(ids.iter().copied().map(Some)).collect();
         let i = all.iter().position(|t| *t == spec.target).unwrap_or(0) as i32;
         spec.target = all[(i + dir).rem_euclid(all.len() as i32) as usize];
         spec.manual = true;

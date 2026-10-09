@@ -11,7 +11,7 @@ use fb_arena::{
     fell, reach_checkpoint, respawn, respawn_point, tick_bodies_with,
 };
 use fb_net::*;
-use fb_proto::{ArenaInfo, Pid};
+use fb_proto::{ArenaInfo, PlayerId};
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::{DT, m};
 use fb_sim::beans;
@@ -85,7 +85,7 @@ pub struct Map {
     /// Who plays this arena, and who of them finished (in order) or is out.
     pub info: ArenaInfo,
     /// Decorations maps put on beans (tails, badges).
-    pub deco: BTreeMap<Pid, BeanDeco>,
+    pub deco: BTreeMap<PlayerId, BeanDeco>,
     /// Sounds the map asked for, for the audio to take.
     pub sfx: Vec<MapSfx>,
     /// How this round looks (`fb_sim::looks`): palettes, sky, light, fog, scenery.
@@ -130,7 +130,7 @@ impl Map {
     }
 
     /// Finished or out: the bean has left the arena.
-    pub fn gone(&self, id: Pid) -> bool {
+    pub fn gone(&self, id: PlayerId) -> bool {
         self.info.finished.contains(&id) || self.info.out.contains(&id)
     }
 
@@ -144,7 +144,7 @@ impl Map {
         zero_tick: i64,
     ) -> Map {
         const SEED: u32 = 1;
-        let participants: Vec<Pid> = (1..=8).collect();
+        let participants: Vec<PlayerId> = (1..=8).map(PlayerId).collect();
         let meta = def.meta();
         let (mut b, mut spec) = build_map(def, SEED, true, &participants);
         let bonuses = if kind == ArenaKind::Round {
@@ -226,20 +226,20 @@ pub enum Cue {
     Knocked,
     Bumped(f32),
     Landed(f32),
-    Finish(Pid),
+    Finish(PlayerId),
     Ko {
-        id: Pid,
+        id: PlayerId,
         out: bool,
     },
-    Bonus(Pid),
+    Bonus(PlayerId),
     Emote {
-        id: Pid,
+        id: PlayerId,
         e: u8,
     },
     /// A round's results are in.
     Results,
     /// Somebody rang the lobby's bell (climbed its tower).
-    Bell(Pid),
+    Bell(PlayerId),
     /// A sound the map asked for (`MapSfx`).
     Sfx(crate::audio::Sfx),
 }
@@ -599,7 +599,7 @@ fn pace_pushes(
     }
 }
 
-fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Query<(), With<PlayerId>>) {
+fn on_controlled(trigger: On<Add, Controlled>, mut commands: Commands, pawns: Query<(), With<BeanId>>) {
     if pawns.get(trigger.entity).is_ok() {
         commands.entity(trigger.entity).insert((
             InputMarker::<FbInput>::default(),
@@ -620,9 +620,9 @@ enum Steer {
 
 /// A slow circle with a hop now and then, and a run for any bonus lying about: exercises prediction and
 /// the map event path without a player.
-fn autopilot(k: u32, map: Option<&Map>, own: Option<(&PlayerId, &BodyFull)>) -> Steer {
+fn autopilot(k: u32, map: Option<&Map>, own: Option<(&BeanId, &BodyFull)>) -> Steer {
     // Each player on its own rhythm, so a room of autopilots does not move in lockstep.
-    let id = own.map_or(0, |(id, _)| id.0);
+    let id = own.map_or(0, |(id, _)| id.0.0);
     let p = k + id * 53;
     let buttons = if p % (89 + id % 13) < 2 { BTN_JUMP } else { 0 };
     if let (Some(map), Some((_, own))) = (map, own) {
@@ -721,7 +721,7 @@ fn write_input(
     map: Option<Res<Map>>,
     mut probe: Option<ResMut<ProbeInput>>,
     time: Res<Time<Real>>,
-    mut q: Query<(&mut ActionState<FbInput>, Option<(&PlayerId, &BodyFull)>), With<InputMarker<FbInput>>>,
+    mut q: Query<(&mut ActionState<FbInput>, Option<(&BeanId, &BodyFull)>), With<InputMarker<FbInput>>>,
     gate: Res<Gate>,
     binds: Res<Bindings>,
     rollback: Option<Res<Rollback>>,
@@ -787,7 +787,7 @@ fn predict(
     mut stats: ResMut<Stats>,
     mut own: Query<
         (
-            &PlayerId,
+            &BeanId,
             &mut BodyFull,
             &ActionState<FbInput>,
             &mut OwnEvents,
@@ -796,7 +796,7 @@ fn predict(
         ),
         With<Predicted>,
     >,
-    others: Query<(&PlayerId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
+    others: Query<(&BeanId, &RemotePose), (With<Interpolated>, Without<Predicted>)>,
     trace: Option<ResMut<Trace>>,
     (hits, interp): (Option<ResMut<HitTrace>>, Option<Res<InterpolationTimeline>>),
     session: Res<Session>,
@@ -879,7 +879,7 @@ fn predict(
             }
         })
         .collect();
-    let drawn = |_: u32, b: u32| extra.iter().find(|o| o.id == b).copied();
+    let drawn = |_: PlayerId, b: PlayerId| extra.iter().find(|o| o.id == b).copied();
     let full = &mut *full;
     // A body from the previous arena may stand on a collider this world does not have.
     if full
@@ -964,7 +964,7 @@ fn predict(
 }
 
 /// The `--trace` line of the own bean at `tick`.
-fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: u32, frame: InputFrame, b: &Body) {
+fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: PlayerId, frame: InputFrame, b: &Body) {
     if core::mem::take(&mut trace.fresh) {
         let _ = writeln!(trace.out, "R {}", tick.0);
     }
@@ -988,7 +988,7 @@ fn write_trace(trace: &mut Trace, tick: Tick, session: &Session, id: u32, frame:
 fn write_hits(
     hits: &mut HitTrace,
     k: i64,
-    id: u32,
+    id: PlayerId,
     replay: bool,
     view: Option<u32>,
     b: &Body,
@@ -1060,7 +1060,7 @@ fn write_hits(
 /// The arena's rules for the own bean that need nobody else: the checkpoint it reached, and where a fall
 /// puts it back (the server would say so only a round trip later, after a rollback or three). A fall that
 /// puts it out of a survival round, a shortcut and the lobby's free spawn stay the server's.
-fn predict_respawn(map: &Map, id: u32, full: &mut BodyFull) {
+fn predict_respawn(map: &Map, id: PlayerId, full: &mut BodyFull) {
     let (kind, fall) = (map.round.kind, map.round.fall);
     let mut checkpoint = full
         .checkpoint
@@ -1110,7 +1110,7 @@ fn apply_map_events(
     map: Option<ResMut<Map>>,
     mut inbox: ResMut<Inbox>,
     interp: Option<Res<InterpolationTimeline>>,
-    own: Query<&PlayerId, With<Predicted>>,
+    own: Query<&BeanId, With<Predicted>>,
     rounds: Query<&Round>,
     mut session: ResMut<Session>,
     mut feed: ResMut<FeedLog>,
@@ -1260,7 +1260,7 @@ const EMOTE_PAD: [GamepadButton; 4] = [
 fn send_emotes(
     keys: Option<Res<ButtonInput<KeyCode>>>,
     pads: Query<&Gamepad>,
-    own: Query<(), (With<Predicted>, With<PlayerId>)>,
+    own: Query<(), (With<Predicted>, With<BeanId>)>,
     mut senders: Query<&mut MessageSender<ClientMsg>, With<Client>>,
     gate: Res<Gate>,
 ) {

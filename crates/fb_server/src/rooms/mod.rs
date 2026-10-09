@@ -12,7 +12,7 @@ mod tests;
 use core::fmt;
 
 use bevy::ecs::entity::Entity;
-use fb_proto::{MapEventMsg, Pid, ServerMsg};
+use fb_proto::{MapEventMsg, PlayerId, ServerMsg};
 use fb_shared::TICK_RATE;
 use fb_shared::input::InputFrame;
 
@@ -60,10 +60,10 @@ pub enum Out {
 /// Where the players' inputs come from.
 pub trait Inputs {
     /// Player `id`'s frame for server tick `tick`.
-    fn frame(&mut self, id: Pid, conn: ConnId, tick: u32) -> InputFrame;
+    fn frame(&mut self, id: PlayerId, conn: ConnId, tick: u32) -> InputFrame;
 
     /// How many ticks behind its own bean player `id` sees the others.
-    fn view(&mut self, _id: Pid, _conn: ConnId) -> u32 {
+    fn view(&mut self, _id: PlayerId, _conn: ConnId) -> u32 {
         0
     }
 }
@@ -72,7 +72,7 @@ pub trait Inputs {
 pub struct NoInputs;
 
 impl Inputs for NoInputs {
-    fn frame(&mut self, _: Pid, _: ConnId, _: u32) -> InputFrame {
+    fn frame(&mut self, _: PlayerId, _: ConnId, _: u32) -> InputFrame {
         InputFrame::IDLE
     }
 }

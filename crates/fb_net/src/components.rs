@@ -1,15 +1,16 @@
 //! Replicated components: the round, each bean's identity, its full state (owner) and its pose (others).
 use bevy::math::Curve;
 use bevy::prelude::*;
+use fb_shared::PlayerId;
 use fb_shared::game::{ArenaKind, FallBehaviour};
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyState, Power};
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The server's id of a player in the room (small, sequential; not the network id).
+/// Whose bean an entity is.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PlayerId(pub u32);
+pub struct BeanId(pub PlayerId);
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BeanColor(pub u8);
@@ -147,7 +148,7 @@ impl Anim {
 /// arms of every bean, the own one's included.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Hold {
-    pub target: Option<u32>,
+    pub target: Option<PlayerId>,
     pub reaching: bool,
 }
 

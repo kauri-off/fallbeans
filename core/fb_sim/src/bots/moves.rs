@@ -78,7 +78,7 @@ pub fn nav_to(bot: &mut BotView, tx: f64, tz: f64, out: &mut BotInput, speed: f6
         Some(cur) => dist_xz(cur.pos, b.pos) > 6.0 || cur.pos.y - b.pos.y > 2.5,
         None => true,
     };
-    let stale = bot.t - bot.plan.at > 0.6 + (bot.id % 5) as f64 * 0.07;
+    let stale = bot.t - bot.plan.at > 0.6 + (bot.id.0 % 5) as f64 * 0.07;
     if b.grounded && (off || stale || m::hypot(bot.plan.tx - tx, bot.plan.tz - tz) > 1.0) {
         // Extra route cost near other beans on the ground: bots run around a crowd instead of into it.
         let y = b.pos.y;
@@ -219,7 +219,7 @@ pub fn unstick(bot: &mut BotView, out: &mut BotInput) {
         // Still stuck: side-step for a moment, to the own right of the line to a bean in the way, or
         // to one side of the heading; every other try the other way, and never off an edge.
         let (hx, hz) = heading(bot, out);
-        let odd = if bot.id % 2 == 1 { -1.0 } else { 1.0 };
+        let odd = if bot.id.0 % 2 == 1 { -1.0 } else { 1.0 };
         let mut sx = hz * odd;
         let mut sz = -hx * odd;
         let mut near = 1.6;

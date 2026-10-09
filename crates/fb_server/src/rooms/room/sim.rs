@@ -10,7 +10,7 @@ impl Room {
         } else {
             RECONNECT_GRACE_S
         });
-        let timed_out: Vec<Pid> = self
+        let timed_out: Vec<PlayerId> = self
             .players
             .iter()
             .filter(|p| match p.kind {
@@ -24,7 +24,7 @@ impl Room {
             .map(|p| p.id)
             .collect();
         for id in timed_out {
-            info!(room = %self.id, id, "player timed out");
+            info!(room = %self.id, %id, "player timed out");
             self.remove_player(id);
         }
         self.tick_room(inputs, false);
@@ -73,7 +73,7 @@ impl Room {
                 self.arena.set_view(p.id, view);
             }
         }
-        let mut frames: Vec<(Pid, InputFrame)> = self
+        let mut frames: Vec<(PlayerId, InputFrame)> = self
             .players
             .iter()
             .filter_map(|p| Some((p.id, inputs.frame(p.id, p.conn()?, tick).clamped())))

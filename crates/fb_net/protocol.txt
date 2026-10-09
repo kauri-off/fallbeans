@@ -61,7 +61,7 @@ messages
     6 ServerMsg
     7 ClientMsg
 components
-    0 PlayerId
+    0 BeanId
     1 BeanColor
     2 Round
     3 BodyFull
@@ -87,14 +87,14 @@ struct ArenaInfo {
     id: u32
     kind: ArenaKind
     game: str
-    participants: Vec<u32>
+    participants: Vec<PlayerId>
     index: u32
     total: u32
     practice: bool
     late: bool
-    finished: Vec<u32>
-    out: Vec<u32>
-    scores: Vec<(u32, i64)>
+    finished: Vec<PlayerId>
+    out: Vec<PlayerId>
+    scores: Vec<(PlayerId, i64)>
 }
 enum ArenaKind {
     0 Lobby
@@ -103,7 +103,7 @@ enum ArenaKind {
 }
 struct Award {
     kind: AwardKind
-    id: u32
+    id: PlayerId
     value: u32
 }
 enum AwardKind {
@@ -115,6 +115,7 @@ enum AwardKind {
     5 Sly
 }
 struct BeanColor(u8)
+struct BeanId(PlayerId)
 enum BodyState {
     0 Normal
     1 Stun
@@ -146,8 +147,8 @@ enum ClientMsg {
     8 Abort
     9 Playlist(Playlist)
     10 AddBot
-    11 RemoveBot(u32)
-    12 Host(u32)
+    11 RemoveBot(PlayerId)
+    12 Host(PlayerId)
     13 Access { private: bool }
     14 Fill(bool)
     15 Emote(u8)
@@ -168,13 +169,13 @@ enum DevCmd {
     4 Lobby
     5 Rate { k: f64 }
     6 Step { ticks: u32 }
-    7 Teleport { id: Option<u32>, p: [f64; 3], yaw: Option<f64> }
-    8 Goto { id: Option<u32>, to: Goto }
+    7 Teleport { id: Option<PlayerId>, p: [f64; 3], yaw: Option<f64> }
+    8 Goto { id: Option<PlayerId>, to: Goto }
     9 Bot { n: Option<u32>, near: bool }
     10 Bots { on: bool }
-    11 Kill { id: Option<u32> }
-    12 Knock { id: Option<u32>, v: [f64; 3] }
-    13 Grab { actor: Option<u32>, target: u32, s: Option<f64> }
+    11 Kill { id: Option<PlayerId> }
+    12 Knock { id: Option<PlayerId>, v: [f64; 3] }
+    13 Grab { actor: Option<PlayerId>, target: PlayerId, s: Option<f64> }
     14 Seed { seed: u32 }
 }
 enum FallBehaviour {
@@ -206,7 +207,7 @@ struct Full {
     power: Option<Power>
     power_until: f64
     climb_to: [f64; 3]
-    tackled: Option<u32>
+    tackled: Option<PlayerId>
     teleports: u32
     checkpoint: Option<u16>
     spawn: u16
@@ -262,13 +263,13 @@ struct Hello {
     outfit: Option<Outfit>
 }
 struct Hold {
-    target: Option<u32>
+    target: Option<PlayerId>
     reaching: bool
 }
 struct Lobby {
     room: RoomRef
     phase: Phase
-    host: Option<u32>
+    host: Option<PlayerId>
     min: u32
     max: u32
     players: Vec<LobbyPlayer>
@@ -278,7 +279,7 @@ struct Lobby {
     next: Option<u32>
 }
 struct LobbyPlayer {
-    id: u32
+    id: PlayerId
     name: str
     color: u8
     outfit: Outfit
@@ -293,15 +294,15 @@ enum MapEvent {
     0 Portal { pair: u32, from: u32, t: f64 }
     1 Seg { seg: u32, ev: SegEvent }
     2 Tile { i: u32, at: f64 }
-    3 Star { k: u32, id: u32 }
-    4 Drop { from: u32, to: Option<u32>, n: i64 }
-    5 Snatch { from: u32, to: u32 }
-    6 Tails { ids: Vec<u32>, by: u32 }
+    3 Star { k: u32, id: PlayerId }
+    4 Drop { from: PlayerId, to: Option<PlayerId>, n: i64 }
+    5 Snatch { from: PlayerId, to: PlayerId }
+    6 Tails { ids: Vec<PlayerId>, by: PlayerId }
 }
 enum MapEventKind {
-    0 Bonus { i: u32, id: u32, at: f64 }
-    1 Finish { id: u32, place: u32, time: f64 }
-    2 Ko { id: u32, out: bool, by: Option<u32>, cause: Cause, shortcut: bool }
+    0 Bonus { i: u32, id: PlayerId, at: f64 }
+    1 Finish { id: PlayerId, place: u32, time: f64 }
+    2 Ko { id: PlayerId, out: bool, by: Option<PlayerId>, cause: Cause, shortcut: bool }
     3 Map(MapEvent)
 }
 struct MapEventMsg {
@@ -391,7 +392,7 @@ enum RoundNote {
     2 Points(i64)
 }
 struct RoundRow {
-    id: u32
+    id: PlayerId
     place: u64
     points: i64
     penalty: i64
@@ -412,21 +413,21 @@ enum ServerMsg {
     2 Rooms { rooms: Vec<RoomInfo>, mine: Option<str> }
     3 Denied { room: Option<str>, reason: DenyReason, msg: Option<str> }
     4 Home { msg: Option<str> }
-    5 Welcome { id: u32, room: str, solo: bool, practice: bool, resumed: bool }
+    5 Welcome { id: PlayerId, room: str, solo: bool, practice: bool, resumed: bool }
     6 Lobby(Lobby)
     7 Arena(ArenaInfo)
     8 RoundEnd { game: str, index: u32, total: u32, rows: Vec<RoundRow>, practice: bool }
     9 GameEnd { standings: Vec<Standing>, awards: Vec<Award> }
-    10 Scores(Vec<(u32, i64)>)
-    11 Emote { id: u32, e: u8 }
-    12 Chat { id: u32, name: str, text: str }
+    10 Scores(Vec<(PlayerId, i64)>)
+    11 Emote { id: PlayerId, e: u8 }
+    12 Chat { id: PlayerId, name: str, text: str }
     13 Notice(str)
-    14 Left(u32)
+    14 Left(PlayerId)
     15 DevAck { q: Option<u32>, result: Result }
     16 Clock { rate: f64 }
 }
 struct Standing {
-    id: u32
+    id: PlayerId
     name: str
     color: u8
     place: u32

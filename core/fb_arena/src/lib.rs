@@ -10,7 +10,7 @@ use fb_shared::hash::Fnv;
 use fb_shared::input::{BTN_DIVE, BTN_GRAB, BTN_JUMP, InputFrame};
 use fb_shared::m::MinMax;
 use fb_shared::rng::Rng;
-use fb_shared::{BOT_EVERY, DT, m};
+use fb_shared::{BOT_EVERY, DT, PlayerId, m};
 use fb_sim::beans::{self, Other, Side};
 use fb_sim::bonus::{BonusTaken, Bonuses};
 use fb_sim::bots::{BotInput, BotMem, BotPlan, BotView, OtherView, smooth_stick};
@@ -82,13 +82,13 @@ pub struct BotState {
 /// The last thing that hit a bean: another player (by) and/or a hazard (cause).
 #[derive(Clone, Copy, Debug)]
 pub struct Hit {
-    pub by: Option<u32>,
+    pub by: Option<PlayerId>,
     pub cause: Cause,
     pub t: f64,
 }
 
 pub struct Pawn {
-    pub id: u32,
+    pub id: PlayerId,
     pub body: Body,
     pub ev: StepEvents,
     pub status: PawnStatus,
@@ -101,7 +101,7 @@ pub struct Pawn {
     /// Index into the map's checkpoints.
     pub checkpoint: Option<usize>,
     pub progress: f64,
-    pub grabbing: Option<u32>,
+    pub grabbing: Option<PlayerId>,
     pub hold_since: f64,
     pub grab_ready_at: f64,
     /// Jumps while held (breaking free).
@@ -121,10 +121,10 @@ pub struct Pawn {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KoInfo {
-    pub id: u32,
+    pub id: PlayerId,
     /// Eliminated from the round (survival), not just respawned.
     pub out: bool,
-    pub by: Option<u32>,
+    pub by: Option<PlayerId>,
     pub cause: Cause,
     pub shortcut: bool,
     /// Where the bean was when it fell.
@@ -136,12 +136,12 @@ pub struct KoInfo {
 pub enum ArenaEvent {
     Bonus(BonusTaken),
     Finish {
-        id: u32,
+        id: PlayerId,
         t: f64,
     },
     Ko(KoInfo),
     Emote {
-        id: u32,
+        id: PlayerId,
         e: u32,
     },
     /// A map event (`keep`: sent again to whoever joins later).
@@ -150,7 +150,7 @@ pub enum ArenaEvent {
         keep: bool,
     },
     Score {
-        id: u32,
+        id: PlayerId,
         v: i64,
     },
 }
@@ -160,7 +160,7 @@ pub enum ArenaEvent {
 pub struct JournalEntry {
     pub t: f64,
     pub what: &'static str,
-    pub id: Option<u32>,
+    pub id: Option<PlayerId>,
     pub data: Option<Value>,
 }
 
@@ -174,7 +174,7 @@ pub struct TraceEntry {
     pub grounded: bool,
     /// Input used: move x/z (−127…127) and buttons (1 jump, 2 dive, 4 grab).
     pub input: [i32; 3],
-    pub grabbing: Option<u32>,
+    pub grabbing: Option<PlayerId>,
     pub hazard: Option<Hazard>,
 }
 
@@ -182,7 +182,7 @@ pub struct TraceEntry {
 struct PawnBodies<'a>(&'a mut [Pawn]);
 
 impl Bodies for PawnBodies<'_> {
-    fn ids(&self) -> Vec<u32> {
+    fn ids(&self) -> Vec<PlayerId> {
         self.0
             .iter()
             .filter(|p| p.status == PawnStatus::Play)
@@ -190,14 +190,14 @@ impl Bodies for PawnBodies<'_> {
             .collect()
     }
 
-    fn get(&self, id: u32) -> Option<&Body> {
+    fn get(&self, id: PlayerId) -> Option<&Body> {
         self.0
             .iter()
             .find(|p| p.id == id && p.status == PawnStatus::Play)
             .map(|p| &p.body)
     }
 
-    fn get_mut(&mut self, id: u32) -> Option<&mut Body> {
+    fn get_mut(&mut self, id: PlayerId) -> Option<&mut Body> {
         self.0
             .iter_mut()
             .find(|p| p.id == id && p.status == PawnStatus::Play)
@@ -212,27 +212,27 @@ pub struct Arena {
     pub world: World,
     pub spec: MapSpec,
     pub bonuses: Bonuses,
-    pub participants: Vec<u32>,
+    pub participants: Vec<PlayerId>,
     /// In the order they were added.
     pub pawns: Vec<Pawn>,
     pub fall: FallBehaviour,
     /// Arena tick: sim time is tick × DT, negative during the intro.
     pub tick: i64,
     pub static_hash: Fingerprint,
-    pub scores: BTreeMap<u32, i64>,
+    pub scores: BTreeMap<PlayerId, i64>,
     /// Map events and bonuses taken so far that whoever joins later must hear of (debug: the room keeps them).
     pub kept_events: usize,
     /// Debug: recent history of every bean, and of the arena.
-    pub trace: BTreeMap<u32, VecDeque<TraceEntry>>,
+    pub trace: BTreeMap<PlayerId, VecDeque<TraceEntry>>,
     pub journal: VecDeque<JournalEntry>,
     /// The round so far, for replays (None unless recording).
     pub recording: Option<Recording>,
     /// What map logic said during the current handler call.
     map_out: Vec<MapOut>,
     /// In finishing order.
-    pub finished: Vec<u32>,
+    pub finished: Vec<PlayerId>,
     /// In elimination order.
-    pub out: Vec<u32>,
+    pub out: Vec<PlayerId>,
     /// Results are decided: no more finishes or outs are recorded.
     pub frozen: bool,
     /// Dev: bot brains run (false: bots stand still).
@@ -253,11 +253,11 @@ pub struct Arena {
     hit_quiet: beans::NoteQuiet,
 }
 
-type SeenTicks = VecDeque<(i64, Vec<(u32, u32, bool, OtherBody)>)>;
+type SeenTicks = VecDeque<(i64, Vec<(PlayerId, u32, bool, OtherBody)>)>;
 
 /// Where a player seeing `view` ticks behind saw bean `b` at tick k. None: now, or the bean is not where it was
 /// any more (respawned since, or knocked over since by someone else: no tackle on what already flies away).
-fn saw_in(seen: &SeenTicks, k: i64, view: u32, b: u32, teleports: u32, down: bool) -> Option<OtherBody> {
+fn saw_in(seen: &SeenTicks, k: i64, view: u32, b: PlayerId, teleports: u32, down: bool) -> Option<OtherBody> {
     if view == 0 {
         return None;
     }
@@ -284,7 +284,7 @@ impl Arena {
         kind: ArenaKind,
         seed: u32,
         tick: i64,
-        participants: &[u32],
+        participants: &[PlayerId],
         with_scene: bool,
     ) -> (Self, Option<SceneDesc>) {
         let (mut b, spec) = build_map(map, seed, with_scene, participants);
@@ -345,21 +345,21 @@ impl Arena {
         face_yaw(&self.spec, p)
     }
 
-    fn index(&self, id: u32) -> Option<usize> {
+    fn index(&self, id: PlayerId) -> Option<usize> {
         self.pawns.iter().position(|p| p.id == id)
     }
 
-    pub fn pawn(&self, id: u32) -> Option<&Pawn> {
+    pub fn pawn(&self, id: PlayerId) -> Option<&Pawn> {
         self.pawns.iter().find(|p| p.id == id)
     }
 
     /// Adds a player or a bot at the next spawn (in the lobby: a free one).
-    pub fn add_pawn(&mut self, id: u32, bot: bool) -> &mut Pawn {
+    pub fn add_pawn(&mut self, id: PlayerId, bot: bool) -> &mut Pawn {
         self.add_pawn_at(id, bot, None)
     }
 
     /// Adds a pawn at spawn point `spawn` (None: the next one, in the lobby a free one).
-    pub fn add_pawn_at(&mut self, id: u32, bot: bool, spawn: Option<usize>) -> &mut Pawn {
+    pub fn add_pawn_at(&mut self, id: PlayerId, bot: bool, spawn: Option<usize>) -> &mut Pawn {
         if let Some(i) = self.index(id) {
             return &mut self.pawns[i];
         }
@@ -388,14 +388,14 @@ impl Arena {
         let spawns = &self.spec.spawns;
         let spawn_i = i % spawns.len();
         let spawn = spawns[spawn_i];
-        let mut body = Body::new(id as i32);
+        let mut body = Body::new(id.0 as i32);
         body.reset(spawn, self.face_yaw(spawn));
         // By slot in the round, not id: the same seed plays out the same whoever joined when.
         let slot = self
             .participants
             .iter()
             .position(|&p| p == id)
-            .map_or(id as u64, |k| k as u64 + 1);
+            .map_or(u64::from(id), |k| k as u64 + 1);
         let bot = bot.then(|| BotState {
             mem: BotMem::default(),
             plan: BotPlan::default(),
@@ -457,7 +457,7 @@ impl Arena {
         best
     }
 
-    pub fn remove_pawn(&mut self, id: u32) {
+    pub fn remove_pawn(&mut self, id: PlayerId) {
         self.op(Op::Remove(id));
         self.pawns.retain(|p| p.id != id);
         // (Ids are never reused: in a lobby that stays up for days the traces of those who left would pile up.)
@@ -517,7 +517,7 @@ impl Arena {
     }
 
     /// Adds a line to the debug journal.
-    pub fn note(&mut self, what: &'static str, id: Option<u32>, data: Option<Value>) {
+    pub fn note(&mut self, what: &'static str, id: Option<PlayerId>, data: Option<Value>) {
         self.journal.push_back(JournalEntry {
             t: r3(self.time()),
             what,
@@ -544,7 +544,7 @@ impl Arena {
     }
 
     /// Runs tick k. Players' frames come from `frame` (the room's input buffers); bots think here.
-    pub fn step(&mut self, k: i64, frame: impl Fn(u32) -> InputFrame) -> Vec<ArenaEvent> {
+    pub fn step(&mut self, k: i64, frame: impl Fn(PlayerId) -> InputFrame) -> Vec<ArenaEvent> {
         self.tick = k;
         let t = k as f64 * DT;
         let mut events = Vec::new();
@@ -571,7 +571,7 @@ impl Arena {
         }
 
         {
-            let looks: Vec<(u32, u32, u32, bool)> = active
+            let looks: Vec<(PlayerId, u32, u32, bool)> = active
                 .iter()
                 .map(|&i| {
                     let p = &self.pawns[i];
@@ -579,8 +579,8 @@ impl Arena {
                 })
                 .collect();
             let history = &self.seen;
-            let seen = |a: u32, b: u32| -> Option<OtherBody> {
-                let look = |id: u32| looks.iter().find(|l| l.0 == id);
+            let seen = |a: PlayerId, b: PlayerId| -> Option<OtherBody> {
+                let look = |id: PlayerId| looks.iter().find(|l| l.0 == id);
                 let o = look(b)?;
                 saw_in(history, k, look(a)?.1, b, o.2, o.3)
             };
@@ -647,7 +647,7 @@ impl Arena {
             self.interact(i, &active, t, &mut events);
         }
         if round && t >= 0.0 && !self.frozen {
-            let mut bodies: Vec<(u32, &mut Body)> = Vec::with_capacity(active.len());
+            let mut bodies: Vec<(PlayerId, &mut Body)> = Vec::with_capacity(active.len());
             let mut it = active.iter().peekable();
             for (i, p) in self.pawns.iter_mut().enumerate() {
                 if it.peek() == Some(&&i) {
@@ -693,7 +693,7 @@ impl Arena {
     }
 
     /// How many ticks behind its bean player `id` sees the others (from its client; recorded).
-    pub fn set_view(&mut self, id: u32, ticks: u32) {
+    pub fn set_view(&mut self, id: PlayerId, ticks: u32) {
         let ticks = ticks.min(MAX_VIEW);
         let Some(i) = self.index(id) else { return };
         if self.pawns[i].view != ticks {

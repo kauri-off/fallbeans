@@ -17,7 +17,7 @@ use serde_reflection::{ContainerFormat, Format, Named, Tracer, TracerConfig, Var
 
 use crate::wire::{POS_STEPS, SIZE_STEPS, TILT_DIR_STEPS, TILT_STEPS, VEL_STEPS, YAW_STEPS};
 use crate::{
-    Anim, BeanColor, BodyFull, ClientMsg, FbInput, Hold, MapEventMsg, PlayerId, ProtocolPlugin, RemotePose, Round,
+    Anim, BeanColor, BeanId, BodyFull, ClientMsg, FbInput, Hold, MapEventMsg, ProtocolPlugin, RemotePose, Round,
     ServerMsg, TICK,
 };
 
@@ -130,7 +130,7 @@ fn types() -> Vec<String> {
     trace::<ServerMsg>(&mut tracer);
     trace::<MapEventMsg>(&mut tracer);
     trace::<FbInput>(&mut tracer);
-    trace::<PlayerId>(&mut tracer);
+    trace::<BeanId>(&mut tracer);
     trace::<BeanColor>(&mut tracer);
     trace::<Round>(&mut tracer);
     trace::<BodyFull>(&mut tracer);

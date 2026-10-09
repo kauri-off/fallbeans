@@ -8,7 +8,7 @@ use fb_arena::{MapRun, Stepper, tick_bodies};
 use fb_shared::m::MinMax;
 use fb_shared::rgb;
 use fb_shared::rng::Rng;
-use fb_shared::{DT, m};
+use fb_shared::{DT, PlayerId, m};
 use fb_sim::builder::{Builder, PortalEnd, PortalOpts, PrimOpts};
 use fb_sim::collider::{ColliderOpts, Contact};
 use fb_sim::map::{Cx, MapLogic, NoLogic};
@@ -69,7 +69,7 @@ impl Sim {
             out: &mut out,
         };
         let mut steppers = [Stepper {
-            id: 1,
+            id: PlayerId(1),
             body: &mut self.body,
             ev: &mut self.ev,
             input,

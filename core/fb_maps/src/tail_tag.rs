@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use fb_shared::NEVER;
+use fb_shared::PlayerId;
 use fb_shared::rgb;
 use fb_shared::rng::shuffle;
 use fb_sim::bots::{
@@ -46,13 +47,13 @@ const HOLD_MAX: f64 = 3.0;
 
 struct Tails {
     /// Who has a tail, in the order they got it.
-    tails: Vec<u32>,
-    immune: BTreeMap<u32, f64>,
+    tails: Vec<PlayerId>,
+    immune: BTreeMap<PlayerId, f64>,
     /// Tails grabbed while immune (grabber, holder, since): the tail goes when the immunity ends, if the
     /// grabber still holds on.
-    held: Vec<(u32, u32, f64)>,
+    held: Vec<(PlayerId, PlayerId, f64)>,
     last_second: f64,
-    participants: Vec<u32>,
+    participants: Vec<PlayerId>,
     wander: BotBrain,
     /// Bots' notes: where a holder runs to, until when, and when it last turned away.
     flee_x: Note<f64>,
@@ -62,18 +63,18 @@ struct Tails {
 }
 
 impl Tails {
-    fn has(&self, id: u32) -> bool {
+    fn has(&self, id: PlayerId) -> bool {
         self.tails.contains(&id)
     }
 
     /// The local player has a tail (client).
-    fn mine(&self, me: Option<u32>) -> bool {
+    fn mine(&self, me: Option<PlayerId>) -> bool {
         me.is_some_and(|me| self.has(me))
     }
 
     /// The tail goes from `from` to `to`.
-    fn pass(&mut self, cx: &mut Cx, from: u32, to: u32) {
-        let mut next: Vec<u32> = self.tails.iter().copied().filter(|&id| id != from).collect();
+    fn pass(&mut self, cx: &mut Cx, from: PlayerId, to: PlayerId) {
+        let mut next: Vec<PlayerId> = self.tails.iter().copied().filter(|&id| id != from).collect();
         if !next.contains(&to) {
             next.push(to);
         }
@@ -153,7 +154,7 @@ impl MapLogic for Tails {
     }
 
     /// Tails weigh you down a little: the chasers can catch up.
-    fn bean(&self, id: u32, body: &mut Body, t: f64) {
+    fn bean(&self, id: PlayerId, body: &mut Body, t: f64) {
         if t < 0.0 || !self.has(id) {
             return;
         }
@@ -165,7 +166,7 @@ impl MapLogic for Tails {
         body.slow_until = body.slow_until.at_least(t + 0.25);
     }
 
-    fn grab(&mut self, cx: &mut Cx, actor: u32, target: u32) {
+    fn grab(&mut self, cx: &mut Cx, actor: PlayerId, target: PlayerId) {
         let t = cx.t;
         if t < 0.0 || self.has(actor) || !self.has(target) {
             return;
@@ -185,7 +186,7 @@ impl MapLogic for Tails {
         self.pass(cx, target, actor);
     }
 
-    fn fall(&mut self, cx: &mut Cx, id: u32, by: Option<u32>) {
+    fn fall(&mut self, cx: &mut Cx, id: PlayerId, by: Option<PlayerId>) {
         if !self.has(id) {
             return;
         }
@@ -216,7 +217,7 @@ impl MapLogic for Tails {
     fn event(&mut self, cx: &mut Cx, ev: &MapEvent) {
         let MapEvent::Tails { ids, by } = ev else { return };
         let before = self.mine(cx.me);
-        let mut tails: Vec<u32> = Vec::new();
+        let mut tails: Vec<PlayerId> = Vec::new();
         for &id in ids {
             if !tails.contains(&id) {
                 tails.push(id);

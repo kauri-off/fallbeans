@@ -10,7 +10,8 @@ pub struct MapEventsChannel;
 mod tests {
     use bevy_replicon::postcard;
     use fb_proto::{
-        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, Playlist, RejectReason, ServerMsg,
+        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, PlayerId, Playlist, RejectReason,
+        ServerMsg,
     };
     use serde::Serialize;
     use serde::de::DeserializeOwned;
@@ -55,7 +56,7 @@ mod tests {
                 games: vec!["door-dash".into(), "star-fall".into()],
                 ..Default::default()
             }),
-            ClientMsg::RemoveBot(u32::MAX),
+            ClientMsg::RemoveBot(PlayerId(u32::MAX)),
             ClientMsg::Access { private: false },
             ClientMsg::Fill(true),
             ClientMsg::Emote(5),
@@ -63,7 +64,7 @@ mod tests {
             ClientMsg::Dev {
                 q: Some(7),
                 cmd: DevCmd::Teleport {
-                    id: Some(2),
+                    id: Some(PlayerId(2)),
                     p: [-1.5, 1e9, 0.0],
                     yaw: Some(-3.0),
                 },
@@ -91,21 +92,21 @@ mod tests {
                 msg: Some("—".into())
             },
             ServerMsg::Welcome {
-                id: 9,
+                id: PlayerId(9),
                 room: "k7qxm".into(),
                 solo: false,
                 practice: true,
                 resumed: true,
             },
-            ServerMsg::Scores(vec![(1, -3), (2, i64::MAX)]),
-            ServerMsg::Emote { id: 1, e: 2 },
+            ServerMsg::Scores(vec![(PlayerId(1), -3), (PlayerId(2), i64::MAX)]),
+            ServerMsg::Emote { id: PlayerId(1), e: 2 },
             ServerMsg::Chat {
-                id: 1,
+                id: PlayerId(1),
                 name: "Боб".into(),
                 text: "привет".into(),
             },
             ServerMsg::Notice("PIN сменился".into()),
-            ServerMsg::Left(4),
+            ServerMsg::Left(PlayerId(4)),
             ServerMsg::DevAck {
                 q: Some(1),
                 result: Err("no round running".into()),
@@ -119,9 +120,9 @@ mod tests {
             arena: 3,
             tick: 1200,
             ev: MapEventKind::Ko {
-                id: 2,
+                id: PlayerId(2),
                 out: true,
-                by: Some(5),
+                by: Some(PlayerId(5)),
                 cause: Cause::Tackle,
                 shortcut: false,
             },
@@ -143,7 +144,11 @@ mod tests {
 
         // Four-byte characters, as many as a sanitized field keeps.
         let text = |n: usize| "🫘".repeat(n);
-        let pids = || (1..=MAX_PLAYERS as u32).map(|i| u32::MAX - i).collect::<Vec<_>>();
+        let pids = || {
+            (1..=MAX_PLAYERS as u32)
+                .map(|i| PlayerId(u32::MAX - i))
+                .collect::<Vec<_>>()
+        };
         let rooms = (0..MAX_ROOMS)
             .map(|_| RoomInfo {
                 id: "k7qxmzzz".into(),
@@ -163,7 +168,7 @@ mod tests {
                 private: true,
             },
             phase: Phase::Podium,
-            host: Some(u32::MAX),
+            host: Some(PlayerId(u32::MAX)),
             min: u32::MAX,
             max: u32::MAX,
             players: pids()
@@ -243,14 +248,14 @@ mod tests {
                 awards: vec![
                     Award {
                         kind: AwardKind::Sly,
-                        id: u32::MAX,
+                        id: PlayerId(u32::MAX),
                         value: u32::MAX,
                     };
                     6 * MAX_PLAYERS
                 ],
             },
             ServerMsg::Chat {
-                id: u32::MAX,
+                id: PlayerId(u32::MAX),
                 name: text(NAME_MAX),
                 text: text(CHAT_MAX),
             },

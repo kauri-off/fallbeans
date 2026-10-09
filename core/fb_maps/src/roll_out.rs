@@ -184,7 +184,7 @@ impl MapDef for RollOut {
                 // The top of the drum carries us sideways at −ω·R; "up" is against it.
                 let carry = -omega * rs * mirror;
                 let up = if carry == 0.0 { 0.0 } else { -m::sign(carry) };
-                let lane = ring.z + ((bot.id % 3) as f64 - 1.0) * 1.5 + bot.mem.traits().off * 0.4;
+                let lane = ring.z + ((bot.id.0 % 3) as f64 - 1.0) * 1.5 + bot.mem.traits().off * 0.4;
                 // Holes as intervals along the surface, in metres towards "up" from the bot.
                 let theta = ring.angle(t);
                 let phi = m::atan2(p.x, p.y - CY);

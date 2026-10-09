@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::time::common_conditions::on_real_timer;
 use fb_arena::PawnStatus;
 use fb_net::*;
-use fb_proto::Pid;
+use fb_proto::PlayerId;
 use fb_shared::input::{BTN_DIVE, BTN_JUMP, InputFrame};
 use fb_shared::{INPUT_HOLD, TICK_RATE};
 use lightyear::connection::client::Disconnecting;
@@ -26,7 +26,7 @@ use crate::rooms::hub::Hub;
 use crate::rooms::room::RoomOptions;
 use crate::rooms::{Backoff, ConnId, Inputs, Out, ticks};
 
-/// A bean in play in a room (`RoomTag`, `PlayerId`).
+/// A bean in play in a room (`RoomTag`, `BeanId`).
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Pawn;
 
@@ -42,7 +42,7 @@ struct PawnEntity {
 #[derive(Resource)]
 pub struct Rooms {
     pub hub: Hub,
-    pawns: BTreeMap<(u32, Pid), PawnEntity>,
+    pawns: BTreeMap<(u32, PlayerId), PawnEntity>,
     rounds: BTreeMap<u32, Entity>,
     /// The room each link is in, as last told to Replicon.
     in_room: BTreeMap<ConnId, u32>,
@@ -320,7 +320,7 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
         if st.gap > 0 && st.gap.is_multiple_of(still) && (st.gap / still).is_power_of_two() {
             warn!(
                 room,
-                id,
+                %id,
                 secs = st.gap / rate,
                 behind = st.behind,
                 "still no input from the player"
@@ -331,13 +331,13 @@ fn watch_inputs(timeline: Res<LocalTimeline>, rooms: Res<Rooms>, mut inputs: Que
                 st.hushed.0 += 1;
                 st.hushed.1 += ticks;
             } else {
-                warn!(room, id, ms = ms(ticks), behind, "input gap");
+                warn!(room, %id, ms = ms(ticks), behind, "input gap");
                 st.quiet_until = now + QUIET_S * rate;
             }
         }
         if st.hushed.0 > 0 && now >= st.quiet_until {
             let (n, ticks) = core::mem::take(&mut st.hushed);
-            warn!(room, id, n, ms = ms(ticks), "more input gaps in {QUIET_S} s");
+            warn!(room, %id, n, ms = ms(ticks), "more input gaps in {QUIET_S} s");
             st.quiet_until = now + QUIET_S * rate;
         }
     }
@@ -352,7 +352,7 @@ struct LinkInputs<'a, 'w, 's> {
 }
 
 impl Inputs for LinkInputs<'_, '_, '_> {
-    fn frame(&mut self, _: Pid, conn: ConnId, tick: u32) -> InputFrame {
+    fn frame(&mut self, _: PlayerId, conn: ConnId, tick: u32) -> InputFrame {
         let Some(&e) = self.owners.get(&conn) else {
             return InputFrame::IDLE;
         };
@@ -364,7 +364,7 @@ impl Inputs for LinkInputs<'_, '_, '_> {
         f
     }
 
-    fn view(&mut self, _: Pid, conn: ConnId) -> u32 {
+    fn view(&mut self, _: PlayerId, conn: ConnId) -> u32 {
         self.views.get(&conn).copied().unwrap_or(0)
     }
 }
@@ -597,7 +597,7 @@ fn publish(
             let mut e = commands.spawn((
                 Pawn,
                 RoomTag(key),
-                PlayerId(p.id),
+                BeanId(p.id),
                 BeanColor(color),
                 InputState::new(tick),
                 RemotePose::of(&full, &hold),

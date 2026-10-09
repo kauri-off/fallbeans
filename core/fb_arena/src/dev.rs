@@ -3,7 +3,7 @@ use super::*;
 
 impl Arena {
     /// Adds a pawn to a running arena (a bot joining mid-round), at `at` or the next spawn.
-    pub fn add_late_pawn(&mut self, id: u32, bot: bool, at: Option<V3>) {
+    pub fn add_late_pawn(&mut self, id: PlayerId, bot: bool, at: Option<V3>) {
         if self.index(id).is_some() {
             return;
         }
@@ -24,7 +24,7 @@ impl Arena {
         }
     }
 
-    fn place(&mut self, id: u32, pos: V3, yaw: Option<f64>) -> bool {
+    fn place(&mut self, id: PlayerId, pos: V3, yaw: Option<f64>) -> bool {
         let Some(i) = self.index(id) else { return false };
         let p = &mut self.pawns[i];
         if p.status != PawnStatus::Play {
@@ -37,13 +37,13 @@ impl Arena {
         true
     }
 
-    pub fn dev_teleport(&mut self, id: u32, pos: V3, yaw: Option<f64>) -> bool {
+    pub fn dev_teleport(&mut self, id: PlayerId, pos: V3, yaw: Option<f64>) -> bool {
         self.op(Op::Teleport { id, pos, yaw });
         self.place(id, pos, yaw)
     }
 
     /// Where `goto` sends a bean: its spawn, a checkpoint, or 3 m before the finish line.
-    pub fn dev_place(&self, id: u32, to: DevPlace) -> Option<V3> {
+    pub fn dev_place(&self, id: PlayerId, to: DevPlace) -> Option<V3> {
         let p = self.pawn(id)?;
         match to {
             DevPlace::Spawn => Some(p.spawn),
@@ -52,7 +52,7 @@ impl Arena {
         }
     }
 
-    pub fn dev_knock(&mut self, id: u32, v: V3) -> bool {
+    pub fn dev_knock(&mut self, id: PlayerId, v: V3) -> bool {
         self.op(Op::Knock { id, v });
         let t = self.time();
         let Some(i) = self.index(id) else { return false };
@@ -70,7 +70,7 @@ impl Arena {
     }
 
     /// Drops a bean below the kill height: it falls by the map's rules on the next tick.
-    pub fn dev_kill(&mut self, id: u32) -> bool {
+    pub fn dev_kill(&mut self, id: PlayerId) -> bool {
         self.op(Op::Kill(id));
         let kill_y = self.spec.kill_y;
         let Some(i) = self.index(id) else { return false };
@@ -82,7 +82,7 @@ impl Arena {
         true
     }
 
-    pub fn dev_grab(&mut self, actor: u32, target: u32, seconds: f64) -> Result<(), &'static str> {
+    pub fn dev_grab(&mut self, actor: PlayerId, target: PlayerId, seconds: f64) -> Result<(), &'static str> {
         self.op(Op::Grab { actor, target, seconds });
         let (Some(a), Some(o)) = (self.index(actor), self.index(target)) else {
             return Err("no such beans in play");

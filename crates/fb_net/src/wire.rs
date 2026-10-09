@@ -3,6 +3,7 @@
 use core::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
+use fb_shared::PlayerId;
 use fb_sim::math::V3;
 use fb_sim::physics::{Body, BodyState, GIANT_SIZE, Power};
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,7 @@ pub struct Full {
     power: Option<Power>,
     power_until: f64,
     climb_to: [f64; 3],
-    tackled: Option<u32>,
+    tackled: Option<PlayerId>,
     teleports: u32,
     checkpoint: Option<u16>,
     spawn: u16,

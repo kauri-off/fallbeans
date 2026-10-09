@@ -3,6 +3,7 @@
 //! the simulation actually used, run-length encoded; bots replay from the seed.
 use std::collections::BTreeMap;
 
+use fb_shared::PlayerId;
 use fb_shared::hash::StateHash;
 use fb_shared::input::InputFrame;
 use fb_sim::math::V3;
@@ -19,11 +20,11 @@ pub struct Recording {
     pub seed: u32,
     /// The arena tick it was created at (sim time × 120; negative during the intro).
     pub tick0: i64,
-    pub participants: Vec<u32>,
+    pub participants: Vec<PlayerId>,
     /// Pawns in the order they were added.
     pub pawns: Vec<PawnRec>,
     /// Human frames whenever they change.
-    pub frames: BTreeMap<u32, Vec<FrameRec>>,
+    pub frames: BTreeMap<PlayerId, Vec<FrameRec>>,
     /// Dev and roster changes applied between ticks: (after tick, op).
     pub ops: Vec<(i64, Op)>,
     pub end_tick: i64,
@@ -33,21 +34,24 @@ pub struct Recording {
 
 /// A pawn added at the start: `[id, bot, spawn index, tick added at]` in JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "(u32, bool, Option<usize>, i64)", into = "(u32, bool, Option<usize>, i64)")]
+#[serde(
+    from = "(PlayerId, bool, Option<usize>, i64)",
+    into = "(PlayerId, bool, Option<usize>, i64)"
+)]
 pub struct PawnRec {
-    pub id: u32,
+    pub id: PlayerId,
     pub bot: bool,
     pub spawn: Option<usize>,
     pub at: i64,
 }
 
-impl From<(u32, bool, Option<usize>, i64)> for PawnRec {
-    fn from((id, bot, spawn, at): (u32, bool, Option<usize>, i64)) -> Self {
+impl From<(PlayerId, bool, Option<usize>, i64)> for PawnRec {
+    fn from((id, bot, spawn, at): (PlayerId, bool, Option<usize>, i64)) -> Self {
         Self { id, bot, spawn, at }
     }
 }
 
-impl From<PawnRec> for (u32, bool, Option<usize>, i64) {
+impl From<PawnRec> for (PlayerId, bool, Option<usize>, i64) {
     fn from(p: PawnRec) -> Self {
         (p.id, p.bot, p.spawn, p.at)
     }
@@ -109,25 +113,25 @@ mod kind_name {
 /// Something that changed the simulation from outside between ticks: a pawn leaving or joining late, dev tools.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Op {
-    Remove(u32),
+    Remove(PlayerId),
     Late {
-        id: u32,
+        id: PlayerId,
         bot: bool,
         at: Option<V3>,
     },
     Teleport {
-        id: u32,
+        id: PlayerId,
         pos: V3,
         yaw: Option<f64>,
     },
     Knock {
-        id: u32,
+        id: PlayerId,
         v: V3,
     },
-    Kill(u32),
+    Kill(PlayerId),
     Grab {
-        actor: u32,
-        target: u32,
+        actor: PlayerId,
+        target: PlayerId,
         seconds: f64,
     },
     /// Bot brains run (false: bots stand still).
@@ -136,7 +140,7 @@ pub enum Op {
     Freeze,
     /// How many ticks behind its bean a player sees the others (`Arena::set_view`).
     View {
-        id: u32,
+        id: PlayerId,
         ticks: u32,
     },
     /// The arena jumped to this tick without simulating the ones between (`Arena::skip_to`).
@@ -144,7 +148,7 @@ pub enum Op {
 }
 
 impl Recording {
-    pub(crate) fn record_frame(&mut self, id: u32, k: i64, input: InputFrame) {
+    pub(crate) fn record_frame(&mut self, id: PlayerId, k: i64, input: InputFrame) {
         let list = self.frames.entry(id).or_default();
         if list.last().is_none_or(|l| l.input != input) {
             list.push(FrameRec { tick: k, input });
@@ -169,7 +173,7 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
         a.add_pawn_at(p.id, p.bot, p.spawn);
     }
     let mut later = rec.pawns.iter().filter(|p| p.at > first).peekable();
-    let mut cursor: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut cursor: BTreeMap<PlayerId, usize> = BTreeMap::new();
     let mut ops = rec.ops.iter().peekable();
     let mut stopped = false;
     let mut k = first + 1;
@@ -184,7 +188,7 @@ pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Result<R
         while let Some(p) = later.next_if(|p| p.at < k) {
             a.add_pawn_at(p.id, p.bot, p.spawn);
         }
-        let mut frames: BTreeMap<u32, InputFrame> = BTreeMap::new();
+        let mut frames: BTreeMap<PlayerId, InputFrame> = BTreeMap::new();
         for (&id, list) in &rec.frames {
             let c = cursor.entry(id).or_insert(0);
             while *c + 1 < list.len() && list[*c + 1].tick <= k {

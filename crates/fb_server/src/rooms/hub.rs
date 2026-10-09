@@ -68,7 +68,7 @@ pub enum Stand {
     InRoom {
         member: Member,
         room: u32,
-        id: Pid,
+        id: PlayerId,
     },
     /// Stands for nobody any more (no hello in time, or a newer connection of the player took over): what
     /// it sends is ignored until it closes.
@@ -84,7 +84,7 @@ impl Stand {
     }
 
     /// The room's key and the player's id in it.
-    pub fn seat(&self) -> Option<(u32, Pid)> {
+    pub fn seat(&self) -> Option<(u32, PlayerId)> {
         match self {
             Stand::InRoom { room, id, .. } => Some((*room, *id)),
             _ => None,
@@ -226,7 +226,7 @@ impl Hub {
     }
 
     /// The room key and player id of a connection in a room.
-    pub fn seat(&self, conn: ConnId) -> Option<(u32, Pid)> {
+    pub fn seat(&self, conn: ConnId) -> Option<(u32, PlayerId)> {
         self.sessions.get(&conn)?.stand.seat()
     }
 
@@ -242,7 +242,7 @@ impl Hub {
     }
 
     /// Out of its room: back at the room list (or `Gone`), and where it was.
-    fn unseat(&mut self, conn: ConnId, gone: bool) -> Option<(u32, Pid)> {
+    fn unseat(&mut self, conn: ConnId, gone: bool) -> Option<(u32, PlayerId)> {
         let s = self.sessions.get_mut(&conn)?;
         let seat = s.stand.seat();
         s.stand = match core::mem::replace(&mut s.stand, Stand::Gone) {
@@ -360,7 +360,13 @@ impl Hub {
         if let Err(what) = m.check() {
             if let Some(hushed) = s.warned.hit(now) {
                 let id = s.stand.seat().map(|(_, id)| id);
-                warn!(ip = s.ip.map(display), id, what, hushed, "bad message");
+                warn!(
+                    ip = s.ip.map(display),
+                    id = id.map(display),
+                    what,
+                    hushed,
+                    "bad message"
+                );
             }
             return;
         }
@@ -581,7 +587,7 @@ impl Hub {
             r.empty_since = None;
         }
         // One room at a time: a room still keeping this player's place (a game they dropped out of) lets go.
-        let others: Vec<(u32, Pid)> = self
+        let others: Vec<(u32, PlayerId)> = self
             .listed()
             .filter(|(k, _)| **k != key)
             .filter_map(|(k, r)| r.player_of(&m.uid).map(|p| (*k, p.id)))
