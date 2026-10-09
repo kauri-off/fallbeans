@@ -1,4 +1,5 @@
-//! Specks of pollen and sparkle drifting around the camera in the look's colour (snow falls, embers rise).
+//! Specks of pollen and sparkle drifting around the camera in the look's colour (snow falls, embers rise). Added
+//! light, marking the upscalers' reactive mask (`reactive.rs`): they have no motion vectors.
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -8,6 +9,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 
+use super::reactive::{ADD, MARK};
 use crate::game::Map;
 use crate::settings::Graphics;
 
@@ -63,6 +65,7 @@ impl Material for MotesMaterial {
         if let Some(d) = &mut descriptor.depth_stencil {
             d.depth_write_enabled = Some(false);
         }
+        super::reactive::blend(descriptor, ADD, MARK);
         Ok(())
     }
 }

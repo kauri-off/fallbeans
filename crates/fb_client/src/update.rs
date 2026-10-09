@@ -346,17 +346,17 @@ fn fetch_and_install(
             error,
         })?;
     let want = expected_sum(&sums, name).ok_or_else(|| UpdateError::NotListed { name: name.into() })?;
+    // (The release's name for the file, never a path of its own.)
+    let file = std::path::Path::new(name)
+        .file_name()
+        .ok_or_else(|| UpdateError::NotAFileName { name: name.into() })?;
     let path = match install {
-        Install::AppImage(p) => {
-            let mut n = p.as_os_str().to_owned();
+        Install::AppImage(old) => {
+            let mut n = old.with_file_name(file).into_os_string();
             n.push(".new");
             PathBuf::from(n)
         }
-        // (The release's name for the file, never a path of its own.)
-        _ => std::path::Path::new(name)
-            .file_name()
-            .map(|n| std::env::temp_dir().join(n))
-            .ok_or_else(|| UpdateError::NotAFileName { name: name.into() })?,
+        _ => std::env::temp_dir().join(file),
     };
     let mut resp = agent(None, Some(download_budget(size)))
         .get(url)
@@ -414,17 +414,22 @@ fn fetch_and_install(
             }
             cmd.spawn().map_err(file_error(&path))?;
         }
-        Install::AppImage(target) => {
+        Install::AppImage(old) => {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(file_error(&path))?;
             }
-            std::fs::rename(&path, target).map_err(file_error(target))?;
-            std::process::Command::new(target)
+            // The new release keeps its own name (`FallBeans-0.2.3-x86_64.AppImage`) next to the old one, which goes.
+            let target = old.with_file_name(file);
+            std::fs::rename(&path, &target).map_err(file_error(&target))?;
+            if target != *old {
+                let _ = std::fs::remove_file(old);
+            }
+            std::process::Command::new(&target)
                 .args(std::env::args_os().skip(1))
                 .spawn()
-                .map_err(file_error(target))?;
+                .map_err(file_error(&target))?;
         }
         Install::Flatpak => return Err(UpdateError::Flatpak),
     }

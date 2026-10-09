@@ -19,6 +19,7 @@ use lightyear::prelude::*;
 use crate::bean::{BeanAnim, Expr, Frame, PIVOT_Y, podium_pose};
 use crate::game::{Cue, Map, PrevPos, Smoothing};
 use crate::outfit::{Base, Tailor, Wardrobe, Wiggle, make_glasses, make_hat, wiggle};
+use crate::render::vfx::GlowMaterial;
 use crate::session::{Outcome, Session};
 use crate::view::{color, power_color};
 
@@ -130,7 +131,7 @@ pub struct Paints {
     mats: HashMap<PaintKey, Handle<StandardMaterial>>,
     /// The rainbow suit's materials (body, belly), recoloured every frame.
     rainbow: Vec<(Handle<StandardMaterial>, bool)>,
-    aura: Vec<Handle<StandardMaterial>>,
+    aura: Vec<Handle<GlowMaterial>>,
     aura_mesh: Option<Handle<Mesh>>,
     tear: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
 }
@@ -191,6 +192,7 @@ pub fn spawn_beans(
     mut paints: ResMut<Paints>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut glows: ResMut<Assets<GlowMaterial>>,
 ) {
     for (e, id) in &beans {
         let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
@@ -216,18 +218,10 @@ pub fn spawn_beans(
             .get_or_insert_with(|| meshes.add(Annulus::new(0.45, 0.8).mesh().resolution(40).build()))
             .clone();
         if paints.aura.is_empty() {
+            // Light added (marking the upscalers' reactive mask: it moves with the bean, over the ground's
+            // motion vectors).
             paints.aura = AURA_COLORS
-                .map(|c| {
-                    materials.add(StandardMaterial {
-                        base_color: c.with_alpha(0.7),
-                        unlit: true,
-                        // Light added (additive, not tone mapped against the scene).
-                        alpha_mode: AlphaMode::Add,
-                        double_sided: true,
-                        cull_mode: None,
-                        ..default()
-                    })
-                })
+                .map(|c| glows.add(GlowMaterial::new(c.with_alpha(0.7))))
                 .into();
         }
         let aura = commands
@@ -663,7 +657,7 @@ pub struct Puppets<'w, 's> {
     parts: Query<'w, 's, &'static mut Transform, (Without<BeanAnim>, Without<Wiggle>)>,
     wiggles: Query<'w, 's, (&'static Wiggle, &'static Base, &'static mut Transform), Without<BeanAnim>>,
     vis: Query<'w, 's, &'static mut Visibility, Without<BeanAnim>>,
-    aura_mats: Query<'w, 's, &'static mut MeshMaterial3d<StandardMaterial>, Without<BeanAnim>>,
+    aura_mats: Query<'w, 's, &'static mut MeshMaterial3d<GlowMaterial>, Without<BeanAnim>>,
     paints: Res<'w, Paints>,
 }
 

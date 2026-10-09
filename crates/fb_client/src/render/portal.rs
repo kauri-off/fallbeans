@@ -2,12 +2,15 @@
 //! a tunnel of bands sinking towards a white-hot core, sparks drawn in, a glowing rim, a slow pulse); a one-way
 //! exit is rings flowing out of a deep middle, sparks thrown out. A trip's flash (the special's tone)
 //! brightens the disc and spins it up. Animated on the GPU's clock: one draw a disc, nothing done on the CPU.
+//! Its opacity marks the upscalers' reactive mask (`reactive.rs`): it moves with no motion vectors.
 //! Also the exit's arrow.
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+};
 use bevy::shader::ShaderRef;
 
 #[derive(Clone, Copy, Default, ShaderType)]
@@ -63,6 +66,8 @@ impl Material for PortalMaterial {
     ) -> Result<(), SpecializedMeshPipelineError> {
         // Seen from both sides.
         descriptor.primitive.cull_mode = None;
+        let over = BlendState::ALPHA_BLENDING.color;
+        super::reactive::blend(descriptor, over, super::reactive::MARK);
         Ok(())
     }
 }

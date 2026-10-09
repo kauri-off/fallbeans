@@ -20,9 +20,10 @@ mod motes;
 pub mod portal;
 pub mod props;
 pub mod quality;
+mod reactive;
 pub mod surface;
 pub mod upscale;
-mod vfx;
+pub mod vfx;
 pub mod warmup;
 
 use std::collections::HashMap;

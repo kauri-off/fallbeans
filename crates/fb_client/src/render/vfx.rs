@@ -2,7 +2,8 @@
 //! written per burst, nothing per frame): dust where a bean lands or throws itself on its belly (and behind it
 //! as it slides on), confetti where one finishes or rings the lobby's bell, sparkles where one takes a bonus,
 //! a ring where a bumper throws one off (`props.rs`); and the twinkle about the finish's stars. Cheap enough for
-//! every preset.
+//! every preset. Also the glow of a bean's aura (`GlowMaterial`). Both mark the upscalers' reactive mask
+//! (`reactive.rs`): they have no motion vectors.
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
@@ -11,12 +12,15 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+};
 use bevy::shader::ShaderRef;
 use fb_net::{Anim, BeanId, BodyFull, RemotePose};
 use fb_sim::looks::Look;
 use lightyear::prelude::Predicted;
 
+use super::reactive::{ADD, MARK};
 use super::warmup::Warmup;
 use crate::beans::BeanView;
 use crate::game::{Cue, Map};
@@ -82,9 +86,24 @@ pub struct VfxUniform {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
+#[bind_group_data(VfxKey)]
 pub struct VfxMaterial {
     #[uniform(0)]
     pub u: VfxUniform,
+}
+
+/// The glowing kinds add their light; the others cover what is behind.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VfxKey {
+    glow: bool,
+}
+
+impl From<&VfxMaterial> for VfxKey {
+    fn from(m: &VfxMaterial) -> Self {
+        Self {
+            glow: m.u.params.x >= Kind::Sparkle.code() - 0.5,
+        }
+    }
 }
 
 impl Material for VfxMaterial {
@@ -96,7 +115,7 @@ impl Material for VfxMaterial {
         "embedded://fb_client/render/vfx.wgsl".into()
     }
 
-    // (Premultiplied: the dust and confetti cover what is behind, the glowing kinds add light with no alpha.)
+    // (Drawn with the see-through things; the blend is `specialize`'s.)
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Premultiplied
     }
@@ -113,7 +132,7 @@ impl Material for VfxMaterial {
         _: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         layout: &MeshVertexBufferLayoutRef,
-        _: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         let layout = layout.0.get_layout(&[
             Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
@@ -125,6 +144,66 @@ impl Material for VfxMaterial {
         if let Some(d) = &mut descriptor.depth_stencil {
             d.depth_write_enabled = Some(false);
         }
+        // Premultiplied over what is behind, or light added; the alpha (coverage, or the glow's strength) marks
+        // the mask either way.
+        let color = if key.bind_group_data.glow {
+            ADD
+        } else {
+            BlendState::PREMULTIPLIED_ALPHA_BLENDING.color
+        };
+        super::reactive::blend(descriptor, color, MARK);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Default, ShaderType)]
+pub struct GlowUniform {
+    /// rgb: colour (linear); a: strength (the light added is the colour times it).
+    pub color: Vec4,
+}
+
+/// Unlit light added over the scene in one colour: a bean's aura.
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct GlowMaterial {
+    #[uniform(0)]
+    pub u: GlowUniform,
+}
+
+impl GlowMaterial {
+    pub fn new(color: Color) -> Self {
+        Self {
+            u: GlowUniform {
+                color: color.to_linear().to_vec4(),
+            },
+        }
+    }
+}
+
+impl Material for GlowMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://fb_client/render/glow.wgsl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Add
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _: &MeshVertexBufferLayoutRef,
+        _: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        super::reactive::blend(descriptor, ADD, MARK);
         Ok(())
     }
 }
@@ -194,7 +273,11 @@ pub struct VfxPlugin;
 impl Plugin for VfxPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "vfx.wgsl");
-        app.add_plugins(MaterialPlugin::<VfxMaterial>::default());
+        bevy::asset::embedded_asset!(app, "glow.wgsl");
+        app.add_plugins((
+            MaterialPlugin::<VfxMaterial>::default(),
+            MaterialPlugin::<GlowMaterial>::default(),
+        ));
         app.add_message::<Burst>();
         app.add_systems(Startup, setup);
         app.add_systems(Update, ((bean_dust, cue_bursts), play, rest).chain());
@@ -203,11 +286,16 @@ impl Plugin for VfxPlugin {
 
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<VfxMaterial>>) {
     let mesh = meshes.add(mesh());
-    // (Drawn from the start, played out: their pipeline compiles with the warm-up, `rest` hides them after.)
+    // (Drawn from the start, played out: their pipelines compile with the warm-up, `rest` hides them after. Half
+    // are glowing kinds, half not: the two blends.)
     let slots = (0..SLOTS)
-        .map(|_| {
+        .map(|i| {
+            let kind = if i % 2 == 0 { Kind::Dust } else { Kind::Sparkle };
             let m = mats.add(VfxMaterial {
-                u: VfxUniform::default(),
+                u: VfxUniform {
+                    color: Vec4::ZERO,
+                    params: Vec4::new(kind.code(), 0.0, 0.0, 0.0),
+                },
             });
             let e = commands
                 .spawn((
@@ -430,6 +518,21 @@ mod tests {
             assert!(k.duration() > 0.0 && k.duration() < 3.0, "{k:?}");
         }
         assert_eq!(Kind::Twinkle.duration(), 0.0);
+    }
+
+    #[test]
+    fn glowing_kinds_add_their_light() {
+        let key = |k: Kind| {
+            VfxKey::from(&VfxMaterial {
+                u: VfxUniform {
+                    color: Vec4::ONE,
+                    params: Vec4::new(k.code(), 0.0, 0.0, 0.0),
+                },
+            })
+            .glow
+        };
+        assert!(!key(Kind::Dust) && !key(Kind::Confetti));
+        assert!(key(Kind::Sparkle) && key(Kind::Ring) && key(Kind::Twinkle));
     }
 
     #[test]

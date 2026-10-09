@@ -1,11 +1,13 @@
 //! AMD FSR 3.1 upscaling (`upscale.rs` chooses it) through AMD's own signed DLL (`ffx.rs`), on wgpu's Vulkan
 //! device: the context is made from wgpu-hal's raw handles, the upscale recorded into a command buffer of its own
 //! right after the main pass's (as Bevy does DLSS), on the main pass's colour, the prepass's depth and motion
-//! vectors and the jitter it asked for, into the full-resolution target before the post-processing.
+//! vectors and the jitter it asked for, into the full-resolution target before the post-processing. What has no
+//! motion vectors of its own is in the reactive mask (`reactive.rs`), given as both of FSR's masks, and the
+//! history is a little shorter than FSR's own (`HISTORY`).
 //!
 //! The images are where FidelityFX is told they are: wgpu moves them there first (`transition_resources`), and
 //! FidelityFX hands them back so. Colour and motion are sampled (`SHADER_READ_ONLY_OPTIMAL`), the output is a
-//! storage image (`GENERAL`); the prepass's depth stays the copy destination it already is
+//! storage image (`GENERAL`), the mask sampled too; the prepass's depth stays the copy destination it already is
 //! (`TRANSFER_DST_OPTIMAL`: wgpu keeps a sampled depth texture in a layout FidelityFX has no name for).
 #![allow(
     unsafe_code,
@@ -27,10 +29,27 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use wgpu::hal::api::Vulkan;
 
 use super::ffx;
+use super::reactive::ReactiveMask;
 use super::upscale::{Available, Faults, TemporalView, Upscaler};
 
 /// FSR's own sharpening (RCAS) on its output, 0…1: a touch; the mip bias keeps the textures crisp already.
 const SHARPNESS: f32 = 0.25;
+
+/// FSR's constants set on each context: shading changes count for more, and what is new (disoccluded, or in the
+/// reactive mask) gathers its history more slowly. Less ghosting, a little more shimmer where a lot changes.
+const HISTORY: [(u64, f32); 2] = [
+    (ffx::KEY_SHADING_CHANGE_SCALE, 1.25),
+    (ffx::KEY_ACCUMULATION_ADDED_PER_FRAME, 0.2),
+];
+
+/// A new context with `HISTORY` (an old DLL without the keys keeps FSR's own).
+fn tune(u: &mut ffx::Upscaler) {
+    for (key, value) in HISTORY {
+        if let Err(e) = u.configure(key, value) {
+            warn!("upscaling: AMD FSR 3.1 keeps its own constant {key}: {e}");
+        }
+    }
+}
 
 /// The context's flags: HDR colour before the tone mapping (already exposed: `Exposure`, so FSR's own auto
 /// exposure only guides its internal tone mapping), Bevy's reversed infinite depth. `FB_FSR3_DEBUG=1` adds
@@ -101,7 +120,12 @@ impl Plugin for Fsr3Plugin {
                     .in_set(RenderSystems::PrepareViews)
                     .before(prepare_view_targets),
             )
-            .add_systems(Core3d, upscale.in_set(Core3dSystems::EarlyPostProcess));
+            .add_systems(
+                Core3d,
+                upscale
+                    .in_set(Core3dSystems::EarlyPostProcess)
+                    .after(super::reactive::mask),
+            );
     }
 }
 
@@ -131,11 +155,12 @@ fn prepare(
         let mut fresh = match ctx {
             Some(c) if c.0.lock().is_ok_and(|u| fits(&u)) => None,
             _ => match ffx::Upscaler::new(api.0.clone(), device.wgpu_device(), view.render, view.out, flags()) {
-                Ok(u) => {
+                Ok(mut u) => {
                     info!(
                         "upscaling: AMD FSR 3.1 {}×{} → {}×{} ({} jitter phases)",
                         view.render.x, view.render.y, view.out.x, view.out.y, u.phases
                     );
+                    tune(&mut u);
                     Some(u)
                 }
                 Err(err) => {
@@ -161,25 +186,24 @@ fn prepare(
     }
 }
 
+/// What the upscale reads of the view.
+type Fsr3View = (
+    &'static TemporalView,
+    &'static Fsr3Context,
+    &'static MainPassResolutionOverride,
+    &'static TemporalJitter,
+    &'static ViewTarget,
+    &'static ViewPrepassTextures,
+    Option<&'static ReactiveMask>,
+);
+
 /// The upscale: the main pass's corner of the colour target into the other, full one.
 #[allow(
     clippy::field_reassign_with_default,
     reason = "the descriptor has private fields: no struct update"
 )]
-fn upscale(
-    view: ViewQuery<(
-        &TemporalView,
-        &Fsr3Context,
-        &MainPassResolutionOverride,
-        &TemporalJitter,
-        &ViewTarget,
-        &ViewPrepassTextures,
-    )>,
-    device: Res<RenderDevice>,
-    faults: Res<Faults>,
-    mut ctx: RenderContext,
-) {
-    let (v, fsr, size, jitter, target, prepass) = view.into_inner();
+fn upscale(view: ViewQuery<Fsr3View>, device: Res<RenderDevice>, faults: Res<Faults>, mut ctx: RenderContext) {
+    let (v, fsr, size, jitter, target, prepass, mask) = view.into_inner();
     if v.kind != Upscaler::Fsr3 || faults.failed(Upscaler::Fsr3) {
         return;
     }
@@ -202,6 +226,15 @@ fn upscale(
         faults.report(Upscaler::Fsr3, "a target FidelityFX cannot take (its format)");
         return;
     };
+    let mask = mask.map(|m| &m.0.texture);
+    let reactive = match mask {
+        Some(m) => ffx::Resource::texture(m, ffx::USAGE_READ_ONLY, ffx::STATE_SAMPLED),
+        None => Some(ffx::Resource::NONE),
+    };
+    let Some(reactive) = reactive else {
+        faults.report(Upscaler::Fsr3, "a reactive mask FidelityFX cannot take (its format)");
+        return;
+    };
     // The images into the layouts named above.
     fn transition(texture: &wgpu::Texture, state: wgpu::TextureUses) -> wgpu::TextureTransition<&wgpu::Texture> {
         wgpu::TextureTransition {
@@ -218,12 +251,15 @@ fn upscale(
             transition(&motion.texture.texture, wgpu::TextureUses::RESOURCE),
             transition(post.destination_texture, wgpu::TextureUses::STORAGE_READ_WRITE),
         ]
-        .into_iter(),
+        .into_iter()
+        .chain(mask.map(|m| transition(m, wgpu::TextureUses::RESOURCE))),
     );
     let mut d = ffx::DispatchUpscale::default();
     d.color = color;
     d.depth = depth_in;
     d.motion_vectors = motion_in;
+    d.reactive = reactive;
+    d.transparency_and_composition = reactive;
     d.output = output;
     d.jitter_offset = (-jitter.offset).into();
     // (Bevy's motion vectors: the current position minus the last, in UV units of the main pass; FSR's: towards

@@ -30,6 +30,7 @@ type PfnCreateContext = unsafe extern "C" fn(*mut Context, *mut Header, *const c
 type PfnDestroyContext = unsafe extern "C" fn(*mut Context, *const c_void) -> u32;
 type PfnQuery = unsafe extern "C" fn(*mut Context, *mut Header) -> u32;
 type PfnDispatch = unsafe extern "C" fn(*mut Context, *const Header) -> u32;
+type PfnConfigure = unsafe extern "C" fn(*mut Context, *const Header) -> u32;
 /// `ffxApiMessage`.
 type PfnMessage = unsafe extern "C" fn(u32, *const WChar);
 
@@ -38,6 +39,7 @@ const CREATE_CONTEXT_UPSCALE: u64 = 0x0001_0000;
 const DISPATCH_UPSCALE: u64 = 0x0001_0001;
 const QUERY_JITTER_PHASE_COUNT: u64 = 0x0001_0004;
 const QUERY_JITTER_OFFSET: u64 = 0x0001_0005;
+const CONFIGURE_UPSCALE_KEY_VALUE: u64 = 0x0001_0007;
 const CREATE_BACKEND_VK: u64 = 0x3;
 const QUERY_PROVIDER_VERSION: u64 = 6;
 
@@ -47,6 +49,13 @@ pub const DEPTH_INVERTED: u32 = 1 << 3;
 pub const DEPTH_INFINITE: u32 = 1 << 4;
 pub const AUTO_EXPOSURE: u32 = 1 << 5;
 pub const DEBUG_CHECKING: u32 = 1 << 7;
+
+// `FfxApiConfigureUpscaleKey`: constants of the upscaler, floats.
+/// How much more reactive to its own measure of shading changes (default 1).
+pub const KEY_SHADING_CHANGE_SCALE: u64 = 2;
+/// How much accumulation a pixel gains a frame after a disocclusion or where the reactive mask is set (default
+/// 1/3): less is a shorter history there.
+pub const KEY_ACCUMULATION_ADDED_PER_FRAME: u64 = 3;
 
 // `FfxApiSurfaceFormat` (the enum's order).
 const FORMAT_R32G32B32A32_FLOAT: u32 = 3;
@@ -58,6 +67,7 @@ const FORMAT_B8G8R8A8_UNORM: u32 = 14;
 const FORMAT_B8G8R8A8_SRGB: u32 = 15;
 const FORMAT_R11G11B10_FLOAT: u32 = 16;
 const FORMAT_R16G16_FLOAT: u32 = 18;
+const FORMAT_R8_UNORM: u32 = 25;
 const FORMAT_R32_FLOAT: u32 = 28;
 
 // `FfxApiResourceType`, `FfxApiResourceUsage`, `FfxApiResourceState`.
@@ -203,6 +213,7 @@ pub fn format(f: TextureFormat) -> Option<u32> {
         TextureFormat::Bgra8UnormSrgb => FORMAT_B8G8R8A8_SRGB,
         TextureFormat::Rg11b10Ufloat => FORMAT_R11G11B10_FLOAT,
         TextureFormat::Rg16Float => FORMAT_R16G16_FLOAT,
+        TextureFormat::R8Unorm => FORMAT_R8_UNORM,
         TextureFormat::R32Float | TextureFormat::Depth32Float => FORMAT_R32_FLOAT,
         _ => return None,
     })
@@ -288,6 +299,17 @@ impl Default for DispatchUpscale {
     }
 }
 
+/// `ffxConfigureDescUpscaleKeyValue`.
+#[allow(dead_code, reason = "fields FidelityFX reads, not Rust")]
+#[repr(C)]
+struct ConfigureKeyValue {
+    header: Header,
+    key: u64,
+    u64: u64,
+    /// The float's address, for a float key.
+    ptr: *mut c_void,
+}
+
 /// `ffxQueryDescUpscaleGetJitterPhaseCount`.
 #[allow(dead_code, reason = "fields FidelityFX reads, not Rust")]
 #[repr(C)]
@@ -330,6 +352,7 @@ pub struct Api {
     destroy: PfnDestroyContext,
     query: PfnQuery,
     dispatch: PfnDispatch,
+    configure: PfnConfigure,
     /// (Last: dropped after nothing can call into it any more.)
     _lib: libloading::Library,
 }
@@ -373,11 +396,13 @@ impl Api {
             let destroy = *lib.get::<PfnDestroyContext>(b"ffxDestroyContext\0")?;
             let query = *lib.get::<PfnQuery>(b"ffxQuery\0")?;
             let dispatch = *lib.get::<PfnDispatch>(b"ffxDispatch\0")?;
+            let configure = *lib.get::<PfnConfigure>(b"ffxConfigure\0")?;
             Ok(Api {
                 create,
                 destroy,
                 query,
                 dispatch,
+                configure,
                 _lib: lib,
             })
         }
@@ -542,6 +567,28 @@ impl Upscaler {
         }
     }
 
+    /// Sets a float constant of the upscaler (`KEY_…`); it holds until set again.
+    pub fn configure(&mut self, key: u64, value: f32) -> Result<(), FfxError> {
+        let mut v = value;
+        let q = ConfigureKeyValue {
+            header: Header::of(CONFIGURE_UPSCALE_KEY_VALUE),
+            key,
+            u64: 0,
+            ptr: (&raw mut v).cast(),
+        };
+        // SAFETY: a live context and a descriptor pointing at a local float, both alive through the call (the
+        // value is copied into the context's constants).
+        let code = unsafe { (self.api.configure)(&mut self.ctx, &q.header) };
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(FfxError::Code {
+                call: "ffxConfigure",
+                code,
+            })
+        }
+    }
+
     /// The sub-pixel jitter of frame `index` of the sequence, in render pixels (`jitterOffset`: what the
     /// projection is offset by, +y down).
     pub fn jitter(&mut self, index: u32) -> Vec2 {
@@ -680,6 +727,7 @@ mod tests {
         assert_eq!(offset_of!(DispatchUpscale, flags), 16 + 8 + 7 * 48 + 32 + 36);
         assert_eq!(size_of::<QueryJitterPhaseCount>(), 32);
         assert_eq!(size_of::<QueryJitterOffset>(), 40);
+        assert_eq!(size_of::<ConfigureKeyValue>(), 40);
     }
 
     #[test]
@@ -705,6 +753,7 @@ mod tests {
         assert_eq!(format(TextureFormat::Rgba16Float), Some(4));
         assert_eq!(format(TextureFormat::Depth32Float), Some(28));
         assert_eq!(format(TextureFormat::Rg16Float), Some(18));
+        assert_eq!(format(TextureFormat::R8Unorm), Some(25));
         assert_eq!(format(TextureFormat::Depth24Plus), None);
     }
 }

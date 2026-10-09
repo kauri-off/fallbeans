@@ -6,13 +6,18 @@
 //! (FSR draws the main pass into a corner of it, `fsr.rs`): its rays and the depth it reads would not match. The
 //! haze is drawn in the main pass instead, as slices across the view at growing distances, far to near in one
 //! draw, each depth-tested against the scene (no prepass needed) and sampling the sun's shadow map once.
+//!
+//! It leaves the upscalers' reactive mask (`reactive.rs`) as it is: smooth, and over the whole scene, it lies
+//! almost as far as what it covers, which keeps it in the history; marked, all far away would shimmer.
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+};
 use bevy::shader::ShaderRef;
 use fb_sim::looks::Look;
 
@@ -79,6 +84,8 @@ impl Material for HazeMaterial {
         if let Some(d) = &mut descriptor.depth_stencil {
             d.depth_write_enabled = Some(false);
         }
+        let over = BlendState::PREMULTIPLIED_ALPHA_BLENDING.color;
+        super::reactive::blend(descriptor, over, super::reactive::KEEP);
         Ok(())
     }
 }

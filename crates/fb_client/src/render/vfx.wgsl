@@ -1,6 +1,7 @@
 // A burst of particles (`vfx.rs`): each a small billboard whose place, size and colour are a function of the
 // burst's age and the particle's own direction and seed. The mesh's transform places the burst and scales it;
-// colours come out premultiplied (the glowing kinds with no alpha: added light).
+// colours come out premultiplied, the alpha the coverage (the glowing kinds' light is added whatever it is, and
+// it marks the reactive mask: `reactive.rs`).
 #import bevy_pbr::{
     mesh_functions,
     mesh_view_bindings::{view, globals},
@@ -81,7 +82,6 @@ fn vertex(v: Vertex) -> Out {
     var r = 0.1;
     var col = m.color.rgb;
     var a = 1.0;
-    var glow = false;
     var shape = PUFF;
     var spin = 0.0;
     switch kind {
@@ -114,7 +114,6 @@ fn vertex(v: Vertex) -> Out {
             r = 0.13 * (1.0 - 0.5 * f);
             col = m.color.rgb * 2.5;
             a = (1.0 - f) * (0.65 + 0.35 * sin(age * 30.0 + s * 20.0));
-            glow = true;
             shape = STAR;
             spin = s * TAU;
         }
@@ -126,7 +125,6 @@ fn vertex(v: Vertex) -> Out {
             r = 0.12 + 0.12 * f;
             col = m.color.rgb * 1.6;
             a = (1.0 - f) * 0.8;
-            glow = true;
         }
         default: {
             // Twinkle: points on a slowly turning shell, each flaring now and then.
@@ -137,7 +135,6 @@ fn vertex(v: Vertex) -> Out {
             r = 0.1;
             col = m.color.rgb * 3.0;
             a = pow(sin(f * 3.14159), 6.0);
-            glow = true;
             shape = STAR;
             spin = s * TAU;
         }
@@ -153,7 +150,7 @@ fn vertex(v: Vertex) -> Out {
     var mv = view.view_from_world * vec4(at, 1.0);
     mv = vec4(mv.xy + corner * (r * scale), mv.z, 1.0);
     out.clip = view.clip_from_view * mv;
-    out.color = vec4(col * a, select(a, 0.0, glow));
+    out.color = vec4(col * a, a);
     out.shape = shape;
     return out;
 }

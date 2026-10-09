@@ -1,5 +1,6 @@
 // Specks drifting in the air around the camera: each a small billboard whose
-// place is a function of time and its seed, wrapped in a box that follows the camera; added light.
+// place is a function of time and its seed, wrapped in a box that follows the camera; added light, its
+// coverage in the alpha for the reactive mask (`reactive.rs`).
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 
 struct Motes {
@@ -72,5 +73,5 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
     let c = in.corner * 0.5;
     let r = dot(c, c);
     let a = smoothstep(0.25, 0.0, r) * in.alpha;
-    return vec4(m.tint.rgb * a * a * 0.55, 0.0);
+    return vec4(m.tint.rgb * a * a * 0.55, a);
 }

@@ -3,8 +3,9 @@
 //! device for what NGX needs; its `DlssPlugin` is left out (`add_anti_alias`): it panics on any error and can only
 //! render at a mode's own size. Here the context is made in the quality or the balanced mode (`mode`) with preset
 //! M, DLSS 4.5's second-generation transformer model, and fed the main pass at the setting's scale: DLSS takes any
-//! size in the range a mode gives (dynamic resolution); one outside it is brought inside. An error falls back to
-//! FSR 1.
+//! size in the range a mode gives (dynamic resolution); one outside it is brought inside. What has no motion
+//! vectors of its own is biased towards the current colour (the reactive mask, `reactive.rs`). An error falls
+//! back to FSR 1.
 use std::sync::{Arc, Mutex};
 
 use bevy::anti_alias::contrast_adaptive_sharpening::CasPlugin;
@@ -29,6 +30,7 @@ use dlss_wgpu::super_resolution::{
 };
 use dlss_wgpu::{DlssFeatureFlags, DlssPerfQualityMode, DlssSdk};
 
+use super::reactive::ReactiveMask;
 use super::upscale::{Available, Faults, TemporalView, Upscaler};
 
 /// The id NGX knows the game by: a GUID of its own (NVIDIA's guide: any, for a title it has not registered).
@@ -146,7 +148,12 @@ impl Plugin for DlssPlugin {
                     .in_set(RenderSystems::PrepareViews)
                     .before(prepare_view_targets),
             )
-            .add_systems(Core3d, upscale.in_set(Core3dSystems::EarlyPostProcess));
+            .add_systems(
+                Core3d,
+                upscale
+                    .in_set(Core3dSystems::EarlyPostProcess)
+                    .after(super::reactive::mask),
+            );
     }
 }
 
@@ -251,21 +258,20 @@ fn prepare(
     }
 }
 
+/// What the upscale reads of the view.
+type DlssTarget = (
+    &'static TemporalView,
+    &'static DlssContext,
+    &'static MainPassResolutionOverride,
+    &'static TemporalJitter,
+    &'static ViewTarget,
+    &'static ViewPrepassTextures,
+    Option<&'static ReactiveMask>,
+);
+
 /// The upscale, as Bevy's own DLSS pass records it: after the main pass's commands, a command buffer of its own.
-fn upscale(
-    view: ViewQuery<(
-        &TemporalView,
-        &DlssContext,
-        &MainPassResolutionOverride,
-        &TemporalJitter,
-        &ViewTarget,
-        &ViewPrepassTextures,
-    )>,
-    adapter: Res<RenderAdapter>,
-    faults: Res<Faults>,
-    mut ctx: RenderContext,
-) {
-    let (v, dlss, size, jitter, target, prepass) = view.into_inner();
+fn upscale(view: ViewQuery<DlssTarget>, adapter: Res<RenderAdapter>, faults: Res<Faults>, mut ctx: RenderContext) {
+    let (v, dlss, size, jitter, target, prepass, mask) = view.into_inner();
     if v.kind != Upscaler::Dlss || faults.failed(Upscaler::Dlss) || dlss.out != v.out {
         return;
     }
@@ -279,7 +285,7 @@ fn upscale(
         depth: &depth.texture.default_view,
         motion_vectors: &motion.texture.default_view,
         exposure: DlssSuperResolutionExposure::Automatic,
-        bias: None,
+        bias: mask.map(|m| &*m.0.default_view),
         dlss_output: post.destination,
         reset: v.reset,
         jitter_offset: (-jitter.offset).to_array(),

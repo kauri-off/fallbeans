@@ -10,7 +10,9 @@
 //! the depth and motion vector prepasses (every material writes its motion, the cloth's waves too:
 //! `cloth.wgsl`), the projection jittered by a sub-pixel offset each frame (`TemporalJitter`, set in the render
 //! world from the upscaler's own sequence), a negative texture mip bias for the scale (`MipBias`), its history
-//! dropped on camera cuts (`Temporal::reset`), and the main texture writable by a compute shader.
+//! dropped on camera cuts (`Temporal::reset`), the main texture writable by a compute shader, and a reactive
+//! mask where the motion vectors are not what is seen (`reactive.rs`). The background (the sky) has Bevy's own
+//! vectors of the camera's turn (`BackgroundMotionVectorsPlugin`).
 use std::sync::{Arc, Mutex};
 
 use bevy::camera::{CameraMainTextureUsages, MainPassResolutionOverride};
@@ -306,6 +308,7 @@ impl Plugin for UpscalePlugin {
         if let Some(r) = app.get_sub_app_mut(RenderApp) {
             r.insert_resource(faults);
         }
+        app.add_plugins(super::reactive::ReactivePlugin);
         // (Both are offered where they run: the setting switches between them in play.)
         #[cfg(feature = "dlss")]
         app.add_plugins(super::dlss::DlssPlugin);

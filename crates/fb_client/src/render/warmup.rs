@@ -342,6 +342,7 @@ struct Kit<'w> {
     images: ResMut<'w, Assets<Image>>,
     surfaces: ResMut<'w, Surfaces>,
     surface_mats: ResMut<'w, Assets<SurfaceMaterial>>,
+    glows: ResMut<'w, Assets<super::vfx::GlowMaterial>>,
     lods: ResMut<'w, ModelLods>,
     env: ResMut<'w, EnvLights>,
     ao: Res<'w, BakedAo>,
@@ -690,6 +691,11 @@ fn spawn_own(commands: &mut Commands, kit: &mut Kit) -> Entity {
         let m = kit.surfaces.material(&spec, &mut kit.images, &mut kit.surface_mats);
         commands.spawn((Mesh3d(block.clone()), MeshMaterial3d(m), next(), ChildOf(root)));
     }
+    // The beans' aura (hidden until a power).
+    let glow = kit
+        .glows
+        .add(super::vfx::GlowMaterial::new(Color::WHITE.with_alpha(0.5)));
+    commands.spawn((Mesh3d(sphere), MeshMaterial3d(glow), next(), ChildOf(root)));
     let bean = kit.assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
     for (i, &hat) in HATS.iter().enumerate() {
         let glasses = GLASSES.get(i % GLASSES.len()).copied().unwrap_or_default();
