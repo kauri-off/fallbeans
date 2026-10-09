@@ -22,6 +22,8 @@ English.
 - `cargo xtask stress --clients 8 --secs 100 --lag 75 --jitter 15 --loss 0.05` — after network changes.
 - `cargo xtask perf <run|show|compare|csv>` — render benchmarks.
 - `cargo xtask fuzz-ui` — plays the whole client at random, prints the path to a crash.
+- `cargo xtask smoke [--secs N] [--map M] [--upscaler fsr3,fsr1]` — the client on lavapipe, offscreen through a
+  practice round with each upscaler: shaders, pipelines and upscalers on a real driver (logs in `target/smoke`).
 - `cargo xtask assets [--export]` — check models (`--export` needs Blender).
 - `cargo xtask dist <nsis|appimage|flatpak|deb|rpm>` — a package (deb, rpm: the server). The `release` workflow
   builds nsis, AppImage and deb; the AppImage on Ubuntu 22.04 for its old glibc.

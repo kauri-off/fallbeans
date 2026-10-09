@@ -1,4 +1,4 @@
-//! Project tasks: `cargo xtask <check|play|doctor|setup|audit|assets|dev|stress|perf|fuzz-ui|dist>`.
+//! Project tasks: `cargo xtask <check|play|doctor|setup|audit|assets|dev|stress|perf|fuzz-ui|smoke|dist>`.
 mod check;
 mod dist;
 mod doctor;
@@ -6,6 +6,7 @@ mod fuzz;
 mod perf;
 mod play;
 mod sdk;
+mod smoke;
 mod stress;
 
 use std::fmt;
@@ -52,6 +53,8 @@ enum Task {
     Perf(perf::PerfArgs),
     /// The whole client played at random (`fb_client` monkey): seeds in parallel, logs in target/fuzz-ui.
     FuzzUi(fuzz::FuzzArgs),
+    /// The client on lavapipe (software Vulkan), offscreen through a practice round with each upscaler.
+    Smoke(smoke::SmokeArgs),
     /// Release package of one kind into dist/.
     Dist(dist::DistArgs),
 }
@@ -445,6 +448,7 @@ fn main() -> ExitCode {
         Task::Stress(a) => stress::stress(&a),
         Task::Perf(a) => perf::perf(&a),
         Task::FuzzUi(a) => fuzz::fuzz(&a),
+        Task::Smoke(a) => smoke::smoke(&a),
         Task::Dist(a) => dist::dist(&a),
     };
     if report(done) {

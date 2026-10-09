@@ -263,6 +263,17 @@ pub fn doctor() -> Result<()> {
         );
     }
 
+    if !windows {
+        r.group("smoke");
+        r.item(
+            "lavapipe",
+            false,
+            crate::smoke::lavapipe()
+                .map(|p| p.display().to_string())
+                .ok_or_else(|| pkg("vulkan-swrast", "mesa-vulkan-drivers", "mesa-vulkan-drivers")),
+        );
+    }
+
     r.group("assets --export");
     let blender = std::env::var_os("BLENDER").unwrap_or_else(|| "blender".into());
     r.item(
