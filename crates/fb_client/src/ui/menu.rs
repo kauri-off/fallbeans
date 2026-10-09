@@ -116,16 +116,15 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
         ..default()
     };
     commands.entity(e).with_children(|l| {
-        // A column beside the player panel, over the game in full view.
+        // A sheet docked on the right, over the game in full view.
         l.spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: rem(17.5),
-                top: rem(0.75),
-                bottom: rem(0.75),
-                width: rem(28.0),
+                right: rem(1.0),
+                top: rem(1.0),
+                bottom: rem(1.0),
+                width: rem(29.0),
                 max_width: percent(60),
-                align_items: AlignItems::FlexStart,
                 ..default()
             },
             Pickable::IGNORE,
@@ -134,12 +133,12 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
             w.spawn((
                 Node {
                     width: percent(100),
-                    max_height: percent(100),
+                    height: percent(100),
                     flex_direction: FlexDirection::Column,
-                    row_gap: rem(0.75),
-                    padding: UiRect::axes(rem(1.0), rem(0.875)),
+                    row_gap: rem(0.875),
+                    padding: UiRect::all(rem(1.25)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(1.125)),
+                    border_radius: BorderRadius::all(rem(1.5)),
                     ..default()
                 },
                 glass(),
@@ -148,6 +147,7 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                 head(
                     m,
                     f,
+                    true,
                     &[
                         (text::TAB_GAME, Action::MenuTab(MenuTab::Game)),
                         (text::TAB_SETTINGS, Action::MenuTab(MenuTab::Settings)),
@@ -159,6 +159,7 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                         flex_direction: FlexDirection::Column,
                         row_gap: rem(0.625),
                         overflow: Overflow::scroll_y(),
+                        flex_grow: 1.0,
                         flex_shrink: 1.0,
                         ..default()
                     },
@@ -536,7 +537,7 @@ fn players(
     let f = &*f;
     let (me, host) = (session.me, session.host());
     rebuild(&mut commands, *q, |p| {
-        heading(p, f, &text::players_of(l.players.len(), l.max));
+        caption(p, f, &text::players_of(l.players.len(), l.max));
         for pl in &l.players {
             player_row(p, f, l, pl, me, host);
         }
@@ -589,11 +590,11 @@ fn player_row(
         Node {
             column_gap: rem(0.5),
             align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.5), rem(0.3)),
-            border_radius: BorderRadius::all(rem(0.625)),
+            padding: UiRect::axes(rem(0.625), rem(0.4)),
+            border_radius: BorderRadius::all(rem(0.75)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, if pl.connected { 0.45 } else { 0.25 })),
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, if Some(pl.id) == me { 0.09 } else { 0.04 })),
     ))
     .with_children(|r| {
         dot(r, suit(pl.color), 0.8);
@@ -603,7 +604,8 @@ fn player_row(
         })
         .with_children(|n| {
             let you = if Some(pl.id) == me { text::YOU } else { "" };
-            label(n, f, &format!("{}{you}", pl.name));
+            let ink = if pl.connected { INK } else { MUTED };
+            rich(n, f, &format!("{}{you}", pl.name), 15.0, ink);
         });
         if Some(pl.id) == l.host {
             label(r, f, "⭐");

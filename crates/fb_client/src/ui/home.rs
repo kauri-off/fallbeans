@@ -101,25 +101,29 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
     let f = &*f;
     commands.entity(layers[Layer::Banner]).insert(BannerBox);
     commands.entity(layers[Layer::Home]).with_children(|l| {
-        l.spawn(Node {
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            padding: UiRect::all(rem(1.0)),
-            ..default()
-        })
+        l.spawn((
+            Node {
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Stretch,
+                column_gap: rem(2.0),
+                padding: UiRect::all(rem(1.25)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.031, 0.027, 0.063, 0.35)),
+        ))
         .with_children(|c| {
             c.spawn((
                 Node {
-                    width: rem(36.0),
+                    width: rem(34.0),
                     max_width: percent(100),
                     max_height: percent(100),
                     flex_direction: FlexDirection::Column,
-                    row_gap: rem(0.75),
-                    padding: UiRect::all(rem(1.25)),
+                    row_gap: rem(0.875),
+                    padding: UiRect::all(rem(1.375)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(1.125)),
+                    border_radius: BorderRadius::all(rem(1.5)),
                     ..default()
                 },
                 glass(),
@@ -128,6 +132,7 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                 head(
                     panel,
                     f,
+                    false,
                     &[
                         (text::TAB_SERVERS, Action::HomeTab(HomeTab::Main)),
                         (text::TAB_SETTINGS, Action::HomeTab(HomeTab::Settings)),
@@ -152,7 +157,7 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                                     field_with_hint(r, f, Field::Server, "", text::SERVER_PLACEHOLDER, 120, None);
                                     button(r, f, text::ADD, Look::Go, Action::AddServer);
                                 });
-                                let bad = rich(p, f, text::SERVER_BAD, 13.0, RED_INK);
+                                let bad = rich(p, f, text::SERVER_BAD, 13.0, BAD);
                                 p.commands().entity(bad).insert((
                                     ServerBad,
                                     Node {
@@ -190,30 +195,48 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                             .with_children(|t| settings_tab(t, f, &options, &folds));
                     });
             });
+            c.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexEnd,
+                    align_items: AlignItems::FlexEnd,
+                    row_gap: rem(0.25),
+                    flex_shrink: 1.0,
+                    min_width: px(0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|h| {
+                logo(h, f, 84.0);
+                rich_in(h, f, text::TAGLINE, 17.0, INK.with_alpha(0.8), true);
+            });
         });
     });
 }
 
-/// A screen's head: the logo and its tabs.
-pub fn head(p: &mut ChildSpawnerCommands, f: &Fonts, items: &[(&str, Action)]) {
+/// A screen's head: the logo (if `with_logo`) and its tabs as one segmented bar.
+pub fn head(p: &mut ChildSpawnerCommands, f: &Fonts, with_logo: bool, items: &[(&str, Action)]) {
     p.spawn(Node {
         width: percent(100),
-        justify_content: JustifyContent::SpaceBetween,
-        align_items: AlignItems::Center,
-        flex_wrap: FlexWrap::Wrap,
-        row_gap: rem(0.5),
+        flex_direction: FlexDirection::Column,
+        row_gap: rem(0.75),
         ..default()
     })
     .with_children(|r| {
-        logo(r, f, 26.0);
+        if with_logo {
+            logo(r, f, 26.0);
+        }
         r.spawn((
             Node {
                 column_gap: rem(0.25),
-                padding: UiRect::all(rem(0.2)),
-                border_radius: BorderRadius::all(rem(0.875)),
+                padding: UiRect::all(rem(0.25)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
                 ..default()
             },
-            BackgroundColor(GROUP),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.3)),
+            BorderColor::all(RIM),
         ))
         .with_children(|t| {
             for (i, (s, a)) in items.iter().enumerate() {
@@ -335,7 +358,7 @@ fn update_box(
             } else {
                 text::crashed(&report)
             };
-            let t = rich(p, f, &msg, 13.0, RED_INK);
+            let t = rich(p, f, &msg, 13.0, BAD);
             wrap_anywhere(p, t);
             button(p, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         }
@@ -365,7 +388,7 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, view: &UpdateView, can:
         }
         UpdateView::State(UpdateState::Failed(err)) => {
             group(p, |g| {
-                let t = rich(g, f, &text::update_failed(err), 13.0, RED_INK);
+                let t = rich(g, f, &text::update_failed(err), 13.0, BAD);
                 wrap_anywhere(g, t);
                 row(g, false, |r| {
                     if can {
@@ -391,7 +414,7 @@ fn servers(
 ) {
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
-        heading(p, f, text::SERVERS);
+        caption(p, f, text::SERVERS);
         if list.list.is_empty() {
             muted(p, f, text::NO_SERVERS);
         }
@@ -426,11 +449,11 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
             border_radius: BorderRadius::all(rem(0.875)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
+        BackgroundColor(GROUP),
         BorderColor::all(RIM),
     ))
     .with_children(|row_| {
-        dot(row_, if up { GREEN } else { MUTED.with_alpha(0.5) }, 10.0);
+        dot(row_, if up { ACCENT } else { MUTED.with_alpha(0.5) }, 0.625);
         row_.spawn(Node {
             flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
@@ -502,9 +525,9 @@ fn rooms(
             }
         });
         if let Some(msg) = alert {
-            rich(p, f, msg, 14.0, RED_INK);
+            rich(p, f, msg, 14.0, BAD);
         }
-        heading(p, f, &text::rooms_count(list.rooms.as_ref().map_or(0, Vec::len)));
+        caption(p, f, &text::rooms_count(list.rooms.as_ref().map_or(0, Vec::len)));
         match &list.rooms {
             None => {
                 muted(p, f, text::LOADING_ROOMS);
@@ -532,8 +555,8 @@ fn room_row(p: &mut ChildSpawnerCommands, f: &Fonts, r: &RoomInfo, mine: bool) {
             border_radius: BorderRadius::all(rem(0.875)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
-        BorderColor::all(if mine { PINK } else { RIM }),
+        BackgroundColor(if mine { ACCENT.with_alpha(0.08) } else { GROUP }),
+        BorderColor::all(if mine { ACCENT } else { RIM }),
     ))
     .with_children(|row_| {
         row_.spawn(Node {
@@ -597,7 +620,7 @@ fn pin(
             });
             match &d.msg {
                 None => muted(g, f, text::PIN_ASK),
-                Some(m) => rich(g, f, m, 13.0, RED_INK),
+                Some(m) => rich(g, f, m, 13.0, BAD),
             };
         });
     });
@@ -732,7 +755,7 @@ fn banner(
                     label(card, f, &text::downloading(*pct, 100));
                 }
                 Offer::Failed(e, _) => {
-                    let t = rich(card, f, &text::update_failed(e), 13.0, RED_INK);
+                    let t = rich(card, f, &text::update_failed(e), 13.0, BAD);
                     wrap_anywhere(card, t);
                 }
                 Offer::Restarting => {
@@ -769,12 +792,12 @@ fn banner(
             .with_children(|c| {
                 c.spawn((
                     Node {
-                        padding: UiRect::axes(rem(1.25), rem(0.6)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(rem(1.0)),
+                        padding: UiRect::new(rem(1.25), rem(0.6), rem(0.6), rem(0.6)),
+                        border: UiRect::new(px(3), px(1), px(1), px(1)),
+                        border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    glass(),
+                    glass_bar(ACCENT),
                 ))
                 .with_children(|b| {
                     row(b, false, |r| {
@@ -810,7 +833,7 @@ fn card(p: &mut ChildSpawnerCommands, inner: impl FnOnce(&mut ChildSpawnerComman
             align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.169, 0.102, 0.361, 0.25)),
+        BackgroundColor(Color::srgba(0.031, 0.027, 0.063, 0.6)),
     ))
     .with_children(|c| {
         c.spawn((
@@ -818,9 +841,9 @@ fn card(p: &mut ChildSpawnerCommands, inner: impl FnOnce(&mut ChildSpawnerComman
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 row_gap: rem(0.75),
-                padding: UiRect::axes(rem(1.6), rem(1.4)),
+                padding: UiRect::axes(rem(2.0), rem(1.75)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                border_radius: BorderRadius::all(rem(1.5)),
                 max_width: rem(30.0),
                 ..default()
             },

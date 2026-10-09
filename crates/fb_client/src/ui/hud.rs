@@ -106,6 +106,8 @@ struct IntroBox;
 #[derive(Component)]
 struct IntroLeft;
 #[derive(Component)]
+struct TimerBox;
+#[derive(Component)]
 struct TimerText;
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 enum Pill {
@@ -145,7 +147,7 @@ fn centred(top: Option<Val>, bottom: Option<Val>) -> Node {
     }
 }
 
-fn shadowed(size: f32, color: Color, font: &Handle<Font>) -> impl Bundle {
+fn shadowed(size: f32, color: Color, shadow: Color, font: &Handle<Font>) -> impl Bundle {
     (
         Text::new(""),
         TextFont {
@@ -155,8 +157,8 @@ fn shadowed(size: f32, color: Color, font: &Handle<Font>) -> impl Bundle {
         },
         TextColor(color),
         TextShadow {
-            offset: Vec2::new(0.0, size / 16.0),
-            color: INK.with_alpha(0.85),
+            offset: Vec2::new(0.0, size / 14.0),
+            color: shadow,
         },
     )
 }
@@ -179,14 +181,14 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
             h.spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(0.75),
-                    left: rem(0.75),
-                    width: rem(16.0),
+                    top: rem(1.0),
+                    left: rem(1.0),
+                    width: rem(17.0),
                     max_height: percent(96),
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::new(rem(0.75), rem(0.75), rem(0.625), rem(0.5)),
+                    padding: UiRect::new(rem(0.625), rem(0.625), rem(0.75), rem(0.625)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(1.125)),
+                    border_radius: BorderRadius::all(rem(1.25)),
                     overflow: Overflow::clip(),
                     ..default()
                 },
@@ -197,16 +199,19 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                     PanelBox,
                     Node {
                         flex_direction: FlexDirection::Column,
-                        row_gap: px(2),
+                        row_gap: px(3),
                         ..default()
                     },
                 ));
                 p.spawn((
                     NetLine,
                     Node {
-                        margin: UiRect::top(rem(0.375)),
+                        margin: UiRect::top(rem(0.5)),
+                        padding: UiRect::new(rem(0.375), px(0), rem(0.5), px(0)),
+                        border: UiRect::top(px(1)),
                         ..default()
                     },
+                    BorderColor::all(RIM),
                     Text::new(""),
                     TextFont {
                         font_size: FontSize::Px(11.0),
@@ -219,70 +224,92 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                 FeedBox,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(0.75),
-                    right: rem(0.75),
-                    max_width: percent(46),
+                    top: rem(1.0),
+                    right: rem(1.0),
+                    max_width: percent(40),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::FlexEnd,
                     row_gap: rem(0.375),
                     ..default()
                 },
             ));
-            h.spawn(centred(Some(rem(0.75)), None)).with_children(|t| {
+            h.spawn(centred(Some(rem(1.0)), None)).with_children(|t| {
                 let full = || Node {
                     width: percent(100),
                     justify_content: JustifyContent::Center,
                     ..default()
                 };
                 t.spawn((IntroBox, full()));
-                t.spawn((TimerText, shadowed(34.0, Color::WHITE, &f.black)));
+                t.spawn((
+                    TimerBox,
+                    Node {
+                        min_width: rem(7.5),
+                        justify_content: JustifyContent::Center,
+                        padding: UiRect::axes(rem(1.25), rem(0.25)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::MAX,
+                        display: display(false),
+                        ..default()
+                    },
+                    glass(),
+                ))
+                .with_children(|b| {
+                    b.spawn((TimerText, shadowed(30.0, INK, Color::NONE, &f.black)));
+                });
                 for pill in [Pill::MapText, Pill::Bonus] {
+                    let look = if pill == Pill::Bonus {
+                        glass_bar(ACCENT)
+                    } else {
+                        glass()
+                    };
+                    let left = if pill == Pill::Bonus { px(3) } else { px(1) };
                     t.spawn((
                         pill,
                         Node {
                             padding: UiRect::axes(rem(1.0), rem(0.375)),
-                            border: UiRect::all(px(1)),
+                            border: UiRect::new(left, px(1), px(1), px(1)),
                             border_radius: BorderRadius::MAX,
                             display: display(false),
                             ..default()
                         },
-                        glass(),
+                        look,
                     ))
                     .with_children(|p| {
-                        rich_in(p, f, "", 16.0, INK, pill == Pill::Bonus);
+                        rich_in(p, f, "", 15.0, INK, pill == Pill::Bonus);
                     });
                 }
-                t.spawn((GoText, shadowed(72.0, YELLOW, &f.black)));
+                t.spawn((GoText, shadowed(80.0, ACCENT, VIOLET, &f.black)));
                 t.spawn((ResultsBox, full()));
             });
             h.spawn((
                 SummaryBox,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(0.75),
-                    right: rem(0.75),
-                    width: rem(20.0),
+                    top: rem(1.0),
+                    right: rem(1.0),
+                    width: rem(22.0),
                     ..default()
                 },
             ));
             h.spawn(centred(Some(percent(30)), None)).with_children(|c| {
-                c.spawn((CountText, shadowed(120.0, Color::WHITE, &f.black)));
+                c.spawn((CountText, shadowed(132.0, INK, VIOLET, &f.black)));
             });
-            h.spawn((StatusBox, centred(None, Some(rem(3.5)))));
-            h.spawn(centred(None, Some(rem(0.75)))).with_children(|k| {
+            h.spawn((StatusBox, centred(None, Some(rem(3.75)))));
+            h.spawn(centred(None, Some(rem(1.0)))).with_children(|k| {
                 k.spawn((
                     KeysBox,
                     Node {
-                        padding: UiRect::axes(rem(0.9), rem(0.4)),
+                        padding: UiRect::axes(rem(1.0), rem(0.4)),
+                        border: UiRect::all(px(1)),
                         border_radius: BorderRadius::MAX,
-                        max_width: percent(96),
+                        max_width: percent(80),
                         display: display(false),
                         ..default()
                     },
-                    BackgroundColor(INK.with_alpha(0.75)),
+                    glass(),
                 ))
                 .with_children(|k| {
-                    rich(k, f, "", 13.0, Color::WHITE);
+                    rich(k, f, "", 13.0, INK.with_alpha(0.85));
                 });
             });
             h.spawn(centred(Some(percent(58)), None)).with_children(|c| {
@@ -291,16 +318,18 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
-                        padding: UiRect::axes(rem(1.4), rem(0.8)),
-                        border_radius: BorderRadius::all(rem(1.0)),
+                        row_gap: rem(0.25),
+                        padding: UiRect::axes(rem(1.75), rem(0.9)),
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(rem(1.25)),
                         display: display(false),
                         ..default()
                     },
-                    BackgroundColor(INK.with_alpha(0.78)),
+                    glass(),
                 ))
                 .with_children(|c| {
-                    rich_in(c, f, text::CLICK_FIELD, 18.0, Color::WHITE, true);
-                    rich(c, f, text::OR_ESC_MENU, 12.0, Color::WHITE);
+                    rich_in(c, f, text::CLICK_FIELD, 18.0, ACCENT, true);
+                    rich(c, f, text::OR_ESC_MENU, 12.0, MUTED);
                 });
             });
         });
@@ -407,30 +436,30 @@ fn name_tag(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, id: Play
         None => (format!("#{id}"), None),
     };
     row(p, false, |r| {
-        dot(r, color.map_or(Color::srgb(0.8, 0.8, 0.8), suit), 0.6);
+        dot(r, color.map_or(MUTED, suit), 0.6);
         rich_in(r, f, &name, size, INK, me);
     });
 }
 
 fn genre_color(g: Genre) -> Color {
     match g {
-        Genre::Race => Color::srgb(0.086, 0.451, 0.769),
-        Genre::Survival => Color::srgb(0.722, 0.306, 0.047),
-        Genre::Points => Color::srgb(0.075, 0.478, 0.243),
+        Genre::Race => Color::srgb(0.2, 0.494, 0.976),
+        Genre::Survival => Color::srgb(0.961, 0.42, 0.122),
+        Genre::Points => Color::srgb(0.086, 0.69, 0.42),
     }
 }
 
 fn genre_pill(p: &mut ChildSpawnerCommands, f: &Fonts, g: Genre, s: &str) {
     p.spawn((
         Node {
-            padding: UiRect::axes(rem(0.5625), px(2)),
+            padding: UiRect::axes(rem(0.625), px(3)),
             border_radius: BorderRadius::MAX,
             ..default()
         },
         BackgroundColor(genre_color(g)),
     ))
     .with_children(|c| {
-        rich(c, f, s, 12.0, Color::WHITE);
+        rich_in(c, f, s, 11.0, Color::WHITE, true);
     });
 }
 
@@ -457,30 +486,36 @@ fn panel(
     let host = session.lobby.as_ref().and_then(|l| l.host);
     let genre_points = def.genre == Genre::Points;
     rebuild(&mut commands, *q, |p| {
-        row(p, false, |r| {
-            if round {
-                let s = if info.practice {
-                    text::PRACTICE_TITLE.to_string()
+        p.spawn(Node {
+            padding: UiRect::new(rem(0.375), px(0), px(0), rem(0.375)),
+            ..default()
+        })
+        .with_children(|h| {
+            row(h, false, |r| {
+                if round {
+                    let s = if info.practice {
+                        text::PRACTICE_TITLE.to_string()
+                    } else {
+                        format!("{}/{}", info.index, info.total)
+                    };
+                    genre_pill(r, f, def.genre, &s);
+                    rich_in(r, f, def.title, 14.0, INK, true);
                 } else {
-                    format!("{}/{}", info.index, info.total)
-                };
-                genre_pill(r, f, def.genre, &s);
-                rich_in(r, f, def.title, 14.0, INK, true);
-            } else {
-                let s = if info.kind == ArenaKind::Podium {
-                    text::GAME_SUMMARY.to_string()
-                } else {
-                    session
-                        .lobby
-                        .as_ref()
-                        .map(|l| l.room.title.clone())
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or_else(|| text::LOBBY.into())
-                };
-                rich_in(r, f, &s, 14.0, INK, true);
-            }
+                    let s = if info.kind == ArenaKind::Podium {
+                        text::GAME_SUMMARY.to_string()
+                    } else {
+                        session
+                            .lobby
+                            .as_ref()
+                            .map(|l| l.room.title.clone())
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or_else(|| text::LOBBY.into())
+                    };
+                    rich_in(r, f, &s, 14.0, INK, true);
+                }
+            });
         });
-        for pl in &players {
+        for (rank, pl) in players.iter().enumerate() {
             let st = hud.roster.iter().find(|r| r.id == pl.id);
             let icon = if !round {
                 String::new()
@@ -497,13 +532,25 @@ fn panel(
                 }
             };
             let dim = st.is_some_and(|s| s.part == Part::Out) || !pl.connected;
-            p.spawn(Node {
-                column_gap: rem(0.375),
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(rem(0.25), px(2)),
-                ..default()
-            })
+            let me = session.me == Some(pl.id);
+            p.spawn((
+                Node {
+                    column_gap: rem(0.375),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(rem(0.375), rem(0.1875)),
+                    border_radius: BorderRadius::all(rem(0.5)),
+                    ..default()
+                },
+                BackgroundColor(if me {
+                    Color::srgba(1.0, 1.0, 1.0, 0.09)
+                } else {
+                    Color::NONE
+                }),
+            ))
             .with_children(|r| {
+                cell(r, 1.0, |x| {
+                    rich_in(x, f, &(rank + 1).to_string(), 11.0, MUTED, true);
+                });
                 r.spawn(Node {
                     flex_grow: 1.0,
                     min_width: px(0),
@@ -518,7 +565,7 @@ fn panel(
                     })
                     .with_children(|t| {
                         let ink = if dim { MUTED } else { INK };
-                        rich_in(t, f, &pl.name, 13.0, ink, session.me == Some(pl.id));
+                        rich_in(t, f, &pl.name, 13.0, ink, me);
                     });
                 });
                 if Some(pl.id) == host {
@@ -535,7 +582,7 @@ fn panel(
                     rich(r, f, &icon, 12.0, INK);
                 }
                 if round && genre_points {
-                    rich(r, f, &bells.to_string(), 12.0, GREEN_INK);
+                    rich(r, f, &bells.to_string(), 12.0, GOOD);
                 }
                 if info.kind != ArenaKind::Lobby {
                     rich_in(r, f, &pl.score.to_string(), 13.0, INK, true);
@@ -634,14 +681,18 @@ fn feed_row(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, x: &Feed
         Node {
             column_gap: rem(0.375),
             align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.75), rem(0.3125)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(rem(0.75)),
+            padding: UiRect::new(rem(0.75), rem(0.75), rem(0.3125), rem(0.3125)),
+            border: UiRect::new(px(3), px(1), px(1), px(1)),
+            border_radius: BorderRadius::all(rem(0.625)),
             // (A note may carry a long path: an F8 report's.)
             max_width: rem(30.0),
             ..default()
         },
-        glass(),
+        glass_bar(match &x.what {
+            Feed::Ko { out: true, .. } => RED,
+            Feed::Ko { .. } => AMBER,
+            Feed::Note(_) => CYAN,
+        }),
     ))
     .with_children(|r| match &x.what {
         Feed::Note(s) => {
@@ -661,7 +712,7 @@ fn feed_row(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, x: &Feed
             }
             rich(r, f, icon, 15.0, INK);
             name_tag(r, f, session, *victim, 13.0);
-            let ink = if *out { RED_INK } else { MUTED };
+            let ink = if *out { BAD } else { MUTED };
             rich(r, f, &text::ko_line(why, *out, *shortcut), 12.0, ink);
         }
     });
@@ -704,10 +755,10 @@ fn intro(
                 width: rem(32.5),
                 max_width: percent(60),
                 flex_direction: FlexDirection::Column,
-                row_gap: rem(0.25),
-                padding: UiRect::axes(rem(1.0), rem(0.625)),
+                row_gap: rem(0.375),
+                padding: UiRect::axes(rem(1.375), rem(1.0)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                border_radius: BorderRadius::all(rem(1.5)),
                 ..default()
             },
             glass(),
@@ -722,10 +773,10 @@ fn intro(
                     flex_grow: 1.0,
                     ..default()
                 });
-                let left = rich(r, f, "", 13.0, PINK);
+                let left = rich(r, f, "", 13.0, ACCENT);
                 r.commands().entity(left).insert(IntroLeft);
             });
-            rich_in(c, f, m.title, 24.0, PINK, true);
+            rich_in(c, f, m.title, 28.0, ACCENT, true);
             label(c, f, &format!("🎯 {}.", m.goal));
             muted(c, f, m.desc);
         });
@@ -752,7 +803,8 @@ type Only<T, A, B> = (With<T>, Without<A>, Without<B>);
 /// The intro box, and the timer, «ВПЕРЁД!» and 3-2-1 texts.
 #[derive(SystemParam)]
 struct Countdown<'w, 's> {
-    intro: Single<'w, 's, &'static mut Node, (With<IntroBox>, Without<Pill>)>,
+    intro: Single<'w, 's, &'static mut Node, (With<IntroBox>, Without<Pill>, Without<TimerBox>)>,
+    timer_box: Single<'w, 's, &'static mut Node, (With<TimerBox>, Without<IntroBox>, Without<Pill>)>,
     timer: Single<'w, 's, (&'static mut Text, &'static mut TextColor), Only<TimerText, GoText, CountText>>,
     go: Single<'w, 's, &'static mut Text, Only<GoText, TimerText, CountText>>,
     count: Single<'w, 's, &'static mut Text, Only<CountText, TimerText, GoText>>,
@@ -763,7 +815,7 @@ struct Countdown<'w, 's> {
 fn clock(
     round: RoundView,
     mut countdown: Countdown,
-    mut pills: Query<(Entity, &Pill, &mut Node), Without<IntroBox>>,
+    mut pills: Query<(Entity, &Pill, &mut Node), (Without<IntroBox>, Without<TimerBox>)>,
     mut leaves: Query<(&mut Rich, Option<&IntroLeft>, Option<&NextLine>)>,
     children: Query<&Children>,
 ) {
@@ -772,6 +824,7 @@ fn clock(
     let before = in_round && round.time.t < 0.0;
     let on = in_round && round.time.t >= 0.0;
     show(&mut countdown.intro, before);
+    show(&mut countdown.timer_box, on);
     let (ref mut t, ref mut c) = *countdown.timer;
     let s = if on {
         text::fmt_time(round.time.time_left)
@@ -781,11 +834,7 @@ fn clock(
     if t.0 != s {
         t.0 = s;
     }
-    c.set_if_neq(TextColor(if round.time.time_left < 10.0 {
-        YELLOW
-    } else {
-        Color::WHITE
-    }));
+    c.set_if_neq(TextColor(if round.time.time_left < 10.0 { AMBER } else { INK }));
     let s = if on && round.time.t < 1.2 { text::GO } else { "" };
     if countdown.go.0 != s {
         countdown.go.0 = s.into();
@@ -824,7 +873,7 @@ fn clock(
 }
 
 fn next_line(p: &mut ChildSpawnerCommands, f: &Fonts, label_s: &'static str) {
-    let e = rich_in(p, f, "", 13.0, PINK, true);
+    let e = rich_in(p, f, "", 13.0, ACCENT, true);
     p.commands().entity(e).insert(NextLine(label_s));
 }
 
@@ -852,10 +901,10 @@ fn results(
                 width: rem(31.25),
                 max_width: percent(60),
                 flex_direction: FlexDirection::Column,
-                row_gap: rem(0.2),
-                padding: UiRect::axes(rem(0.875), rem(0.625)),
+                row_gap: rem(0.25),
+                padding: UiRect::axes(rem(1.125), rem(0.875)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                border_radius: BorderRadius::all(rem(1.5)),
                 ..default()
             },
             glass(),
@@ -895,17 +944,17 @@ fn results(
                     .with_children(|x| name_tag(x, f, &session, row_.id, 13.0));
                     rich(t, f, &text::round_note(row_.note), 12.0, MUTED);
                     cell(t, 2.0, |x| {
-                        rich(x, f, &format!("+{}", row_.points), 13.0, GREEN_INK);
+                        rich(x, f, &format!("+{}", row_.points), 13.0, GOOD);
                     });
                     cell(t, 1.625, |x| {
                         if row_.penalty > 0 {
-                            rich(x, f, &format!("−{}", row_.penalty), 13.0, RED_INK);
+                            rich(x, f, &format!("−{}", row_.penalty), 13.0, BAD);
                         }
                     });
                     cell(t, 1.875, |x| {
                         let ink = match row_.delta {
-                            d if d > 0 => GREEN_INK,
-                            d if d < 0 => RED_INK,
+                            d if d > 0 => GOOD,
+                            d if d < 0 => BAD,
                             _ => INK,
                         };
                         rich_in(x, f, &text::signed(row_.delta), 13.0, ink, true);
@@ -924,12 +973,12 @@ fn table_row(p: &mut ChildSpawnerCommands, me: bool, f: impl FnOnce(&mut ChildSp
         Node {
             column_gap: rem(0.375),
             align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.25), px(2)),
-            border_radius: BorderRadius::all(rem(0.375)),
+            padding: UiRect::axes(rem(0.375), rem(0.1875)),
+            border_radius: BorderRadius::all(rem(0.5)),
             ..default()
         },
         BackgroundColor(if me {
-            Color::srgba(1.0, 1.0, 1.0, 0.6)
+            Color::srgba(1.0, 1.0, 1.0, 0.09)
         } else {
             Color::NONE
         }),
@@ -963,10 +1012,10 @@ fn summary(
                 width: percent(100),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: rem(0.5),
-                padding: UiRect::axes(rem(0.875), rem(0.75)),
+                row_gap: rem(0.625),
+                padding: UiRect::axes(rem(1.125), rem(1.0)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                border_radius: BorderRadius::all(rem(1.5)),
                 ..default()
             },
             glass(),
@@ -978,7 +1027,7 @@ fn summary(
                 Some(w) => text::wins(&w.name),
                 None => text::GAME_OVER.to_string(),
             };
-            rich_in(c, f, &title, 22.0, PINK, true);
+            rich_in(c, f, &title, 22.0, ACCENT, true);
             c.spawn(Node {
                 width: percent(100),
                 flex_direction: FlexDirection::Column,
@@ -1024,7 +1073,7 @@ fn summary(
                         border_radius: BorderRadius::all(rem(0.75)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.45)),
+                    BackgroundColor(GROUP),
                 ))
                 .with_children(|r| {
                     let (icon, title, what) = text::award(a);
@@ -1058,21 +1107,21 @@ fn status(
         if !on {
             return;
         }
-        let (line, ink) = match hud.status {
-            Part::Finished => (text::finished(hud.place), GREEN_INK),
-            Part::Out => (text::YOU_ARE_OUT.to_string(), RED_INK),
-            _ => (text::SPECTATOR.to_string(), INK),
+        let (line, ink, bar) = match hud.status {
+            Part::Finished => (text::finished(hud.place), GOOD, ACCENT),
+            Part::Out => (text::YOU_ARE_OUT.to_string(), BAD, RED),
+            _ => (text::SPECTATOR.to_string(), INK, CYAN),
         };
         p.spawn((
             Node {
-                column_gap: rem(0.625),
+                column_gap: rem(0.75),
                 align_items: AlignItems::Center,
-                padding: UiRect::axes(rem(1.125), rem(0.5)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                padding: UiRect::new(rem(1.25), rem(1.25), rem(0.5), rem(0.5)),
+                border: UiRect::new(px(3), px(1), px(1), px(1)),
+                border_radius: BorderRadius::all(rem(1.0)),
                 ..default()
             },
-            glass(),
+            glass_bar(bar),
         ))
         .with_children(|r| {
             rich_in(

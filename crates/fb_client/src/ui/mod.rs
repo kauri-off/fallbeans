@@ -41,20 +41,21 @@ const BOLD: &[u8] = include_bytes!("../../../../assets/fonts/Nunito-Bold.ttf");
 const BLACK: &[u8] = include_bytes!("../../../../assets/fonts/Nunito-Black.ttf");
 pub const EMOJI: &[u8] = include_bytes!("../../../../assets/fonts/NotoColorEmoji-subset.ttf");
 
-pub const INK: Color = Color::srgb(0.169, 0.102, 0.361);
-pub const MUTED: Color = Color::srgb(0.329, 0.271, 0.498);
-pub const LOGO_PINK: Color = Color::srgb(0.816, 0.165, 0.451);
-pub const PINK: Color = Color::srgb(0.831, 0.2, 0.478);
-pub const GREEN: Color = Color::srgb(0.094, 0.525, 0.275);
-pub const GREEN_INK: Color = Color::srgb(0.043, 0.373, 0.176);
-pub const BLUE: Color = Color::srgb(0.094, 0.439, 0.733);
-pub const RED: Color = Color::srgb(0.816, 0.161, 0.271);
-pub const RED_INK: Color = Color::srgb(0.659, 0.082, 0.184);
-pub const YELLOW: Color = Color::srgb(1.0, 0.824, 0.247);
-pub const PANEL: Color = Color::srgba(1.0, 1.0, 1.0, 0.84);
-pub const RIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.8);
-pub const GROUP: Color = Color::srgba(0.169, 0.102, 0.361, 0.06);
-pub const SHADOW: Color = Color::srgba(0.169, 0.102, 0.361, 0.22);
+pub const INK: Color = Color::srgb(0.953, 0.945, 1.0);
+pub const MUTED: Color = Color::srgb(0.639, 0.624, 0.761);
+/// Text on the bright fills (the accent, cyan).
+pub const DARK: Color = Color::srgb(0.055, 0.051, 0.102);
+pub const ACCENT: Color = Color::srgb(0.776, 0.957, 0.196);
+pub const VIOLET: Color = Color::srgb(0.545, 0.361, 0.965);
+pub const CYAN: Color = Color::srgb(0.133, 0.827, 0.933);
+pub const RED: Color = Color::srgb(1.0, 0.302, 0.427);
+pub const GOOD: Color = Color::srgb(0.608, 0.882, 0.365);
+pub const BAD: Color = Color::srgb(1.0, 0.478, 0.541);
+pub const AMBER: Color = Color::srgb(1.0, 0.69, 0.125);
+pub const PANEL: Color = Color::srgba(0.067, 0.063, 0.118, 0.88);
+pub const RIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.1);
+pub const GROUP: Color = Color::srgba(1.0, 1.0, 1.0, 0.05);
+pub const SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
 /// Sizes are in rem: 16 px at the base scale, which follows the window (`UiScale`, `scale_ui`).
 pub fn rem(x: f32) -> Val {
@@ -239,13 +240,14 @@ pub enum Look {
 impl Look {
     fn fill(self) -> (Color, Color) {
         match self {
-            Look::Plain | Look::Tiny | Look::Chip(false) => (Color::srgba(1.0, 1.0, 1.0, 0.7), INK),
-            Look::Tab(false) => (Color::NONE, INK),
-            Look::Tab(true) => (Color::srgba(1.0, 1.0, 1.0, 0.92), INK),
-            Look::Primary => (PINK, Color::WHITE),
-            Look::Go => (GREEN, Color::WHITE),
-            Look::Danger | Look::TinyDanger => (RED, Color::WHITE),
-            Look::Chip(true) => (BLUE, Color::WHITE),
+            Look::Plain | Look::Tiny | Look::Chip(false) => (Color::srgba(1.0, 1.0, 1.0, 0.08), INK),
+            Look::Tab(false) => (Color::NONE, MUTED),
+            Look::Tab(true) => (INK, DARK),
+            Look::Primary => (VIOLET, Color::WHITE),
+            Look::Go => (ACCENT, DARK),
+            Look::Danger => (RED, Color::WHITE),
+            Look::TinyDanger => (RED.with_alpha(0.16), BAD),
+            Look::Chip(true) => (CYAN, DARK),
             Look::Check(_) => (Color::NONE, INK),
             Look::Fold => (Color::NONE, MUTED),
             Look::Swatch(c, _) => (c, INK),
@@ -255,19 +257,19 @@ impl Look {
     fn size(self) -> f32 {
         match self {
             Look::Tiny | Look::TinyDanger => 12.0,
-            Look::Chip(_) | Look::Check(_) | Look::Fold => 13.5,
-            _ => 16.0,
+            Look::Chip(_) | Look::Check(_) | Look::Fold | Look::Tab(_) => 13.5,
+            _ => 15.0,
         }
     }
 
     fn padding(self) -> UiRect {
         match self {
-            Look::Tiny | Look::TinyDanger => UiRect::axes(rem(0.5), px(2)),
-            Look::Chip(_) => UiRect::axes(rem(0.6875), rem(0.3125)),
-            Look::Tab(_) => UiRect::axes(rem(0.75), rem(0.375)),
+            Look::Tiny | Look::TinyDanger => UiRect::axes(rem(0.5), px(3)),
+            Look::Chip(_) => UiRect::axes(rem(0.75), rem(0.3125)),
+            Look::Tab(_) => UiRect::axes(rem(0.875), rem(0.375)),
             Look::Check(_) | Look::Fold => UiRect::axes(px(0), px(2)),
             Look::Swatch(..) => UiRect::ZERO,
-            _ => UiRect::axes(rem(1.0), rem(0.5625)),
+            _ => UiRect::axes(rem(1.125), rem(0.625)),
         }
     }
 
@@ -282,16 +284,19 @@ impl Look {
         BorderColor::all(match self {
             Look::Check(_) | Look::Fold | Look::Tab(_) => Color::NONE,
             Look::Swatch(_, true) => INK,
-            Look::Swatch(_, false) => Color::WHITE,
-            _ => RIM,
+            Look::Swatch(_, false) => Color::srgba(1.0, 1.0, 1.0, 0.2),
+            Look::Plain | Look::Tiny | Look::Chip(false) => RIM,
+            _ => Color::srgba(1.0, 1.0, 1.0, 0.18),
         })
     }
 
     fn shadow(self) -> Option<BoxShadow> {
         match self {
-            Look::Check(_) | Look::Fold | Look::Tab(false) => None,
-            Look::Swatch(..) => Some(BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4))),
-            _ => Some(BoxShadow::new(SHADOW.with_alpha(0.12), px(0), px(2), px(0), px(6))),
+            Look::Check(_) | Look::Fold | Look::Tab(_) | Look::Plain | Look::Tiny | Look::Chip(false) => None,
+            Look::Swatch(..) => Some(BoxShadow::new(SHADOW.with_alpha(0.35), px(0), px(1), px(0), px(4))),
+            Look::Primary => Some(BoxShadow::new(VIOLET.with_alpha(0.45), px(0), px(4), px(0), px(14))),
+            Look::Go => Some(BoxShadow::new(ACCENT.with_alpha(0.3), px(0), px(4), px(0), px(14))),
+            _ => Some(BoxShadow::new(SHADOW.with_alpha(0.3), px(0), px(2), px(0), px(8))),
         }
     }
 }

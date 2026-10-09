@@ -6,6 +6,7 @@ use fb_shared::rules::RoundNote;
 use fb_sim::physics::Power;
 
 pub const LOGO: &str = "Fall Beans";
+pub const TAGLINE: &str = "Гонки, выживание и очки — до 8 бобов";
 pub const TAB_ROOMS: &str = "Комнаты";
 pub const TAB_SERVERS: &str = "Серверы";
 pub const TAB_SETTINGS: &str = "Настройки";

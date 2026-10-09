@@ -146,10 +146,10 @@ pub fn logo(p: &mut ChildSpawnerCommands, f: &Fonts, size: f32) -> Entity {
             font_size: FontSize::Px(size),
             ..default()
         },
-        TextColor(LOGO_PINK),
+        TextColor(ACCENT),
         TextShadow {
-            offset: Vec2::new(0.0, 2.5),
-            color: Color::WHITE,
+            offset: Vec2::new(0.0, size / 10.0),
+            color: VIOLET,
         },
     ))
     .id()
@@ -162,9 +162,8 @@ pub fn button(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, act:
 pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, act: Action, enabled: bool) -> Entity {
     let (bg, ink) = look.fill();
     let radius = match look {
-        Look::Tab(_) => rem(0.75),
-        Look::Chip(_) | Look::Tiny | Look::TinyDanger => rem(0.6),
-        _ => rem(0.875),
+        Look::Tab(_) | Look::Chip(_) | Look::Tiny | Look::TinyDanger => px(f32::MAX),
+        _ => rem(0.75),
     };
     // (Labels of check boxes wrap; other buttons keep their size.)
     let shrink = if matches!(look, Look::Check(_)) { 1.0 } else { 0.0 };
@@ -201,8 +200,8 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                     flex_shrink: 0.0,
                     ..default()
                 },
-                BorderColor::all(if on { BLUE } else { MUTED }),
-                BackgroundColor(if on { BLUE } else { Color::WHITE }),
+                BorderColor::all(if on { ACCENT } else { MUTED }),
+                BackgroundColor(if on { ACCENT } else { Color::NONE }),
                 Pickable::IGNORE,
             ))
             .with_children(|c| {
@@ -214,7 +213,7 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
                         border_radius: BorderRadius::all(px(2)),
                         ..default()
                     },
-                    BackgroundColor(Color::WHITE),
+                    BackgroundColor(DARK),
                     if on { Visibility::Inherited } else { Visibility::Hidden },
                     Pickable::IGNORE,
                 ));
@@ -333,8 +332,8 @@ pub(super) fn restyle(
             }
             if let Look::Check(on) = look {
                 if let Ok((mut rim, mut fill)) = boxes.get_mut(c) {
-                    *rim = BorderColor::all(if on { BLUE } else { MUTED });
-                    fill.set_if_neq(BackgroundColor(if on { BLUE } else { Color::WHITE }));
+                    *rim = BorderColor::all(if on { ACCENT } else { MUTED });
+                    fill.set_if_neq(BackgroundColor(if on { ACCENT } else { Color::NONE }));
                 }
                 if let Ok(mut v) = dots.get_mut(c) {
                     v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
@@ -377,11 +376,11 @@ pub fn field(
         },
         TextColor(INK),
         TextCursorStyle {
-            color: INK,
+            color: ACCENT,
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.92)),
-        BorderColor::all(Color::srgba(0.169, 0.102, 0.361, 0.25)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.28)),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.14)),
     ));
     if let Some(filter) = filter {
         e.insert(EditableTextFilter::new(filter));
@@ -505,7 +504,7 @@ pub fn slider(
                     border_radius: BorderRadius::all(rem(0.2)),
                     ..default()
                 },
-                BackgroundColor(INK.with_alpha(0.2)),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
             ));
             s.spawn(Node {
                 position_type: PositionType::Absolute,
@@ -527,8 +526,8 @@ pub fn slider(
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(BLUE),
-                    BorderColor::all(Color::WHITE),
+                    BackgroundColor(ACCENT),
+                    BorderColor::all(DARK),
                 ));
             });
         });
@@ -553,11 +552,13 @@ pub fn group(p: &mut ChildSpawnerCommands, f: impl FnOnce(&mut ChildSpawnerComma
         Node {
             flex_direction: FlexDirection::Column,
             row_gap: rem(0.625),
-            padding: UiRect::all(rem(0.75)),
-            border_radius: BorderRadius::all(rem(0.875)),
+            padding: UiRect::all(rem(0.875)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(1.0)),
             ..default()
         },
         BackgroundColor(GROUP),
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.06)),
     ))
     .with_children(f)
     .id()
@@ -606,9 +607,9 @@ pub fn dot(p: &mut ChildSpawnerCommands, color: Color, size: f32) -> Entity {
 /// A dot's rim: white, or a faint ink line round a colour too pale to show on the white panels (a white suit).
 pub fn dot_rim(c: Color) -> Color {
     let rim = if c.luminance() > 0.8 {
-        Color::srgba(0.169, 0.102, 0.361, 0.35)
+        Color::srgba(0.0, 0.0, 0.0, 0.4)
     } else {
-        Color::WHITE
+        Color::srgba(1.0, 1.0, 1.0, 0.45)
     };
     rim.with_alpha(rim.alpha() * c.alpha())
 }
@@ -665,11 +666,29 @@ pub(super) fn sync_folds(
     }
 }
 
-/// A glass panel (`.glass`).
+/// A dark glass panel.
 pub fn glass() -> (BackgroundColor, BorderColor, BoxShadow) {
     (
         BackgroundColor(PANEL),
         BorderColor::all(RIM),
-        BoxShadow::new(SHADOW.with_alpha(0.18), px(0), rem(0.6), px(0), rem(1.8)),
+        BoxShadow::new(SHADOW.with_alpha(0.45), px(0), rem(0.75), px(0), rem(2.0)),
     )
+}
+
+/// A glass panel with a coloured bar down its left side.
+pub fn glass_bar(c: Color) -> (BackgroundColor, BorderColor, BoxShadow) {
+    let (bg, _, shadow) = glass();
+    (
+        bg,
+        BorderColor {
+            left: c,
+            ..BorderColor::all(RIM)
+        },
+        shadow,
+    )
+}
+
+/// A small capital label over a part of a panel.
+pub fn caption(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
+    rich_in(p, f, &s.to_uppercase(), 11.0, MUTED, true)
 }

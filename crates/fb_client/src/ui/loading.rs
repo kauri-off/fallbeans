@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use super::*;
 use crate::render::warmup::Warmup;
 
-/// The screen's backdrop: the game's pink sky.
-const BACKDROP: Color = Color::srgb(1.0, 0.85, 0.95);
+/// The screen's backdrop: the night behind the panels.
+const BACKDROP: Color = Color::srgb(0.043, 0.039, 0.078);
 
 pub struct LoadingPlugin;
 
@@ -53,18 +53,18 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
             GlobalZIndex(1000),
         ))
         .with_children(|s| {
-            logo(s, f, 64.0);
-            rich_in(s, f, text::LOADING, 24.0, INK, true);
+            logo(s, f, 72.0);
+            rich_in(s, f, text::LOADING, 20.0, INK, true);
             s.spawn((
                 Node {
                     width: rem(22.0),
                     max_width: percent(80),
-                    height: rem(0.75),
-                    border_radius: BorderRadius::all(rem(0.375)),
+                    height: rem(0.5),
+                    border_radius: BorderRadius::MAX,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(GROUP),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
             ))
             .with_children(|b| {
                 b.spawn((
@@ -72,10 +72,11 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                     Node {
                         width: percent(0),
                         height: percent(100),
-                        border_radius: BorderRadius::all(rem(0.375)),
+                        border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(PINK),
+                    BackgroundColor(ACCENT),
+                    BoxShadow::new(ACCENT.with_alpha(0.5), px(0), px(0), px(0), px(10)),
                 ));
             });
             let step = muted(s, f, "");

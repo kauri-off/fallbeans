@@ -127,7 +127,7 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, folds:
                     .with_children(|n| {
                         let keys = heading(n, f, &crate::keys::labels(o.binds.keys(b)));
                         n.commands().entity(keys).insert(BindKeys(b));
-                        let wait = rich(n, f, text::PRESS_KEY, 14.0, PINK);
+                        let wait = rich(n, f, text::PRESS_KEY, 14.0, ACCENT);
                         n.commands().entity(wait).insert((
                             BindWait(b),
                             Node {
