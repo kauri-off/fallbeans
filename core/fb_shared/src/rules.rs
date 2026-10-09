@@ -40,6 +40,8 @@ pub struct RoundView<'a> {
     pub finished: &'a [PlayerId],
     /// In elimination order.
     pub out: &'a [PlayerId],
+    /// When a bean in `out` dropped out: those of one moment keep their order between them.
+    pub out_at: &'a dyn Fn(PlayerId) -> Option<f64>,
     pub scores: &'a BTreeMap<PlayerId, i64>,
     pub progress: &'a dyn Fn(PlayerId) -> f64,
     pub time_up: bool,
@@ -150,7 +152,10 @@ impl RoundView<'_> {
             Genre::Survival => {
                 let outs: Vec<PlayerId> = self.out.iter().copied().filter(|id| ids.contains(id)).collect();
                 let stayed: Vec<PlayerId> = ids.iter().copied().filter(|id| !outs.contains(id)).collect();
-                let gone = outs.iter().rev().map(|&id| vec![id]);
+                let mut gone = Vec::new();
+                for same in outs.chunk_by(|&a, &b| (self.out_at)(a) == (self.out_at)(b)).rev() {
+                    gone.extend(same.iter().map(|&id| vec![id]));
+                }
                 if early {
                     return bots.into_iter().chain(gone).collect();
                 }
@@ -283,6 +288,8 @@ mod tests {
         gone: Vec<u32>,
         finished: Vec<u32>,
         out: Vec<u32>,
+        /// Unset: each bean in `out` on a tick of its own.
+        out_at: BTreeMap<u32, f64>,
         scores: BTreeMap<u32, i64>,
         progress: BTreeMap<u32, f64>,
         time_up: bool,
@@ -296,6 +303,7 @@ mod tests {
             gone: vec![],
             finished: vec![],
             out: vec![],
+            out_at: BTreeMap::new(),
             scores: BTreeMap::new(),
             progress: BTreeMap::new(),
             time_up: false,
@@ -319,6 +327,10 @@ mod tests {
     fn with<R>(x: &V, f: impl FnOnce(&RoundView) -> R) -> R {
         let connected = |id: PlayerId| !x.gone.contains(&id.0);
         let progress = |id: PlayerId| x.progress.get(&id.0).copied().unwrap_or(0.0);
+        let out_at = |id: PlayerId| {
+            let at = x.out.iter().position(|&o| o == id.0).map(|i| i as f64);
+            x.out_at.get(&id.0).copied().or(at)
+        };
         let (ids, finished, out) = (pids(&x.ids), pids(&x.finished), pids(&x.out));
         let scores = x.scores.iter().map(|(&id, &v)| (PlayerId(id), v)).collect();
         let bots = x
@@ -331,6 +343,7 @@ mod tests {
             connected: &connected,
             finished: &finished,
             out: &out,
+            out_at: &out_at,
             scores: &scores,
             progress: &progress,
             time_up: x.time_up,
@@ -392,6 +405,18 @@ mod tests {
         let rows = score(&x, &BTreeMap::new(), &BTreeMap::new());
         let pts = |id| rows.iter().find(|r| r.id.0 == id).unwrap().points;
         assert_eq!([pts(1), pts(2), pts(3), pts(4)], [8, 8, 3, 0]);
+    }
+
+    #[test]
+    fn beans_out_on_one_tick_rank_in_join_order() {
+        let mut x = v(Genre::Survival);
+        x.out = vec![4, 2, 3];
+        x.out_at = [(4, 5.0), (2, 9.0), (3, 9.0)].into();
+        x.time_up = true;
+        assert_eq!(
+            plain(with(&x, |r| r.rank_groups(None))),
+            [vec![1], vec![2], vec![3], vec![4]]
+        );
     }
 
     #[test]

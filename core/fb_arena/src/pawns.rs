@@ -141,7 +141,7 @@ impl Arena {
                 }
                 // Prefer what is ahead over what is merely close.
                 let score = d - facing * 0.6;
-                if score > best {
+                if score >= best {
                     continue;
                 }
                 best = score;
