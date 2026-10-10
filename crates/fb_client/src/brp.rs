@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::game::{MapNow, Others, PredictionStats, ProbeInput};
 use crate::net::Connection;
 use crate::session::{Session, send};
-use crate::ui::{Fold, Folds, HomeTab, MenuTab, Ui};
+use crate::ui::{Act, Field, Fold, Folds, HomeTab, MenuTab, Rich, Section, Ui};
 
 pub struct BrpPlugin {
     pub port: u16,
@@ -28,6 +28,8 @@ impl Plugin for BrpPlugin {
                 .with_method_main("fb/input", input)
                 .with_method_main("fb/shot", shot)
                 .with_method_main("fb/ui", ui_state)
+                .with_method_main("fb/press", press)
+                .with_method_main("fb/field", field)
                 .with_method_main("fb/camera", camera),
             RemoteHttpPlugin::default().with_port(self.port),
         ));
@@ -197,23 +199,26 @@ struct UiParams {
     menu: Option<bool>,
     /// "game", "settings" or "dev" (the menu's tabs); "rooms" or "home-settings" at the room list.
     tab: Option<String>,
-    /// Opens or folds a folded part ("gfx", "keys", "problems", "practice", "outfit", "dev-maps").
+    /// Opens or folds a folded part ("practice", "outfit", "dev-maps").
     fold: Option<Fold>,
+    /// Picks a part of the settings ("controls", "screen", "gfx", "keys", "problems").
+    section: Option<Section>,
     debug: Option<bool>,
 }
 
-/// Drives the interface the way the player's clicks would (menu, tabs, folded parts, F3).
+/// Drives the interface the way the player's clicks would (menu, tabs, folded parts, settings parts, F3).
 fn ui_state(
     In(params): In<Option<Value>>,
     ui: Option<ResMut<Ui>>,
     folds: Option<ResMut<Folds>>,
+    section: Option<ResMut<Section>>,
     home: Option<ResMut<NextState<HomeTab>>>,
     menu: Option<ResMut<NextState<MenuTab>>>,
     overlay: Option<ResMut<crate::hud::Overlay>>,
 ) -> BrpResult {
     let p: UiParams = parse(params)?;
-    let (Some(mut ui), Some(mut folds), Some(mut home), Some(mut menu), Some(mut overlay)) =
-        (ui, folds, home, menu, overlay)
+    let (Some(mut ui), Some(mut folds), Some(mut section), Some(mut home), Some(mut menu), Some(mut overlay)) =
+        (ui, folds, section, home, menu, overlay)
     else {
         return Err(bad("no interface (headless)"));
     };
@@ -232,10 +237,88 @@ fn ui_state(
     if let Some(k) = p.fold {
         folds.toggle(k);
     }
+    if let Some(s) = p.section {
+        *section = s;
+    }
     if let Some(d) = p.debug {
         overlay.0 = d;
     }
     Ok(json!({ "menu": ui.menu, "chat": ui.chat, "need_click": ui.need_click }))
+}
+
+#[derive(Deserialize)]
+struct PressParams {
+    /// A part of the button's label.
+    label: String,
+    /// Which of the buttons that match, as they are read: top to bottom, left to right.
+    #[serde(default)]
+    nth: usize,
+}
+
+type Pressable = (
+    Entity,
+    &'static bevy::ui::UiGlobalTransform,
+    &'static bevy::ui::ComputedNode,
+    &'static InheritedVisibility,
+    Has<bevy::ui::InteractionDisabled>,
+);
+
+/// Presses a button on screen by its label, as a click would; the labels on screen if none matches.
+fn press(
+    In(params): In<Option<Value>>,
+    buttons: Query<Pressable, With<Act>>,
+    children: Query<&Children>,
+    texts: Query<&Rich>,
+    mut commands: Commands,
+) -> BrpResult {
+    let p: PressParams = parse(params)?;
+    let label = |e: Entity| {
+        children
+            .iter_descendants(e)
+            .filter_map(|c| texts.get(c).ok())
+            .map(|t| t.0.clone())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut on_screen: Vec<_> = buttons
+        .iter()
+        .filter(|(_, _, n, v, off)| v.get() && n.size().x > 0.0 && !off)
+        .map(|(e, at, ..)| (e, at.translation, label(e)))
+        .collect();
+    on_screen.sort_by(|a, b| {
+        (a.1.y, a.1.x)
+            .partial_cmp(&(b.1.y, b.1.x))
+            .unwrap_or(core::cmp::Ordering::Equal)
+    });
+    let Some((e, ..)) = on_screen.iter().filter(|(.., l)| l.contains(&p.label)).nth(p.nth) else {
+        let all: Vec<_> = on_screen.into_iter().map(|(.., l)| l).collect();
+        return Err(bad(format!("no button «{}» on screen: {all:?}", p.label)));
+    };
+    commands.trigger(bevy::ui_widgets::Activate { entity: *e });
+    Ok(Value::Null)
+}
+
+#[derive(Deserialize)]
+struct FieldParams {
+    field: Field,
+    text: String,
+}
+
+/// Types into a text field: its text becomes `text`.
+fn field(In(params): In<Option<Value>>, mut fields: Query<(&Field, &mut bevy::text::EditableText)>) -> BrpResult {
+    let p: FieldParams = parse(params)?;
+    let mut found = false;
+    for (f, mut t) in &mut fields {
+        if *f == p.field {
+            crate::ui::set_field_text(&mut t, &p.text);
+            found = true;
+        }
+    }
+    if found {
+        Ok(Value::Null)
+    } else {
+        Err(bad("no such field"))
+    }
 }
 
 #[derive(Deserialize)]

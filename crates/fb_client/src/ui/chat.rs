@@ -32,6 +32,8 @@ impl Plugin for ChatPlugin {
 }
 
 #[derive(Component)]
+struct ChatBox;
+#[derive(Component)]
 struct LogBox;
 /// A line of the chat: its number and time.
 #[derive(Component)]
@@ -44,16 +46,18 @@ fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
     let f = &*f;
     commands.entity(e).with_children(|l| {
         l.spawn((
+            ChatBox,
             Node {
                 position_type: PositionType::Absolute,
-                left: rem(1.0),
-                bottom: rem(3.5),
-                width: rem(24.0),
+                left: px(24),
+                bottom: px(24),
+                width: px(480),
                 max_width: percent(40),
                 flex_direction: FlexDirection::Column,
-                row_gap: rem(0.375),
+                border_radius: BorderRadius::all(px(18)),
                 ..default()
             },
+            BackgroundColor(Color::NONE),
             Pickable::IGNORE,
         ))
         .with_children(|c| {
@@ -61,20 +65,19 @@ fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                 LogBox,
                 Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    padding: UiRect::axes(rem(0.75), rem(0.5)),
-                    border_radius: BorderRadius::all(rem(1.0)),
-                    max_height: rem(14.0),
+                    align_items: AlignItems::FlexStart,
+                    row_gap: px(4),
+                    max_height: px(280),
                     overflow: Overflow::scroll_y(),
                     justify_content: JustifyContent::FlexEnd,
                     ..default()
                 },
-                BackgroundColor(Color::NONE),
                 Pickable::IGNORE,
             ));
             c.spawn((
                 ChatInput,
                 Node {
+                    margin: UiRect::new(px(8), px(8), px(6), px(8)),
                     display: bevy::ui::Display::None,
                     ..default()
                 },
@@ -155,9 +158,15 @@ fn lines(
 fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine) {
     let color = l.id.and_then(|id| session.player(id)).map_or(MUTED, |p| suit(p.color));
     // (A suit too light to read on the light panel goes darker.)
-    let name_ink = color.mix(&INK, 0.35);
+    let name_ink = color.mix(&INK, 0.45);
     p.spawn((
         ChatRow(l.n, l.at),
+        Node {
+            padding: UiRect::axes(px(12), px(6)),
+            border_radius: BorderRadius::all(px(12)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
         Text::default(),
         TextLayout::default(),
         Pickable::IGNORE,
@@ -169,7 +178,7 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
                 TextSpan::new(run),
                 TextFont {
                     font: if emoji { f.emoji.clone() } else { f.strong.clone() }.into(),
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextColor(name_ink),
@@ -180,22 +189,26 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
                 TextSpan::new(run),
                 TextFont {
                     font: if emoji { f.emoji.clone() } else { f.body.clone() }.into(),
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
-                TextColor(INK),
+                TextColor(if l.id.is_some() { INK } else { FAINT }),
             ));
         }
     });
 }
 
-/// Open, every line; for a while after a new one, the last few; otherwise none.
+type BoxLook = (Entity, &'static mut BackgroundColor, &'static mut Node);
+
+/// Open, every line on a card with the field; for a while after a new one, the last few, each on its own; otherwise
+/// none.
 fn shown(
     ui: Res<Ui>,
     log: Res<ChatLog>,
     time: Res<Time<Real>>,
-    mut q: Single<&mut BackgroundColor, With<LogBox>>,
-    mut rows: Query<(&ChatRow, &mut Node)>,
+    mut q: Single<BoxLook, (With<ChatBox>, Without<ChatRow>)>,
+    mut rows: Query<(&ChatRow, &mut Node, &mut BackgroundColor)>,
+    mut commands: Commands,
 ) {
     let now = time.elapsed_secs();
     let fresh = log.0.back().is_some_and(|l| now - l.at < SHOW_S);
@@ -206,13 +219,38 @@ fn shown(
     } else {
         None
     };
-    let alpha = if ui.chat { 0.88 } else { 0.55 };
-    q.set_if_neq(BackgroundColor(if from.is_some() && !log.0.is_empty() {
-        PANEL.with_alpha(alpha)
+    let (e, ref mut bg, ref mut node) = *q;
+    bg.set_if_neq(BackgroundColor(if ui.chat { PANEL } else { Color::NONE }));
+    let pad = if ui.chat {
+        UiRect::new(px(2), px(2), px(6), px(0))
     } else {
+        UiRect::ZERO
+    };
+    if node.padding != pad {
+        node.padding = pad;
+        if ui.chat {
+            commands
+                .entity(e)
+                .insert(BoxShadow::new(SHADOW.with_alpha(0.1), px(0), px(2), px(0), px(10)));
+        } else {
+            commands.entity(e).remove::<BoxShadow>();
+        }
+    }
+    let line_bg = if ui.chat {
         Color::NONE
-    }));
-    for (r, mut node) in &mut rows {
+    } else {
+        Color::srgba(0.984, 0.973, 0.953, 0.95)
+    };
+    for (r, mut node, mut bg) in &mut rows {
         show(&mut node, from.is_some_and(|n| r.0 >= n));
+        bg.set_if_neq(BackgroundColor(line_bg));
+        let pad = if ui.chat {
+            UiRect::axes(px(12), px(1))
+        } else {
+            UiRect::axes(px(12), px(6))
+        };
+        if node.padding != pad {
+            node.padding = pad;
+        }
     }
 }

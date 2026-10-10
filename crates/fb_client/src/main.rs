@@ -310,15 +310,14 @@ fn screenshot(
 
 /// `--offscreen`: the image the game is drawn to instead of a window.
 #[derive(Resource)]
-pub struct Offscreen(pub Handle<Image>);
+pub struct Offscreen(pub Handle<Image>, pub Vec2);
 
-const OFFSCREEN_SIZE: (u32, u32) = (1600, 900);
-
-fn offscreen_target(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn offscreen_target(mut commands: Commands, mut images: ResMut<Assets<Image>>, opts: Res<Opts>) {
     use bevy::render::render_resource::{TextureFormat, TextureUsages};
-    let mut image = Image::new_target_texture(OFFSCREEN_SIZE.0, OFFSCREEN_SIZE.1, TextureFormat::Rgba8UnormSrgb, None);
+    let (w, h) = opts.size;
+    let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
-    commands.insert_resource(Offscreen(images.add(image)));
+    commands.insert_resource(Offscreen(images.add(image), Vec2::new(w as f32, h as f32)));
 }
 
 /// A screenshot of what the game shows (the window, or the offscreen image).

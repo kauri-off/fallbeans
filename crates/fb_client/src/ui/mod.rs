@@ -40,50 +40,53 @@ use crate::view::color;
 
 const BODY: &[u8] = include_bytes!("../../../../assets/fonts/Manrope-SemiBold.ttf");
 const STRONG: &[u8] = include_bytes!("../../../../assets/fonts/Manrope-ExtraBold.ttf");
-const DISPLAY: &[u8] = include_bytes!("../../../../assets/fonts/Unbounded-Bold.ttf");
 pub const EMOJI: &[u8] = include_bytes!("../../../../assets/fonts/NotoColorEmoji-subset.ttf");
 
-// The dataviz skill's reference palette, light mode (its `palette.md`): chrome and ink, categorical slots,
-// the blue ramp and the status colours. Text wears the inks; a colour beside it carries the meaning.
-pub const INK: Color = Color::srgb(0.043, 0.043, 0.043);
-pub const MUTED: Color = Color::srgb(0.3216, 0.3176, 0.3059);
-pub const FAINT: Color = Color::srgb(0.537, 0.529, 0.506);
-/// Text on the saturated fills (blue, green, critical).
-pub const ON_FILL: Color = Color::WHITE;
-/// Categorical slot 1 and blue ramp 450: the interface's one accent.
-pub const BLUE: Color = Color::srgb(0.165, 0.471, 0.839);
-/// Blue ramp 400 and 500: the gradient of the main buttons.
-pub const BLUE_400: Color = Color::srgb(0.224, 0.529, 0.898);
-pub const BLUE_500: Color = Color::srgb(0.145, 0.416, 0.749);
-/// Blue ramp 550 and 100.
-pub const BLUE_DEEP: Color = Color::srgb(0.11, 0.361, 0.671);
-pub const BLUE_SOFT: Color = Color::srgb(0.804, 0.886, 0.984);
-/// Categorical slot 6, and status good.
-pub const GREEN: Color = Color::srgb(0.0, 0.514, 0.0);
-pub const GREEN_DEEP: Color = Color::srgb(0.047, 0.639, 0.047);
-/// Status: good text, serious, warning, critical.
-pub const GOOD: Color = Color::srgb(0.0, 0.388, 0.0);
-pub const SERIOUS: Color = Color::srgb(0.925, 0.514, 0.353);
-pub const WARNING: Color = Color::srgb(0.98, 0.698, 0.098);
-pub const CRITICAL: Color = Color::srgb(0.816, 0.231, 0.231);
-/// The medals: categorical yellow, the baseline grey, categorical orange.
-pub const GOLD: Color = Color::srgb(0.929, 0.631, 0.0);
-pub const SILVER: Color = Color::srgb(0.765, 0.761, 0.718);
-pub const BRONZE: Color = Color::srgb(0.922, 0.408, 0.204);
-/// The page plane, the chart surface (panels) and the neutral (cards in them).
-pub const PLANE: Color = Color::srgb(0.976, 0.976, 0.969);
-/// The chart surface, opaque: buttons and fields.
-pub const SURFACE: Color = Color::srgb(0.988, 0.988, 0.984);
-pub const PANEL: Color = Color::srgba(0.988, 0.988, 0.984, 0.94);
-pub const NEUTRAL: Color = Color::srgb(0.941, 0.937, 0.925);
-/// The hairline ring.
-pub const RIM: Color = ink_wash(0.1);
-pub const GROUP: Color = Color::srgba(0.941, 0.937, 0.925, 0.7);
-pub const SHADOW: Color = Color::srgba(0.043, 0.043, 0.043, 0.2);
+const fn hex(rgb: u32) -> Color {
+    Color::srgb(
+        ((rgb >> 16) & 0xff) as f32 / 255.0,
+        ((rgb >> 8) & 0xff) as f32 / 255.0,
+        (rgb & 0xff) as f32 / 255.0,
+    )
+}
 
-/// Primary ink, faint: washes and rules on the light surfaces.
+// The soft-toy palette (`mock/c.html`): warm paper and cards, brown inks, one teal accent, apricot for "yours".
+pub const INK: Color = hex(0x2F2B27);
+pub const MUTED: Color = hex(0x5C544B);
+pub const FAINT: Color = hex(0x71675C);
+/// Placeholders and the text of what cannot be pressed.
+pub const GHOST: Color = hex(0x958B80);
+pub const ON_FILL: Color = Color::WHITE;
+pub const PAPER: Color = hex(0xECE6DC);
+pub const CARD: Color = hex(0xFBF8F3);
+pub const CARD2: Color = hex(0xF3EEE6);
+pub const WELL: Color = hex(0xEAE3D8);
+pub const LINE: Color = hex(0xE0D7CA);
+/// The rule between rows of a card.
+pub const HAIR: Color = hex(0xEEE7DC);
+pub const TEAL: Color = hex(0x3F6F66);
+pub const TEAL_DEEP: Color = hex(0x335C54);
+pub const TEAL_SOFT: Color = hex(0xDDE8E4);
+pub const TEAL_INK: Color = hex(0x244A43);
+pub const APRICOT: Color = hex(0xE2A07C);
+pub const APRICOT_SOFT: Color = hex(0xF7E6DA);
+pub const APRICOT_INK: Color = hex(0x8E4D2A);
+pub const CRITICAL: Color = hex(0xAE4438);
+pub const CRITICAL_SOFT: Color = hex(0xF4E0DB);
+pub const GOOD: Color = hex(0x3B7350);
+pub const GOOD_SOFT: Color = hex(0xE1EDE3);
+pub const GOLD: Color = hex(0xD9B65E);
+pub const SILVER: Color = hex(0xC2BEB5);
+pub const BRONZE: Color = hex(0xC99470);
+/// Cards over the game, a little see-through.
+pub const PANEL: Color = Color::srgba(0.984, 0.973, 0.953, 0.96);
+pub const SHADOW: Color = Color::srgba(0.275, 0.204, 0.133, 0.14);
+/// The veil over the game under a card.
+pub const DIM: Color = Color::srgba(0.188, 0.157, 0.125, 0.3);
+
+/// Primary ink, faint: washes on the light surfaces.
 pub const fn ink_wash(a: f32) -> Color {
-    Color::srgba(0.043, 0.043, 0.043, a)
+    Color::srgba(0.184, 0.169, 0.153, a)
 }
 
 /// Sizes are in rem: 16 px at the base scale, which follows the window (`UiScale`, `scale_ui`).
@@ -99,13 +102,13 @@ pub fn suit(i: u8) -> Color {
     }
 }
 
-/// A game's genre as a colour: categorical slots 1-3, the ones validated all-pairs (`validate_palette.js`).
-pub fn genre_color(g: fb_shared::game::Genre) -> Color {
+/// A game's genre: its colour, the soft fill of its tags and tiles, and the ink on that fill.
+pub fn genre_tones(g: fb_shared::game::Genre) -> (Color, Color, Color) {
     use fb_shared::game::Genre;
     match g {
-        Genre::Race => Color::srgb(0.165, 0.471, 0.839),
-        Genre::Survival => Color::srgb(0.922, 0.408, 0.204),
-        Genre::Points => Color::srgb(0.106, 0.686, 0.478),
+        Genre::Race => (hex(0x7591B0), hex(0xDFE6EE), hex(0x3C5A7A)),
+        Genre::Survival => (hex(0xC4A15C), hex(0xF1E7D1), hex(0x6A511E)),
+        Genre::Points => (hex(0x8BAD88), hex(0xE0EBDD), hex(0x3D633F)),
     }
 }
 
@@ -113,10 +116,8 @@ pub fn genre_color(g: fb_shared::game::Genre) -> Color {
 pub struct Fonts {
     /// Manrope SemiBold: running text.
     pub body: Handle<Font>,
-    /// Manrope ExtraBold: names, headings, numbers in tables.
+    /// Manrope ExtraBold: names, headings, titles and numbers.
     pub strong: Handle<Font>,
-    /// Unbounded: the logo, titles, the timer and the countdown.
-    pub display: Handle<Font>,
     pub emoji: Handle<Font>,
 }
 
@@ -165,9 +166,6 @@ pub struct Ui {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Fold {
-    Gfx,
-    Keys,
-    Problems,
     Practice,
     Outfit,
     DevMaps,
@@ -188,6 +186,28 @@ impl Folds {
     pub fn open(&self, f: Fold) -> bool {
         self.0.contains(&f)
     }
+}
+
+/// A part of the settings, picked in their side bar (by name in BRP's `fb/ui`).
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Section {
+    #[default]
+    Controls,
+    Screen,
+    Gfx,
+    Keys,
+    Problems,
+}
+
+impl Section {
+    pub const ALL: [Section; 5] = [
+        Section::Controls,
+        Section::Screen,
+        Section::Gfx,
+        Section::Keys,
+        Section::Problems,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,6 +246,7 @@ pub enum Action {
     MenuTab(MenuTab),
     /// Opens or folds a folded part.
     Fold(Fold),
+    Section(Section),
     SaveName(Field),
     Join(String),
     SubmitPin(String),
@@ -262,135 +283,168 @@ pub struct UiAction(pub Action);
 /// How a button looks.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum Look {
+    /// A light button with a rim.
     Plain,
     Primary,
+    /// The big main action of a card.
     Go,
+    /// Apricot: back to what is the player's own.
+    Warm,
     Danger,
     Chip(bool),
+    /// A chip in a long list of them.
+    SmallChip(bool),
     Tab(bool),
+    /// An entry of the settings' side bar.
+    Nav(bool),
     Tiny,
-    TinyDanger,
-    /// A switch with its label.
+    /// A bare icon («×»).
+    Icon,
+    /// A setting's row: its label, the switch at the end.
     Check(bool),
+    /// A switch before its label.
+    Toggle(bool),
     /// The head of a folded part.
     Fold,
     /// A colour swatch (selected or not).
     Swatch(Color, bool),
-    /// A map's tile, with its genre's colour.
-    Tile(Color),
+    /// A map's tile, in its genre's colours.
+    Tile(fb_shared::game::Genre),
 }
 
 impl Look {
-    fn fill(self) -> (Color, Color) {
+    /// The look it shares its colours with.
+    fn base(self) -> Look {
         match self {
-            Look::Plain | Look::Tiny | Look::Chip(false) | Look::Tile(_) => (SURFACE, INK),
-            Look::Tab(false) => (Color::NONE, MUTED),
-            Look::Tab(true) => (SURFACE, INK),
-            Look::Primary => (BLUE, ON_FILL),
-            Look::Go => (GREEN, ON_FILL),
-            Look::Danger => (CRITICAL, ON_FILL),
-            Look::TinyDanger => (CRITICAL.with_alpha(0.1), CRITICAL),
-            Look::Chip(true) => (BLUE, ON_FILL),
-            Look::Check(_) => (Color::NONE, INK),
-            Look::Fold => (Color::NONE, INK),
-            Look::Swatch(c, _) => (c, INK),
+            Look::SmallChip(on) => Look::Chip(on),
+            l => l,
         }
     }
 
-    /// The big buttons are lit by a gradient across them.
-    fn gradient(self, dim: bool) -> Option<BackgroundGradient> {
-        let (a, b) = match self {
-            Look::Primary => (BLUE_400, BLUE_500),
-            Look::Go => (GREEN_DEEP, GREEN),
-            _ => return None,
-        };
-        let k = if dim { 0.4 } else { 1.0 };
-        Some(BackgroundGradient::from(LinearGradient::to_right(vec![
-            a.with_alpha(k).into(),
-            b.with_alpha(k).into(),
-        ])))
+    fn fill(self) -> (Color, Color) {
+        match self.base() {
+            Look::Plain | Look::Tiny => (CARD2, INK),
+            Look::Primary | Look::Go => (TEAL, ON_FILL),
+            Look::Warm => (APRICOT, hex(0x3E2414)),
+            Look::Danger => (CRITICAL_SOFT, CRITICAL),
+            Look::Chip(false) => (CARD, INK),
+            Look::Chip(true) | Look::Nav(true) => (TEAL_SOFT, TEAL_INK),
+            Look::Tab(false) | Look::Nav(false) => (Color::NONE, MUTED),
+            Look::Tab(true) => (CARD, INK),
+            Look::Icon => (Color::NONE, FAINT),
+            Look::Check(_) | Look::Toggle(_) | Look::Fold => (Color::NONE, INK),
+            Look::Swatch(c, _) => (c, INK),
+            Look::Tile(g) => (genre_tones(g).1, INK),
+            Look::SmallChip(_) => unreachable!("a small chip looks like a chip"),
+        }
     }
 
-    /// Hovered, the face is lit from within rather than recoloured.
-    fn flat(self) -> bool {
-        matches!(self, Look::Check(_) | Look::Fold | Look::Tab(false))
+    /// What it looks like when it cannot be pressed.
+    fn off(self) -> (Color, Color) {
+        match self.base() {
+            Look::Chip(_) => (CARD2, GHOST),
+            Look::Swatch(c, _) => (c.with_alpha(0.35), INK),
+            Look::Check(_) | Look::Toggle(_) | Look::Fold | Look::Tab(_) | Look::Nav(_) | Look::Icon => {
+                (Color::NONE, GHOST)
+            }
+            _ => (WELL, FAINT),
+        }
+    }
+
+    fn hover(self) -> Color {
+        match self.base() {
+            Look::Primary | Look::Go => TEAL_DEEP,
+            Look::Warm => hex(0xD99470),
+            Look::Danger => hex(0xEDD3CD),
+            Look::Plain | Look::Tiny => WELL,
+            Look::Chip(false) | Look::Icon | Look::Nav(false) => CARD2,
+            Look::Check(_) | Look::Toggle(_) | Look::Fold | Look::Tab(false) | Look::Swatch(..) | Look::Nav(true) => {
+                self.fill().0
+            }
+            Look::Chip(true) | Look::Tab(true) | Look::Tile(_) | Look::SmallChip(_) => self.fill().0.darker(0.025),
+        }
     }
 
     fn size(self) -> f32 {
         match self {
-            Look::Tiny | Look::TinyDanger => 12.0,
-            Look::Chip(_) | Look::Tab(_) | Look::Tile(_) => 13.5,
-            Look::Check(_) => 14.5,
-            Look::Fold => 15.0,
-            Look::Primary | Look::Go | Look::Danger => 15.5,
-            _ => 14.5,
+            Look::Tiny | Look::Tile(_) | Look::SmallChip(_) => 14.0,
+            Look::Chip(_) | Look::Toggle(_) => 15.0,
+            Look::Go => 18.0,
+            _ => 16.0,
         }
     }
 
     fn strong(self) -> bool {
-        matches!(
-            self,
-            Look::Primary | Look::Go | Look::Danger | Look::Tab(_) | Look::Fold | Look::Chip(true) | Look::Tile(_)
+        !matches!(
+            self.base(),
+            Look::Chip(false) | Look::Check(_) | Look::Toggle(_) | Look::Icon
         )
     }
 
     fn padding(self) -> UiRect {
         match self {
-            Look::Tiny | Look::TinyDanger => UiRect::axes(rem(0.625), rem(0.25)),
-            Look::Chip(_) => UiRect::axes(rem(0.875), rem(0.375)),
-            Look::Tab(_) => UiRect::axes(rem(1.0), rem(0.5)),
-            Look::Tile(_) => UiRect::new(rem(0.75), rem(0.75), rem(0.625), rem(0.625)),
-            Look::Check(_) => UiRect::axes(px(0), rem(0.25)),
-            Look::Fold => UiRect::axes(rem(0.875), rem(0.75)),
-            Look::Swatch(..) => UiRect::ZERO,
-            Look::Primary | Look::Go | Look::Danger => UiRect::axes(rem(1.375), rem(0.75)),
-            _ => UiRect::axes(rem(1.125), rem(0.625)),
+            Look::Tiny => UiRect::axes(px(11), px(5)),
+            Look::Chip(_) => UiRect::axes(px(14), px(7)),
+            Look::SmallChip(_) => UiRect::axes(px(10), px(4)),
+            Look::Tab(_) => UiRect::axes(px(20), px(9)),
+            Look::Nav(_) => UiRect::axes(px(16), px(12)),
+            Look::Icon => UiRect::axes(px(12), px(6)),
+            Look::Tile(_) => UiRect::axes(px(12), px(10)),
+            Look::Check(_) => UiRect::axes(px(0), px(14)),
+            Look::Toggle(_) | Look::Swatch(..) => UiRect::ZERO,
+            Look::Fold => UiRect::axes(px(0), px(4)),
+            Look::Go => UiRect::axes(px(28), px(15)),
+            _ => UiRect::axes(px(20), px(11)),
         }
     }
 
     fn border(self) -> UiRect {
-        match self {
-            Look::Swatch(_, on) => UiRect::all(px(if on { 3 } else { 2 })),
-            Look::Tile(_) => UiRect::new(px(1), px(1), px(3), px(1)),
-            _ => UiRect::all(px(1)),
+        match self.base() {
+            Look::Plain | Look::Tiny | Look::Chip(_) => UiRect::all(px(1)),
+            Look::Check(_) => UiRect::bottom(px(1)),
+            _ => UiRect::ZERO,
         }
     }
 
     fn rim(self) -> BorderColor {
-        match self {
-            Look::Check(_) | Look::Fold | Look::Tab(false) => BorderColor::all(Color::NONE),
-            Look::Tab(true) => BorderColor::all(RIM),
-            Look::Swatch(_, true) => BorderColor::all(INK),
-            Look::Swatch(c, false) => BorderColor::all(dot_rim(c)),
-            Look::Tile(c) => BorderColor {
-                top: c,
-                ..BorderColor::all(RIM)
-            },
-            Look::Plain | Look::Tiny | Look::Chip(false) => BorderColor::all(RIM),
+        match self.base() {
+            Look::Chip(true) => BorderColor::all(hex(0xB9D0C8)),
+            Look::Plain | Look::Tiny | Look::Chip(false) => BorderColor::all(LINE),
+            Look::Check(_) => BorderColor::all(HAIR),
             _ => BorderColor::all(Color::NONE),
         }
     }
 
     fn radius(self) -> Val {
-        match self {
-            Look::Tab(_) | Look::Chip(_) | Look::Tiny | Look::TinyDanger | Look::Swatch(..) => px(f32::MAX),
-            Look::Fold => rem(1.0),
-            Look::Check(_) => px(0),
-            _ => rem(0.875),
+        match self.base() {
+            Look::Chip(_) | Look::Swatch(..) => px(f32::MAX),
+            Look::Tiny => px(10),
+            Look::Tab(_) | Look::Nav(_) | Look::Icon => px(12),
+            Look::Go => px(16),
+            Look::Check(_) | Look::Toggle(_) | Look::Fold => px(0),
+            _ => px(14),
         }
     }
 
     fn shadow(self) -> Option<BoxShadow> {
-        match self {
-            Look::Swatch(..) => Some(BoxShadow::new(SHADOW, px(0), px(1), px(0), px(4))),
-            Look::Primary => Some(BoxShadow::new(BLUE.with_alpha(0.3), px(0), px(4), px(0), px(14))),
-            Look::Go => Some(BoxShadow::new(GREEN.with_alpha(0.25), px(0), px(4), px(0), px(14))),
-            Look::Danger => Some(BoxShadow::new(CRITICAL.with_alpha(0.25), px(0), px(4), px(0), px(14))),
-            Look::Chip(true) => Some(BoxShadow::new(BLUE.with_alpha(0.25), px(0), px(2), px(0), px(8))),
-            Look::Tab(true) | Look::Plain | Look::Tiny | Look::Chip(false) | Look::Tile(_) => {
-                Some(BoxShadow::new(SHADOW.with_alpha(0.08), px(0), px(1), px(0), px(3)))
-            }
+        match self.base() {
+            Look::Primary | Look::Go | Look::Warm => Some(BoxShadow::new(
+                Color::srgba(0.157, 0.235, 0.216, 0.18),
+                px(0),
+                px(1),
+                px(0),
+                px(2),
+            )),
+            Look::Tab(true) => Some(BoxShadow::new(SHADOW, px(0), px(1), px(0), px(3))),
             _ => None,
+        }
+    }
+
+    /// The ring round the swatch picked.
+    fn outline(self) -> Outline {
+        match self {
+            Look::Swatch(_, true) => Outline::new(px(2), px(2), INK),
+            _ => Outline::new(px(0), px(0), Color::NONE),
         }
     }
 }
@@ -408,8 +462,9 @@ pub fn display(on: bool) -> bevy::ui::Display {
     }
 }
 
-/// Text fields, found by what they hold.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+/// Text fields, found by what they hold (by name in BRP's `fb/field`).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Field {
     Server,
     Name,
@@ -455,12 +510,12 @@ impl Plugin for UiPlugin {
         let f = Fonts {
             body: Handle::default(),
             strong: fonts.add(Font::from_bytes(STRONG.to_vec())),
-            display: fonts.add(Font::from_bytes(DISPLAY.to_vec())),
             emoji: fonts.add(Font::from_bytes(EMOJI.to_vec())),
         };
         app.insert_resource(f);
         app.init_resource::<Ui>();
         app.init_resource::<Folds>();
+        app.init_resource::<Section>();
         app.init_state::<Screen>();
         app.add_sub_state::<HomeTab>();
         app.add_sub_state::<MenuTab>();
@@ -482,6 +537,7 @@ impl Plugin for UiPlugin {
                 (
                     ui_actions,
                     sync_folds.run_if(resource_changed::<Folds>.or_else(any_match_filter::<Added<FoldChevron>>)),
+                    sync_sections.run_if(resource_changed::<Section>.or_else(any_match_filter::<Added<SectionBody>>)),
                     sync_settings.run_if(
                         resource_changed::<Controls>
                             .or_else(resource_changed::<Display>)
@@ -552,8 +608,8 @@ fn setup(mut commands: Commands) {
                     Pickable::IGNORE,
                 ));
                 match layer {
-                    Layer::Menu => l.insert(motion::Reveal::new(motion::Motion::slide(56.0, 0.0))),
-                    Layer::Home => l.insert(motion::Reveal::new(motion::Motion::slide(-40.0, 0.0).lasting(0.4))),
+                    Layer::Menu => l.insert(motion::Reveal::new(motion::Motion::slide(0.0, 24.0))),
+                    Layer::Home => l.insert(motion::Reveal::new(motion::Motion::slide(0.0, 16.0).lasting(0.35))),
                     _ => &mut l,
                 };
                 layers[layer as usize] = l.id();
@@ -596,8 +652,14 @@ pub fn show(node: &mut Mut<Node>, on: bool) {
 
 /// The interface follows the window: one rem is 12–20 px, growing with its width and height, times the
 /// player's own scale.
-fn scale_ui(windows: Query<&Window, With<PrimaryWindow>>, display: Res<Display>, mut scale: ResMut<UiScale>) {
-    let (w, h) = windows.single().map_or((1600.0, 900.0), |w| (w.width(), w.height()));
+fn scale_ui(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    offscreen: Option<Res<crate::Offscreen>>,
+    display: Res<Display>,
+    mut scale: ResMut<UiScale>,
+) {
+    let image = offscreen.map_or((1600.0, 900.0), |o| (o.1.x, o.1.y));
+    let (w, h) = windows.single().map_or(image, |w| (w.width(), w.height()));
     let root = (0.0042 * w + 0.0055 * h + 4.5).clamp(12.0, 20.0);
     let s = root / 16.0 * display.ui_scale.clamp(0.75, 1.5);
     if (scale.0 - s).abs() > 1e-3 {
@@ -684,53 +746,31 @@ type ButtonState = (
 
 fn style_buttons(
     q: Query<ButtonState, With<bevy::ui_widgets::Button>>,
-    mut faces: Query<(&mut BackgroundColor, &mut UiTransform, Option<&mut BackgroundGradient>)>,
+    mut faces: Query<(&mut BackgroundColor, &mut UiTransform)>,
 ) {
     for (look, hovered, pressed, disabled, face) in &q {
-        let Ok((mut bg, mut tf, gradient)) = faces.get_mut(face.0) else {
+        let Ok((mut bg, mut tf)) = faces.get_mut(face.0) else {
             continue;
         };
         let hover = hovered.get() && !disabled;
-        let (base, _) = look.fill();
-        let c = if look.flat() {
-            if hover { INK.with_alpha(0.06) } else { Color::NONE }
-        } else if disabled {
-            base.with_alpha(base.alpha() * 0.4)
-        } else if look.gradient(false).is_some() {
-            Color::NONE
+        let c = if disabled {
+            look.off().0
         } else if hover {
-            // (A light face darkens a little, a saturated one lightens.)
-            if base.luminance() > 0.6 {
-                base.darker(0.04)
-            } else {
-                base.lighter(0.05)
-            }
+            look.hover()
         } else {
-            base
+            look.fill().0
         };
         bg.set_if_neq(BackgroundColor(c));
-        if let (Some(mut g), Some(want)) = (gradient, look.gradient(disabled)) {
-            g.set_if_neq(want);
-        }
-        let still = disabled || matches!(look, Look::Check(_) | Look::Fold | Look::Swatch(..));
-        let (y, k) = if still {
-            (0.0, 1.0)
+        let still = disabled || matches!(look, Look::Check(_) | Look::Toggle(_) | Look::Fold | Look::Nav(_));
+        let k = if still {
+            1.0
         } else if pressed {
-            (1.0, 0.97)
-        } else if hover {
-            (-2.0, 1.0)
+            0.97
+        } else if matches!(look, Look::Swatch(..)) && hover {
+            1.1
         } else {
-            (0.0, 1.0)
+            1.0
         };
-        let k = if matches!(look, Look::Swatch(..)) && hover {
-            1.12
-        } else {
-            k
-        };
-        let next = Val2::px(0.0, y);
-        if tf.translation != next {
-            tf.translation = next;
-        }
         if tf.scale != Vec2::splat(k) {
             tf.scale = Vec2::splat(k);
         }
@@ -766,6 +806,7 @@ struct SettingsMut<'w> {
 #[derive(SystemParam)]
 struct Tabs<'w> {
     folds: ResMut<'w, Folds>,
+    section: ResMut<'w, Section>,
     home_tab: ResMut<'w, NextState<HomeTab>>,
     menu_tab: ResMut<'w, NextState<MenuTab>>,
 }
@@ -784,6 +825,7 @@ fn ui_actions(
             Action::HomeTab(t) => tabs.home_tab.set(*t),
             Action::MenuTab(t) => tabs.menu_tab.set(*t),
             Action::Fold(k) => tabs.folds.toggle(*k),
+            Action::Section(k) => *tabs.section = *k,
             Action::Set(t) => {
                 match t {
                     Toggle::InvertMouse => settings.controls.invert_mouse_y ^= true,
