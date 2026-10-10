@@ -3422,7 +3422,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "fb_arena"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "fb_maps",
  "fb_shared",
@@ -3434,7 +3434,7 @@ dependencies = [
 
 [[package]]
 name = "fb_audit"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "fb_arena",
  "fb_maps",
@@ -3447,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "fb_client"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "aeronet_websocket",
  "ash",
@@ -3489,7 +3489,7 @@ dependencies = [
 
 [[package]]
 name = "fb_maps"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "fb_shared",
  "fb_sim",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "fb_net"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_replicon",
@@ -3514,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "fb_proto"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "fb_maps",
  "fb_shared",
@@ -3524,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "fb_server"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3550,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "fb_shared"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "libm",
  "proptest",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "fb_sim"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "fb_shared",
  "glam 0.32.1",
@@ -9874,7 +9874,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
