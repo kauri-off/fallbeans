@@ -140,6 +140,23 @@ fn rename_in_the_lobby_menu() {
     g.frames(5);
 }
 
+/// A colour picked in the lobby goes onto one's own bean there, not only into the menu.
+#[test]
+fn a_colour_picked_in_the_lobby_paints_the_bean() {
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    let bean = |w: &mut World| {
+        let me = w.resource::<Session>().me?;
+        let mut q = w.query::<(&fb_net::BeanId, &fb_net::BeanColor)>();
+        q.iter(w).find(|(id, _)| id.0 == me).map(|(_, c)| c.0)
+    };
+    g.until(10.0, "one's own bean", |w| bean(w).is_some());
+    let was = bean(g.client().world_mut()).expect("one's own bean");
+    let to = if was == 0 { 1 } else { 0 };
+    g.press(2.0, "a free colour", |a| matches!(a, Action::Color(c) if *c == to));
+    g.until(5.0, "the bean in the new colour", |w| bean(w) == Some(to));
+}
+
 /// The keys belong to the game in play (`Gate`), and Esc opens the menu.
 fn keys_in_play(g: &mut Game) {
     g.frames(10);

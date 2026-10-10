@@ -351,6 +351,7 @@ impl Inputs for LinkInputs<'_, '_, '_> {
 
 type Bodies = (
     &'static Pawn,
+    &'static mut BeanColor,
     &'static mut BodyFull,
     &'static mut RemotePose,
     &'static mut Hold,
@@ -550,7 +551,9 @@ fn publish(
             };
             let entry = pawns.get(&(key, p.id));
             if let Some(pe) = entry.filter(|pe| pe.owner == owner) {
-                if let Ok((_, mut f, mut pose, mut h)) = bodies.get_mut(pe.entity) {
+                if let Ok((_, mut c, mut f, mut pose, mut h)) = bodies.get_mut(pe.entity) {
+                    // The colour changes in the lobby, on a pawn that lives on.
+                    c.set_if_neq(BeanColor(color));
                     if *f != full || *h != hold {
                         *pose = RemotePose::of(&full, &hold);
                     }
