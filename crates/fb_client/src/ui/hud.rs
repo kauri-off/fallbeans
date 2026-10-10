@@ -406,12 +406,13 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                 },
                 Pickable::IGNORE,
             ));
-            // The middle: 3-2-1 in a disc, and «ВПЕРЁД!».
+            // Above the own bean, under the timer: 3-2-1 in a disc, and «ВПЕРЁД!».
             h.spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    width: percent(100),
-                    height: percent(100),
+                    left: px(0),
+                    right: px(0),
+                    top: percent(17),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
