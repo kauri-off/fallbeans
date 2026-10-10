@@ -9,6 +9,7 @@ mod menu;
 pub mod motion;
 mod settings;
 mod tags;
+mod wardrobe;
 mod widgets;
 
 pub use settings::*;
@@ -16,6 +17,8 @@ pub use widgets::*;
 
 #[cfg(test)]
 pub use home::Form;
+#[cfg(test)]
+pub use wardrobe::Pick;
 
 use std::collections::BTreeSet;
 
@@ -167,7 +170,6 @@ pub struct Ui {
 #[serde(rename_all = "kebab-case")]
 pub enum Fold {
     Practice,
-    Outfit,
     DevMaps,
 }
 
@@ -267,6 +269,8 @@ pub enum Action {
     Color(u8),
     Wear(Outfit),
     RandomOutfit,
+    /// Opens a list or palette of the look, or closes it.
+    Pick(wardrobe::Pick),
     Set(Toggle),
     Rebind(Bind),
     ResetKeys,
@@ -310,6 +314,10 @@ pub enum Look {
     Swatch(Color, bool),
     /// A map's tile, in its genre's colours.
     Tile(fb_shared::game::Genre),
+    /// A field that opens a list (open or not).
+    Select(bool),
+    /// An entry of such a list (the one chosen or not).
+    Item(bool),
 }
 
 impl Look {
@@ -335,6 +343,9 @@ impl Look {
             Look::Check(_) | Look::Toggle(_) | Look::Fold => (Color::NONE, INK),
             Look::Swatch(c, _) => (c, INK),
             Look::Tile(g) => (genre_tones(g).1, INK),
+            Look::Select(_) => (ON_FILL, INK),
+            Look::Item(true) => (TEAL_SOFT, TEAL_INK),
+            Look::Item(false) => (Color::NONE, INK),
             Look::SmallChip(_) => unreachable!("a small chip looks like a chip"),
         }
     }
@@ -357,6 +368,9 @@ impl Look {
             Look::Warm => hex(0xD99470),
             Look::Danger => hex(0xEDD3CD),
             Look::Plain | Look::Tiny => WELL,
+            Look::Select(_) => CARD,
+            Look::Item(false) => CARD2,
+            Look::Item(true) => self.fill().0.darker(0.025),
             Look::Chip(false) | Look::Icon | Look::Nav(false) => CARD2,
             Look::Check(_) | Look::Toggle(_) | Look::Fold | Look::Tab(false) | Look::Swatch(..) | Look::Nav(true) => {
                 self.fill().0
@@ -368,7 +382,7 @@ impl Look {
     fn size(self) -> f32 {
         match self {
             Look::Tiny | Look::Tile(_) | Look::SmallChip(_) => 14.0,
-            Look::Chip(_) | Look::Toggle(_) => 15.0,
+            Look::Chip(_) | Look::Toggle(_) | Look::Select(_) | Look::Item(_) => 15.0,
             Look::Go => 18.0,
             _ => 16.0,
         }
@@ -377,7 +391,7 @@ impl Look {
     fn strong(self) -> bool {
         !matches!(
             self.base(),
-            Look::Chip(false) | Look::Check(_) | Look::Toggle(_) | Look::Icon
+            Look::Chip(false) | Look::Check(_) | Look::Toggle(_) | Look::Icon | Look::Select(_) | Look::Item(false)
         )
     }
 
@@ -390,6 +404,8 @@ impl Look {
             Look::Nav(_) => UiRect::axes(px(16), px(12)),
             Look::Icon => UiRect::axes(px(12), px(6)),
             Look::Tile(_) => UiRect::axes(px(12), px(10)),
+            Look::Select(_) => UiRect::axes(px(14), px(9)),
+            Look::Item(_) => UiRect::axes(px(12), px(8)),
             Look::Check(_) => UiRect::axes(px(0), px(14)),
             Look::Toggle(_) | Look::Swatch(..) => UiRect::ZERO,
             Look::Fold => UiRect::axes(px(0), px(4)),
@@ -400,7 +416,7 @@ impl Look {
 
     fn border(self) -> UiRect {
         match self.base() {
-            Look::Plain | Look::Tiny | Look::Chip(_) => UiRect::all(px(1)),
+            Look::Plain | Look::Tiny | Look::Chip(_) | Look::Select(_) => UiRect::all(px(1)),
             Look::Check(_) => UiRect::bottom(px(1)),
             _ => UiRect::ZERO,
         }
@@ -408,7 +424,8 @@ impl Look {
 
     fn rim(self) -> BorderColor {
         match self.base() {
-            Look::Chip(true) => BorderColor::all(hex(0xB9D0C8)),
+            Look::Chip(true) | Look::Select(true) => BorderColor::all(hex(0xB9D0C8)),
+            Look::Select(false) => BorderColor::all(LINE),
             Look::Plain | Look::Tiny | Look::Chip(false) => BorderColor::all(LINE),
             Look::Check(_) => BorderColor::all(HAIR),
             _ => BorderColor::all(Color::NONE),
@@ -419,7 +436,8 @@ impl Look {
         match self.base() {
             Look::Chip(_) | Look::Swatch(..) => px(f32::MAX),
             Look::Tiny => px(10),
-            Look::Tab(_) | Look::Nav(_) | Look::Icon => px(12),
+            Look::Tab(_) | Look::Nav(_) | Look::Icon | Look::Select(_) => px(12),
+            Look::Item(_) => px(10),
             Look::Go => px(16),
             Look::Check(_) | Look::Toggle(_) | Look::Fold => px(0),
             _ => px(14),
@@ -570,6 +588,7 @@ impl Plugin for UiPlugin {
             tags::TagsPlugin,
             loading::LoadingPlugin,
             motion::MotionPlugin,
+            wardrobe::WardrobePlugin,
         ));
     }
 }

@@ -6,13 +6,11 @@ use bevy::input_focus::InputFocus;
 use bevy::picking::events::{Pointer, Press};
 use bevy::prelude::*;
 use bevy::text::EditableText;
-use bevy::ui::InteractionDisabled;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
 use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, PlayerId, Playlist};
-use fb_shared::COLORS;
-use fb_shared::outfit::{GLASSES, HATS, Hat, Tint};
+use fb_shared::outfit::{GLASSES, HATS, Tint};
 use lightyear::prelude::client::Client;
 use lightyear::prelude::*;
 
@@ -38,8 +36,7 @@ impl Plugin for MenuPlugin {
                 (
                     parts.run_if(state_changed::<MenuTab>.or_else(resource_changed::<Session>)),
                     top.run_if(resource_changed::<Session>),
-                    (swatches, players, host_setup, phase_line).run_if(resource_changed::<Session>),
-                    outfit.run_if(resource_changed::<Player>.or_else(resource_changed::<Folds>)),
+                    (players, host_setup, phase_line).run_if(resource_changed::<Session>),
                     hover_rows,
                     dev,
                 ),
@@ -104,10 +101,6 @@ struct PinLine;
 /// The lobby's columns (who is here, the setup), and the card of a game under way.
 #[derive(Component)]
 struct LobbyPart;
-#[derive(Component)]
-struct Swatches;
-#[derive(Component)]
-struct OutfitBox;
 #[derive(Component)]
 struct PlayersBox;
 #[derive(Component)]
@@ -330,33 +323,7 @@ fn build_menu(
                         let g = group(c, |g| {
                             subheading(g, f, text::SECTION_BEAN);
                             name_row(g, f, Field::MenuName, &me.name(), me.color().map_or(APRICOT, suit));
-                            g.spawn((Swatches, col(8.0))).with_children(|s| {
-                                caption(s, f, text::COLOR);
-                                s.spawn(Node {
-                                    flex_wrap: FlexWrap::Wrap,
-                                    column_gap: px(8),
-                                    row_gap: px(8),
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                })
-                                .with_children(|r| {
-                                    for i in 0..COLORS.len() as u8 {
-                                        swatch(r, suit(i), false, Action::Color(i), true, 30.0);
-                                    }
-                                });
-                            });
-                            g.spawn((
-                                OutfitBox,
-                                Node {
-                                    flex_direction: FlexDirection::Column,
-                                    flex_grow: 1.0,
-                                    min_height: px(0),
-                                    row_gap: px(12),
-                                    overflow: Overflow::scroll_y(),
-                                    ..default()
-                                },
-                                bevy::ui_widgets::ScrollArea,
-                            ));
+                            super::wardrobe::bean_card(g, f);
                         });
                         c.commands().entity(g).insert(Node {
                             flex_direction: FlexDirection::Column,
@@ -811,24 +778,6 @@ fn top(session: Res<Session>, mut top: Top, mut labels: Labels) {
 }
 
 /// The suit colours (in the lobby only, one per bean): the player's marked, the others' not to be had.
-fn swatches(
-    session: Res<Session>,
-    mut row: Single<&mut Node, With<Swatches>>,
-    mut buttons: Query<(Entity, &Act, &mut Look, Has<InteractionDisabled>)>,
-    mut commands: Commands,
-) {
-    let Some(l) = &session.lobby else { return };
-    show(&mut row, l.phase == Phase::Lobby);
-    let me = session.me;
-    let mine = l.players.iter().find(|p| Some(p.id) == me);
-    for (e, act, mut look, disabled) in &mut buttons {
-        let Action::Color(i) = act.0 else { continue };
-        let taken = l.players.iter().any(|p| p.color == i && Some(p.id) != me);
-        look.set_if_neq(Look::Swatch(suit(i), mine.is_some_and(|m| m.color == i)));
-        enable(&mut commands, e, !disabled, !taken);
-    }
-}
-
 /// Who is here, in the lobby.
 fn players(
     session: Res<Session>,
@@ -1168,130 +1117,6 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
         border: UiRect::all(px(1)),
         border_radius: BorderRadius::all(px(18)),
         ..default()
-    });
-}
-
-/// The player's look: a picture of the bean while folded; hat, glasses and colours of the hat, belly and shoes
-/// (each choice carries the whole outfit: redrawn when it changes).
-fn outfit(
-    player: Res<Player>,
-    folds: Res<Folds>,
-    me: Me,
-    session: Res<Session>,
-    q: Single<Entity, With<OutfitBox>>,
-    f: Res<Fonts>,
-    mut commands: Commands,
-) {
-    let f = &*f;
-    let outfit = player.outfit();
-    let c = super::home::own_color(&me, &session);
-    rebuild(&mut commands, *q, |p| outfit_picker(p, f, &folds, &outfit, c));
-}
-
-fn outfit_picker(p: &mut ChildSpawnerCommands, f: &Fonts, folds: &Folds, outfit: &fb_proto::Outfit, c: Color) {
-    if !folds.open(Fold::Outfit) {
-        p.spawn((
-            Node {
-                flex_grow: 1.0,
-                min_height: px(120),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::FlexEnd,
-                padding: UiRect::bottom(px(18)),
-                border_radius: BorderRadius::all(px(16)),
-                ..default()
-            },
-            BackgroundColor(CARD2),
-        ))
-        .with_children(|v| {
-            let b = bean(v, c, 124.0);
-            v.commands().entity(b).insert(super::home::OwnBean);
-        });
-    }
-    p.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::top(px(10)),
-            border: UiRect::top(px(1)),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BorderColor::all(HAIR),
-    ))
-    .with_children(|w| {
-        let note = format!("{} · {}", text::hat(outfit.hat), text::glasses(outfit.glasses));
-        let note = if folds.open(Fold::Outfit) { "" } else { note.as_str() };
-        fold(w, f, folds, Fold::Outfit, text::OUTFIT, note, |c| {
-            let wear = |patch: &dyn Fn(&mut fb_proto::Outfit)| {
-                let mut o = *outfit;
-                patch(&mut o);
-                Action::Wear(o)
-            };
-            row(c, true, |r| {
-                for h in HATS {
-                    button(r, f, text::hat(h), Look::Chip(outfit.hat == h), wear(&|o| o.hat = h));
-                }
-            });
-            if outfit.hat != Hat::None {
-                tints(c, f, text::HAT_COLOR, outfit.hat_color, &|t| wear(&|o| o.hat_color = t));
-            }
-            row(c, true, |r| {
-                for g in GLASSES {
-                    button(
-                        r,
-                        f,
-                        text::glasses(g),
-                        Look::Chip(outfit.glasses == g),
-                        wear(&|o| o.glasses = g),
-                    );
-                }
-            });
-            tints(c, f, text::BELLY, outfit.belly, &|t| wear(&|o| o.belly = t));
-            tints(c, f, text::SHOES, outfit.shoes, &|t| wear(&|o| o.shoes = t));
-            row(c, false, |r| {
-                button(r, f, text::RANDOM, Look::Tiny, Action::RandomOutfit);
-                button(r, f, text::RESET, Look::Tiny, Action::Wear(fb_proto::Outfit::default()));
-            });
-        });
-    });
-}
-
-fn tints(
-    p: &mut ChildSpawnerCommands,
-    f: &Fonts,
-    title: &str,
-    now: Option<Tint>,
-    act: &dyn Fn(Option<Tint>) -> Action,
-) {
-    row(p, false, |c| {
-        let here = c.target_entity();
-        c.commands().entity(here).insert(Node {
-            column_gap: px(10),
-            align_items: AlignItems::Center,
-            ..default()
-        });
-        c.spawn(Node {
-            width: px(96),
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|t| {
-            caption(t, f, title);
-        });
-        row(c, true, |r| {
-            let here = r.target_entity();
-            r.commands().entity(here).insert(Node {
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: px(7),
-                row_gap: px(7),
-                flex_shrink: 1.0,
-                ..default()
-            });
-            // "As designed": the part's own colour.
-            swatch_none(r, now.is_none(), act(None), 26.0);
-            for t in Tint::ALL {
-                swatch(r, color(t.rgb()), now == Some(t), act(Some(t)), true, 26.0);
-            }
-        });
     });
 }
 

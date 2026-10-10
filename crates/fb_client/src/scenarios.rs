@@ -153,8 +153,39 @@ fn a_colour_picked_in_the_lobby_paints_the_bean() {
     g.until(10.0, "one's own bean", |w| bean(w).is_some());
     let was = bean(g.client().world_mut()).expect("one's own bean");
     let to = if was == 0 { 1 } else { 0 };
+    g.press(2.0, "the suit's palette", |a| {
+        matches!(a, Action::Pick(crate::ui::Pick::Suit))
+    });
     g.press(2.0, "a free colour", |a| matches!(a, Action::Color(c) if *c == to));
     g.until(5.0, "the bean in the new colour", |w| bean(w) == Some(to));
+}
+
+/// A hat picked from its list is worn and the list closes; Esc closes an open list, not the menu.
+#[test]
+fn a_hat_picked_from_its_list_is_worn() {
+    use crate::ui::Pick;
+    use fb_shared::outfit::Hat;
+    let mut g = Game::new(&["--room", "dev"]);
+    in_lobby(&mut g);
+    let listed = |a: &Action| matches!(a, Action::Wear(o) if o.hat == Hat::Tophat);
+    g.press(2.0, "the hat's list", |a| matches!(a, Action::Pick(Pick::Hat)));
+    g.press(
+        2.0,
+        "the cap in it",
+        |a| matches!(a, Action::Wear(o) if o.hat == Hat::Cap),
+    );
+    g.frames(3);
+    assert_eq!(g.res::<crate::settings::Player>().outfit().hat, Hat::Cap);
+    assert!(!g.shows(listed), "the list stayed open");
+    g.press(2.0, "the hat's list", |a| matches!(a, Action::Pick(Pick::Hat)));
+    g.until(2.0, "the list", |w| {
+        let mut q = w.query::<(&crate::ui::Act, &bevy::prelude::InheritedVisibility)>();
+        q.iter(w).any(|(a, v)| listed(&a.0) && v.get())
+    });
+    g.escape();
+    g.frames(3);
+    assert!(g.res::<Ui>().menu, "Esc closed the menu, not the list");
+    assert!(!g.shows(listed), "Esc left the list open");
 }
 
 /// The keys belong to the game in play (`Gate`), and Esc opens the menu.
@@ -780,7 +811,9 @@ fn reconnecting_spares_commands_queued_on_beans() {
             crate::net::restart(&mut commands, &mut conn);
         }
     };
-    let touch = |mut commands: Commands, beans: Query<Entity, With<crate::beans::Rig>>| {
+    // (The server's beans: not the one of the menu's stage.)
+    type Served = (With<crate::beans::Rig>, With<fb_net::BeanId>);
+    let touch = |mut commands: Commands, beans: Query<Entity, Served>| {
         for e in &beans {
             commands.entity(e).insert(Touched);
         }
@@ -788,7 +821,7 @@ fn reconnecting_spares_commands_queued_on_beans() {
     let mut g = Game::new(&["--room", "dev"]);
     g.client().init_resource::<Now>();
     g.client().add_systems(Update, (hang_up, touch).chain_ignore_deferred());
-    let beans = |w: &mut World| w.query_filtered::<(), With<crate::beans::Rig>>().iter(w).count() > 0;
+    let beans = |w: &mut World| w.query_filtered::<(), Served>().iter(w).count() > 0;
     for close in [false, true] {
         in_lobby(&mut g);
         g.until(10.0, "a bean", beans);
@@ -879,16 +912,16 @@ fn a_click_on_the_menu_panel_keeps_it_open() {
     g.until(5.0, "the menu in place", |w| {
         w.query::<&crate::ui::motion::Motion>().iter(w).next().is_none()
     });
-    let swatches = g.rects(|a| matches!(a, Action::Color(_)));
-    let last = swatches
+    let looks = g.rects(|a| matches!(a, Action::RandomOutfit | Action::Wear(_)));
+    let last = looks
         .iter()
         .max_by(|a, b| a.max.x.total_cmp(&b.max.x))
-        .expect("colour swatches");
+        .expect("the look's buttons");
     let panel = g.rects(|a| matches!(a, Action::Resume))[0];
     let gap = Vec2::new((last.max.x + panel.max.x) / 2.0, last.center().y);
     assert!(
         gap.x - last.max.x > 4.0,
-        "no room right of the swatches: {last:?} in {panel:?}"
+        "no room right of the look's buttons: {last:?} in {panel:?}"
     );
     g.click_at(gap);
     assert!(g.res::<Ui>().menu, "a click on the panel closed the menu");

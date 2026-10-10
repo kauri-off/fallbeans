@@ -29,6 +29,7 @@ impl Plugin for BrpPlugin {
                 .with_method_main("fb/shot", shot)
                 .with_method_main("fb/ui", ui_state)
                 .with_method_main("fb/press", press)
+                .with_method_main("fb/pointer", pointer)
                 .with_method_main("fb/field", field)
                 .with_method_main("fb/camera", camera),
             RemoteHttpPlugin::default().with_port(self.port),
@@ -199,7 +200,7 @@ struct UiParams {
     menu: Option<bool>,
     /// "game", "settings" or "dev" (the menu's tabs); "rooms" or "home-settings" at the room list.
     tab: Option<String>,
-    /// Opens or folds a folded part ("practice", "outfit", "dev-maps").
+    /// Opens or folds a folded part ("practice", "dev-maps").
     fold: Option<Fold>,
     /// Picks a part of the settings ("controls", "screen", "gfx", "keys", "problems").
     section: Option<Section>,
@@ -263,15 +264,29 @@ type Pressable = (
     Has<bevy::ui::InteractionDisabled>,
 );
 
+/// The buttons on screen and their labels.
+#[derive(bevy::ecs::system::SystemParam)]
+struct OnScreen<'w, 's> {
+    buttons: Query<'w, 's, Pressable, With<Act>>,
+    children: Query<'w, 's, &'static Children>,
+    texts: Query<'w, 's, &'static Rich>,
+}
+
 /// Presses a button on screen by its label, as a click would; the labels on screen if none matches.
-fn press(
-    In(params): In<Option<Value>>,
-    buttons: Query<Pressable, With<Act>>,
-    children: Query<&Children>,
-    texts: Query<&Rich>,
-    mut commands: Commands,
-) -> BrpResult {
+fn press(In(params): In<Option<Value>>, screen: OnScreen, mut commands: Commands) -> BrpResult {
     let p: PressParams = parse(params)?;
+    let e = find_button(&p, &screen)?;
+    commands.trigger(bevy::ui_widgets::Activate { entity: e });
+    Ok(Value::Null)
+}
+
+/// A button on screen by its label; the labels on screen if none matches.
+fn find_button(p: &PressParams, screen: &OnScreen) -> Result<Entity, BrpError> {
+    let OnScreen {
+        buttons,
+        children,
+        texts,
+    } = screen;
     let label = |e: Entity| {
         children
             .iter_descendants(e)
@@ -294,7 +309,71 @@ fn press(
         let all: Vec<_> = on_screen.into_iter().map(|(.., l)| l).collect();
         return Err(bad(format!("no button «{}» on screen: {all:?}", p.label)));
     };
-    commands.trigger(bevy::ui_widgets::Activate { entity: *e });
+    Ok(*e)
+}
+
+#[derive(Deserialize)]
+struct PointerParams {
+    /// Over the button of this label…
+    label: Option<String>,
+    #[serde(default)]
+    nth: usize,
+    /// …or at this point, in physical pixels of the screen.
+    at: Option<[f32; 2]>,
+    /// "press" or "release" the left button there.
+    button: Option<String>,
+}
+
+/// Moves the mouse pointer (hover, drags), and presses or lets go of its left button.
+fn pointer(
+    In(params): In<Option<Value>>,
+    screen: OnScreen,
+    cameras: Query<&bevy::camera::RenderTarget, With<crate::view::MainCamera>>,
+    windows: Query<(Entity, &Window), With<bevy::window::PrimaryWindow>>,
+    mut out: MessageWriter<bevy::picking::pointer::PointerInput>,
+    mut last: Local<Vec2>,
+) -> BrpResult {
+    use bevy::picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput};
+    let p: PointerParams = parse(params)?;
+    let at = match (&p.label, p.at) {
+        (Some(label), _) => {
+            let q = PressParams {
+                label: label.clone(),
+                nth: p.nth,
+            };
+            let e = find_button(&q, &screen)?;
+            screen.buttons.get(e).map_err(|_| bad("gone"))?.1.translation
+        }
+        (None, Some([x, y])) => Vec2::new(x, y),
+        (None, None) => return Err(bad("label or at")),
+    };
+    let window = windows.single().ok();
+    let target = cameras
+        .single()
+        .ok()
+        .and_then(|t| t.normalize(window.map(|(e, _)| e)))
+        .ok_or_else(|| bad("no camera target"))?;
+    let scale = window.map_or(1.0, |(_, w)| w.scale_factor());
+    let location = Location {
+        target,
+        position: at / scale,
+    };
+    // (Moves without a delta are not drags.)
+    let delta = location.position - core::mem::replace(&mut *last, location.position);
+    let action = match p.button.as_deref() {
+        None => PointerAction::Move { delta },
+        Some("press") => PointerAction::Press(PointerButton::Primary),
+        Some("release") => PointerAction::Release(PointerButton::Primary),
+        Some(b) => return Err(bad(format!("no button action {b}"))),
+    };
+    if !matches!(action, PointerAction::Move { .. }) {
+        out.write(PointerInput::new(
+            PointerId::Mouse,
+            location.clone(),
+            PointerAction::Move { delta },
+        ));
+    }
+    out.write(PointerInput::new(PointerId::Mouse, location, action));
     Ok(Value::Null)
 }
 

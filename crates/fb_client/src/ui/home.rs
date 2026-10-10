@@ -334,12 +334,15 @@ pub fn name_row(p: &mut ChildSpawnerCommands, f: &Fonts, which: Field, name: &st
         ..default()
     })
     .with_children(|r| {
-        let b = bean(r, color, if which == Field::MenuName { 58.0 } else { 40.0 });
-        r.commands().entity(b).insert(OwnBean);
-        r.spawn(Node {
-            width: px(6),
-            ..default()
-        });
+        // (The menu shows the bean itself under the name.)
+        if which != Field::MenuName {
+            let b = bean(r, color, 40.0);
+            r.commands().entity(b).insert(OwnBean);
+            r.spawn(Node {
+                width: px(6),
+                ..default()
+            });
+        }
         field_with_hint(r, f, which, name, text::NAME_PLACEHOLDER, NAME_MAX, None);
         button(r, f, text::SAVE, Look::Plain, Action::SaveName(which));
     });
