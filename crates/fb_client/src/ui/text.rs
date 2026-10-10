@@ -7,6 +7,16 @@ use fb_sim::physics::Power;
 
 pub const LOGO: &str = "Fall Beans";
 pub const TAGLINE: &str = "Гонки, выживание и очки — до 8 бобов";
+pub const SECTION_CONTROLS: &str = "Управление";
+pub const SECTION_SCREEN: &str = "Экран и звук";
+pub const SECTION_NAME: &str = "Ваше имя";
+pub const SECTION_ROOM: &str = "Комната";
+pub const SECTION_BEAN: &str = "Ваш боб";
+pub const SECTION_GAME: &str = "Игра";
+pub const ADD_SERVER: &str = "Добавить сервер";
+pub const ONLINE: &str = "в сети";
+pub const STANDINGS: &str = "Итоговая таблица";
+pub const AWARDS: &str = "Награды";
 pub const TAB_ROOMS: &str = "Комнаты";
 pub const TAB_SERVERS: &str = "Серверы";
 pub const TAB_SETTINGS: &str = "Настройки";
@@ -471,40 +481,6 @@ pub fn glasses(g: Glasses) -> &'static str {
         Glasses::Hearts => "💕 Сердечки",
         Glasses::Monocle => "🧐 Монокль",
         Glasses::Visor => "🥽 Визор",
-    }
-}
-
-/// The controls line at the bottom of the screen, for the device used last and the keys bound.
-pub fn keys(pad: bool, binds: &crate::settings::Bindings, grab: &str, chat: bool, lead: &str) -> String {
-    use crate::keys::{Bind, label};
-    let body = if pad {
-        format!(
-            "Левый стик — бег · Правый стик — камера · A — прыжок · X/B — нырок · RB/RT — {grab} · Крестовина — эмоции"
-        )
-    } else if binds.is_default() {
-        format!("WASD — бег · Мышь — камера · Пробел — прыжок · E/ЛКМ — нырок · Q/ПКМ — {grab} · 1–5 — эмоции")
-    } else {
-        let first = |b: Bind| binds.keys(b).first().and_then(|k| label(*k)).unwrap_or("—");
-        let run = [Bind::Forward, Bind::Left, Bind::Back, Bind::Right]
-            .map(first)
-            .join("/");
-        format!(
-            "{run} — бег · Мышь — камера · {} — прыжок · {}/ЛКМ — нырок · {}/ПКМ — {grab} · 1–5 — эмоции",
-            first(Bind::Jump),
-            first(Bind::Dive),
-            first(Bind::Grab)
-        )
-    };
-    let chat = if chat && !pad { " · Enter — чат" } else { "" };
-    format!("{lead}{body}{chat}")
-}
-
-pub fn menu_lead(pad: bool, host: bool) -> String {
-    let key = if pad { "Start" } else { "Esc" };
-    if host {
-        format!("{key} — меню и запуск игры · ")
-    } else {
-        format!("{key} — меню · ")
     }
 }
 

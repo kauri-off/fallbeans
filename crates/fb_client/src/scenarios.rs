@@ -854,12 +854,14 @@ fn settings_at_the_room_list() {
 }
 
 /// A press on the menu's panel between its buttons is not one on the field: the menu stays open. One beside
-/// the panel closes it.
+/// the panel (it is docked on the right: to its left) closes it.
 #[test]
 fn a_click_on_the_menu_panel_keeps_it_open() {
     let mut g = Game::new(&["--room", "dev"]);
     in_lobby(&mut g);
-    g.frames(10);
+    g.until(5.0, "the menu in place", |w| {
+        w.query::<&crate::ui::motion::Motion>().iter(w).next().is_none()
+    });
     let swatches = g.rects(|a| matches!(a, Action::Color(_)));
     let last = swatches
         .iter()
@@ -873,7 +875,7 @@ fn a_click_on_the_menu_panel_keeps_it_open() {
     );
     g.click_at(gap);
     assert!(g.res::<Ui>().menu, "a click on the panel closed the menu");
-    g.click_at(Vec2::new(panel.max.x + 200.0, panel.center().y));
+    g.click_at(Vec2::new(panel.min.x - 200.0, panel.center().y));
     assert!(!g.res::<Ui>().menu, "a click beside the panel left the menu open");
 }
 

@@ -153,10 +153,9 @@ fn lines(
 }
 
 fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine) {
-    let color =
-        l.id.and_then(|id| session.player(id))
-            .map_or(Color::WHITE, |p| suit(p.color));
-    let name_ink = color.mix(&Color::WHITE, 0.5);
+    let color = l.id.and_then(|id| session.player(id)).map_or(MUTED, |p| suit(p.color));
+    // (A suit too light to read on the light panel goes darker.)
+    let name_ink = color.mix(&INK, 0.35);
     p.spawn((
         ChatRow(l.n, l.at),
         Text::default(),
@@ -169,7 +168,7 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
             t.spawn((
                 TextSpan::new(run),
                 TextFont {
-                    font: if emoji { f.emoji.clone() } else { f.black.clone() }.into(),
+                    font: if emoji { f.emoji.clone() } else { f.strong.clone() }.into(),
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
@@ -180,11 +179,11 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
             t.spawn((
                 TextSpan::new(run),
                 TextFont {
-                    font: if emoji { f.emoji.clone() } else { f.bold.clone() }.into(),
+                    font: if emoji { f.emoji.clone() } else { f.body.clone() }.into(),
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextColor(INK),
             ));
         }
     });

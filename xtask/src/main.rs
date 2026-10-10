@@ -270,7 +270,10 @@ pub fn dlss() -> bool {
 }
 
 pub fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    // (The one `cargo run` sets first: the one built in is that of whichever worktree sharing `target/` built xtask last.)
+    let dir =
+        std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+    dir.parent().unwrap().to_path_buf()
 }
 
 /// Cargo's target directory: `CARGO_TARGET_DIR` (relative to the root), else `target`.

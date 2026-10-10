@@ -166,20 +166,26 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                     bevy::ui_widgets::ScrollArea,
                 ))
                 .with_children(|b| {
-                    b.spawn((Part::Top, col(0.625))).with_children(|t| {
-                        t.spawn((PracticeTop, col(0.625))).with_children(|p| {
-                            label(p, f, "");
-                            button(p, f, text::PRACTICE_BACK, Look::Plain, Action::EndPractice);
+                    let tab = || motion::Reveal::new(motion::Motion::slide(0.0, 12.0));
+                    b.spawn((Part::Top, col(0.625), tab())).with_children(|t| {
+                        t.spawn((PracticeTop, col(0.0))).with_children(|p| {
+                            group(p, |g| {
+                                // (The first text in it: `top` writes the map's line there.)
+                                rich_in(g, f, "", 15.0, INK, true);
+                                button(g, f, text::PRACTICE_BACK, Look::Plain, Action::EndPractice);
+                            });
                         });
                         t.spawn((RoomTop, col(0.0))).with_children(|r| {
-                            group(r, |g| {
+                            section(r, f, text::SECTION_ROOM, |g| {
                                 row(g, false, |r| {
                                     r.spawn(Node {
                                         flex_grow: 1.0,
+                                        flex_shrink: 1.0,
+                                        min_width: px(0),
                                         ..default()
                                     })
                                     .with_children(|t| {
-                                        let title = heading(t, f, "");
+                                        let title = big(t, f, "", 19.0, INK);
                                         t.commands().entity(title).insert(RoomTitle);
                                     });
                                     button(r, f, text::LEAVE_ROOM, Look::TinyDanger, Action::LeaveRoom);
@@ -196,46 +202,61 @@ fn build_menu(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                             });
                         });
                     });
-                    b.spawn((Part::Name, col(0.625))).with_children(|n| {
-                        name_row(n, f, Field::MenuName, &me.name());
-                    });
-                    b.spawn((Part::Body, col(0.625))).with_children(|p| {
-                        p.spawn((
-                            Swatches,
-                            Node {
-                                flex_wrap: FlexWrap::Wrap,
-                                column_gap: rem(0.5),
-                                row_gap: rem(0.4),
-                                align_items: AlignItems::Center,
-                                ..default()
-                            },
-                        ))
-                        .with_children(|r| {
-                            for i in 0..COLORS.len() as u8 {
-                                swatch(r, suit(i), false, Action::Color(i), true, 1.75);
-                            }
+                    b.spawn((Part::Name, col(0.625), tab())).with_children(|n| {
+                        section(n, f, text::SECTION_BEAN, |g| {
+                            name_row(g, f, Field::MenuName, &me.name());
+                            g.spawn((
+                                Swatches,
+                                Node {
+                                    flex_wrap: FlexWrap::Wrap,
+                                    column_gap: rem(0.5),
+                                    row_gap: rem(0.5),
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|r| {
+                                for i in 0..COLORS.len() as u8 {
+                                    swatch(r, suit(i), false, Action::Color(i), true, 1.75);
+                                }
+                            });
+                            g.spawn((OutfitBox, col(0.625)));
                         });
-                        p.spawn((OutfitBox, col(0.625)));
+                    });
+                    b.spawn((Part::Body, col(1.0), tab())).with_children(|p| {
                         p.spawn((PhaseBox, col(0.625)));
-                        p.spawn((LobbyPart, col(0.625))).with_children(|l| {
-                            l.spawn((PlayersBox, col(0.625)));
+                        p.spawn((LobbyPart, col(1.0))).with_children(|l| {
+                            l.spawn((PlayersBox, col(0.375)));
                             l.spawn((HostBox, col(0.625)));
                             practice_list(l, f, &folds);
                         });
                     });
-                    b.spawn((Part::Settings, col(0.625)))
+                    b.spawn((Part::Settings, col(0.625), tab()))
                         .with_children(|s| settings_tab(s, f, &options, &folds));
-                    b.spawn((Part::Dev, col(0.625))).with_children(|d| {
+                    b.spawn((Part::Dev, col(0.625), tab())).with_children(|d| {
                         d.spawn((DevBox, col(0.625)));
                     });
                 });
-                button(
-                    m,
-                    f,
-                    &format!("{} {}", text::RESUME, text::RESUME_HINT),
-                    Look::Primary,
-                    Action::Resume,
-                );
+                m.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: rem(0.375),
+                        padding: UiRect::top(rem(0.875)),
+                        border: UiRect::top(px(1)),
+                        ..default()
+                    },
+                    BorderColor::all(RIM),
+                ))
+                .with_children(|r| {
+                    button(r, f, text::RESUME, Look::Primary, Action::Resume);
+                    r.spawn(Node {
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_children(|h| {
+                        rich(h, f, text::RESUME_HINT.trim_start_matches("· "), 12.0, FAINT);
+                    });
+                });
             });
         });
     });
@@ -537,7 +558,16 @@ fn players(
     let f = &*f;
     let (me, host) = (session.me, session.host());
     rebuild(&mut commands, *q, |p| {
-        caption(p, f, &text::players_of(l.players.len(), l.max));
+        p.spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            padding: UiRect::new(rem(0.25), rem(0.25), px(0), rem(0.125)),
+            ..default()
+        })
+        .with_children(|h| {
+            caption(h, f, &text::players_of(l.players.len(), l.max));
+            meter(h, l.players.len() as f32 / l.max.max(1) as f32, BLUE, rem(4.0));
+        });
         for pl in &l.players {
             player_row(p, f, l, pl, me, host);
         }
@@ -571,10 +601,15 @@ fn phase_line(
     let Some((line, host)) = &*shown else { return };
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
-        label(p, f, line);
-        if *host {
-            button(p, f, text::ABORT, Look::Danger, Action::Send(ClientMsg::Abort));
-        }
+        group(p, |g| {
+            row(g, false, |r| {
+                badge(r, f, text::IN_GAME, WARNING.with_alpha(0.25), INK);
+                label(r, f, line);
+            });
+            if *host {
+                button(g, f, text::ABORT, Look::Danger, Action::Send(ClientMsg::Abort));
+            }
+        });
     });
 }
 
@@ -586,50 +621,60 @@ fn player_row(
     me: Option<PlayerId>,
     host: bool,
 ) {
+    let mine = Some(pl.id) == me;
     p.spawn((
         Node {
-            column_gap: rem(0.5),
+            column_gap: rem(0.75),
             align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.625), rem(0.4)),
-            border_radius: BorderRadius::all(rem(0.75)),
+            padding: UiRect::axes(rem(0.625), rem(0.5)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(0.875)),
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, if Some(pl.id) == me { 0.09 } else { 0.04 })),
+        BackgroundColor(ink_wash(if mine { 0.08 } else { 0.035 })),
+        BorderColor::all(if mine { BLUE.with_alpha(0.5) } else { Color::NONE }),
     ))
     .with_children(|r| {
-        dot(r, suit(pl.color), 0.8);
+        avatar(r, f, &pl.name, suit(pl.color), 2.25);
         r.spawn(Node {
+            flex_direction: FlexDirection::Column,
             flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_width: px(0),
             ..default()
         })
         .with_children(|n| {
-            let you = if Some(pl.id) == me { text::YOU } else { "" };
-            let ink = if pl.connected { INK } else { MUTED };
-            rich(n, f, &format!("{}{you}", pl.name), 15.0, ink);
-        });
-        if Some(pl.id) == l.host {
-            label(r, f, "⭐");
-        }
-        if pl.crowns > 0 {
-            label(r, f, &format!("👑{}", pl.crowns));
-        }
-        if pl.bot {
-            // (With "fill with bots" on, a bot taken out would be replaced at once.)
-            if host && !l.fill {
-                button(r, f, "×", Look::Tiny, Action::Send(ClientMsg::RemoveBot(pl.id)));
-            } else {
-                muted(r, f, text::BOT);
-            }
-        } else {
-            if host && Some(pl.id) != me && pl.connected {
-                button(r, f, text::GIVE_HOST, Look::Tiny, Action::Send(ClientMsg::Host(pl.id)));
-            }
-            let ping = if pl.connected {
+            let you = if mine { text::YOU } else { "" };
+            let live = pl.connected || pl.bot;
+            rich_in(
+                n,
+                f,
+                &format!("{}{you}", pl.name),
+                14.5,
+                if live { INK } else { MUTED },
+                true,
+            );
+            let line = if pl.bot {
+                text::BOT.to_string()
+            } else if pl.connected {
                 text::ping(pl.ping)
             } else {
                 text::NO_LINK.into()
             };
-            muted(r, f, &ping);
+            rich(n, f, &line, 12.0, if live { MUTED } else { CRITICAL });
+        });
+        if Some(pl.id) == l.host {
+            badge(r, f, "⭐", GOLD.with_alpha(0.2), INK);
+        }
+        if pl.crowns > 0 {
+            badge(r, f, &format!("👑 {}", pl.crowns), GOLD.with_alpha(0.2), INK);
+        }
+        // (With "fill with bots" on, a bot taken out would be replaced at once.)
+        if pl.bot && host && !l.fill {
+            button(r, f, "×", Look::TinyDanger, Action::Send(ClientMsg::RemoveBot(pl.id)));
+        }
+        if !pl.bot && host && !mine && pl.connected {
+            button(r, f, text::GIVE_HOST, Look::Tiny, Action::Send(ClientMsg::Host(pl.id)));
         }
     });
 }
@@ -645,7 +690,12 @@ fn host_setup(session: Res<Session>, q: Single<Entity, With<HostBox>>, f: Res<Fo
         if host {
             setup_of(p, f, l);
         } else {
-            muted(p, f, text::HOST_STARTS);
+            group(p, |g| {
+                row(g, false, |r| {
+                    spinner(r, 1.0, BLUE);
+                    label(r, f, text::HOST_STARTS);
+                });
+            });
         }
     });
 }
@@ -660,7 +710,7 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
         patch(&mut next);
         Action::Send(ClientMsg::Playlist(next))
     };
-    group(p, |g| {
+    section(p, f, text::SECTION_GAME, |g| {
         row(g, true, |r| {
             for (m, s) in [
                 (Mode::Mix, text::MODE_MIX),
@@ -712,25 +762,16 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
             Look::Check(l.fill),
             Action::Send(ClientMsg::Fill(!l.fill)),
         );
+        let room = !l.fill && (l.players.len() as u32) < l.max;
         row(g, false, |r| {
-            let room = !l.fill && (l.players.len() as u32) < l.max;
             button_if(r, f, text::ADD_BOT, Look::Plain, Action::Send(ClientMsg::AddBot), room);
-            r.spawn(Node {
-                flex_grow: 1.0,
-                flex_shrink: 1.0,
-                min_width: px(0),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            })
-            .with_children(|g| {
-                let s = if enough {
-                    text::START_GAME.to_string()
-                } else {
-                    text::need_players(l.min)
-                };
-                button_if(g, f, &s, Look::Go, Action::Send(ClientMsg::Start), enough);
-            });
         });
+        let s = if enough {
+            text::START_GAME.to_string()
+        } else {
+            text::need_players(l.min)
+        };
+        button_if(g, f, &s, Look::Go, Action::Send(ClientMsg::Start), enough);
     });
 }
 
@@ -791,7 +832,7 @@ fn tints(
     act: &dyn Fn(Option<Tint>) -> Action,
 ) {
     stack(p, |c| {
-        muted(c, f, title);
+        caption(c, f, title);
         row(c, true, |r| {
             // "As designed": the part's own colour.
             swatch(r, Color::srgb(0.85, 0.86, 0.89), now.is_none(), act(None), true, 1.375);
