@@ -28,6 +28,7 @@ mod net;
 mod opts;
 mod outfit;
 mod perf;
+mod preview;
 mod probe;
 mod render;
 mod report;
@@ -235,6 +236,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
         app.add_plugins((
             view::ViewPlugin,
             beans::BeansPlugin,
+            preview::PreviewPlugin { draws: !test },
             hud::HudPlugin,
             logs::LogsPlugin,
             report::ReportPlugin,

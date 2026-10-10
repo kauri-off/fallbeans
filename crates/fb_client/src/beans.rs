@@ -102,7 +102,7 @@ impl Rig {
 /// What the bean wears now, and the entities of it.
 #[derive(Component, Default)]
 pub struct Dress {
-    worn: Option<(u8, Outfit, bool, bool)>,
+    worn: Option<Worn>,
     parts: Vec<Entity>,
     wiggles: Vec<Entity>,
     tail: Vec<Entity>,
@@ -190,85 +190,108 @@ pub fn spawn_beans(
     mut glows: ResMut<Assets<GlowMaterial>>,
 ) {
     for (e, id) in &beans {
-        let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
-        let model = commands
-            .spawn((
-                WorldAssetRoot(scene),
-                BeanModel(e),
-                Transform::from_xyz(0.0, -PIVOT_Y, 0.0),
-                Visibility::default(),
-            ))
-            .id();
-        let pivot = commands
-            .spawn((
-                Transform::from_xyz(0.0, PIVOT_Y, 0.0),
-                Visibility::default(),
-                ChildOf(e),
-            ))
-            .id();
-        commands.entity(model).insert(ChildOf(pivot));
-        // A soft ring at the feet while a bonus is in effect.
-        let ring = paints
-            .aura_mesh
-            .get_or_insert_with(|| meshes.add(Annulus::new(0.45, 0.8).mesh().resolution(40).build()))
-            .clone();
-        if paints.aura.is_empty() {
-            // Light added (marking the upscalers' reactive mask: it moves with the bean, over the ground's
-            // motion vectors).
-            paints.aura = AURA_COLORS
-                .map(|c| glows.add(GlowMaterial::new(c.with_alpha(0.7))))
-                .into();
-        }
-        let aura = commands
-            .spawn((
-                Mesh3d(ring),
-                MeshMaterial3d(paints.aura[0].clone()),
-                Transform::from_xyz(0.0, 0.05, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
-                Visibility::Hidden,
-                NotShadowCaster,
-                ChildOf(e),
-            ))
-            .id();
-        let (tear_mesh, tear_mat) = paints
-            .tear
-            .get_or_insert_with(|| {
-                (
-                    meshes.add(Sphere::new(0.022).mesh().uv(10, 8).scaled_by(Vec3::new(1.0, 1.4, 0.7))),
-                    materials.add(StandardMaterial {
-                        base_color: TEAR.with_alpha(0.85),
-                        perceptual_roughness: 0.05,
-                        alpha_mode: AlphaMode::Blend,
-                        ..default()
-                    }),
-                )
-            })
-            .clone();
-        let tears = [0; 4].map(|_| {
-            commands
-                .spawn((
-                    Mesh3d(tear_mesh.clone()),
-                    MeshMaterial3d(tear_mat.clone()),
-                    Transform::default(),
-                    Visibility::Hidden,
-                    NotShadowCaster,
-                    ChildOf(model),
-                ))
-                .id()
-        });
+        let rig = spawn_rig(
+            &mut commands,
+            e,
+            &assets,
+            &mut paints,
+            &mut meshes,
+            &mut materials,
+            &mut glows,
+        );
         commands.entity(e).insert((
             BeanView,
             BeanAnim::new(id.0),
             Dress::default(),
-            Rig {
-                pivot,
-                model,
-                aura,
-                tears,
-                parts: None,
-            },
+            rig,
             Transform::default(),
             Visibility::default(),
         ));
+    }
+}
+
+/// The model, its pivot, the aura and the tears under `e`: a rig to insert on it (with a `Dress` and a
+/// `BeanAnim`), its parts found once the model's scene is in.
+pub fn spawn_rig(
+    commands: &mut Commands,
+    e: Entity,
+    assets: &AssetServer,
+    paints: &mut Paints,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    glows: &mut Assets<GlowMaterial>,
+) -> Rig {
+    let scene = assets.load(GltfAssetLabel::Scene(0).from_asset("models/bean.glb"));
+    let model = commands
+        .spawn((
+            WorldAssetRoot(scene),
+            BeanModel(e),
+            Transform::from_xyz(0.0, -PIVOT_Y, 0.0),
+            Visibility::default(),
+        ))
+        .id();
+    let pivot = commands
+        .spawn((
+            Transform::from_xyz(0.0, PIVOT_Y, 0.0),
+            Visibility::default(),
+            ChildOf(e),
+        ))
+        .id();
+    commands.entity(model).insert(ChildOf(pivot));
+    // A soft ring at the feet while a bonus is in effect.
+    let ring = paints
+        .aura_mesh
+        .get_or_insert_with(|| meshes.add(Annulus::new(0.45, 0.8).mesh().resolution(40).build()))
+        .clone();
+    if paints.aura.is_empty() {
+        // Light added (marking the upscalers' reactive mask: it moves with the bean, over the ground's
+        // motion vectors).
+        paints.aura = AURA_COLORS
+            .map(|c| glows.add(GlowMaterial::new(c.with_alpha(0.7))))
+            .into();
+    }
+    let aura = commands
+        .spawn((
+            Mesh3d(ring),
+            MeshMaterial3d(paints.aura[0].clone()),
+            Transform::from_xyz(0.0, 0.05, 0.0).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+            Visibility::Hidden,
+            NotShadowCaster,
+            ChildOf(e),
+        ))
+        .id();
+    let (tear_mesh, tear_mat) = paints
+        .tear
+        .get_or_insert_with(|| {
+            (
+                meshes.add(Sphere::new(0.022).mesh().uv(10, 8).scaled_by(Vec3::new(1.0, 1.4, 0.7))),
+                materials.add(StandardMaterial {
+                    base_color: TEAR.with_alpha(0.85),
+                    perceptual_roughness: 0.05,
+                    alpha_mode: AlphaMode::Blend,
+                    ..default()
+                }),
+            )
+        })
+        .clone();
+    let tears = [0; 4].map(|_| {
+        commands
+            .spawn((
+                Mesh3d(tear_mesh.clone()),
+                MeshMaterial3d(tear_mat.clone()),
+                Transform::default(),
+                Visibility::Hidden,
+                NotShadowCaster,
+                ChildOf(model),
+            ))
+            .id()
+    });
+    Rig {
+        pivot,
+        model,
+        aura,
+        tears,
+        parts: None,
     }
 }
 
@@ -394,7 +417,6 @@ pub fn dress_beans(
         }
     }
     for (id, color, rig, mut dress) in &mut beans {
-        let Some(parts) = &rig.parts else { continue };
         let player = session
             .lobby
             .as_ref()
@@ -402,131 +424,155 @@ pub fn dress_beans(
         let outfit = player.map(|p| p.outfit).unwrap_or_default();
         let crown = player.is_some_and(|p| p.crowns > 0);
         let tail = map.as_ref().and_then(|m| m.deco.get(&id.0)).is_some_and(|d| d.tail);
-        let worn = (color.0, outfit, crown, tail);
-        if dress.worn == Some(worn) {
-            continue;
-        }
-        dress.worn = Some(worn);
-        for e in core::mem::take(&mut dress.parts) {
-            commands.entity(e).try_despawn();
-        }
-        dress.wiggles.clear();
-        dress.tail.clear();
-
-        let (suit_i, suit) = suit_of(color.0);
-        // Soft plastic with a faint clearcoat.
-        let body = paints.get(PaintKey::Body(suit_i), &mut tailor.materials, |m| {
-            plain_part(m.get(&parts.body_mat), suit_base(suit), 0.5, coat)
-        });
-        // The belly patch: the suit colour washed towards white, or a colour of its own.
-        let (belly_key, belly_color) = match outfit.belly {
-            Some(t) => (PaintKey::Belly(t as u8), crate::view::color(t.rgb())),
-            None => (PaintKey::BellyWashed(suit_i), suit_base(suit).mix(&Color::WHITE, 0.62)),
-        };
-        let belly = paints.get(belly_key, &mut tailor.materials, |m| {
-            plain_part(m.get(&parts.belly_mat), belly_color, 0.55, false)
-        });
-        if suit == Suit::Rainbow {
-            for (h, is_belly) in [(&body, false), (&belly, true)] {
-                if (outfit.belly.is_none() || !is_belly) && !paints.rainbow.iter().any(|(r, _)| r == h) {
-                    paints.rainbow.push((h.clone(), is_belly));
-                }
-            }
-        }
-        for e in &parts.body {
-            commands.entity(*e).insert(MeshMaterial3d(body.clone()));
-        }
-        for e in &parts.belly {
-            commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
-        }
-        // Shoes of the outfit's colour, or the model's own (plain too: no baked AO).
-        let shoe = paints.get(
-            PaintKey::Shoe(outfit.shoes.map(|t| t as u8)),
-            &mut tailor.materials,
-            |m| {
-                let model = m.get(&parts.shoe_mat);
-                let color = match outfit.shoes {
-                    Some(t) => crate::view::color(t.rgb()),
-                    None => model.map_or(Color::WHITE, |m| m.base_color),
-                };
-                plain_part(model, color, 0.5, false)
-            },
+        dress_rig(
+            &mut commands,
+            rig,
+            &mut dress,
+            (color.0, outfit, crown, tail),
+            &mut paints,
+            &mut tailor,
         );
-        for e in &parts.shoes {
-            commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
-        }
+    }
+}
 
-        let hat = make_hat(outfit.hat, outfit.hat_color.map(|t| crate::view::color(t.rgb())));
-        let crown_lift = hat.as_ref().map_or(0.0, |h| h.crown_lift);
-        let mut wiggles = Vec::new();
-        for (acc, shadows) in [(hat, true), (make_glasses(outfit.glasses), false)] {
-            if let Some(a) = acc {
-                let e = tailor.spawn(&mut commands, rig.model, &a.root, &body, shadows, &mut wiggles);
-                dress.parts.push(e);
+/// What a bean wears: its colour (into `COLORS`), outfit, a crown, a tail.
+pub type Worn = (u8, Outfit, bool, bool);
+
+/// Paints and dresses a rig whose scene is in (nothing to do while it wears that already).
+pub fn dress_rig(
+    commands: &mut Commands,
+    rig: &Rig,
+    dress: &mut Dress,
+    worn: Worn,
+    paints: &mut Paints,
+    tailor: &mut Tailor,
+) {
+    let Some(parts) = &rig.parts else { return };
+    if dress.worn == Some(worn) {
+        return;
+    }
+    dress.worn = Some(worn);
+    let (color, outfit, crown, tail) = worn;
+    let coat = tailor.coat();
+    for e in core::mem::take(&mut dress.parts) {
+        commands.entity(e).try_despawn();
+    }
+    dress.wiggles.clear();
+    dress.tail.clear();
+
+    let (suit_i, suit) = suit_of(color);
+    // Soft plastic with a faint clearcoat.
+    let body = paints.get(PaintKey::Body(suit_i), &mut tailor.materials, |m| {
+        plain_part(m.get(&parts.body_mat), suit_base(suit), 0.5, coat)
+    });
+    // The belly patch: the suit colour washed towards white, or a colour of its own.
+    let (belly_key, belly_color) = match outfit.belly {
+        Some(t) => (PaintKey::Belly(t as u8), crate::view::color(t.rgb())),
+        None => (PaintKey::BellyWashed(suit_i), suit_base(suit).mix(&Color::WHITE, 0.62)),
+    };
+    let belly = paints.get(belly_key, &mut tailor.materials, |m| {
+        plain_part(m.get(&parts.belly_mat), belly_color, 0.55, false)
+    });
+    if suit == Suit::Rainbow {
+        for (h, is_belly) in [(&body, false), (&belly, true)] {
+            if (outfit.belly.is_none() || !is_belly) && !paints.rainbow.iter().any(|(r, _)| r == h) {
+                paints.rainbow.push((h.clone(), is_belly));
             }
         }
-        dress.wiggles = wiggles;
-        if crown {
-            let scene = tailor
-                .assets
-                .load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb"));
-            // The band (radius 0.5 in the model) rests on the head where it is 0.31 m from the axis.
-            let e = commands
-                .spawn((
-                    WorldAssetRoot(scene),
-                    Transform::from_xyz(0.0, 1.465 + crown_lift, -0.01)
-                        .with_rotation(Quat::from_rotation_x(-0.06))
-                        .with_scale(Vec3::splat(CROWN_SCALE)),
-                    Visibility::default(),
-                    ChildOf(rig.model),
-                ))
-                .id();
+    }
+    for e in &parts.body {
+        commands.entity(*e).insert(MeshMaterial3d(body.clone()));
+    }
+    for e in &parts.belly {
+        commands.entity(*e).insert(MeshMaterial3d(belly.clone()));
+    }
+    // Shoes of the outfit's colour, or the model's own (plain too: no baked AO).
+    let shoe = paints.get(
+        PaintKey::Shoe(outfit.shoes.map(|t| t as u8)),
+        &mut tailor.materials,
+        |m| {
+            let model = m.get(&parts.shoe_mat);
+            let color = match outfit.shoes {
+                Some(t) => crate::view::color(t.rgb()),
+                None => model.map_or(Color::WHITE, |m| m.base_color),
+            };
+            plain_part(model, color, 0.5, false)
+        },
+    );
+    for e in &parts.shoes {
+        commands.entity(*e).insert(MeshMaterial3d(shoe.clone()));
+    }
+
+    let hat = make_hat(outfit.hat, outfit.hat_color.map(|t| crate::view::color(t.rgb())));
+    let crown_lift = hat.as_ref().map_or(0.0, |h| h.crown_lift);
+    let mut wiggles = Vec::new();
+    for (acc, shadows) in [(hat, true), (make_glasses(outfit.glasses), false)] {
+        if let Some(a) = acc {
+            let e = tailor.spawn(commands, rig.model, &a.root, &body, shadows, &mut wiggles);
             dress.parts.push(e);
         }
-        if tail {
-            let fur = paints.get(PaintKey::Tail, &mut tailor.materials, |_| StandardMaterial {
-                base_color: FUR,
-                perceptual_roughness: 0.7,
-                ..default()
-            });
-            let tip = paints.get(PaintKey::TailTip, &mut tailor.materials, |_| StandardMaterial {
-                base_color: FUR_TIP,
-                perceptual_roughness: 0.8,
-                ..default()
-            });
-            let mut parent = commands
+    }
+    dress.wiggles = wiggles;
+    if crown {
+        let scene = tailor
+            .assets
+            .load(GltfAssetLabel::Scene(0).from_asset("models/crown.glb"));
+        // The band (radius 0.5 in the model) rests on the head where it is 0.31 m from the axis.
+        let e = commands
+            .spawn((
+                WorldAssetRoot(scene),
+                Transform::from_xyz(0.0, 1.465 + crown_lift, -0.01)
+                    .with_rotation(Quat::from_rotation_x(-0.06))
+                    .with_scale(Vec3::splat(CROWN_SCALE)),
+                Visibility::default(),
+                ChildOf(rig.model),
+            ))
+            .id();
+        dress.parts.push(e);
+    }
+    if tail {
+        let fur = paints.get(PaintKey::Tail, &mut tailor.materials, |_| StandardMaterial {
+            base_color: FUR,
+            perceptual_roughness: 0.7,
+            ..default()
+        });
+        let tip = paints.get(PaintKey::TailTip, &mut tailor.materials, |_| StandardMaterial {
+            base_color: FUR_TIP,
+            perceptual_roughness: 0.8,
+            ..default()
+        });
+        let mut parent = commands
+            .spawn((
+                Transform::from_xyz(0.0, 0.45, -0.52),
+                Visibility::default(),
+                ChildOf(rig.model),
+            ))
+            .id();
+        dress.parts.push(parent);
+        // The tail's spheres, made once for every bean.
+        const BALLS: [Handle<Mesh>; 5] = [
+            bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e01"),
+            bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e02"),
+            bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e03"),
+            bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e04"),
+            bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e05"),
+        ];
+        for (i, ball) in BALLS.iter().enumerate() {
+            let r = 0.17 - i as f32 * 0.02;
+            let pos = if i > 0 { Vec3::new(0.0, 0.1, -0.15) } else { Vec3::ZERO };
+            if !tailor.meshes.contains(ball) {
+                let _ = tailor.meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
+            }
+            parent = commands
                 .spawn((
-                    Transform::from_xyz(0.0, 0.45, -0.52),
+                    Mesh3d(ball.clone()),
+                    MeshMaterial3d(if i == 4 { tip.clone() } else { fur.clone() }),
+                    Transform::from_translation(pos),
                     Visibility::default(),
-                    ChildOf(rig.model),
+                    ChildOf(parent),
                 ))
                 .id();
-            dress.parts.push(parent);
-            // The tail's spheres, made once for every bean.
-            const BALLS: [Handle<Mesh>; 5] = [
-                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e01"),
-                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e02"),
-                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e03"),
-                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e04"),
-                bevy::asset::uuid_handle!("5b0d7f4e-2f43-4c1e-9a55-1f7f3c0a9e05"),
-            ];
-            for (i, ball) in BALLS.iter().enumerate() {
-                let r = 0.17 - i as f32 * 0.02;
-                let pos = if i > 0 { Vec3::new(0.0, 0.1, -0.15) } else { Vec3::ZERO };
-                if !tailor.meshes.contains(ball) {
-                    let _ = tailor.meshes.insert(ball, Sphere::new(r).mesh().uv(14, 10));
-                }
-                parent = commands
-                    .spawn((
-                        Mesh3d(ball.clone()),
-                        MeshMaterial3d(if i == 4 { tip.clone() } else { fur.clone() }),
-                        Transform::from_translation(pos),
-                        Visibility::default(),
-                        ChildOf(parent),
-                    ))
-                    .id();
-                dress.tail.push(parent);
-            }
+            dress.tail.push(parent);
         }
     }
 }
@@ -804,7 +850,6 @@ pub fn animate_beans(
                 pose,
             },
         );
-        let out = anim.out;
         // `--trace hits`: the own bean as drawn this frame (`F tick+overstep …`), with what moves its top.
         #[cfg(feature = "traces")]
         if own && let (Some(h), Some(m)) = (trace.hits.as_mut(), stage.map.as_ref()) {
@@ -812,94 +857,110 @@ pub fn animate_beans(
             let p = root.translation;
             h.line(format_args!(
                 "F {k:.2} {} dt={:.4} pos={:.3},{:.3},{:.3} yaw={yaw:.3} vel={:.2},{:.2},{:.2} {anim_code:?} lean={:.3} roll={:.3} twist={:.3}",
-                id.0, dt, p.x, p.y, p.z, vel.x, vel.y, vel.z, out.lean, out.roll, out.twist
+                id.0, dt, p.x, p.y, p.z, vel.x, vel.y, vel.z, anim.out.lean, anim.out.roll, anim.out.twist
             ));
         }
-        root.scale = Vec3::splat(out.grow);
-        if let Ok(mut tf) = puppets.parts.get_mut(rig.pivot) {
-            tf.rotation = out.pivot;
-        }
-        if let Ok(mut tf) = puppets.parts.get_mut(rig.model) {
-            tf.translation.y = -PIVOT_Y + out.lift;
-            tf.rotation = Quat::from_euler(EulerRot::XYZ, out.lean, out.twist, out.roll);
-            tf.scale = out.squash;
-        }
-        if let Some(p) = &rig.parts {
-            for (i, ((e, base), (x, z))) in p.limbs.iter().zip(out.limbs).enumerate() {
-                if let Ok(mut tf) = puppets.parts.get_mut(*e) {
-                    tf.rotation = Quat::from_euler(EulerRot::XYZ, base.x + x, base.y, base.z + z);
-                    if i < 2 {
-                        tf.scale.y = out.stretch[i];
-                    }
+        pose_rig(&mut puppets, rig, dress, &mut anim, &mut root, power, t, dt);
+    }
+}
+
+/// Puts the rig's nodes where the animation's last frame left them.
+#[allow(clippy::too_many_arguments)]
+pub fn pose_rig(
+    puppets: &mut Puppets,
+    rig: &Rig,
+    dress: &Dress,
+    anim: &mut BeanAnim,
+    root: &mut Transform,
+    power: Option<Power>,
+    t: f32,
+    dt: f32,
+) {
+    let out = anim.out;
+    root.scale = Vec3::splat(out.grow);
+    if let Ok(mut tf) = puppets.parts.get_mut(rig.pivot) {
+        tf.rotation = out.pivot;
+    }
+    if let Ok(mut tf) = puppets.parts.get_mut(rig.model) {
+        tf.translation.y = -PIVOT_Y + out.lift;
+        tf.rotation = Quat::from_euler(EulerRot::XYZ, out.lean, out.twist, out.roll);
+        tf.scale = out.squash;
+    }
+    if let Some(p) = &rig.parts {
+        for (i, ((e, base), (x, z))) in p.limbs.iter().zip(out.limbs).enumerate() {
+            if let Ok(mut tf) = puppets.parts.get_mut(*e) {
+                tf.rotation = Quat::from_euler(EulerRot::XYZ, base.x + x, base.y, base.z + z);
+                if i < 2 {
+                    tf.scale.y = out.stretch[i];
                 }
             }
-            for (i, h) in p.hands.iter().enumerate() {
-                if let Ok(mut tf) = puppets.parts.get_mut(*h) {
-                    tf.scale.y = 1.0 / out.stretch[i];
-                }
-            }
-            for e in p.eyes {
-                if let Ok(mut tf) = puppets.parts.get_mut(e) {
-                    tf.scale.y = out.eye_open;
-                }
-            }
-            for (i, (e, base)) in p.pupils.iter().enumerate() {
-                if let Ok(mut tf) = puppets.parts.get_mut(*e) {
-                    tf.scale = Vec3::splat(out.pupil);
-                    tf.translation = *base + out.pupil_roll[i].extend(0.0);
-                }
+        }
+        for (i, h) in p.hands.iter().enumerate() {
+            if let Ok(mut tf) = puppets.parts.get_mut(*h) {
+                tf.scale.y = 1.0 / out.stretch[i];
             }
         }
-        for (i, e) in rig.tears.iter().enumerate() {
-            if let Ok(mut v) = puppets.vis.get_mut(*e) {
-                v.set_if_neq(if out.crying {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
-            }
-            if out.crying
-                && let Ok(mut tf) = puppets.parts.get_mut(*e)
-            {
-                // Drops run down from under each eye and drip off.
-                let side = if i % 2 == 1 { 1.0 } else { -1.0 };
-                let f = (t * 1.3 + i as f32 * 0.37).fract();
-                tf.translation = Vec3::new(side * (0.12 + f * 0.02), 1.15 - f * 0.25, 0.52 - f * 0.05);
-                tf.scale = Vec3::splat(0.6 + (f * core::f32::consts::PI).sin() * 0.5);
+        for e in p.eyes {
+            if let Ok(mut tf) = puppets.parts.get_mut(e) {
+                tf.scale.y = out.eye_open;
             }
         }
-        if let Ok(mut v) = puppets.vis.get_mut(rig.aura) {
-            v.set_if_neq(if out.aura.is_some() {
+        for (i, (e, base)) in p.pupils.iter().enumerate() {
+            if let Ok(mut tf) = puppets.parts.get_mut(*e) {
+                tf.scale = Vec3::splat(out.pupil);
+                tf.translation = *base + out.pupil_roll[i].extend(0.0);
+            }
+        }
+    }
+    for (i, e) in rig.tears.iter().enumerate() {
+        if let Ok(mut v) = puppets.vis.get_mut(*e) {
+            v.set_if_neq(if out.crying {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             });
         }
-        if let Some(s) = out.aura {
-            if let Ok(mut tf) = puppets.parts.get_mut(rig.aura) {
-                tf.scale = Vec3::splat(s);
-            }
-            if let (Ok(mut m), Some(h)) = (
-                puppets.aura_mats.get_mut(rig.aura),
-                power.and_then(|p| puppets.paints.aura.get(p as usize)),
-            ) && m.0 != *h
-            {
-                m.0 = h.clone();
-            }
+        if out.crying
+            && let Ok(mut tf) = puppets.parts.get_mut(*e)
+        {
+            // Drops run down from under each eye and drip off.
+            let side = if i % 2 == 1 { 1.0 } else { -1.0 };
+            let f = (t * 1.3 + i as f32 * 0.37).fract();
+            tf.translation = Vec3::new(side * (0.12 + f * 0.02), 1.15 - f * 0.25, 0.52 - f * 0.05);
+            tf.scale = Vec3::splat(0.6 + (f * core::f32::consts::PI).sin() * 0.5);
         }
-        for (e, (ry, rx)) in dress.tail.iter().zip(out.tail) {
-            if let Ok(mut tf) = puppets.parts.get_mut(*e) {
-                tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
-            }
-        }
-        let mut rotor = anim.rotor;
-        for e in &dress.wiggles {
-            if let Ok((w, base, mut tf)) = puppets.wiggles.get_mut(*e) {
-                wiggle(*w, &base.0, &mut tf, t, out.speed, &mut rotor, dt);
-            }
-        }
-        anim.rotor = rotor;
     }
+    if let Ok(mut v) = puppets.vis.get_mut(rig.aura) {
+        v.set_if_neq(if out.aura.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+    if let Some(s) = out.aura {
+        if let Ok(mut tf) = puppets.parts.get_mut(rig.aura) {
+            tf.scale = Vec3::splat(s);
+        }
+        if let (Ok(mut m), Some(h)) = (
+            puppets.aura_mats.get_mut(rig.aura),
+            power.and_then(|p| puppets.paints.aura.get(p as usize)),
+        ) && m.0 != *h
+        {
+            m.0 = h.clone();
+        }
+    }
+    for (e, (ry, rx)) in dress.tail.iter().zip(out.tail) {
+        if let Ok(mut tf) = puppets.parts.get_mut(*e) {
+            tf.rotation = Quat::from_euler(EulerRot::XYZ, rx, ry, 0.0);
+        }
+    }
+    let mut rotor = anim.rotor;
+    for e in &dress.wiggles {
+        if let Ok((w, base, mut tf)) = puppets.wiggles.get_mut(*e) {
+            wiggle(*w, &base.0, &mut tf, t, out.speed, &mut rotor, dt);
+        }
+    }
+    anim.rotor = rotor;
 }
 
 #[cfg(test)]
