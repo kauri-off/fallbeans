@@ -122,6 +122,14 @@ dlss_wgpu = { version = "4.0.0", optional = true }
 ash = { version = "0.38", default-features = false }
 libloading = "0.8"
 
+# The window's icon on Wayland (`icon/wayland.rs`): winit's own Wayland crates.
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland", "rwh_06"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+rustix = { version = "1", features = ["fs"] }
+
 [dev-dependencies]
 # The client's tests: a real server in their process, drawing on wgpu's noop device.
 fb_server = { path = "../fb_server" }
