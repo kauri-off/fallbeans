@@ -383,9 +383,11 @@ pub fn choose(app: &mut App, opts: &Opts) -> WgpuSettings {
         backends: Some(p.backend.wgpu()),
         ..default()
     };
-    // (Bevy keeps wgpu's indirect-call validation in release builds only where DX12 may run, which needs it;
-    // its default reckons with every backend.)
-    if !cfg!(debug_assertions) && p.backend != Backend::Dx12 {
+    // DX12's indirect first instance needs wgpu's indirect validation (`dlss` drops it) and no indirect count.
+    if p.backend == Backend::Dx12 {
+        wgpu.instance_flags.insert(InstanceFlags::VALIDATION_INDIRECT_CALL);
+        wgpu.disabled_features = Some(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT);
+    } else if !cfg!(debug_assertions) {
         wgpu.instance_flags.remove(InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
     // DXC is found only beside the exe; FXC fallback stalls seconds per pipeline.
