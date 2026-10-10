@@ -1,33 +1,16 @@
-//! Drums: a staircase of drums surging and easing (or a launch pad to a walkway over them), drums with
-//! pegs, rollers, logs rolling you sideways and changing direction, in an order from the seed.
+//! Drum sections: a staircase of surging drums, drums with pegs, rollers, logs rolling you sideways.
 use fb_shared::cause::Hazard;
 use fb_shared::rgb;
 use fb_sim::bots::{BotView, SharedTest, Waypoint};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, pick_sections, race_course, rotor_decks, trampoline_gap,
-    with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{SegOut, Segment, edge_jump};
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::{Palette, pal};
 
 use crate::util::{deco, o};
-
-pub struct DrumRoll;
-
-static META: GameMeta = GameMeta::new(
-    MapId::DrumRoll,
-    "Барабаны",
-    Genre::Race,
-    "Лестница из барабанов, которые то разгоняются, то замедляются (или батут на мостик над ними), барабаны с шипами, катки, брёвна, которые катят вбок и меняют направление. Порядок каждый раз свой!",
-    "Доберитесь до финиша",
-    140.0,
-);
 
 /// A drum of radius `r` whose top is at `top`: along x (rolling you forwards or back) or along z (a log rolling
 /// you sideways). Pegs (boxes on the surface) knock over whoever they catch.
@@ -122,7 +105,7 @@ const PALS: [Palette; 4] = [pal::ORANGE, pal::TEAL, pal::PINK, pal::GREEN];
 
 /// A zig-zag staircase of drums rolling back at you, their speed surging and easing, or a launch pad to
 /// a narrow walkway over them.
-fn drum_stairs() -> Segment {
+pub(super) fn drum_stairs() -> Segment {
     Box::new(|s| {
         let y = s.y;
         s.b.box_(v3(0.0, y - 1.0, s.z + 2.0), v3(16.0, 2.0, 4.0), pal::PURPLE, o());
@@ -208,7 +191,7 @@ fn drum_stairs() -> Segment {
 }
 
 /// Logs rolling sideways, each on its own rhythm, reversing now and then; run along them and hop the gaps.
-fn log_run(n: u32) -> Segment {
+pub(super) fn log_run(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let r = 1.8;
@@ -273,7 +256,7 @@ fn log_run(n: u32) -> Segment {
 }
 
 /// Big drums rolling towards you with pegs across them: jump each peg as it comes over the top.
-fn peg_drums(n: u32) -> Segment {
+pub(super) fn peg_drums(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let r = 2.2;
@@ -338,7 +321,7 @@ fn peg_drums(n: u32) -> Segment {
 }
 
 /// A bridge of small rollers turning in alternating directions, with bumpers to dodge.
-fn roller_bridge(n: u32) -> Segment {
+pub(super) fn roller_bridge(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let r = 0.55;
@@ -372,33 +355,4 @@ fn roller_bridge(n: u32) -> Segment {
             ..Default::default()
         }
     })
-}
-
-impl MapDef for DrumRoll {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Circus, LookId::Candy, LookId::Royal]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![
-            rotor_decks(1),
-            peg_drums(3),
-            roller_bridge(10),
-            trampoline_gap(),
-            hammer_bridges(2),
-        ];
-        let middle = pick_sections(&mut b.rng, pool, 3);
-        let mut sections = vec![drum_stairs()];
-        sections.extend(middle);
-        sections.push(log_run(5));
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

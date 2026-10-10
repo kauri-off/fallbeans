@@ -23,6 +23,8 @@ pub struct Round {
     pub arena: u32,
     pub kind: ArenaKind,
     pub map: MapId,
+    /// The race's sections (`MapDef::sections`): `fb_maps::get(map, sections)`.
+    pub sections: u8,
     pub seed: u32,
     pub zero_tick: i64,
     /// What a fall does here (a server run with `--respawn` keeps survival rounds respawning).
@@ -38,7 +40,7 @@ impl Round {
 
     /// The same map (a new zero tick is the same arena, shifted).
     pub fn same_arena(&self, o: &Round) -> bool {
-        self.arena == o.arena && self.map == o.map && self.seed == o.seed
+        self.arena == o.arena && self.map == o.map && self.sections == o.sections && self.seed == o.seed
     }
 }
 

@@ -10,7 +10,7 @@ pub struct MapEventsChannel;
 mod tests {
     use bevy_replicon::postcard;
     use fb_proto::{
-        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, MapId, PlayerId, Playlist,
+        Cause, ClientMsg, DenyReason, DevCmd, Hello, MapEventKind, MapEventMsg, MapId, Pick, PlayerId, Playlist,
         RejectReason, ServerMsg,
     };
     use serde::Serialize;
@@ -53,7 +53,7 @@ mod tests {
             ClientMsg::Leave,
             ClientMsg::Color(12),
             ClientMsg::Playlist(Playlist {
-                games: vec![MapId::DoorDash, MapId::StarFall],
+                games: vec![Pick::race(6, Some(123_456_789)), Pick::map(MapId::StarFall)],
                 ..Default::default()
             }),
             ClientMsg::RemoveBot(PlayerId(u32::MAX)),
@@ -189,7 +189,7 @@ mod tests {
                 .collect(),
             playlist: Playlist {
                 mode: Mode::Custom,
-                games: vec![MapId::Podium; 12],
+                games: vec![Pick::race(u8::MAX, Some(u32::MAX)); 12],
                 rounds: u32::MAX,
             },
             fill: true,
@@ -217,6 +217,7 @@ mod tests {
                 id: u32::MAX,
                 kind: ArenaKind::Podium,
                 game: MapId::Podium,
+                track: Some(Pick::race(u8::MAX, Some(u32::MAX))),
                 participants: pids(),
                 index: u32::MAX,
                 total: u32::MAX,
@@ -228,6 +229,7 @@ mod tests {
             }),
             ServerMsg::RoundEnd {
                 game: MapId::Podium,
+                track: Some(Pick::race(u8::MAX, Some(u32::MAX))),
                 index: u32::MAX,
                 total: u32::MAX,
                 rows: pids().into_iter().map(row).collect(),

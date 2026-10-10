@@ -13,7 +13,7 @@ pub enum DevError {
     #[error("no round running")]
     NoRound,
     #[error("not games: {}", join(.0))]
-    NotGames(Vec<MapId>),
+    NotGames(Vec<Pick>),
     #[error("pause first (rate 0)")]
     NotPaused,
     #[error("no bean #{0} in this arena")]
@@ -28,8 +28,8 @@ pub enum DevError {
     NoGrab,
 }
 
-fn join(ids: &[MapId]) -> String {
-    ids.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+fn join(picks: &[Pick]) -> String {
+    picks.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
 }
 
 impl Room {
@@ -68,7 +68,7 @@ impl Room {
                 Ok("round ended".into())
             }
             DevCmd::Start { games, rounds, bots } => {
-                let bad: Vec<MapId> = games.iter().copied().filter(|&g| Game::by_id(g).is_none()).collect();
+                let bad: Vec<Pick> = games.iter().copied().filter(|&g| Game::of(g).is_none()).collect();
                 if !bad.is_empty() {
                     return Err(DevError::NotGames(bad));
                 }
@@ -104,9 +104,9 @@ impl Room {
                     }
                 };
                 self.start_game();
-                let plan: Vec<&str> = self
+                let plan: Vec<String> = self
                     .session()
-                    .map_or(Vec::new(), |s| s.plan.iter().map(|g| g.id().as_str()).collect());
+                    .map_or(Vec::new(), |s| s.plan.iter().map(|g| g.pick().to_string()).collect());
                 Ok(format!("started: {}", plan.join(", ")))
             }
             DevCmd::Lobby => {

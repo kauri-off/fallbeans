@@ -3,7 +3,7 @@
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 pub use fb_shared::cause::{Cause, Hazard};
 use fb_shared::game::ArenaKind;
-pub use fb_shared::game::MapId;
+pub use fb_shared::game::{MapId, Pick};
 use fb_shared::rules::RoundRow;
 use fb_shared::{CHAT_MAX, COLORS, EMOTES, ROOM_PIN_DIGITS};
 pub use fb_sim::map::MapEvent;
@@ -104,7 +104,7 @@ pub enum DevCmd {
     EndRound,
     /// Start a game now: optional list of games, rounds, and exactly how many bots (replacing any).
     Start {
-        games: Vec<MapId>,
+        games: Vec<Pick>,
         rounds: Option<u32>,
         bots: Option<u32>,
     },
@@ -208,8 +208,8 @@ fn check_pid(id: PlayerId) -> Result<(), &'static str> {
     ensure(id.0 != 0, "player id")
 }
 
-fn check_games(games: &[MapId]) -> Result<(), &'static str> {
-    ensure(games.len() <= 12, "games")
+fn check_games(games: &[Pick]) -> Result<(), &'static str> {
+    ensure(games.len() <= 12 && games.iter().all(Pick::valid), "games")
 }
 
 fn finite(v: &[f64]) -> bool {
@@ -384,6 +384,8 @@ pub struct ArenaInfo {
     pub id: u32,
     pub kind: ArenaKind,
     pub game: MapId,
+    /// A race's track as played (`Pick::code` to share it).
+    pub track: Option<Pick>,
     pub participants: Vec<PlayerId>,
     /// Round number in the game (1-based) and the number of rounds; 0 outside rounds.
     pub index: u32,
@@ -483,6 +485,7 @@ pub enum ServerMsg {
     Arena(ArenaInfo),
     RoundEnd {
         game: MapId,
+        track: Option<Pick>,
         index: u32,
         total: u32,
         rows: Vec<RoundRow>,
@@ -642,7 +645,7 @@ mod tests {
         assert!(ClientMsg::Color(12).check().is_ok());
         assert!(ClientMsg::Color(13).check().is_err());
         assert!(ClientMsg::Color(255).check().is_err());
-        let playlist = |games: Vec<MapId>, rounds| {
+        let playlist = |games: Vec<Pick>, rounds| {
             ClientMsg::Playlist(Playlist {
                 games,
                 rounds,
@@ -650,10 +653,18 @@ mod tests {
             })
             .check()
         };
-        assert!(playlist(vec![MapId::DoorDash], 5).is_ok());
+        let race = Pick::map(MapId::Race);
+        assert!(playlist(vec![race, Pick::race(8, Some(999_999_999))], 5).is_ok());
+        assert!(playlist(vec![Pick::race(9, None)], 5).is_err());
+        assert!(playlist(vec![Pick::race(5, Some(1_000_000_000))], 5).is_err());
+        let sized = Pick {
+            sections: 5,
+            ..Pick::map(MapId::HexAGone)
+        };
+        assert!(playlist(vec![sized], 5).is_err());
         assert!(playlist(Vec::new(), 0).is_err());
         assert!(playlist(Vec::new(), 13).is_err());
-        assert!(playlist(vec![MapId::DoorDash; 13], 5).is_err());
+        assert!(playlist(vec![race; 13], 5).is_err());
         assert!(ClientMsg::RemoveBot(PlayerId(0)).check().is_err());
         assert!(ClientMsg::RemoveBot(PlayerId(3)).check().is_ok());
         assert!(ClientMsg::Host(PlayerId(0)).check().is_err());
@@ -679,11 +690,12 @@ mod tests {
         assert!(!ok(DevCmd::Step { ticks: 1201 }));
         assert!(ok(DevCmd::Seed { seed: 1 << 31 }));
         assert!(!ok(DevCmd::Seed { seed: (1 << 31) + 1 }));
-        let start = |games: Vec<MapId>, rounds, bots| DevCmd::Start { games, rounds, bots };
+        let start = |games: Vec<Pick>, rounds, bots| DevCmd::Start { games, rounds, bots };
         assert!(ok(start(Vec::new(), Some(12), Some(7))));
         assert!(!ok(start(Vec::new(), Some(0), None)));
         assert!(!ok(start(Vec::new(), None, Some(8))));
-        assert!(!ok(start(vec![MapId::DoorDash; 13], None, None)));
+        assert!(!ok(start(vec![Pick::map(MapId::Race); 13], None, None)));
+        assert!(!ok(start(vec![Pick::race(2, None)], None, None)));
         let goto = |to| DevCmd::Goto { id: None, to };
         assert!(ok(goto(Goto::Checkpoint(64))));
         assert!(!ok(goto(Goto::Checkpoint(65))));

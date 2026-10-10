@@ -86,7 +86,7 @@ cargo xtask perf csv файл.json [out.csv]
 командой (`-p fb_client -p fb_server`, как это делает xtask): сборка одного пакета даёт другое объединение фич
 зависимостей, и cargo пересобирает половину из них (2–3 минуты).
 
-Все сцены подряд: `fb_client --start jump-club,portal-panic,hex-a-gone --start-rounds 3 --fill --perf-capture 110
+Все сцены подряд: `fb_client --start jump-club,race,hex-a-gone --start-rounds 3 --fill --perf-capture 110
 --perf-from-start --profiler …` — `--start` берёт список карт (по очереди), `--perf-from-start` пишет с запуска, а
 не с разминки раунда. Без `--autopilot` боб стоит на старте: кадр почти не меняется между прогонами (сид сервера
 `--seed 7`), это удобнее для сравнения до/после, чем автопилот.

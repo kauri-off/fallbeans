@@ -1,15 +1,10 @@
 //! Glass bridges with one safe pane per row; a fake pane is not solid and shatters under whoever steps on it.
 use fb_shared::{rgb, rgba};
 use fb_sim::bots::{BotInput, BotView, HumanOpts, Note, Waypoint, humanize, init_bot, steer};
-use fb_sim::builder::Builder;
 use fb_sim::collider::{ColId, ColliderOpts, Shape};
-use fb_sim::course::{
-    CourseOpts, Section, SegOut, Segment, glove_alley, moving_platforms, pick_sections, pistons, race_course,
-    rotor_decks, tipping_bridge, with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{Section, SegOut, Segment};
 use fb_sim::m::MinMax;
-use fb_sim::map::{Cx, GameMeta, Genre, Hook, MapCtx, MapDef, MapId, MapSfx, MapSpec, SegEvent, Steer};
+use fb_sim::map::{Cx, Hook, MapSfx, SegEvent, Steer};
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::physics::{Body, StepEvents, Touch};
@@ -19,17 +14,6 @@ use fb_sim::scene::{Finish, Form, LookOut, Part, Piece, pal};
 use fb_sim::world::{MoveCtx, World};
 
 use crate::util::{deco, o};
-
-pub struct HiddenBridge;
-
-static META: GameMeta = GameMeta::new(
-    MapId::HiddenBridge,
-    "Невидимый мост",
-    Genre::Race,
-    "Три стеклянных моста: ложная панель лопается от первого касания, и оттолкнуться от неё уже не выйдет. Смотрите, где упали другие, и идите по зелёным! Дальше мосты уже и с перчатками.",
-    "Найдите путь и добегите до финиша",
-    150.0,
-);
 
 const PANE: f64 = 2.6;
 const THICK: f64 = 0.3;
@@ -294,7 +278,7 @@ impl Section for GlassBridge {
 }
 
 #[expect(clippy::cast_possible_truncation, reason = "a column below cols")]
-fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segment {
+pub(super) fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let dx = 3.0;
@@ -439,39 +423,4 @@ fn glass_bridge(rows: usize, cols: usize, glove_rows: &'static [usize]) -> Segme
             ..Default::default()
         }
     })
-}
-
-impl MapDef for HiddenBridge {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Starlight, LookId::Neon, LookId::Ocean]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![
-            rotor_decks(1),
-            moving_platforms(4),
-            glove_alley(3),
-            pistons(3, 14.0),
-            tipping_bridge(5),
-        ];
-        let mut mids = pick_sections(&mut b.rng, pool, 2).into_iter();
-        let mut rows = |lo: usize| lo + b.rng.index(3);
-        let (r0, r1, r2) = (rows(8), rows(6), rows(5));
-        let sections = vec![
-            glass_bridge(r0, 5, &[]),
-            mids.next().unwrap(),
-            glass_bridge(r1, 4, &[2, 5]),
-            mids.next().unwrap(),
-            glass_bridge(r2, 3, &[1, 3]),
-        ];
-        let opts = CourseOpts {
-            sections: with_rests(sections, 6.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

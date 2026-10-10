@@ -486,6 +486,7 @@ fn publish(
             r.arena == room.arena_id
                 && r.kind == room.arena.kind
                 && r.map == map
+                && r.sections == room.arena.map.sections()
                 && r.seed == room.arena.seed
                 && r.zero_tick == zero_tick
                 && r.fall == room.arena.fall
@@ -495,6 +496,7 @@ fn publish(
             arena: room.arena_id,
             kind: room.arena.kind,
             map,
+            sections: room.arena.map.sections(),
             seed: room.arena.seed,
             zero_tick,
             fall: room.arena.fall,

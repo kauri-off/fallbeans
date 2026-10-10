@@ -15,6 +15,9 @@ use crate::{Arena, ArenaKind};
 pub struct Recording {
     pub v: u32,
     pub game: MapId,
+    /// The race's sections (`MapDef::sections`).
+    #[serde(default)]
+    pub sections: u8,
     #[serde(with = "kind_name")]
     pub kind: ArenaKind,
     pub seed: u32,
@@ -168,7 +171,7 @@ pub struct Replay {
 
 /// Plays a recorded round again; `each` sees the arena after every tick (returning true stops).
 pub fn replay(rec: &Recording, mut each: impl FnMut(&Arena) -> bool) -> Replay {
-    let map = fb_maps::by_id(rec.game);
+    let map = fb_maps::get(rec.game, rec.sections);
     let (mut a, _) = Arena::new(map, rec.kind, rec.seed, rec.tick0, &rec.participants, false);
     let first = a.tick;
     for p in rec.pawns.iter().filter(|p| p.at <= first) {

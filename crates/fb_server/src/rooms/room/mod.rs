@@ -10,7 +10,7 @@ use fb_maps::director::{self, plan_game, valid_playlist};
 use fb_maps::lobby::Lobby as LobbyMap;
 use fb_maps::podium::Podium as PodiumMap;
 use fb_proto::*;
-use fb_shared::game::{GameMeta, Genre};
+use fb_shared::game::{GameMeta, Genre, SEED_LIMIT};
 use fb_shared::input::InputFrame;
 use fb_shared::outfit::bot_outfit;
 use fb_shared::rng::{Rng, shuffle};
@@ -53,18 +53,30 @@ const LOBBY_GRACE_S: f64 = 10.0;
 /// The longest dev warp (s): it simulates every tick at once, and the tick is every room's.
 const WARP_MAX_S: f64 = 30.0;
 
-/// A game's map, looked up once by its id.
+/// A round's game as planned: its map (the race of its length), looked up once, and a fixed seed if any.
 #[derive(Clone, Copy)]
-pub struct Game(&'static dyn MapDef);
+pub struct Game {
+    def: &'static dyn MapDef,
+    /// Every round of it on this seed (a race track to replay).
+    pub seed: Option<u32>,
+}
 
 impl Game {
     /// The game (not the lobby or the podium) of this id.
     pub fn by_id(id: MapId) -> Option<Self> {
-        fb_maps::director::game(id).map(|_| Self(fb_maps::by_id(id)))
+        Self::of(Pick::map(id))
+    }
+
+    /// The game of a playlist's pick, when it is one and within bounds.
+    pub fn of(pick: Pick) -> Option<Self> {
+        (fb_maps::director::game(pick.map).is_some() && pick.valid()).then(|| Self {
+            def: fb_maps::get(pick.map, pick.sections),
+            seed: pick.seed,
+        })
     }
 
     pub fn meta(self) -> &'static GameMeta {
-        self.0.meta()
+        self.def.meta()
     }
 
     pub fn id(self) -> MapId {
@@ -72,27 +84,35 @@ impl Game {
     }
 
     pub fn map(self) -> &'static dyn MapDef {
-        self.0
+        self.def
+    }
+
+    pub fn pick(self) -> Pick {
+        Pick {
+            map: self.id(),
+            sections: self.def.sections(),
+            seed: self.seed,
+        }
     }
 
     /// The rounds of a game for so many players (`director::plan_game`).
     fn plan(players: u32, playlist: &Playlist, rng: &mut Rng) -> Vec<Self> {
         plan_game(players, playlist, rng)
             .into_iter()
-            .filter_map(Self::by_id)
+            .filter_map(Self::of)
             .collect()
     }
 }
 
 impl PartialEq for Game {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
+        self.pick() == other.pick()
     }
 }
 
 impl core::fmt::Debug for Game {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.id().as_str())
+        write!(f, "{}", self.pick())
     }
 }
 
@@ -544,6 +564,13 @@ impl Room {
 
     // ------------------------------------------------------------------ messages
 
+    /// The race's track being played (its sections and seed).
+    pub fn track(&self) -> Option<Pick> {
+        let a = &self.arena;
+        (a.kind == ArenaKind::Round && a.map.meta().id == MapId::Race)
+            .then(|| Pick::race(a.map.sections(), Some(a.seed)))
+    }
+
     pub fn arena_info(&self, late: bool) -> ArenaInfo {
         let a = &self.arena;
         let round = self.round().filter(|_| a.kind == ArenaKind::Round);
@@ -551,6 +578,7 @@ impl Room {
             id: self.arena_id,
             kind: a.kind,
             game: a.map.meta().id,
+            track: self.track(),
             participants: a.participants.clone(),
             index: round.map_or(0, |r| r.index),
             total: round.map_or(0, |r| r.total),

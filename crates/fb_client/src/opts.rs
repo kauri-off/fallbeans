@@ -3,16 +3,25 @@ use std::path::PathBuf;
 use bevy::prelude::Resource;
 use clap::{Parser, ValueEnum};
 use fb_net::{HTTP_PORT, NetSim, WS_PORT};
-use fb_proto::MapId;
+use fb_proto::{MapId, Pick};
 
-/// `--practice`, `--start`: a game's map id.
+fn games_list() -> String {
+    let ids: Vec<&str> = fb_maps::GAMES.iter().map(|m| m.meta().id.as_str()).collect();
+    format!("games: {} (the race also as race:SECTIONS[:SEED])", ids.join(", "))
+}
+
+/// `--practice`: a game's map id.
 fn game_id(s: &str) -> Result<MapId, String> {
     MapId::parse(s)
         .filter(|&m| fb_maps::director::game(m).is_some())
-        .ok_or_else(|| {
-            let ids: Vec<&str> = fb_maps::GAMES.iter().map(|m| m.meta().id.as_str()).collect();
-            format!("not a game; games: {}", ids.join(", "))
-        })
+        .ok_or_else(|| format!("not a game; {}", games_list()))
+}
+
+/// `--start`: a game, the race with its length and seed if given (`race:6:1234`).
+fn game_pick(s: &str) -> Result<Pick, String> {
+    Pick::parse(s)
+        .filter(|p| fb_maps::director::game(p.map).is_some())
+        .ok_or_else(|| format!("not a game; {}", games_list()))
 }
 
 /// `--profile`: a name for the settings folder, never a path (`../x` would write outside it).
@@ -117,9 +126,9 @@ pub struct Opts {
     /// Suit colour for this run (index into the palette).
     #[arg(long)]
     pub color: Option<u8>,
-    /// Map ids: if this client hosts the room, it starts a game of these maps in turn (`a,b,c`).
-    #[arg(long, value_name = "MAP", value_parser = game_id, value_delimiter = ',')]
-    pub start: Vec<MapId>,
+    /// Map ids: if this client hosts the room, it starts a game of these maps in turn (`a,race:5,c`).
+    #[arg(long, value_name = "MAP", value_parser = game_pick, value_delimiter = ',')]
+    pub start: Vec<Pick>,
     /// With `--start`: wait until the room has this many players (default: 2, or 1 if the server runs with `--solo`; never fewer).
     #[arg(long, value_name = "N")]
     pub start_players: Option<usize>,

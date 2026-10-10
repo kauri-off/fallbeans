@@ -166,6 +166,7 @@ impl Map {
                 arena: 0,
                 kind,
                 map: meta.id,
+                sections: def.sections(),
                 seed: SEED,
                 zero_tick,
                 fall: fb_arena::fall_behaviour(meta.genre),
@@ -184,6 +185,7 @@ impl Map {
                 id: 0,
                 kind,
                 game: meta.id,
+                track: None,
                 participants,
                 index: 0,
                 total: 0,
@@ -411,7 +413,7 @@ fn build_round(
     let Some(info) = session.arena.clone().filter(|a| a.id == round.arena) else {
         return;
     };
-    let def = fb_maps::by_id(round.map);
+    let def = fb_maps::get(round.map, round.sections);
     let (mut b, mut spec) = build_map(def, round.seed, true, &info.participants);
     let meta = def.meta();
     let bonuses = if round.kind == ArenaKind::Round {

@@ -1,27 +1,19 @@
-//! Every map: one module per map, and the registry.
+//! Every map: one module per map (the race's sections in `race`), and the registry.
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::needless_pass_by_value
 )]
+use fb_shared::game::RACE_SECTIONS_DEFAULT;
 use fb_sim::map::{MapDef, MapId};
 
-pub mod ball_hill;
-pub mod bounce_park;
-pub mod cliff_climb;
-pub mod crown_peak;
 pub mod director;
-pub mod door_dash;
-pub mod drum_roll;
-pub mod frost_sky;
-pub mod hammer_swing;
 pub mod hex_a_gone;
-pub mod hidden_bridge;
 pub mod jump_club;
 pub mod lobby;
 pub mod plate_drop;
 pub mod podium;
-pub mod portal_panic;
+pub mod race;
 pub mod roll_out;
 pub mod star_fall;
 pub mod tail_tag;
@@ -30,69 +22,51 @@ pub mod wall_rush;
 
 /// Every game map, in the order of the list in the menu (the lobby and the podium are not games).
 pub static GAMES: &[&dyn MapDef] = &[
-    &door_dash::DoorDash,
-    &hammer_swing::HammerSwing,
-    &ball_hill::BallHill,
-    &hidden_bridge::HiddenBridge,
-    &drum_roll::DrumRoll,
+    race::of(RACE_SECTIONS_DEFAULT),
     &jump_club::JumpClub,
     &roll_out::RollOut,
     &wall_rush::WallRush,
     &tail_tag::TailTag,
     &hex_a_gone::HexAGone,
-    &crown_peak::CrownPeak,
     &plate_drop::PlateDrop,
-    &portal_panic::PortalPanic,
-    &bounce_park::BouncePark,
-    &cliff_climb::CliffClimb,
-    &frost_sky::FrostSky,
     &star_fall::StarFall,
 ];
 
 /// Every map, the lobby and the podium included.
 pub static MAPS: &[&dyn MapDef] = &[
-    &door_dash::DoorDash,
-    &hammer_swing::HammerSwing,
-    &ball_hill::BallHill,
-    &hidden_bridge::HiddenBridge,
-    &drum_roll::DrumRoll,
+    race::of(RACE_SECTIONS_DEFAULT),
     &jump_club::JumpClub,
     &roll_out::RollOut,
     &wall_rush::WallRush,
     &tail_tag::TailTag,
     &hex_a_gone::HexAGone,
-    &crown_peak::CrownPeak,
     &plate_drop::PlateDrop,
-    &portal_panic::PortalPanic,
-    &bounce_park::BouncePark,
-    &cliff_climb::CliffClimb,
-    &frost_sky::FrostSky,
     &star_fall::StarFall,
     &lobby::Lobby,
     &podium::Podium,
 ];
 
+/// The map of this id (the race of its default length).
 pub fn by_id(id: MapId) -> &'static dyn MapDef {
     match id {
-        MapId::DoorDash => &door_dash::DoorDash,
-        MapId::HammerSwing => &hammer_swing::HammerSwing,
-        MapId::BallHill => &ball_hill::BallHill,
-        MapId::HiddenBridge => &hidden_bridge::HiddenBridge,
-        MapId::DrumRoll => &drum_roll::DrumRoll,
+        MapId::Race => race::of(RACE_SECTIONS_DEFAULT),
         MapId::JumpClub => &jump_club::JumpClub,
         MapId::RollOut => &roll_out::RollOut,
         MapId::WallRush => &wall_rush::WallRush,
         MapId::TailTag => &tail_tag::TailTag,
         MapId::HexAGone => &hex_a_gone::HexAGone,
-        MapId::CrownPeak => &crown_peak::CrownPeak,
         MapId::PlateDrop => &plate_drop::PlateDrop,
-        MapId::PortalPanic => &portal_panic::PortalPanic,
-        MapId::BouncePark => &bounce_park::BouncePark,
-        MapId::CliffClimb => &cliff_climb::CliffClimb,
-        MapId::FrostSky => &frost_sky::FrostSky,
         MapId::StarFall => &star_fall::StarFall,
         MapId::Lobby => &lobby::Lobby,
         MapId::Podium => &podium::Podium,
+    }
+}
+
+/// The map of this id with this many sections (the race's length; other maps ignore it).
+pub fn get(map: MapId, sections: u8) -> &'static dyn MapDef {
+    match map {
+        MapId::Race => race::of(sections),
+        _ => by_id(map),
     }
 }
 

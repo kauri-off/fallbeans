@@ -75,6 +75,7 @@ pub struct Denied {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Results {
     pub game: MapId,
+    pub track: Option<fb_proto::Pick>,
     pub index: u32,
     pub total: u32,
     pub rows: Vec<fb_shared::rules::RoundRow>,
@@ -371,6 +372,7 @@ fn receive(
                 }
                 ServerMsg::RoundEnd {
                     game,
+                    track,
                     index,
                     total,
                     rows,
@@ -380,6 +382,7 @@ fn receive(
                     info!("round {index} ({game}) over: {}", line.join(" "));
                     state.view.outcome.results = Some(Results {
                         game,
+                        track,
                         index,
                         total,
                         rows,
@@ -459,7 +462,7 @@ fn start_game(
         return;
     }
     session.started = true;
-    let games: Vec<&str> = opts.start.iter().map(|m| m.as_str()).collect();
+    let games: Vec<String> = opts.start.iter().map(ToString::to_string).collect();
     info!("starting {} with {n} players", games.join(","));
     if opts.fill {
         send(&mut senders, ClientMsg::Fill(true));

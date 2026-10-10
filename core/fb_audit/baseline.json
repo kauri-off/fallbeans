@@ -1,155 +1,47 @@
 {
-  "balance/ball-hill/falls_per_bot_min": {
-    "value": 0.198,
-    "tol": 0.2
-  },
-  "balance/ball-hill/finish_p50": {
-    "value": 69.623,
-    "tol": 12.216
-  },
-  "balance/ball-hill/finish_rate": {
-    "value": 0.984,
-    "tol": 0.05
-  },
-  "balance/bounce-park/falls_per_bot_min": {
-    "value": 0.715,
-    "tol": 0.267
-  },
-  "balance/bounce-park/finish_p50": {
-    "value": 47.136,
-    "tol": 2.357
-  },
-  "balance/bounce-park/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/cliff-climb/falls_per_bot_min": {
-    "value": 0.865,
-    "tol": 0.396
-  },
-  "balance/cliff-climb/finish_p50": {
-    "value": 43.721,
-    "tol": 3.335
-  },
-  "balance/cliff-climb/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/crown-peak/falls_per_bot_min": {
-    "value": 0.673,
-    "tol": 0.251
-  },
-  "balance/crown-peak/finish_p50": {
-    "value": 60.678,
-    "tol": 4.929
-  },
-  "balance/crown-peak/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/door-dash/falls_per_bot_min": {
-    "value": 0.848,
-    "tol": 0.365
-  },
-  "balance/door-dash/finish_p50": {
-    "value": 49.721,
-    "tol": 2.971
-  },
-  "balance/door-dash/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/drum-roll/falls_per_bot_min": {
-    "value": 1.643,
-    "tol": 0.561
-  },
-  "balance/drum-roll/finish_p50": {
-    "value": 35.546,
-    "tol": 1.894
-  },
-  "balance/drum-roll/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/frost-sky/falls_per_bot_min": {
-    "value": 1.155,
-    "tol": 0.301
-  },
-  "balance/frost-sky/finish_p50": {
-    "value": 63.393,
-    "tol": 7.744
-  },
-  "balance/frost-sky/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
-  "balance/hammer-swing/falls_per_bot_min": {
-    "value": 0.956,
-    "tol": 0.31
-  },
-  "balance/hammer-swing/finish_p50": {
-    "value": 50.208,
-    "tol": 3.613
-  },
-  "balance/hammer-swing/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
   "balance/hex-a-gone/survival": {
     "value": 37.265,
     "tol": 3.136
   },
-  "balance/hidden-bridge/falls_per_bot_min": {
-    "value": 3.039,
-    "tol": 0.473
-  },
-  "balance/hidden-bridge/finish_p50": {
-    "value": 60.958,
-    "tol": 5.691
-  },
-  "balance/hidden-bridge/finish_rate": {
-    "value": 1.0,
-    "tol": 0.05
-  },
   "balance/jump-club/survival": {
-    "value": 37.274,
-    "tol": 5.969
+    "value": 36.457,
+    "tol": 6.71
   },
   "balance/plate-drop/survival": {
-    "value": 33.975,
-    "tol": 6.601
+    "value": 34.282,
+    "tol": 6.522
   },
-  "balance/portal-panic/falls_per_bot_min": {
-    "value": 0.629,
-    "tol": 0.359
+  "balance/race/falls_per_bot_min": {
+    "value": 1.36,
+    "tol": 0.517
   },
-  "balance/portal-panic/finish_p50": {
-    "value": 43.866,
-    "tol": 3.683
+  "balance/race/finish_p50": {
+    "value": 57.391,
+    "tol": 12.403
   },
-  "balance/portal-panic/finish_rate": {
+  "balance/race/finish_rate": {
     "value": 1.0,
     "tol": 0.05
   },
   "balance/roll-out/survival": {
-    "value": 29.097,
-    "tol": 13.314
+    "value": 29.098,
+    "tol": 13.313
   },
   "balance/star-fall/falls_per_bot_min": {
-    "value": 0.591,
-    "tol": 0.2
+    "value": 0.525,
+    "tol": 0.243
   },
   "balance/star-fall/top_score": {
-    "value": 26.0,
-    "tol": 10.758
+    "value": 24.063,
+    "tol": 7.672
   },
   "balance/tail-tag/falls_per_bot_min": {
-    "value": 1.625,
-    "tol": 0.638
+    "value": 1.644,
+    "tol": 0.622
   },
   "balance/tail-tag/top_score": {
-    "value": 53.188,
-    "tol": 5.319
+    "value": 52.313,
+    "tol": 5.231
   },
   "balance/wall-rush/survival": {
     "value": 27.889,

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use fb_shared::PlayerId;
-pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, MapId, can_move, fall_behaviour};
+pub use fb_shared::game::{ArenaKind, FallBehaviour, GameMeta, Genre, MapId, Pick, can_move, fall_behaviour};
 use serde::{Deserialize, Serialize};
 
 use crate::bots::{BotBrain, BotInput, BotView};
@@ -363,6 +363,10 @@ pub trait MapDef: Sync {
     /// Looks of the map (`looks.rs`), its signature one first; none: the classic look.
     fn looks(&self) -> &'static [LookId] {
         &[]
+    }
+    /// The race's obstacle sections (`Pick::sections`); 0 for other maps.
+    fn sections(&self) -> u8 {
+        0
     }
 }
 

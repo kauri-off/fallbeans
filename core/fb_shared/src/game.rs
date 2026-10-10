@@ -33,45 +33,27 @@ impl Genre {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum MapId {
-    DoorDash,
-    HammerSwing,
-    BallHill,
-    HiddenBridge,
-    DrumRoll,
+    Race,
     JumpClub,
     RollOut,
     WallRush,
     TailTag,
     HexAGone,
-    CrownPeak,
     PlateDrop,
-    PortalPanic,
-    BouncePark,
-    CliffClimb,
-    FrostSky,
     StarFall,
     Lobby,
     Podium,
 }
 
 impl MapId {
-    pub const ALL: [MapId; 19] = [
-        MapId::DoorDash,
-        MapId::HammerSwing,
-        MapId::BallHill,
-        MapId::HiddenBridge,
-        MapId::DrumRoll,
+    pub const ALL: [MapId; 10] = [
+        MapId::Race,
         MapId::JumpClub,
         MapId::RollOut,
         MapId::WallRush,
         MapId::TailTag,
         MapId::HexAGone,
-        MapId::CrownPeak,
         MapId::PlateDrop,
-        MapId::PortalPanic,
-        MapId::BouncePark,
-        MapId::CliffClimb,
-        MapId::FrostSky,
         MapId::StarFall,
         MapId::Lobby,
         MapId::Podium,
@@ -79,22 +61,13 @@ impl MapId {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            MapId::DoorDash => "door-dash",
-            MapId::HammerSwing => "hammer-swing",
-            MapId::BallHill => "ball-hill",
-            MapId::HiddenBridge => "hidden-bridge",
-            MapId::DrumRoll => "drum-roll",
+            MapId::Race => "race",
             MapId::JumpClub => "jump-club",
             MapId::RollOut => "roll-out",
             MapId::WallRush => "wall-rush",
             MapId::TailTag => "tail-tag",
             MapId::HexAGone => "hex-a-gone",
-            MapId::CrownPeak => "crown-peak",
             MapId::PlateDrop => "plate-drop",
-            MapId::PortalPanic => "portal-panic",
-            MapId::BouncePark => "bounce-park",
-            MapId::CliffClimb => "cliff-climb",
-            MapId::FrostSky => "frost-sky",
             MapId::StarFall => "star-fall",
             MapId::Lobby => "lobby",
             MapId::Podium => "podium",
@@ -109,6 +82,93 @@ impl MapId {
 impl fmt::Display for MapId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// How many obstacle sections a race may have, and how many it has unless told.
+pub const RACE_SECTIONS: core::ops::RangeInclusive<u8> = 3..=8;
+pub const RACE_SECTIONS_DEFAULT: u8 = 6;
+/// Map seeds (track codes) are below this.
+pub const SEED_LIMIT: u32 = 1_000_000_000;
+
+/// A round of a playlist: a game and, for the race, its length; a fixed seed replays one track.
+/// In text: `hex-a-gone`, `race`, `race:5`, `race:5:123456`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pick {
+    pub map: MapId,
+    /// The race's obstacle sections (0 for other maps).
+    pub sections: u8,
+    pub seed: Option<u32>,
+}
+
+impl Pick {
+    pub const fn map(map: MapId) -> Self {
+        Self {
+            map,
+            sections: if matches!(map, MapId::Race) {
+                RACE_SECTIONS_DEFAULT
+            } else {
+                0
+            },
+            seed: None,
+        }
+    }
+
+    pub const fn race(sections: u8, seed: Option<u32>) -> Self {
+        Self {
+            map: MapId::Race,
+            sections,
+            seed,
+        }
+    }
+
+    /// Within its bounds: sections only for the race, in `RACE_SECTIONS`; a seed below `SEED_LIMIT`.
+    pub fn valid(&self) -> bool {
+        let sections = if self.map == MapId::Race {
+            RACE_SECTIONS.contains(&self.sections)
+        } else {
+            self.sections == 0
+        };
+        sections && self.seed.is_none_or(|s| s < SEED_LIMIT)
+    }
+
+    /// A race's track code to share (`6-123456789`: its sections and seed).
+    pub fn code(&self) -> Option<String> {
+        let seed = self.seed.filter(|_| self.map == MapId::Race)?;
+        Some(format!("{}-{seed}", self.sections))
+    }
+
+    /// The race of a track code (`code`).
+    pub fn from_code(s: &str) -> Option<Self> {
+        let (n, seed) = s.trim().split_once('-')?;
+        let pick = Self::race(n.parse().ok()?, Some(seed.parse().ok()?));
+        pick.valid().then_some(pick)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let mut parts = s.split(':');
+        let map = MapId::parse(parts.next()?)?;
+        let mut pick = Self::map(map);
+        if let Some(n) = parts.next() {
+            pick.sections = n.parse().ok()?;
+        }
+        if let Some(seed) = parts.next() {
+            pick.seed = Some(seed.parse().ok()?);
+        }
+        (parts.next().is_none() && pick.valid()).then_some(pick)
+    }
+}
+
+impl fmt::Display for Pick {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.map.as_str())?;
+        if self.map == MapId::Race {
+            write!(f, ":{}", self.sections)?;
+        }
+        if let Some(seed) = self.seed {
+            write!(f, ":{seed}")?;
+        }
+        Ok(())
     }
 }
 
@@ -205,4 +265,44 @@ pub enum ArenaKind {
 /// Beans stand still before the start of a round (the intro) and on the podium.
 pub fn can_move(kind: ArenaKind, t: f64) -> bool {
     kind == ArenaKind::Lobby || (kind == ArenaKind::Round && t >= 0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_read_back_as_written() {
+        for p in [
+            Pick::map(MapId::HexAGone),
+            Pick::map(MapId::Race),
+            Pick::race(3, None),
+            Pick::race(8, Some(SEED_LIMIT - 1)),
+        ] {
+            assert_eq!(Pick::parse(&p.to_string()), Some(p), "{p}");
+        }
+        assert_eq!(Pick::parse("race"), Some(Pick::race(RACE_SECTIONS_DEFAULT, None)));
+        for bad in [
+            "race:9",
+            "race:2",
+            "race:5:1000000000",
+            "hex-a-gone:4",
+            "race:5:1:2",
+            "lobby:x",
+        ] {
+            assert_eq!(Pick::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn track_codes_name_a_race() {
+        let p = Pick::race(5, Some(42));
+        assert_eq!(p.code().as_deref(), Some("5-42"));
+        assert_eq!(Pick::from_code(" 5-42 "), Some(p));
+        assert_eq!(Pick::race(5, None).code(), None);
+        assert_eq!(Pick::map(MapId::JumpClub).code(), None);
+        for bad in ["5", "9-42", "5-x", "5-1000000000"] {
+            assert_eq!(Pick::from_code(bad), None, "{bad}");
+        }
+    }
 }

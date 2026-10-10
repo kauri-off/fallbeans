@@ -1,18 +1,13 @@
-//! Down an icy slope, over gaps only a dive makes, sliding under low bars, a section from the seed,
-//! another slope, then flying shuttles over the clouds to the finish.
+//! Ice sections: icy slopes down, gaps only a dive makes, low bars to slide under, flying shuttles.
 use std::sync::Arc;
 
 use fb_shared::NEVER;
 use fb_shared::rgb;
 use fb_sim::bots::{BotInput, BotView, Note, SharedTest, Waypoint, follow, steer};
-use fb_sim::builder::{Builder, PrimOpts, Ramp};
+use fb_sim::builder::{PrimOpts, Ramp};
 use fb_sim::collider::ColliderOpts;
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, edge_jump, moving_platforms, pick_sections, race_course, seesaws, with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{SegOut, Segment, edge_jump};
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::physics::BodyState;
 use fb_sim::props::arm_contact_eta;
@@ -20,17 +15,6 @@ use fb_sim::scene::Surface;
 use fb_sim::scene::{Palette, pal};
 
 use crate::util::{deco, dynamic, o, rot};
-
-pub struct FrostSky;
-
-static META: GameMeta = GameMeta::new(
-    MapId::FrostSky,
-    "Ледяные небеса",
-    Genre::Race,
-    "Скользкие ледяные склоны, пропасти, которые берутся только прыжком с нырком (E или ЛКМ в полёте), низкие перекладины — под ними только проскользить, и летающие платформы над облаками.",
-    "Доскользите до финиша",
-    150.0,
-);
 
 const ICE_PAL: Palette = [rgb(0xbfe9ff), rgb(0xe4f6ff)];
 
@@ -46,7 +30,7 @@ fn ice(slip: f64) -> PrimOpts {
 }
 
 /// A slope of ice down between rails, bumpers on the way, and a run-out of ice at the bottom.
-fn ice_slope(drop: f64, len: f64) -> Segment {
+pub(super) fn ice_slope(drop: f64, len: f64) -> Segment {
     Box::new(move |s| {
         let w = 12.0;
         let y0 = s.y;
@@ -101,7 +85,7 @@ fn ice_slope(drop: f64, len: f64) -> Segment {
 }
 
 /// Gaps a jump alone falls short of: jump from the edge, dive in the air to reach the other side.
-fn dive_gaps(n: u32, gap: f64) -> Segment {
+pub(super) fn dive_gaps(n: u32, gap: f64) -> Segment {
     Box::new(move |s| {
         let len = 6.0;
         let y = s.y;
@@ -154,7 +138,7 @@ fn dive_gaps(n: u32, gap: f64) -> Segment {
 
 /// Low bars across an icy run: nobody gets under them standing up; a dive from the yellow stripes slides
 /// under.
-fn dive_bars(n: u32) -> Segment {
+pub(super) fn dive_bars(n: u32) -> Segment {
     Box::new(move |s| {
         let w = 12.0;
         let gap_z = 11.0;
@@ -214,7 +198,7 @@ fn dive_bars(n: u32) -> Segment {
 }
 
 /// Round decks of ice with sweeping bars: jump them without sliding off.
-fn ice_rotors(n: u32) -> Segment {
+pub(super) fn ice_rotors(n: u32) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let mut zz = s.z;
@@ -381,7 +365,7 @@ fn ride_drive(
 }
 
 /// Flying platforms: shuttles over the clouds to an island higher up, and others on to a higher dock.
-fn sky_shuttles() -> Segment {
+pub(super) fn sky_shuttles() -> Segment {
     Box::new(|s| {
         let w = 14.0;
         let size = 4.4;
@@ -441,28 +425,4 @@ fn sky_shuttles() -> Segment {
             ..Default::default()
         }
     })
-}
-
-impl MapDef for FrostSky {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Snow, LookId::Starlight, LookId::Ocean]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![ice_rotors(2), moving_platforms(4), seesaws(3)];
-        let extra = pick_sections(&mut b.rng, pool, 1);
-        let mut sections = vec![ice_slope(5.0, 26.0), dive_gaps(3, 7.5), dive_bars(3)];
-        sections.extend(extra);
-        sections.push(ice_slope(4.0, 22.0));
-        sections.push(sky_shuttles());
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

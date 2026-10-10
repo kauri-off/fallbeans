@@ -80,14 +80,15 @@ impl Room {
         (self.now() - zero).floor() as i64 - 1
     }
 
-    /// The map's seed and the spawn order.
+    /// The map's seed (a dev seed first, then the game's own) and the spawn order.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "a seed below 10⁹"
     )]
-    fn draw_round(&mut self, mut ids: Vec<PlayerId>) -> (u32, Vec<PlayerId>) {
-        let seed = self.next_seed.unwrap_or_else(|| (self.rng.unit() * 1e9).floor() as u32);
+    fn draw_round(&mut self, game: Game, mut ids: Vec<PlayerId>) -> (u32, Vec<PlayerId>) {
+        let seed =
+            (self.next_seed.or(game.seed)).unwrap_or_else(|| (self.rng.unit() * f64::from(SEED_LIMIT)).floor() as u32);
         // A dev seed fixes the spawn order too (screenshots, repeatable tests).
         match self.next_seed.take() {
             Some(s) => shuffle(&mut ids, &mut Rng::new(s ^ 0x5eed)),
@@ -112,7 +113,7 @@ impl Room {
         self.stage = Stage::Game { session, step };
         let Some((game, _, _)) = next else { return };
         let dev_seed = self.next_seed;
-        let (seed, participants) = self.draw_round(self.roster());
+        let (seed, participants) = self.draw_round(game, self.roster());
         let bots = participants
             .iter()
             .any(|&id| self.player(id).is_some_and(Player::is_bot));
@@ -182,7 +183,7 @@ impl Room {
         let (seed, participants, built) = match ready {
             Some(u) => (u.seed, u.participants, u.arena.join().ok()),
             None => {
-                let (seed, participants) = self.draw_round(ids);
+                let (seed, participants) = self.draw_round(game, ids);
                 (seed, participants, None)
             }
         };
@@ -202,7 +203,7 @@ impl Room {
             let bot = self.player(*id).is_some_and(Player::is_bot);
             arena.add_pawn_at(*id, bot, Some(i));
         }
-        info!(room = %self.id, game = %game.id(), seed, players = participants.len(), "round");
+        info!(room = %self.id, game = %game.pick(), seed, players = participants.len(), "round");
         let bots = participants
             .iter()
             .any(|&id| self.player(id).is_some_and(Player::is_bot));
@@ -327,6 +328,7 @@ impl Room {
         info!(room = %self.id, game = %game.id(), rows = ?deltas, "round over");
         self.broadcast(ServerMsg::RoundEnd {
             game: game.id(),
+            track: self.track(),
             index,
             total,
             rows,

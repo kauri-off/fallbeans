@@ -275,7 +275,7 @@ fn runs_a_game_of_points_to_a_podium_freezing_beans_before_each_start() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec![MapId::JumpClub, MapId::HexAGone],
+        games: vec![Pick::map(MapId::JumpClub), Pick::map(MapId::HexAGone)],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
@@ -343,7 +343,7 @@ fn bots_count_as_players_and_are_simulated_on_the_server() {
     let bot = t.lobby(a).players.iter().find(|p| p.bot).unwrap().id;
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec![MapId::DoorDash],
+        games: vec![Pick::map(MapId::Race)],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
@@ -417,7 +417,7 @@ fn tail_tag_steals_only_by_grabbing_within_reach() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec![MapId::TailTag],
+        games: vec![Pick::map(MapId::TailTag)],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
@@ -501,7 +501,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
         &mut t,
         a,
         DevCmd::Start {
-            games: vec![MapId::HammerSwing],
+            games: vec![Pick::map(MapId::Race)],
             rounds: None,
             bots: Some(2),
         },
@@ -560,7 +560,7 @@ fn replays_a_recorded_round_to_exactly_the_same_state() {
     }
     cmd(&mut t, a, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
-    assert_eq!(rec.game, MapId::HammerSwing);
+    assert_eq!(rec.game, MapId::Race);
     let has = |f: fn(&fb_arena::Op) -> bool| rec.ops.iter().any(|o| f(&o.1));
     assert!(has(|o| matches!(o, fb_arena::Op::Teleport { .. })), "{:?}", rec.ops);
     assert!(has(|o| matches!(o, fb_arena::Op::Knock { .. })), "{:?}", rec.ops);
@@ -582,7 +582,7 @@ fn dev_start_plays_the_rounds_asked_for() {
     let a = t.hello("A", "ua");
     let mut start = |games: &[MapId], rounds| {
         let cmd = DevCmd::Start {
-            games: games.to_vec(),
+            games: games.iter().map(|&m| Pick::map(m)).collect(),
             rounds,
             bots: Some(3),
         };
@@ -596,17 +596,17 @@ fn dev_start_plays_the_rounds_asked_for() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        start(&[MapId::JumpClub, MapId::DoorDash, MapId::CrownPeak], Some(1)),
+        start(&[MapId::JumpClub, MapId::Race, MapId::HexAGone], Some(1)),
         [MapId::JumpClub]
     );
-    assert_eq!(start(&[MapId::DoorDash], Some(3)), [MapId::DoorDash; 3]);
+    assert_eq!(start(&[MapId::Race], Some(3)), [MapId::Race; 3]);
     assert_eq!(
-        start(&[MapId::JumpClub, MapId::DoorDash], Some(3)),
-        [MapId::JumpClub, MapId::DoorDash, MapId::JumpClub]
+        start(&[MapId::JumpClub, MapId::Race], Some(3)),
+        [MapId::JumpClub, MapId::Race, MapId::JumpClub]
     );
     assert_eq!(
-        start(&[MapId::JumpClub, MapId::DoorDash], None),
-        [MapId::JumpClub, MapId::DoorDash]
+        start(&[MapId::JumpClub, MapId::Race], None),
+        [MapId::JumpClub, MapId::Race]
     );
 }
 
@@ -623,7 +623,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     cmd(
         &mut t,
         DevCmd::Start {
-            games: vec![MapId::JumpClub, MapId::DoorDash],
+            games: vec![Pick::map(MapId::JumpClub), Pick::map(MapId::Race)],
             rounds: Some(2),
             bots: Some(3),
         },
@@ -631,7 +631,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     cmd(&mut t, DevCmd::EndRound);
     assert_eq!(t.room.phase(), Phase::Results);
     assert!(t.room.round_prepared());
-    t.until(15.0, |t| t.room.arena.map.meta().id == MapId::DoorDash, |_| {});
+    t.until(15.0, |t| t.room.arena.map.meta().id == MapId::Race, |_| {});
     assert!(!t.room.round_prepared());
     t.inputs.held.insert(
         a.id,
@@ -644,7 +644,7 @@ fn builds_the_next_round_ahead_and_it_replays_the_same() {
     t.advance(8.0);
     cmd(&mut t, DevCmd::Lobby);
     let rec = t.room.debug_replay(Some(0)).expect("a recording");
-    assert_eq!(rec.game, MapId::DoorDash);
+    assert_eq!(rec.game, MapId::Race);
     let r = fb_arena::replay(&rec, |_| false);
     assert!(r.ticks > 900);
     assert!(r.matches);
@@ -1177,7 +1177,7 @@ fn a_survival_round_with_one_player_left_is_played_not_won_at_once() {
     let b = t.hello("B", "ub");
     t.room.playlist = Playlist {
         mode: Mode::Custom,
-        games: vec![MapId::HexAGone],
+        games: vec![Pick::map(MapId::HexAGone)],
         rounds: 5,
     };
     t.ctl(a, ClientMsg::Start);
