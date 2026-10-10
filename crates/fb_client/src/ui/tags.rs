@@ -286,8 +286,8 @@ fn place_tags(
         // Recoloured in steps, and once more on reaching shown or gone.
         if (a - tag.painted).abs() > 0.04 || (a != tag.painted && (a == 0.0 || a == 1.0)) {
             tag.painted = a;
-            *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.82 * a));
-            *rim = BorderColor::all(RIM.with_alpha(0.8 * a));
+            *bg = BackgroundColor(PANEL.with_alpha(0.78 * a));
+            *rim = BorderColor::all(RIM.with_alpha(RIM.alpha() * a));
             let dot = suit(tag.color).with_alpha(a);
             for c in nodes.children.iter_descendants(e) {
                 if let Ok((mut fill, mut border)) = nodes.dots.get_mut(c) {

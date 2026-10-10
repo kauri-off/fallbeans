@@ -285,10 +285,6 @@ impl Bindings {
         }
         *self.slot(b) = vec![key];
     }
-
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 impl Player {

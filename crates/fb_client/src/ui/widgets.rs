@@ -1,7 +1,7 @@
-//! The building blocks of every screen: rich text, buttons, fields, sliders, groups and folds.
+//! The building blocks of every screen: rich text, buttons, switches, fields, sliders, cards, folds and badges.
 use super::*;
 
-/// Splits text into runs of the game's font and of the emoji font (Nunito has no emoji or symbols).
+/// Splits text into runs of the game's font and of the emoji font (Manrope has no emoji or symbols).
 pub fn runs(s: &str) -> Vec<(String, bool)> {
     let mut out: Vec<(String, bool)> = Vec::new();
     for c in s.chars() {
@@ -39,6 +39,18 @@ pub fn rich_in(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, colo
     rich_with(p, f, s, size, color, black, None)
 }
 
+/// Text in the display face (Unbounded), for titles and big numbers.
+pub fn big(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, size: f32, color: Color) -> Entity {
+    let font = TextFont {
+        font: f.display.clone().into(),
+        font_size: FontSize::Px(size),
+        ..default()
+    };
+    p.spawn((Text::default(), font.clone(), TextColor(color), Rich(s.into())))
+        .with_children(|t| spans(t, f, s, &font, TextColor(color), None))
+        .id()
+}
+
 /// Text whose root and every run carry `pick`.
 fn rich_with(
     p: &mut ChildSpawnerCommands,
@@ -50,7 +62,7 @@ fn rich_with(
     pick: Option<Pickable>,
 ) -> Entity {
     let font = TextFont {
-        font: if black { f.black.clone() } else { f.bold.clone() }.into(),
+        font: if black { f.strong.clone() } else { f.body.clone() }.into(),
         font_size: FontSize::Px(size),
         ..default()
     };
@@ -127,7 +139,7 @@ pub fn wrap_anywhere(p: &mut ChildSpawnerCommands, t: Entity) {
 }
 
 pub fn label(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
-    rich(p, f, s, 15.0, INK)
+    rich(p, f, s, 14.5, INK)
 }
 
 pub fn muted(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
@@ -138,18 +150,23 @@ pub fn heading(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
     rich_in(p, f, s, 15.0, INK, true)
 }
 
+/// A small capital label over a part of a panel.
+pub fn caption(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str) -> Entity {
+    rich_in(p, f, &s.to_uppercase(), 11.0, FAINT, true)
+}
+
 pub fn logo(p: &mut ChildSpawnerCommands, f: &Fonts, size: f32) -> Entity {
     p.spawn((
         Text::new(text::LOGO),
         TextFont {
-            font: f.black.clone().into(),
+            font: f.display.clone().into(),
             font_size: FontSize::Px(size),
             ..default()
         },
-        TextColor(LOGO_PINK),
+        TextColor(BLUE),
         TextShadow {
-            offset: Vec2::new(0.0, 2.5),
-            color: Color::WHITE,
+            offset: Vec2::new(size / 18.0, size / 14.0),
+            color: BLUE_DEEP,
         },
     ))
     .id()
@@ -161,12 +178,7 @@ pub fn button(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, act:
 
 pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, act: Action, enabled: bool) -> Entity {
     let (bg, ink) = look.fill();
-    let radius = match look {
-        Look::Tab(_) => rem(0.75),
-        Look::Chip(_) | Look::Tiny | Look::TinyDanger => rem(0.6),
-        _ => rem(0.875),
-    };
-    // (Labels of check boxes wrap; other buttons keep their size.)
+    // (Labels of switches wrap; other buttons keep their size.)
     let shrink = if matches!(look, Look::Check(_)) { 1.0 } else { 0.0 };
     let face = (
         Node {
@@ -174,64 +186,99 @@ pub fn button_if(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, look: Look, a
             flex_shrink: shrink,
             padding: look.padding(),
             border: look.border(),
-            border_radius: BorderRadius::all(radius),
-            justify_content: if matches!(look, Look::Check(_) | Look::Fold) {
-                JustifyContent::FlexStart
-            } else {
-                JustifyContent::Center
+            border_radius: BorderRadius::all(look.radius()),
+            justify_content: match look {
+                Look::Check(_) | Look::Fold => JustifyContent::SpaceBetween,
+                _ => JustifyContent::Center,
             },
             align_items: AlignItems::Center,
-            column_gap: rem(0.4),
+            column_gap: rem(0.625),
             ..default()
         },
         BackgroundColor(bg),
         look.rim(),
     );
     button_shell(p, look, act, enabled, shrink, face, |b| {
-        if let Look::Check(on) = look {
-            b.spawn((
-                CheckBox,
-                Node {
-                    width: rem(1.1),
-                    height: rem(1.1),
-                    border: UiRect::all(px(2)),
-                    border_radius: BorderRadius::all(rem(0.3)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    flex_shrink: 0.0,
-                    ..default()
-                },
-                BorderColor::all(if on { BLUE } else { MUTED }),
-                BackgroundColor(if on { BLUE } else { Color::WHITE }),
-                Pickable::IGNORE,
-            ))
-            .with_children(|c| {
-                c.spawn((
-                    CheckDot,
-                    Node {
-                        width: rem(0.5),
-                        height: rem(0.5),
-                        border_radius: BorderRadius::all(px(2)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::WHITE),
-                    if on { Visibility::Inherited } else { Visibility::Hidden },
-                    Pickable::IGNORE,
-                ));
-            });
-        }
         // (Picking hits text by its runs: a run without IGNORE would take the release from the button.)
         if !s.is_empty() {
-            rich_with(b, f, s, look.size(), ink, false, Some(Pickable::IGNORE));
+            let t = rich_with(b, f, s, look.size(), ink, look.strong(), Some(Pickable::IGNORE));
+            if matches!(look, Look::Check(_)) {
+                b.commands().entity(t).insert(Node {
+                    flex_shrink: 1.0,
+                    ..default()
+                });
+            }
+        }
+        match look {
+            Look::Check(on) => switch(b, on),
+            Look::Fold => {
+                b.spawn((
+                    FoldChevron,
+                    Text::new("›"),
+                    TextFont {
+                        font: f.strong.clone().into(),
+                        font_size: FontSize::Px(20.0),
+                        ..default()
+                    },
+                    TextColor(MUTED),
+                    Pickable::IGNORE,
+                ));
+            }
+            _ => {}
         }
     })
 }
 
-/// A check box's square, and the mark in it.
+/// A switch's track, and the knob that slides along it.
 #[derive(Component)]
 pub(super) struct CheckBox;
 #[derive(Component)]
 pub(super) struct CheckDot;
+
+fn switch(b: &mut ChildSpawnerCommands, on: bool) {
+    b.spawn((
+        CheckBox,
+        Node {
+            width: rem(2.5),
+            height: rem(1.375),
+            padding: UiRect::all(px(3)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::MAX,
+            justify_content: if on {
+                JustifyContent::FlexEnd
+            } else {
+                JustifyContent::FlexStart
+            },
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        switch_track(on),
+        Pickable::IGNORE,
+    ))
+    .with_children(|c| {
+        c.spawn((
+            CheckDot,
+            Node {
+                width: rem(0.9375),
+                height: rem(0.9375),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BackgroundColor(if on { ON_FILL } else { SURFACE }),
+            BoxShadow::new(SHADOW.with_alpha(0.4), px(0), px(1), px(0), px(3)),
+            Pickable::IGNORE,
+        ));
+    });
+}
+
+fn switch_track(on: bool) -> (BackgroundColor, BorderColor) {
+    if on {
+        (BackgroundColor(BLUE), BorderColor::all(BLUE))
+    } else {
+        (BackgroundColor(ink_wash(0.12)), BorderColor::all(Color::NONE))
+    }
+}
 
 /// A colour swatch button.
 pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action, enabled: bool, size: f32) -> Entity {
@@ -248,6 +295,28 @@ pub fn swatch(p: &mut ChildSpawnerCommands, color: Color, on: bool, act: Action,
         look.rim(),
     );
     button_shell(p, look, act, enabled, 0.0, face, |_| {})
+}
+
+/// A map's tile: its genre over its title, with the genre's colour along the top.
+pub fn tile(p: &mut ChildSpawnerCommands, f: &Fonts, title: &str, sub: &str, color: Color, act: Action) -> Entity {
+    let look = Look::Tile(color);
+    let face = (
+        Node {
+            width: rem(9.25),
+            flex_direction: FlexDirection::Column,
+            row_gap: rem(0.125),
+            padding: look.padding(),
+            border: look.border(),
+            border_radius: BorderRadius::all(look.radius()),
+            ..default()
+        },
+        BackgroundColor(look.fill().0),
+        look.rim(),
+    );
+    button_shell(p, look, act, true, 0.0, face, |b| {
+        rich_with(b, f, &sub.to_uppercase(), 10.0, MUTED, true, Some(Pickable::IGNORE));
+        rich_with(b, f, title, 14.0, INK, true, Some(Pickable::IGNORE));
+    })
 }
 
 /// What of a button moves when it is hovered or pressed. The button itself stays put: pressed at its edge,
@@ -283,6 +352,9 @@ fn button_shell(
         if let Some(shadow) = look.shadow() {
             fe.insert(shadow);
         }
+        if let Some(g) = look.gradient(!enabled) {
+            fe.insert(g);
+        }
         fe.with_children(inside);
         face_e = fe.id();
     });
@@ -301,13 +373,19 @@ pub fn enable(commands: &mut Commands, e: Entity, was: bool, on: bool) {
     }
 }
 
-/// A button whose `Look` was set anew is redrawn: its rim, shadow, ink and check box.
+type Track = (
+    &'static mut Node,
+    &'static mut BorderColor,
+    &'static mut BackgroundColor,
+);
+
+/// A button whose `Look` was set anew is redrawn: its rim, shadow, gradient, ink and switch.
 pub(super) fn restyle(
     buttons: Query<(Ref<Look>, &Face), Changed<Look>>,
     mut faces: Query<(&mut Node, &mut BorderColor), Without<CheckBox>>,
     children: Query<&Children>,
-    mut boxes: Query<(&mut BorderColor, &mut BackgroundColor), With<CheckBox>>,
-    mut dots: Query<&mut Visibility, With<CheckDot>>,
+    mut tracks: Query<Track, With<CheckBox>>,
+    mut knobs: Query<&mut BackgroundColor, (With<CheckDot>, Without<CheckBox>)>,
     mut inks: Query<&mut TextColor>,
     mut commands: Commands,
 ) {
@@ -326,23 +404,38 @@ pub(super) fn restyle(
             Some(s) => commands.entity(face.0).insert(s),
             None => commands.entity(face.0).remove::<BoxShadow>(),
         };
+        match look.gradient(false) {
+            Some(g) => commands.entity(face.0).insert(g),
+            None => commands.entity(face.0).remove::<BackgroundGradient>(),
+        };
         let ink = look.fill().1;
         for c in children.iter_descendants(face.0) {
             if let Ok(mut t) = inks.get_mut(c) {
                 t.set_if_neq(TextColor(ink));
             }
             if let Look::Check(on) = look {
-                if let Ok((mut rim, mut fill)) = boxes.get_mut(c) {
-                    *rim = BorderColor::all(if on { BLUE } else { MUTED });
-                    fill.set_if_neq(BackgroundColor(if on { BLUE } else { Color::WHITE }));
+                if let Ok((mut node, mut rim, mut fill)) = tracks.get_mut(c) {
+                    let (bg, border) = switch_track(on);
+                    *rim = border;
+                    fill.set_if_neq(bg);
+                    let j = if on {
+                        JustifyContent::FlexEnd
+                    } else {
+                        JustifyContent::FlexStart
+                    };
+                    if node.justify_content != j {
+                        node.justify_content = j;
+                    }
                 }
-                if let Ok(mut v) = dots.get_mut(c) {
-                    v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+                if let Ok(mut k) = knobs.get_mut(c) {
+                    k.set_if_neq(BackgroundColor(if on { ON_FILL } else { SURFACE }));
                 }
             }
         }
     }
 }
+
+const FIELD_RIM: Color = ink_wash(0.16);
 
 /// A text field (one line). `filter` keeps only the characters it allows.
 pub fn field(
@@ -358,9 +451,9 @@ pub fn field(
         Node {
             flex_grow: 1.0,
             min_width: rem(4.0),
-            padding: UiRect::axes(rem(0.75), rem(0.5)),
+            padding: UiRect::axes(rem(0.875), rem(0.625)),
             border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(rem(0.75)),
+            border_radius: BorderRadius::all(rem(0.875)),
             overflow: Overflow::clip(),
             ..default()
         },
@@ -371,22 +464,32 @@ pub fn field(
         },
         TextLayout::no_wrap(),
         TextFont {
-            font: f.bold.clone().into(),
+            font: f.body.clone().into(),
             font_size: FontSize::Px(15.0),
             ..default()
         },
         TextColor(INK),
         TextCursorStyle {
-            color: INK,
+            color: BLUE,
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.92)),
-        BorderColor::all(Color::srgba(0.169, 0.102, 0.361, 0.25)),
+        BackgroundColor(SURFACE),
+        BorderColor::all(FIELD_RIM),
     ));
     if let Some(filter) = filter {
         e.insert(EditableTextFilter::new(filter));
     }
     e.id()
+}
+
+/// The field with the keyboard is ringed in the accent.
+pub(super) fn focus_ring(focus: Res<InputFocus>, mut fields: Query<(Entity, &mut BorderColor), With<Field>>) {
+    for (e, mut rim) in &mut fields {
+        let want = BorderColor::all(if focus.get() == Some(e) { BLUE } else { FIELD_RIM });
+        if *rim != want {
+            *rim = want;
+        }
+    }
 }
 
 /// The placeholder shown over an empty field (`Placeholder(field)` next to it).
@@ -414,18 +517,18 @@ pub fn field_with_hint(
             Placeholder(field_e),
             Node {
                 position_type: PositionType::Absolute,
-                left: rem(0.8),
-                top: rem(0.5),
+                left: rem(0.9375),
+                top: rem(0.625),
                 ..default()
             },
             Pickable::IGNORE,
             Text::new(hint),
             TextFont {
-                font: f.bold.clone().into(),
+                font: f.body.clone().into(),
                 font_size: FontSize::Px(15.0),
                 ..default()
             },
-            TextColor(MUTED.with_alpha(0.6)),
+            TextColor(FAINT),
         ));
     });
     field_e
@@ -452,7 +555,11 @@ pub fn field_text(fields: &Query<(&Field, &EditableText)>, which: Field) -> Stri
         .unwrap_or_default()
 }
 
-/// A slider of a setting, with its label and value.
+/// The lit part of a slider's rail, up to its thumb.
+#[derive(Component)]
+pub struct SliderFill;
+
+/// A slider of a setting: its label and value over a rail lit up to the thumb.
 pub fn slider(
     p: &mut ChildSpawnerCommands,
     f: &Fonts,
@@ -463,25 +570,41 @@ pub fn slider(
     step: f32,
 ) {
     let range = SliderRange::new(range.0, range.1);
-    let thumb_left = percent(range.thumb_position(value) * 100.0);
+    let at = percent(range.thumb_position(value) * 100.0);
+    const THUMB: f32 = 1.125;
     p.spawn(Node {
         flex_direction: FlexDirection::Column,
-        row_gap: rem(0.3),
+        row_gap: rem(0.375),
         ..default()
     })
     .with_children(|c| {
-        row(c, false, |r| {
-            label(r, f, &format!("{label_s}:"));
+        c.spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|r| {
+            label(r, f, label_s);
             r.spawn((
-                KnobValue(knob),
-                Text::new(knob_text(knob, value)),
-                TextFont {
-                    font: f.black.clone().into(),
-                    font_size: FontSize::Px(15.0),
+                Node {
+                    padding: UiRect::axes(rem(0.5), px(1)),
+                    border_radius: BorderRadius::MAX,
                     ..default()
                 },
-                TextColor(INK),
-            ));
+                BackgroundColor(ink_wash(0.07)),
+            ))
+            .with_children(|v| {
+                v.spawn((
+                    KnobValue(knob),
+                    Text::new(knob_text(knob, value)),
+                    TextFont {
+                        font: f.strong.clone().into(),
+                        font_size: FontSize::Px(12.5),
+                        ..default()
+                    },
+                    TextColor(INK),
+                ));
+            });
         });
         c.spawn((
             knob,
@@ -491,44 +614,57 @@ pub fn slider(
             SliderStep(step),
             Hovered::default(),
             Node {
-                height: rem(1.1),
+                height: rem(THUMB),
                 justify_content: JustifyContent::Center,
-                align_items: AlignItems::Stretch,
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
         ))
         .with_children(|s| {
-            s.spawn((
-                Node {
-                    height: rem(0.4),
-                    border_radius: BorderRadius::all(rem(0.2)),
-                    ..default()
-                },
-                BackgroundColor(INK.with_alpha(0.2)),
-            ));
+            // (The rail runs between the thumb's centres at both ends, as the slider maps the pointer.)
             s.spawn(Node {
-                position_type: PositionType::Absolute,
-                left: px(0),
-                right: rem(1.1),
-                top: px(0),
-                bottom: px(0),
+                margin: UiRect::axes(rem(THUMB / 2.0), px(0)),
+                height: rem(THUMB),
+                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Column,
                 ..default()
             })
-            .with_children(|t| {
-                t.spawn((
+            .with_children(|rail| {
+                rail.spawn((
+                    Node {
+                        height: rem(0.375),
+                        border_radius: BorderRadius::MAX,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(ink_wash(0.1)),
+                ))
+                .with_children(|t| {
+                    t.spawn((
+                        SliderFill,
+                        Node {
+                            width: at,
+                            height: percent(100),
+                            ..default()
+                        },
+                        BackgroundColor(BLUE),
+                    ));
+                });
+                rail.spawn((
                     SliderThumb,
                     Node {
                         position_type: PositionType::Absolute,
-                        width: rem(1.1),
-                        height: rem(1.1),
-                        left: thumb_left,
-                        border: UiRect::all(px(2)),
+                        width: rem(THUMB),
+                        height: rem(THUMB),
+                        left: at,
+                        border: UiRect::all(px(3)),
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(BLUE),
-                    BorderColor::all(Color::WHITE),
+                    UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
+                    BackgroundColor(SURFACE),
+                    BorderColor::all(BLUE),
+                    BoxShadow::new(SHADOW.with_alpha(0.2), px(0), px(1), px(0), px(4)),
                 ));
             });
         });
@@ -547,19 +683,46 @@ pub fn knob_text(knob: Knob, v: f32) -> String {
     }
 }
 
-/// A box of related controls.
+/// A card of related controls.
 pub fn group(p: &mut ChildSpawnerCommands, f: impl FnOnce(&mut ChildSpawnerCommands)) -> Entity {
     p.spawn((
         Node {
             flex_direction: FlexDirection::Column,
-            row_gap: rem(0.625),
-            padding: UiRect::all(rem(0.75)),
-            border_radius: BorderRadius::all(rem(0.875)),
+            row_gap: rem(0.75),
+            padding: UiRect::all(rem(1.0)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(1.125)),
             ..default()
         },
         BackgroundColor(GROUP),
+        BorderColor::all(ink_wash(0.06)),
     ))
     .with_children(f)
+    .id()
+}
+
+/// A card under its caption.
+pub fn section(
+    p: &mut ChildSpawnerCommands,
+    f: &Fonts,
+    title: &str,
+    body: impl FnOnce(&mut ChildSpawnerCommands),
+) -> Entity {
+    p.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: rem(0.5),
+        ..default()
+    })
+    .with_children(|c| {
+        c.spawn(Node {
+            padding: UiRect::left(rem(0.25)),
+            ..default()
+        })
+        .with_children(|t| {
+            caption(t, f, title);
+        });
+        group(c, body);
+    })
     .id()
 }
 
@@ -568,7 +731,7 @@ pub fn row(p: &mut ChildSpawnerCommands, wrap: bool, f: impl FnOnce(&mut ChildSp
         flex_direction: FlexDirection::Row,
         flex_wrap: if wrap { FlexWrap::Wrap } else { FlexWrap::NoWrap },
         column_gap: rem(0.5),
-        row_gap: rem(0.4),
+        row_gap: rem(0.5),
         align_items: AlignItems::Center,
         ..default()
     })
@@ -584,6 +747,14 @@ pub fn stack(p: &mut ChildSpawnerCommands, f: impl FnOnce(&mut ChildSpawnerComma
     })
     .with_children(f)
     .id()
+}
+
+/// Room to the right: what follows goes to the row's end.
+pub fn spacer(p: &mut ChildSpawnerCommands) {
+    p.spawn(Node {
+        flex_grow: 1.0,
+        ..default()
+    });
 }
 
 /// A colour dot (a player's suit).
@@ -603,17 +774,143 @@ pub fn dot(p: &mut ChildSpawnerCommands, color: Color, size: f32) -> Entity {
     .id()
 }
 
-/// A dot's rim: white, or a faint ink line round a colour too pale to show on the white panels (a white suit).
+/// A dot's rim: a light line round a dark colour, a dark one round a colour too pale to show on its own.
 pub fn dot_rim(c: Color) -> Color {
     let rim = if c.luminance() > 0.8 {
-        Color::srgba(0.169, 0.102, 0.361, 0.35)
+        ink_wash(0.35)
     } else {
         Color::WHITE
     };
     rim.with_alpha(rim.alpha() * c.alpha())
 }
 
-/// A folded part: its title toggles it; the body is built folded or not and shown when open (`sync_folds`).
+/// Ink that reads on a fill of colour `c`.
+pub fn ink_on(c: Color) -> Color {
+    if c.luminance() > 0.45 { INK } else { ON_FILL }
+}
+
+/// A player's round avatar: their suit colour with their initial.
+pub fn avatar(p: &mut ChildSpawnerCommands, f: &Fonts, name: &str, color: Color, size: f32) -> Entity {
+    // (The last word's: "Бот Кекс" is К, not Б like every other bot.)
+    let word = name.split_whitespace().last().unwrap_or(name);
+    let initial: String = word
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "?".into(), |c| c.to_uppercase().collect());
+    p.spawn((
+        Node {
+            width: rem(size),
+            height: rem(size),
+            border: UiRect::all(px(2)),
+            border_radius: BorderRadius::MAX,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundGradient::from(LinearGradient::to_bottom(vec![
+            color.lighter(0.08).into(),
+            color.darker(0.12).into(),
+        ])),
+        BorderColor::all(Color::WHITE),
+        BoxShadow::new(SHADOW.with_alpha(0.15), px(0), px(1), px(0), px(3)),
+    ))
+    .with_children(|a| {
+        rich_in(a, f, &initial, size * 7.5, ink_on(color), true);
+    })
+    .id()
+}
+
+/// A small pill of colour with a word in it.
+pub fn badge(p: &mut ChildSpawnerCommands, f: &Fonts, s: &str, fill: Color, ink: Color) -> Entity {
+    p.spawn((
+        Node {
+            padding: UiRect::axes(rem(0.5), px(2)),
+            border_radius: BorderRadius::MAX,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(fill),
+    ))
+    .with_children(|b| {
+        rich_in(b, f, s, 11.0, ink, true);
+    })
+    .id()
+}
+
+/// A key as it is printed on a keyboard; the entity of its text.
+pub fn keycap(p: &mut ChildSpawnerCommands, f: &Fonts, key: &str) -> Entity {
+    let mut t = Entity::PLACEHOLDER;
+    p.spawn((
+        Node {
+            min_width: rem(1.625),
+            padding: UiRect::new(rem(0.4375), rem(0.4375), px(1), px(2)),
+            border: UiRect::new(px(1), px(1), px(1), px(3)),
+            border_radius: BorderRadius::all(rem(0.375)),
+            justify_content: JustifyContent::Center,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(SURFACE),
+        BorderColor::all(ink_wash(0.22)),
+    ))
+    .with_children(|k| {
+        t = rich_in(k, f, key, 11.5, INK, true);
+    });
+    t
+}
+
+/// How far a bar is filled (0–1), in `color`.
+pub fn meter(p: &mut ChildSpawnerCommands, frac: f32, color: Color, width: Val) -> Entity {
+    p.spawn((
+        Node {
+            width,
+            height: rem(0.3125),
+            border_radius: BorderRadius::MAX,
+            overflow: Overflow::clip(),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(ink_wash(0.1)),
+    ))
+    .with_children(|m| {
+        m.spawn((
+            Node {
+                width: percent(frac.clamp(0.0, 1.0) * 100.0),
+                height: percent(100),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+            BackgroundColor(color),
+        ));
+    })
+    .id()
+}
+
+/// A ring turning while something is on its way.
+pub fn spinner(p: &mut ChildSpawnerCommands, size: f32, color: Color) -> Entity {
+    p.spawn((
+        Node {
+            width: rem(size),
+            height: rem(size),
+            border: UiRect::all(px(3)),
+            border_radius: BorderRadius::MAX,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BorderColor {
+            top: color,
+            right: color.with_alpha(0.5),
+            bottom: color.with_alpha(0.15),
+            left: color.with_alpha(0.15),
+        },
+        super::motion::Spin,
+    ))
+    .id()
+}
+
+/// A folded part: a card whose head toggles it; the body is built folded or not and shown when open
+/// (`sync_folds`).
 pub fn fold(
     p: &mut ChildSpawnerCommands,
     f: &Fonts,
@@ -623,53 +920,81 @@ pub fn fold(
     body: impl FnOnce(&mut ChildSpawnerCommands),
 ) {
     let open = folds.open(key);
-    stack(p, |c| {
-        let b = button(c, f, &fold_title(title, open), Look::Fold, Action::Fold(key));
-        c.commands().entity(b).insert(FoldTitle(title));
+    p.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(1.0)),
+            ..default()
+        },
+        BackgroundColor(GROUP),
+        BorderColor::all(ink_wash(0.06)),
+    ))
+    .with_children(|c| {
+        button(c, f, title, Look::Fold, Action::Fold(key));
         c.spawn((
             FoldBody(key),
             Node {
                 flex_direction: FlexDirection::Column,
-                row_gap: rem(0.625),
+                row_gap: rem(0.75),
+                padding: UiRect::new(rem(0.875), rem(0.875), rem(0.125), rem(0.875)),
                 display: display(open),
                 ..default()
             },
+            super::motion::Reveal::new(super::motion::Motion::slide(0.0, -8.0)),
         ))
         .with_children(body);
     });
 }
 
+/// The arrow at the end of a fold's head: turned down while it is open.
 #[derive(Component)]
-pub(super) struct FoldTitle(&'static str);
+pub(super) struct FoldChevron;
 
 #[derive(Component)]
 pub(super) struct FoldBody(Fold);
 
-fn fold_title(title: &str, open: bool) -> String {
-    format!("{} {title}", if open { "−" } else { "+" })
-}
-
 pub(super) fn sync_folds(
     folds: Res<Folds>,
     mut bodies: Query<(&FoldBody, &mut Node)>,
-    titles: Query<(Entity, &Act, &FoldTitle)>,
-    mut labels: Labels,
+    heads: Query<(&Act, &Face)>,
+    children: Query<&Children>,
+    mut chevrons: Query<&mut UiTransform, With<FoldChevron>>,
 ) {
     for (b, mut node) in &mut bodies {
         show(&mut node, folds.open(b.0));
     }
-    for (e, act, title) in &titles {
-        if let Action::Fold(k) = act.0 {
-            labels.set(e, &fold_title(title.0, folds.open(k)));
+    for (act, face) in &heads {
+        let Action::Fold(k) = act.0 else { continue };
+        let turn = Rot2::degrees(if folds.open(k) { 90.0 } else { 0.0 });
+        for c in children.iter_descendants(face.0) {
+            if let Ok(mut t) = chevrons.get_mut(c)
+                && t.rotation != turn
+            {
+                t.rotation = turn;
+            }
         }
     }
 }
 
-/// A glass panel (`.glass`).
+/// A dark glass panel.
 pub fn glass() -> (BackgroundColor, BorderColor, BoxShadow) {
     (
         BackgroundColor(PANEL),
         BorderColor::all(RIM),
-        BoxShadow::new(SHADOW.with_alpha(0.18), px(0), rem(0.6), px(0), rem(1.8)),
+        BoxShadow::new(SHADOW.with_alpha(0.5), px(0), rem(0.75), px(0), rem(2.25)),
+    )
+}
+
+/// A glass panel with a coloured bar down its left side (its node's left border).
+pub fn glass_bar(c: Color) -> (BackgroundColor, BorderColor, BoxShadow) {
+    let (bg, _, shadow) = glass();
+    (
+        bg,
+        BorderColor {
+            left: c,
+            ..BorderColor::all(RIM)
+        },
+        shadow,
     )
 }

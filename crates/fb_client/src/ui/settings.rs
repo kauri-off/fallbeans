@@ -97,22 +97,26 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, folds:
         slider(c, f, k, s, o.knob(k), range, step);
     };
     stack(p, |c| {
-        knob(c, Knob::MouseSens, text::MOUSE_SENS, crate::settings::SENS_RANGE, 0.05);
-        check(c, text::INVERT_MOUSE, Toggle::InvertMouse);
-        knob(c, Knob::StickSens, text::STICK_SENS, crate::settings::SENS_RANGE, 0.05);
-        check(c, text::INVERT_STICK, Toggle::InvertStick);
-        check(c, text::SHAKE, Toggle::Shake);
-        knob(c, Knob::Fov, text::FOV, crate::settings::FOV_RANGE, 1.0);
-        knob(c, Knob::Volume, text::VOLUME, (0.0, 1.0), 0.05);
-        knob(c, Knob::UiScale, text::UI_SCALE, crate::settings::UI_SCALE_RANGE, 0.05);
-        check(c, text::SHOW_FPS, Toggle::ShowFps);
-        check(c, text::FULLSCREEN, Toggle::Fullscreen);
+        section(c, f, text::SECTION_CONTROLS, |g| {
+            knob(g, Knob::MouseSens, text::MOUSE_SENS, crate::settings::SENS_RANGE, 0.05);
+            check(g, text::INVERT_MOUSE, Toggle::InvertMouse);
+            knob(g, Knob::StickSens, text::STICK_SENS, crate::settings::SENS_RANGE, 0.05);
+            check(g, text::INVERT_STICK, Toggle::InvertStick);
+            check(g, text::SHAKE, Toggle::Shake);
+        });
+        section(c, f, text::SECTION_SCREEN, |g| {
+            knob(g, Knob::Fov, text::FOV, crate::settings::FOV_RANGE, 1.0);
+            knob(g, Knob::Volume, text::VOLUME, (0.0, 1.0), 0.05);
+            knob(g, Knob::UiScale, text::UI_SCALE, crate::settings::UI_SCALE_RANGE, 0.05);
+            check(g, text::SHOW_FPS, Toggle::ShowFps);
+            check(g, text::FULLSCREEN, Toggle::Fullscreen);
+        });
         fold(c, f, folds, Fold::Gfx, text::GRAPHICS, |k| graphics(k, f, o));
         fold(c, f, folds, Fold::Keys, text::KEYS, |k| {
             for b in crate::keys::BINDS {
                 row(k, false, |r| {
                     r.spawn(Node {
-                        width: rem(6.0),
+                        width: rem(7.0),
                         flex_shrink: 0.0,
                         ..default()
                     })
@@ -122,29 +126,36 @@ pub fn settings_tab(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, folds:
                     r.spawn(Node {
                         flex_grow: 1.0,
                         min_width: px(0),
+                        column_gap: rem(0.5),
+                        align_items: AlignItems::Center,
                         ..default()
                     })
                     .with_children(|n| {
-                        let keys = heading(n, f, &crate::keys::labels(o.binds.keys(b)));
+                        let keys = keycap(n, f, &crate::keys::labels(o.binds.keys(b)));
                         n.commands().entity(keys).insert(BindKeys(b));
-                        let wait = rich(n, f, text::PRESS_KEY, 14.0, PINK);
+                        let wait = rich_in(n, f, text::PRESS_KEY, 13.0, BLUE, true);
                         n.commands().entity(wait).insert((
                             BindWait(b),
                             Node {
                                 display: display(false),
                                 ..default()
                             },
+                            motion::Reveal::new(motion::Motion::pop(0.8)),
                         ));
                     });
                     button(r, f, text::CHANGE, Look::Tiny, Action::Rebind(b));
                 });
             }
             muted(k, f, text::KEYS_NOTE);
-            button(k, f, text::RESET_KEYS, Look::Tiny, Action::ResetKeys);
+            row(k, false, |r| {
+                button(r, f, text::RESET_KEYS, Look::Tiny, Action::ResetKeys);
+            });
         });
         fold(c, f, folds, Fold::Problems, text::PROBLEMS, |k| {
             muted(k, f, text::PROBLEMS_NOTE);
-            button(k, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
+            row(k, false, |r| {
+                button(r, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
+            });
         });
     });
 }
@@ -154,7 +165,7 @@ fn graphics(p: &mut ChildSpawnerCommands, f: &Fonts, o: &Options) {
     use crate::render::quality::{Preset, Upscale};
     let chips = |p: &mut ChildSpawnerCommands, title: &str, items: &mut dyn Iterator<Item = (&str, GfxPick)>| {
         stack(p, |c| {
-            muted(c, f, title);
+            caption(c, f, title);
             row(c, true, |r| {
                 for (s, pick) in items {
                     let (on, ok) = o.picked(pick);

@@ -101,25 +101,33 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
     let f = &*f;
     commands.entity(layers[Layer::Banner]).insert(BannerBox);
     commands.entity(layers[Layer::Home]).with_children(|l| {
-        l.spawn(Node {
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            padding: UiRect::all(rem(1.0)),
-            ..default()
-        })
+        l.spawn((
+            Node {
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Stretch,
+                column_gap: rem(2.5),
+                padding: UiRect::all(rem(1.5)),
+                ..default()
+            },
+            BackgroundGradient::from(LinearGradient::to_right(vec![
+                PLANE.with_alpha(0.9).into(),
+                PLANE.with_alpha(0.55).into(),
+                PLANE.with_alpha(0.15).into(),
+            ])),
+        ))
         .with_children(|c| {
             c.spawn((
                 Node {
-                    width: rem(36.0),
+                    width: rem(34.0),
                     max_width: percent(100),
                     max_height: percent(100),
                     flex_direction: FlexDirection::Column,
-                    row_gap: rem(0.75),
-                    padding: UiRect::all(rem(1.25)),
+                    row_gap: rem(1.0),
+                    padding: UiRect::all(rem(1.5)),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(1.125)),
+                    border_radius: BorderRadius::all(rem(1.75)),
                     ..default()
                 },
                 glass(),
@@ -128,6 +136,7 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                 head(
                     panel,
                     f,
+                    false,
                     &[
                         (text::TAB_SERVERS, Action::HomeTab(HomeTab::Main)),
                         (text::TAB_SETTINGS, Action::HomeTab(HomeTab::Settings)),
@@ -145,14 +154,15 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                         bevy::ui_widgets::ScrollArea,
                     ))
                     .with_children(|body| {
-                        body.spawn((ServersBox, column(0.75))).with_children(|t| {
+                        let tab = || motion::Reveal::new(motion::Motion::slide(0.0, 12.0));
+                        body.spawn((ServersBox, column(1.25), tab())).with_children(|t| {
                             t.spawn((ServersList, column(0.625)));
-                            t.spawn(column(0.5)).with_children(|p| {
+                            section(t, f, text::ADD_SERVER, |p| {
                                 row(p, false, |r| {
                                     field_with_hint(r, f, Field::Server, "", text::SERVER_PLACEHOLDER, 120, None);
                                     button(r, f, text::ADD, Look::Go, Action::AddServer);
                                 });
-                                let bad = rich(p, f, text::SERVER_BAD, 13.0, RED_INK);
+                                let bad = rich(p, f, text::SERVER_BAD, 13.0, CRITICAL);
                                 p.commands().entity(bad).insert((
                                     ServerBad,
                                     Node {
@@ -163,14 +173,15 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                                 muted(p, f, text::SERVER_HINT);
                             });
                         });
-                        body.spawn((RoomsBox, column(0.75))).with_children(|t| {
-                            name_row(t, f, Field::Name, &me.name());
+                        body.spawn((RoomsBox, column(1.25), tab())).with_children(|t| {
+                            section(t, f, text::SECTION_NAME, |n| {
+                                name_row(n, f, Field::Name, &me.name());
+                            });
                             t.spawn((RoomsList, column(0.625)));
                             t.spawn((PinBox, column(0.625)));
-                            group(t, |g| {
+                            section(t, f, text::OWN_ROOM, |g| {
                                 g.spawn((OwnRoom, column(0.625)));
-                                g.spawn((NewRoom, column(0.625))).with_children(|n| {
-                                    heading(n, f, text::OWN_ROOM);
+                                g.spawn((NewRoom, column(0.75))).with_children(|n| {
                                     field_with_hint(
                                         n,
                                         f,
@@ -186,38 +197,61 @@ fn build_home(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>, me: Me
                             });
                             practice_list(t, f, &folds);
                         });
-                        body.spawn((SettingsBox, column(0.0)))
+                        body.spawn((SettingsBox, column(0.0), tab()))
                             .with_children(|t| settings_tab(t, f, &options, &folds));
                     });
+            });
+            c.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexEnd,
+                    align_items: AlignItems::FlexEnd,
+                    row_gap: rem(0.5),
+                    flex_shrink: 1.0,
+                    min_width: px(0),
+                    padding: UiRect::all(rem(1.0)),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|h| {
+                logo(h, f, 88.0);
+                rich_in(h, f, text::TAGLINE, 17.0, INK.with_alpha(0.85), true);
             });
         });
     });
 }
 
-/// A screen's head: the logo and its tabs.
-pub fn head(p: &mut ChildSpawnerCommands, f: &Fonts, items: &[(&str, Action)]) {
+/// A screen's head: the logo (if `with_logo`) and its tabs as one segmented bar.
+pub fn head(p: &mut ChildSpawnerCommands, f: &Fonts, with_logo: bool, items: &[(&str, Action)]) {
     p.spawn(Node {
         width: percent(100),
-        justify_content: JustifyContent::SpaceBetween,
-        align_items: AlignItems::Center,
-        flex_wrap: FlexWrap::Wrap,
-        row_gap: rem(0.5),
+        flex_direction: FlexDirection::Column,
+        row_gap: rem(1.0),
         ..default()
     })
     .with_children(|r| {
-        logo(r, f, 26.0);
+        if with_logo {
+            logo(r, f, 24.0);
+        }
         r.spawn((
             Node {
                 column_gap: rem(0.25),
-                padding: UiRect::all(rem(0.2)),
-                border_radius: BorderRadius::all(rem(0.875)),
+                padding: UiRect::all(rem(0.25)),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
                 ..default()
             },
-            BackgroundColor(GROUP),
+            BackgroundColor(NEUTRAL),
+            BorderColor::all(RIM),
         ))
         .with_children(|t| {
             for (i, (s, a)) in items.iter().enumerate() {
-                button(t, f, s, Look::Tab(i == 0), a.clone());
+                let b = button(t, f, s, Look::Tab(i == 0), a.clone());
+                t.commands().entity(b).insert(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
             }
         });
     });
@@ -335,7 +369,7 @@ fn update_box(
             } else {
                 text::crashed(&report)
             };
-            let t = rich(p, f, &msg, 13.0, RED_INK);
+            let t = rich(p, f, &msg, 13.0, CRITICAL);
             wrap_anywhere(p, t);
             button(p, f, text::OPEN_LOGS, Look::Tiny, Action::OpenLogs);
         }
@@ -365,7 +399,7 @@ fn update_state(p: &mut ChildSpawnerCommands, f: &Fonts, view: &UpdateView, can:
         }
         UpdateView::State(UpdateState::Failed(err)) => {
             group(p, |g| {
-                let t = rich(g, f, &text::update_failed(err), 13.0, RED_INK);
+                let t = rich(g, f, &text::update_failed(err), 13.0, CRITICAL);
                 wrap_anywhere(g, t);
                 row(g, false, |r| {
                     if can {
@@ -391,20 +425,70 @@ fn servers(
 ) {
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
-        heading(p, f, text::SERVERS);
+        p.spawn(Node {
+            padding: UiRect::left(rem(0.25)),
+            ..default()
+        })
+        .with_children(|t| {
+            caption(t, f, text::SERVERS);
+        });
         if list.list.is_empty() {
-            muted(p, f, text::NO_SERVERS);
+            group(p, |g| {
+                rich(g, f, "🌐", 28.0, INK);
+                muted(g, f, text::NO_SERVERS);
+            });
         }
-        for addr in list.ordered() {
-            server_row(p, f, &addr, &states.get(&addr));
+        for (i, addr) in list.ordered().iter().enumerate() {
+            let e = server_row(p, f, addr, &states.get(addr));
+            p.commands()
+                .entity(e)
+                .insert(motion::Motion::slide(0.0, 10.0).after(i as f32 * 0.04));
         }
     });
 }
 
-fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Status) {
+/// A card of a list: an icon, two lines, and what may be done on the right.
+fn list_card(p: &mut ChildSpawnerCommands, lit: bool, inner: impl FnOnce(&mut ChildSpawnerCommands)) -> Entity {
+    p.spawn((
+        Node {
+            column_gap: rem(0.875),
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(rem(0.875), rem(0.75)),
+            border: UiRect::all(px(if lit { 2 } else { 1 })),
+            border_radius: BorderRadius::all(rem(1.125)),
+            ..default()
+        },
+        BackgroundColor(if lit { BLUE.with_alpha(0.07) } else { GROUP }),
+        BorderColor::all(if lit { BLUE } else { RIM }),
+    ))
+    .with_children(inner)
+    .id()
+}
+
+/// A round icon of a list's card, lit while what it stands for is up.
+fn list_icon(p: &mut ChildSpawnerCommands, f: &Fonts, icon: &str, lit: bool) {
+    p.spawn((
+        Node {
+            width: rem(2.75),
+            height: rem(2.75),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(rem(0.875)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(if lit { BLUE.with_alpha(0.12) } else { ink_wash(0.05) }),
+        BorderColor::all(if lit { BLUE.with_alpha(0.4) } else { RIM }),
+    ))
+    .with_children(|i| {
+        rich(i, f, icon, 18.0, INK);
+    });
+}
+
+fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Status) -> Entity {
     let (title, line, can) = match status {
-        Status::Checking => (addr.to_string(), text::CHECKING.to_string(), true),
-        Status::Down => (addr.to_string(), text::SERVER_DOWN.to_string(), true),
+        Status::Checking | Status::Down => (addr.to_string(), None, true),
         Status::Up(i) => {
             let title = i.name.clone().unwrap_or_else(|| addr.to_string());
             let same = i.protocol == fb_net::PROTOCOL_VERSION;
@@ -413,37 +497,48 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
             } else {
                 text::server_line(i.players, i.rooms)
             };
-            (title, line, same)
+            (title, Some(line), same)
         }
     };
-    let up = matches!(status, Status::Up(_));
-    p.spawn((
-        Node {
-            column_gap: rem(0.5),
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.75), rem(0.5)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(rem(0.875)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
-        BorderColor::all(RIM),
-    ))
-    .with_children(|row_| {
-        dot(row_, if up { GREEN } else { MUTED.with_alpha(0.5) }, 10.0);
+    let up = matches!(status, Status::Up(_)) && can;
+    list_card(p, false, |row_| {
+        list_icon(row_, f, "🖥", up);
         row_.spawn(Node {
             flex_direction: FlexDirection::Column,
+            row_gap: rem(0.25),
             flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_width: px(0),
             ..default()
         })
         .with_children(|c| {
-            heading(c, f, &title);
-            let addr_line = if title == addr {
-                line
-            } else {
-                format!("{addr} · {line}")
-            };
-            muted(c, f, &addr_line);
+            rich_in(c, f, &title, 16.0, INK, true);
+            row(c, true, |r| {
+                match status {
+                    Status::Checking => {
+                        spinner(r, 0.75, MUTED);
+                        muted(r, f, text::CHECKING);
+                    }
+                    Status::Down => {
+                        badge(r, f, text::SERVER_DOWN, CRITICAL.with_alpha(0.16), CRITICAL);
+                    }
+                    Status::Up(_) if can => {
+                        badge(r, f, text::ONLINE, BLUE.with_alpha(0.16), BLUE);
+                    }
+                    Status::Up(_) => {
+                        badge(r, f, text::SERVER_OTHER_VERSION, WARNING.with_alpha(0.25), INK);
+                    }
+                }
+                let more = match (&line, title == addr) {
+                    (Some(l), true) if can => Some(l.clone()),
+                    (Some(l), false) if can => Some(format!("{addr} · {l}")),
+                    (_, false) => Some(addr.to_string()),
+                    _ => None,
+                };
+                if let Some(m) = more {
+                    muted(r, f, &m);
+                }
+            });
         });
         button_if(
             row_,
@@ -455,7 +550,7 @@ fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Stat
         );
         // ("×": "✕" is in neither of the game's fonts.)
         button(row_, f, "×", Look::TinyDanger, Action::RemoveServer(addr.to_string()));
-    });
+    })
 }
 
 /// The field to add a server is emptied when the list changes (unless the address was not one), and says so then.
@@ -502,59 +597,94 @@ fn rooms(
             }
         });
         if let Some(msg) = alert {
-            rich(p, f, msg, 14.0, RED_INK);
+            p.spawn((
+                Node {
+                    padding: UiRect::axes(rem(0.875), rem(0.625)),
+                    border: UiRect::new(px(3), px(1), px(1), px(1)),
+                    border_radius: BorderRadius::all(rem(0.75)),
+                    ..default()
+                },
+                BackgroundColor(CRITICAL.with_alpha(0.1)),
+                BorderColor {
+                    left: CRITICAL,
+                    ..BorderColor::all(CRITICAL.with_alpha(0.25))
+                },
+                motion::Motion::pop(0.95),
+            ))
+            .with_children(|a| {
+                rich(a, f, msg, 14.0, CRITICAL);
+            });
         }
-        heading(p, f, &text::rooms_count(list.rooms.as_ref().map_or(0, Vec::len)));
+        p.spawn(Node {
+            padding: UiRect::new(rem(0.25), px(0), rem(0.5), px(0)),
+            ..default()
+        })
+        .with_children(|t| {
+            caption(t, f, &text::rooms_count(list.rooms.as_ref().map_or(0, Vec::len)));
+        });
         match &list.rooms {
             None => {
-                muted(p, f, text::LOADING_ROOMS);
+                row(p, false, |r| {
+                    spinner(r, 1.0, BLUE);
+                    muted(r, f, text::LOADING_ROOMS);
+                });
             }
             Some(l) if l.is_empty() => {
-                muted(p, f, text::NO_ROOMS);
+                group(p, |g| {
+                    rich(g, f, "🚪", 28.0, INK);
+                    muted(g, f, text::NO_ROOMS);
+                });
             }
             Some(l) => {
-                for r in l {
-                    room_row(p, f, r, list.mine.as_deref() == Some(r.id.as_str()));
+                for (i, r) in l.iter().enumerate() {
+                    let e = room_row(p, f, r, list.mine.as_deref() == Some(r.id.as_str()));
+                    p.commands()
+                        .entity(e)
+                        .insert(motion::Motion::slide(0.0, 10.0).after(i as f32 * 0.04));
                 }
             }
         }
     });
 }
 
-fn room_row(p: &mut ChildSpawnerCommands, f: &Fonts, r: &RoomInfo, mine: bool) {
+fn room_row(p: &mut ChildSpawnerCommands, f: &Fonts, r: &RoomInfo, mine: bool) -> Entity {
     let full = r.players >= r.max;
-    p.spawn((
-        Node {
-            column_gap: rem(0.5),
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.75), rem(0.5)),
-            border: UiRect::all(px(if mine { 2 } else { 1 })),
-            border_radius: BorderRadius::all(rem(0.875)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
-        BorderColor::all(if mine { PINK } else { RIM }),
-    ))
-    .with_children(|row_| {
+    list_card(p, mine, |row_| {
+        let host = r.host.as_deref().unwrap_or("?");
+        avatar(row_, f, host, if mine { BLUE } else { BLUE_DEEP }, 2.75);
         row_.spawn(Node {
             flex_direction: FlexDirection::Column,
+            row_gap: rem(0.25),
             flex_grow: 1.0,
+            flex_shrink: 1.0,
+            min_width: px(0),
             ..default()
         })
         .with_children(|c| {
             let lock = if r.private { "🔒 " } else { "" };
-            heading(c, f, &format!("{lock}{}", r.title));
+            rich_in(c, f, &format!("{lock}{}", r.title), 16.0, INK, true);
             muted(c, f, &text::room_line(r.host.as_deref(), r.phase != Phase::Lobby, mine));
         });
-        let bots = if r.bots > 0 {
-            format!(" +{} 🤖", r.bots)
-        } else {
-            String::new()
-        };
-        label(row_, f, &format!("{}/{}{bots}", r.players, r.max));
+        row_.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexEnd,
+            row_gap: rem(0.3125),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|c| {
+            let bots = if r.bots > 0 {
+                format!(" +{}🤖", r.bots)
+            } else {
+                String::new()
+            };
+            rich_in(c, f, &format!("{}/{}{bots}", r.players, r.max), 13.0, INK, true);
+            let frac = r.players as f32 / r.max.max(1) as f32;
+            meter(c, frac, if full { CRITICAL } else { BLUE }, rem(3.5));
+        });
         let s = if full { text::NO_PLACES } else { text::ENTER };
         button_if(row_, f, s, Look::Primary, Action::Join(r.id.clone()), !full);
-    });
+    })
 }
 
 /// A private room asked for its PIN: only its host knows it. (Redrawn, so emptied, when it asks again.)
@@ -597,7 +727,7 @@ fn pin(
             });
             match &d.msg {
                 None => muted(g, f, text::PIN_ASK),
-                Some(m) => rich(g, f, m, 13.0, RED_INK),
+                Some(m) => rich(g, f, m, 13.0, CRITICAL),
             };
         });
     });
@@ -640,14 +770,28 @@ fn title_hint(me: Me, fields: Query<&Field>, mut hints: Query<(&Placeholder, &mu
     }
 }
 
-/// One map against bots, alone.
+/// One map against bots, alone: a tile for each.
 pub fn practice_list(p: &mut ChildSpawnerCommands, f: &Fonts, folds: &Folds) {
     fold(p, f, folds, Fold::Practice, text::PRACTICE, |c| {
-        row(c, true, |r| {
+        // (Tiles of a row as high as its highest.)
+        c.spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: rem(0.5),
+            row_gap: rem(0.5),
+            align_items: AlignItems::Stretch,
+            ..default()
+        })
+        .with_children(|r| {
             for g in fb_maps::GAMES {
                 let m = g.meta();
-                let s = format!("{} · {}", m.title, text::genre(m.genre));
-                button(r, f, &s, Look::Chip(false), Action::Practice(m.id));
+                tile(
+                    r,
+                    f,
+                    m.title,
+                    text::genre(m.genre),
+                    genre_color(m.genre),
+                    Action::Practice(m.id),
+                );
             }
         });
     });
@@ -725,14 +869,14 @@ fn banner(
     rebuild(&mut commands, e, |p| match show {
         Show::None => {}
         Show::Outdated(offer) => card(p, |card| {
-            logo(card, f, 30.0);
+            logo(card, f, 36.0);
             label(card, f, text::OUTDATED);
             match &offer {
                 Offer::Downloading(pct) => {
                     label(card, f, &text::downloading(*pct, 100));
                 }
                 Offer::Failed(e, _) => {
-                    let t = rich(card, f, &text::update_failed(e), 13.0, RED_INK);
+                    let t = rich(card, f, &text::update_failed(e), 13.0, CRITICAL);
                     wrap_anywhere(card, t);
                 }
                 Offer::Restarting => {
@@ -763,21 +907,23 @@ fn banner(
                 width: percent(100),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::FlexStart,
-                padding: UiRect::top(rem(1.0)),
+                padding: UiRect::top(rem(1.25)),
                 ..default()
             })
             .with_children(|c| {
                 c.spawn((
                     Node {
-                        padding: UiRect::axes(rem(1.25), rem(0.6)),
+                        padding: UiRect::new(rem(1.0), rem(0.625), rem(0.625), rem(0.625)),
                         border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(rem(1.0)),
+                        border_radius: BorderRadius::MAX,
                         ..default()
                     },
                     glass(),
+                    motion::Motion::slide(0.0, -24.0),
                 ))
                 .with_children(|b| {
                     row(b, false, |r| {
+                        spinner(r, 1.125, BLUE);
                         heading(r, f, s);
                         button(r, f, text::CANCEL, Look::Tiny, Action::LeaveServer);
                     });
@@ -785,7 +931,7 @@ fn banner(
             });
         }
         Show::Card(more, quit) => card(p, |card| {
-            logo(card, f, 30.0);
+            logo(card, f, 36.0);
             if let Some(m) = more {
                 label(card, f, &m);
             }
@@ -810,21 +956,26 @@ fn card(p: &mut ChildSpawnerCommands, inner: impl FnOnce(&mut ChildSpawnerComman
             align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.169, 0.102, 0.361, 0.25)),
+        BackgroundGradient::from(RadialGradient::new(
+            UiPosition::CENTER,
+            RadialGradientShape::FarthestCorner,
+            vec![BLUE_SOFT.with_alpha(0.4).into(), ink_wash(0.35).into()],
+        )),
     ))
     .with_children(|c| {
         c.spawn((
             Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: rem(0.75),
-                padding: UiRect::axes(rem(1.6), rem(1.4)),
+                row_gap: rem(1.0),
+                padding: UiRect::axes(rem(2.25), rem(2.0)),
                 border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
-                max_width: rem(30.0),
+                border_radius: BorderRadius::all(rem(1.75)),
+                max_width: rem(32.0),
                 ..default()
             },
             glass(),
+            motion::Motion::pop(0.9),
         ))
         .with_children(inner);
     });

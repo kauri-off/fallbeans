@@ -6,8 +6,8 @@ use bevy::prelude::*;
 use super::*;
 use crate::render::warmup::Warmup;
 
-/// The screen's backdrop: the game's pink sky.
-const BACKDROP: Color = Color::srgb(1.0, 0.85, 0.95);
+/// The screen's backdrop: the night behind the panels.
+const BACKDROP: Color = PLANE;
 
 pub struct LoadingPlugin;
 
@@ -49,22 +49,31 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                 ..default()
             },
             BackgroundColor(BACKDROP),
+            // (Also warms the gradient pipeline the interface draws with.)
+            BackgroundGradient::from(RadialGradient::new(
+                UiPosition::TOP,
+                RadialGradientShape::FarthestCorner,
+                vec![BLUE_SOFT.into(), BLUE_SOFT.with_alpha(0.3).into(), BACKDROP.into()],
+            )),
             // (Above every layer, the F4 overlay too.)
             GlobalZIndex(1000),
         ))
         .with_children(|s| {
-            logo(s, f, 64.0);
-            rich_in(s, f, text::LOADING, 24.0, INK, true);
+            logo(s, f, 80.0);
+            row(s, false, |r| {
+                spinner(r, 1.25, BLUE);
+                rich_in(r, f, text::LOADING, 18.0, INK, true);
+            });
             s.spawn((
                 Node {
-                    width: rem(22.0),
+                    width: rem(24.0),
                     max_width: percent(80),
-                    height: rem(0.75),
-                    border_radius: BorderRadius::all(rem(0.375)),
+                    height: rem(0.375),
+                    border_radius: BorderRadius::MAX,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(GROUP),
+                BackgroundColor(ink_wash(0.08)),
             ))
             .with_children(|b| {
                 b.spawn((
@@ -72,10 +81,11 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                     Node {
                         width: percent(0),
                         height: percent(100),
-                        border_radius: BorderRadius::all(rem(0.375)),
+                        border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(PINK),
+                    BackgroundColor(BLUE),
+                    BoxShadow::new(BLUE.with_alpha(0.5), px(0), px(0), px(0), px(10)),
                 ));
             });
             let step = muted(s, f, "");

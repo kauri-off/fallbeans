@@ -46,8 +46,8 @@ fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
         l.spawn((
             Node {
                 position_type: PositionType::Absolute,
-                left: rem(0.75),
-                bottom: rem(3.2),
+                left: rem(1.0),
+                bottom: rem(3.5),
                 width: rem(24.0),
                 max_width: percent(40),
                 flex_direction: FlexDirection::Column,
@@ -62,8 +62,8 @@ fn build_chat(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                 Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: px(2),
-                    padding: UiRect::axes(rem(0.625), rem(0.4)),
-                    border_radius: BorderRadius::all(rem(0.75)),
+                    padding: UiRect::axes(rem(0.75), rem(0.5)),
+                    border_radius: BorderRadius::all(rem(1.0)),
                     max_height: rem(14.0),
                     overflow: Overflow::scroll_y(),
                     justify_content: JustifyContent::FlexEnd,
@@ -153,10 +153,9 @@ fn lines(
 }
 
 fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine) {
-    let color =
-        l.id.and_then(|id| session.player(id))
-            .map_or(Color::WHITE, |p| suit(p.color));
-    let name_ink = color.mix(&Color::WHITE, 0.5);
+    let color = l.id.and_then(|id| session.player(id)).map_or(MUTED, |p| suit(p.color));
+    // (A suit too light to read on the light panel goes darker.)
+    let name_ink = color.mix(&INK, 0.35);
     p.spawn((
         ChatRow(l.n, l.at),
         Text::default(),
@@ -169,7 +168,7 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
             t.spawn((
                 TextSpan::new(run),
                 TextFont {
-                    font: if emoji { f.emoji.clone() } else { f.black.clone() }.into(),
+                    font: if emoji { f.emoji.clone() } else { f.strong.clone() }.into(),
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
@@ -180,11 +179,11 @@ fn line(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, l: &ChatLine
             t.spawn((
                 TextSpan::new(run),
                 TextFont {
-                    font: if emoji { f.emoji.clone() } else { f.bold.clone() }.into(),
+                    font: if emoji { f.emoji.clone() } else { f.body.clone() }.into(),
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextColor(INK),
             ));
         }
     });
@@ -207,9 +206,9 @@ fn shown(
     } else {
         None
     };
-    let alpha = if ui.chat { 0.8 } else { 0.45 };
+    let alpha = if ui.chat { 0.88 } else { 0.55 };
     q.set_if_neq(BackgroundColor(if from.is_some() && !log.0.is_empty() {
-        INK.with_alpha(alpha * 0.8)
+        PANEL.with_alpha(alpha)
     } else {
         Color::NONE
     }));
