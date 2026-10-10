@@ -1,6 +1,7 @@
 //! The window's icon: winit's window class has none, so Windows showed its default (Wayland: `wayland.rs`).
 
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::NonSendMarker;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::window::WindowCreated;
@@ -19,7 +20,8 @@ impl Plugin for IconPlugin {
     }
 }
 
-fn set(mut created: MessageReader<WindowCreated>) {
+// `WINIT_WINDOWS` is a thread local of the main thread.
+fn set(mut created: MessageReader<WindowCreated>, _main_thread: NonSendMarker) {
     for created in created.read() {
         let Some((rgba, size)) = rgba() else { return };
         WINIT_WINDOWS.with_borrow(|windows| {
