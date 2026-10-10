@@ -312,7 +312,7 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         plan.len()
                     ));
                 }
-                for &id in &plan {
+                for id in plan.iter().map(|p| p.map) {
                     match game(id) {
                         None => {
                             out.error(format!("planned an unknown game {id}"));
@@ -331,11 +331,13 @@ fn rules(ctx: &Ctx, out: &mut Out) {
                         }
                     }
                 }
-                let uniq: BTreeSet<MapId> = plan.iter().copied().collect();
-                if uniq.len() < plan.len().min(5) {
+                // (The race is a new track each time: it may come back.)
+                let others: Vec<MapId> = plan.iter().map(|p| p.map).filter(|&m| m != MapId::Race).collect();
+                let uniq: BTreeSet<MapId> = others.iter().copied().collect();
+                if uniq.len() < others.len().min(5) {
                     out.warn(format!(
                         "{name} {rounds} rounds repeats a game: {}",
-                        plan.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")
+                        plan.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                     ));
                 }
             }

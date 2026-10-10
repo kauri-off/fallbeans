@@ -361,7 +361,32 @@ pub fn maps_count(n: usize) -> String {
 }
 
 pub fn custom_count(n: usize) -> String {
-    format!("Карты по порядку · {n} из 12")
+    format!("Раунды по порядку · {n} из 12")
+}
+
+pub const ADD_ROUND: &str = "Добавить раунд:";
+pub const TRACK_CODE_HINT: &str = "Код трассы";
+pub const DRAG_HINT: &str = "Перетащите раунд, чтобы поменять порядок";
+pub const ADD_TRACK: &str = "Добавить трассу";
+pub const RANDOM_TRACK: &str = "случайная трасса";
+
+pub fn sections(n: u8) -> String {
+    plural(u32::from(n), "испытание", "испытания", "испытаний")
+}
+
+/// The race's length and track, under its line in the host's list.
+pub fn race_line(p: &fb_proto::Pick) -> Option<String> {
+    if p.map != fb_proto::MapId::Race {
+        return None;
+    }
+    let track = p
+        .code()
+        .map_or_else(|| RANDOM_TRACK.to_string(), |c| format!("трасса {c}"));
+    Some(format!("{} · {track}", sections(p.sections)))
+}
+
+pub fn track_code(code: &str) -> String {
+    format!("Код трассы: {code}")
 }
 
 /// What the host has set up, as the others see it.
@@ -376,7 +401,7 @@ pub fn setup_line(p: &fb_proto::Playlist) -> String {
     match p.mode {
         Mode::Custom => format!(
             "Режим: {mode} · {}",
-            plural(p.games.len() as u32, "карта", "карты", "карт")
+            plural(p.games.len() as u32, "раунд", "раунда", "раундов")
         ),
         _ => format!("Режим: {mode} · раундов: {}", p.rounds),
     }

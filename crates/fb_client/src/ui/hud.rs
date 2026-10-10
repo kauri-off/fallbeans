@@ -584,7 +584,7 @@ fn hud_state(
     } else {
         None
     };
-    let duration = fb_maps::by_id(map.round.map).meta().duration;
+    let duration = fb_maps::get(map.round.map, map.round.sections).meta().duration;
     let next_in = session
         .lobby
         .as_ref()
@@ -993,6 +993,13 @@ fn intro(
                 margin: UiRect::top(px(10)),
                 ..default()
             });
+            if let Some(code) = info.track.and_then(|t| t.code()) {
+                let t = rich_in(c, f, &text::track_code(&code), 15.0, MUTED, true);
+                c.commands().entity(t).insert(Node {
+                    margin: UiRect::top(px(8)),
+                    ..default()
+                });
+            }
         });
     });
 }
@@ -1231,6 +1238,9 @@ fn results(
                     text::results_of(r.index, r.total)
                 };
                 board_head(c, f, &cap, title, next);
+                if let Some(code) = r.track.and_then(|t| t.code()) {
+                    caption(c, f, &text::track_code(&code));
+                }
                 for (i, row_) in r.rows.iter().enumerate() {
                     let me = session.me == Some(row_.id);
                     let last = i + 1 == r.rows.len();

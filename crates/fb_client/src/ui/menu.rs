@@ -9,7 +9,8 @@ use bevy::text::EditableText;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use fb_arena::ArenaKind;
 use fb_maps::director::ROUND_COUNTS;
-use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, Mode, Phase, PlayerId, Playlist};
+use fb_proto::{ClientMsg, DevCmd, Goto, Lobby, MapId, Mode, Phase, Pick, PlayerId, Playlist};
+use fb_shared::game::RACE_SECTIONS;
 use fb_shared::outfit::{GLASSES, HATS, Tint};
 use lightyear::prelude::client::Client;
 use lightyear::prelude::*;
@@ -972,15 +973,48 @@ fn hover_rows(mut rows: Query<(&Hovered, &mut BackgroundColor), HoveredRows>) {
 }
 
 /// The host's setup, or the line that the host starts the game.
-fn host_setup(session: Res<Session>, q: Single<Entity, With<HostBox>>, f: Res<Fonts>, mut commands: Commands) {
+/// (Redrawn only when what it shows changes: a track code being typed stays.)
+fn host_setup(
+    session: Res<Session>,
+    q: Single<Entity, With<HostBox>>,
+    f: Res<Fonts>,
+    fields: Query<(&Field, &EditableText)>,
+    mut shown: Local<Option<SetupView>>,
+    mut commands: Commands,
+) {
     let Some(l) = session.lobby.as_ref().filter(|l| l.phase == Phase::Lobby) else {
+        *shown = None;
         return;
     };
-    let f = &*f;
     let host = session.host();
+    let next = SetupView {
+        host,
+        playlist: l.playlist.clone(),
+        fill: l.fill,
+        players: l.players.len(),
+        ready: l.players.iter().filter(|p| p.connected || p.bot).count(),
+        min: l.min,
+        max: l.max,
+    };
+    if shown.as_ref() == Some(&next) {
+        return;
+    }
+    // (Its track just added to the list: the code typed is done with.)
+    let mut code = field_text(&fields, Field::TrackCode);
+    if let Some(pick) = Pick::from_code(&code) {
+        let count = |pl: &Playlist| pl.games.iter().filter(|&&g| g == pick).count();
+        if shown
+            .as_ref()
+            .is_some_and(|old| count(&next.playlist) > count(&old.playlist))
+        {
+            code.clear();
+        }
+    }
+    *shown = Some(next);
+    let f = &*f;
     rebuild(&mut commands, *q, |p| {
         if host {
-            setup_of(p, f, l);
+            setup_of(p, f, l, &code);
         } else {
             let g = group(p, |g| {
                 spinner(g, 30.0, TEAL);
@@ -1003,8 +1037,19 @@ fn host_setup(session: Res<Session>, q: Single<Entity, With<HostBox>>, f: Res<Fo
     });
 }
 
+#[derive(PartialEq)]
+struct SetupView {
+    host: bool,
+    playlist: Playlist,
+    fill: bool,
+    players: usize,
+    ready: usize,
+    min: u32,
+    max: u32,
+}
+
 /// The host's part of the lobby: which maps, how many rounds, bots, and the start button.
-fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
+fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby, code: &str) {
     let pl = &l.playlist;
     let ready = l.players.iter().filter(|p| p.connected || p.bot).count() as u32;
     let enough = ready >= l.min;
@@ -1026,35 +1071,7 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
             }
         });
         if pl.mode == Mode::Custom {
-            stack(g, |c| {
-                caption(c, f, &text::custom_count(pl.games.len()));
-                row(c, true, |r| {
-                    let here = r.target_entity();
-                    r.commands().entity(here).insert(Node {
-                        flex_wrap: FlexWrap::Wrap,
-                        column_gap: px(6),
-                        row_gap: px(6),
-                        ..default()
-                    });
-                    for def in fb_maps::GAMES {
-                        let m = def.meta();
-                        let at = pl.games.iter().position(|&g| g == m.id);
-                        let s = match at {
-                            Some(i) => format!("{}. {}", i + 1, m.title),
-                            None => m.title.to_string(),
-                        };
-                        let id = m.id;
-                        let act = with(&|p| {
-                            if let Some(i) = p.games.iter().position(|&g| g == id) {
-                                p.games.remove(i);
-                            } else if p.games.len() < 12 {
-                                p.games.push(id);
-                            }
-                        });
-                        button(r, f, &s, Look::SmallChip(at.is_some()), act);
-                    }
-                });
-            });
+            stack(g, |c| custom_list(c, f, pl, code));
         } else {
             row(g, true, |r| {
                 let here = r.target_entity();
@@ -1117,6 +1134,209 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby) {
         border: UiRect::all(px(1)),
         border_radius: BorderRadius::all(px(18)),
         ..default()
+    });
+}
+
+/// A round of the host's list, by its place: dragged onto another, it takes that one's place.
+#[derive(Component)]
+struct ListRow(usize);
+
+/// Six dots to take a round by.
+fn grip(r: &mut ChildSpawnerCommands) {
+    r.spawn((
+        Node {
+            display: bevy::ui::Display::Grid,
+            grid_template_columns: RepeatedGridTrack::px(2, 4.0),
+            column_gap: px(3),
+            row_gap: px(3),
+            padding: UiRect::axes(px(4), px(6)),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        Pickable::IGNORE,
+    ))
+    .with_children(|g| {
+        for _ in 0..6 {
+            g.spawn((
+                Node {
+                    width: px(4),
+                    height: px(4),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(GHOST),
+                Pickable::IGNORE,
+            ));
+        }
+    });
+}
+
+/// The row a picked entity is in (a drag may start on its buttons).
+fn row_of(mut e: Entity, rows: &Query<&ListRow>, parents: &Query<&ChildOf>) -> Option<usize> {
+    loop {
+        if let Ok(r) = rows.get(e) {
+            return Some(r.0);
+        }
+        e = parents.get(e).ok()?.parent();
+    }
+}
+
+fn row_drag_over(ev: On<Pointer<DragEnter>>, mut bg: Query<&mut BackgroundColor, With<ListRow>>) {
+    if let Ok(mut b) = bg.get_mut(ev.entity) {
+        b.set_if_neq(BackgroundColor(TEAL_SOFT));
+    }
+}
+
+fn row_drag_out(ev: On<Pointer<DragLeave>>, mut bg: Query<&mut BackgroundColor, With<ListRow>>) {
+    if let Ok(mut b) = bg.get_mut(ev.entity) {
+        b.set_if_neq(BackgroundColor(Color::NONE));
+    }
+}
+
+/// A round dropped on another row moves to its place.
+fn row_dropped(
+    ev: On<Pointer<DragDrop>>,
+    rows: Query<&ListRow>,
+    parents: Query<&ChildOf>,
+    mut bg: Query<&mut BackgroundColor, With<ListRow>>,
+    session: Res<Session>,
+    mut out: MessageWriter<UiAction>,
+) {
+    if let Ok(mut b) = bg.get_mut(ev.entity) {
+        b.set_if_neq(BackgroundColor(Color::NONE));
+    }
+    let (Some(from), Ok(to)) = (row_of(ev.dropped, &rows, &parents), rows.get(ev.entity).map(|r| r.0)) else {
+        return;
+    };
+    let Some(l) = session.lobby.as_ref() else { return };
+    if from == to || from >= l.playlist.games.len() || to >= l.playlist.games.len() {
+        return;
+    }
+    let mut next = l.playlist.clone();
+    let g = next.games.remove(from);
+    next.games.insert(to, g);
+    out.write(UiAction(Action::Send(ClientMsg::Playlist(next))));
+}
+
+/// The host's list changed so.
+fn patched(pl: &Playlist, patch: impl FnOnce(&mut Playlist)) -> Action {
+    let mut next = pl.clone();
+    patch(&mut next);
+    Action::Send(ClientMsg::Playlist(next))
+}
+
+/// The host's own list: its rounds (the race's length and track for each race), games to add, a track code.
+fn custom_list(c: &mut ChildSpawnerCommands, f: &Fonts, pl: &Playlist, code: &str) {
+    caption(c, f, &text::custom_count(pl.games.len()));
+    if pl.games.len() > 1 {
+        caption(c, f, text::DRAG_HINT);
+    }
+    for (i, pick) in pl.games.iter().enumerate() {
+        let title = fb_maps::get(pick.map, pick.sections).meta().title;
+        let row_e = row(c, false, |r| {
+            grip(r);
+            r.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    min_width: px(0),
+                    row_gap: px(2),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|t| {
+                rich_with(
+                    t,
+                    f,
+                    &format!("{}. {title}", i + 1),
+                    15.0,
+                    INK,
+                    true,
+                    Some(Pickable::IGNORE),
+                );
+                if let Some(line) = text::race_line(pick) {
+                    rich_with(t, f, &line, 13.0, FAINT, false, Some(Pickable::IGNORE));
+                }
+            });
+            if pick.map == MapId::Race {
+                let resize = |d: i8| {
+                    patched(pl, |p| {
+                        if let Some(g) = p.games.get_mut(i) {
+                            let n = g.sections.saturating_add_signed(d);
+                            if RACE_SECTIONS.contains(&n) {
+                                g.sections = n;
+                                g.seed = None;
+                            }
+                        }
+                    })
+                };
+                let fewer = RACE_SECTIONS.contains(&pick.sections.saturating_sub(1));
+                let more = RACE_SECTIONS.contains(&pick.sections.saturating_add(1));
+                button_if(r, f, "−", Look::Tiny, resize(-1), fewer);
+                button_if(r, f, "+", Look::Tiny, resize(1), more);
+            }
+            let remove = patched(pl, |p| {
+                if i < p.games.len() {
+                    p.games.remove(i);
+                }
+            });
+            button(r, f, "×", Look::Icon, remove);
+        });
+        c.commands()
+            .entity(row_e)
+            .insert((
+                ListRow(i),
+                Node {
+                    column_gap: px(8),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::new(px(6), px(8), px(6), px(6)),
+                    border_radius: BorderRadius::all(px(12)),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .observe(row_drag_over)
+            .observe(row_drag_out)
+            .observe(row_dropped);
+    }
+    if pl.games.len() >= 12 {
+        return;
+    }
+    caption(c, f, text::ADD_ROUND);
+    row(c, true, |r| {
+        let here = r.target_entity();
+        r.commands().entity(here).insert(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: px(6),
+            row_gap: px(6),
+            ..default()
+        });
+        for def in fb_maps::GAMES {
+            let m = def.meta();
+            let id = m.id;
+            let add = patched(pl, |p| p.games.push(Pick::map(id)));
+            button(r, f, &format!("+ {}", m.title), Look::SmallChip(false), add);
+        }
+    });
+    row(c, false, |r| {
+        let here = r.target_entity();
+        r.commands().entity(here).insert(Node {
+            column_gap: px(8),
+            align_items: AlignItems::Center,
+            ..default()
+        });
+        field_with_hint(
+            r,
+            f,
+            Field::TrackCode,
+            code,
+            text::TRACK_CODE_HINT,
+            16,
+            Some(|c: char| c.is_ascii_digit() || c == '-'),
+        );
+        button(r, f, text::ADD_TRACK, Look::Plain, Action::AddTrack);
     });
 }
 
@@ -1203,7 +1423,7 @@ fn dev(
                     for def in fb_maps::GAMES {
                         let m = def.meta();
                         let cmd = DevCmd::Start {
-                            games: vec![m.id],
+                            games: vec![Pick::map(m.id)],
                             rounds: Some(1),
                             bots: Some(3),
                         };

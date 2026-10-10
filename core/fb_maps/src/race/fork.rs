@@ -1,32 +1,16 @@
-//! A fork of a timed hammer bridge or a longer safe zig-zag, then seed-ordered obstacles.
+//! A fork: a timed hammer bridge or a longer safe zig-zag with pushers.
 use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
-use fb_sim::builder::{Builder, PrimOpts};
+use fb_sim::builder::PrimOpts;
 use fb_sim::collider::ColliderOpts;
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, conveyor, glove_alley, hammer_bridges, moving_platforms, pick_sections, race_course,
-    rotor_decks, seesaws, tipping_bridge, with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{SegOut, Segment};
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::scene::pal;
 
 use crate::util::o;
 
-pub struct HammerSwing;
-
-static META: GameMeta = GameMeta::new(
-    MapId::HammerSwing,
-    "Молоты и качели",
-    Genre::Race,
-    "Развилка: мост под молотами или коридор с толкателями. Дальше — качели, мостики-перевёртыши, ленты, перчатки и молоты в случайном порядке и со своими таймингами.",
-    "Доберитесь до финиша",
-    150.0,
-);
-
-fn fork() -> Segment {
+pub(super) fn fork() -> Segment {
     Box::new(|s| {
         let y = s.y;
         let z0 = s.z;
@@ -118,34 +102,4 @@ fn fork() -> Segment {
             checkpoint: Some((z1 + 0.5, V3::new(0.0, y + 0.1, z1 + 4.0))),
         }
     })
-}
-
-impl MapDef for HammerSwing {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Factory, LookId::Desert, LookId::Lava]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![
-            seesaws(3),
-            conveyor(30.0),
-            hammer_bridges(3),
-            tipping_bridge(6),
-            glove_alley(4),
-            moving_platforms(4),
-        ];
-        let middle = pick_sections(&mut b.rng, pool, 4);
-        let mut sections = vec![fork()];
-        sections.extend(middle);
-        sections.push(rotor_decks(1));
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

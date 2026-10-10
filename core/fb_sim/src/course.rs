@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use fb_shared::cause::Hazard;
 use fb_shared::rgb;
-use fb_shared::rng::{Rng, shuffle};
+use fb_shared::rng::shuffle;
 
 use crate::bots::{BOT_DT, BotInput, BotView, Note, SharedTest, Waypoint, init_bot, path_step};
 use crate::builder::{Builder, PortalEnd, PortalOpts, PrimOpts, Ramp};
@@ -105,16 +105,9 @@ pub type FinishWith = Box<dyn FnOnce(&mut Builder, f64, f64) -> (Finish, Vec<Way
 
 #[derive(Default)]
 pub struct CourseOpts {
-    /// Sections in order (`pick_sections` for random ones).
+    /// Sections in order.
     pub sections: Vec<Segment>,
     pub finish_with: Option<FinishWith>,
-}
-
-/// A few sections drawn from a pool (without repeats) in a seeded order.
-pub fn pick_sections(rng: &mut Rng, mut pool: Vec<Segment>, n: usize) -> Vec<Segment> {
-    shuffle(&mut pool, rng);
-    pool.truncate(n);
-    pool
 }
 
 /// Alternates rest platforms between sections.

@@ -250,8 +250,8 @@ fn count_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
     compiling.made.store(made, Ordering::Relaxed);
 }
 
-/// Every map in its own look, then each look not shown yet on a map that has it, the lobby last (the room list
-/// is lit as it is afterwards).
+/// Every map in its own look (the race with all its sections), then each look not shown yet on a map that has it,
+/// the lobby last (the room list is lit as it is afterwards).
 fn plan() -> Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> {
     let classic = fb_sim::looks::classic().look;
     let kind = |id: MapId| match id {
@@ -268,6 +268,7 @@ fn plan() -> Vec<(&'static dyn MapDef, ArenaKind, &'static Look)> {
             lobby = Some(d);
             continue;
         }
+        let d: &'static dyn MapDef = if id == MapId::Race { &fb_maps::race::Showcase } else { d };
         out.push((d, kind(id), own_look(d)));
     }
     for l in LOOKS {

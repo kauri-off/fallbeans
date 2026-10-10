@@ -1,4 +1,4 @@
-//! The specials of every map as a client builds them: each look runs through the round without
+//! The specials of every map (every race section) as a client builds them: each look runs through the round without
 //! panicking, places only parts its special has, and every kind turns up.
 use fb_shared::PlayerId;
 use std::collections::BTreeSet;
@@ -10,7 +10,9 @@ use fb_sim::scene::{LookOut, SceneItem};
 #[test]
 fn looks_run_through_rounds() {
     let mut kinds = BTreeSet::new();
-    for &map in fb_maps::MAPS {
+    // (The race draws a few of its sections per seed: the showcase has them all.)
+    let showcase: &'static dyn fb_sim::map::MapDef = &fb_maps::race::Showcase;
+    for &map in fb_maps::MAPS.iter().chain([&showcase]) {
         let end = map.meta().duration.at_most(150.0);
         for seed in 1..=4 {
             let (mut b, spec) = build_map(map, seed, true, &[1, 2].map(PlayerId));

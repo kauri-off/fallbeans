@@ -7,7 +7,7 @@ use fb_sim::math::V3;
 
 #[test]
 fn replays_end_in_the_recorded_state() {
-    for map in [MapId::DoorDash, MapId::TailTag, MapId::HexAGone] {
+    for map in [MapId::Race, MapId::TailTag, MapId::HexAGone] {
         let def = fb_maps::by_id(map);
         let ids: Vec<PlayerId> = (1..=6).map(PlayerId).collect();
         let (mut a, _) = Arena::new(def, ArenaKind::Round, 42, -360, &ids, false);
@@ -49,7 +49,7 @@ fn replays_end_in_the_recorded_state() {
 
 #[test]
 fn ticks_the_server_skipped_are_skipped_on_replay() {
-    let def = fb_maps::by_id(MapId::DoorDash);
+    let def = fb_maps::by_id(MapId::Race);
     let ids: Vec<PlayerId> = (1..=4).map(PlayerId).collect();
     let (mut a, _) = Arena::new(def, ArenaKind::Round, 5, -360, &ids, false);
     a.record();
@@ -81,7 +81,7 @@ fn ticks_the_server_skipped_are_skipped_on_replay() {
 #[cfg(feature = "traces")]
 #[test]
 fn a_traced_round_logs_dives_and_tackles_and_leaves_the_state_alone() {
-    let def = fb_maps::by_id(MapId::DoorDash);
+    let def = fb_maps::by_id(MapId::Race);
     let ids: Vec<PlayerId> = (1..=8).map(PlayerId).collect();
     let run = |traced: bool| {
         let (mut a, _) = Arena::new(def, ArenaKind::Round, 7, -360, &ids, false);

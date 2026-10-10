@@ -1,32 +1,17 @@
-//! Bounce all the way: a mushroom forest, hovering trampolines, catapults over walls, one more thing from
-//! the seed, a second (higher) forest and a giant trampoline up to the finish.
+//! Bounce sections: mushroom forests, hovering trampolines, catapults over walls, a giant trampoline.
 use fb_shared::{Rgb, rgb};
 use fb_sim::bots::{Hop, Waypoint, WpX, aim_landing, hop_chain};
 use fb_sim::builder::{Builder, PrimOpts};
 use fb_sim::collider::ColliderOpts;
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, bumper_ramp, pick_sections, race_course, seesaws, trampoline_gap, with_rests,
-};
-use fb_sim::looks::{LookId, Pattern};
+use fb_sim::course::{SegOut, Segment};
+use fb_sim::looks::Pattern;
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::scene::Surface;
 use fb_sim::scene::pal;
 
 use crate::util::o;
-
-pub struct BouncePark;
-
-static META: GameMeta = GameMeta::new(
-    MapId::BouncePark,
-    "Прыг-скок",
-    Genre::Race,
-    "Грибы, батуты и катапульты: скачите со шляпки на шляпку, ловите летающие батуты, взлетайте над стенами. Рулите в полёте, чтобы приземлиться куда надо!",
-    "Допрыгайте до финиша",
-    150.0,
-);
 
 const CAPS: [Rgb; 5] = [
     rgb(0xff5f6d),
@@ -37,7 +22,7 @@ const CAPS: [Rgb; 5] = [
 ];
 
 /// Giant mushrooms over the void, each cap a little higher than the last: bounce from cap to cap.
-fn mushroom_forest(n: usize, power: f64) -> Segment {
+pub(super) fn mushroom_forest(n: usize, power: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(12.0, 2.0, 6.0), pal::PURPLE, o());
@@ -142,7 +127,7 @@ fn hover_trampoline(
 }
 
 /// Trampolines hovering over a gap, sliding from side to side: jump on, bounce across.
-fn hover_trampolines(n: usize, power: f64) -> Segment {
+pub(super) fn hover_trampolines(n: usize, power: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(12.0, 2.0, 6.0), pal::PURPLE, o());
@@ -192,7 +177,7 @@ fn hover_trampolines(n: usize, power: f64) -> Segment {
 }
 
 /// Walls too high to climb, with catapult pads before each: over the wall and down the other side.
-fn pad_catapults(n: usize) -> Segment {
+pub(super) fn pad_catapults(n: usize) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let w = 12.0;
@@ -233,7 +218,7 @@ fn pad_catapults(n: usize) -> Segment {
 }
 
 /// A big trampoline down in a pit, and a high ledge beyond it: bounce up and steer onto it.
-fn big_bounce(rise: f64) -> Segment {
+pub(super) fn big_bounce(rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         s.b.box_(v3(0.0, y - 1.0, s.z + 2.5), v3(12.0, 2.0, 5.0), pal::PURPLE, o());
@@ -309,28 +294,4 @@ fn big_bounce(rise: f64) -> Segment {
             })),
         }
     })
-}
-
-impl MapDef for BouncePark {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Jungle, LookId::Candy, LookId::Meadow]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![bumper_ramp(4.0, 22.0), trampoline_gap(), seesaws(3)];
-        let extra = pick_sections(&mut b.rng, pool, 1);
-        let mut sections = vec![mushroom_forest(5, 16.0), hover_trampolines(3, 15.0), pad_catapults(3)];
-        sections.extend(extra);
-        sections.push(mushroom_forest(6, 17.0));
-        sections.push(big_bounce(6.0));
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

@@ -1361,6 +1361,7 @@ fn enter_submits(
             Some(room) => Action::SubmitPin(room),
             None => return,
         },
+        Field::TrackCode => Action::AddTrack,
         Field::Chat => return,
     };
     out.write(UiAction(a));
@@ -1399,6 +1400,18 @@ fn home_actions(
                 profile.opts.name = None;
                 crate::settings::save_soon(&mut commands);
                 send(&mut senders, ClientMsg::Name(n));
+            }
+            Action::AddTrack => {
+                let code = field_text(&forms.fields, Field::TrackCode);
+                let (Some(pick), Some(l)) = (fb_proto::Pick::from_code(&code), session.lobby.as_ref()) else {
+                    continue;
+                };
+                if l.playlist.games.len() >= 12 {
+                    continue;
+                }
+                let mut next = l.playlist.clone();
+                next.games.push(pick);
+                send(&mut senders, ClientMsg::Playlist(next));
             }
             Action::Join(room) => {
                 session.denied = None;

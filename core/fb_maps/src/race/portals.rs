@@ -1,33 +1,17 @@
-//! Gaps crossed only by portals, with a few seed-drawn challenges in between.
+//! Portal sections: gaps crossed only by portals, blinking ones, a wall of them, cannons.
 use std::sync::Arc;
 
 use fb_shared::{Rgb, rgb};
 use fb_sim::bots::{BotView, SharedTest, Waypoint, aim_landing};
-use fb_sim::builder::{Builder, OpenFn, PortalEnd, PortalOpts, portal_shut};
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, moving_platforms, pick_sections, pistons, portal_fork, race_course, rotor_decks,
-    with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::builder::{OpenFn, PortalEnd, PortalOpts, portal_shut};
+use fb_sim::course::{SegOut, Segment};
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::{Piece, lamp_part, pal};
 
 use crate::util::o;
-
-pub struct PortalPanic;
-
-static META: GameMeta = GameMeta::new(
-    MapId::PortalPanic,
-    "Портальный переполох",
-    Genre::Race,
-    "Пропасти, которые не перепрыгнуть: только порталы! Обычные ведут туда и обратно, односторонние — только вперёд (выход со стрелкой), одни открываются по очереди, другие швыряют через стену.",
-    "Добегите до финиша",
-    150.0,
-);
 
 const ONE_WAY: Rgb = rgb(0x39e0d0);
 const CANNON: Rgb = rgb(0xff8a3d);
@@ -62,7 +46,7 @@ fn through(x: f64, z: f64) -> [Waypoint; 2] {
 
 /// Islands over gaps nobody can jump, each swept by a low bar: two one-way portals at the far end of each
 /// lead on to the next island (left to left, right to right).
-fn portal_islands(n: usize) -> Segment {
+pub(super) fn portal_islands(n: usize) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let w = 14.0;
@@ -127,7 +111,7 @@ fn portal_islands(n: usize) -> Segment {
 }
 
 /// A gap with three one-way portals in a row, each open for a moment in turn: go for the one about to open.
-fn blinking_portals() -> Segment {
+pub(super) fn blinking_portals() -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let near = 9.0;
@@ -182,7 +166,7 @@ fn blinking_portals() -> Segment {
 
 /// A wall too high to climb: portals at its foot come out on top of it and throw whoever comes out over
 /// it, down onto the landing beyond. Bumpers stand in the way to the portals.
-fn portal_wall() -> Segment {
+pub(super) fn portal_wall() -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let w = 16.0;
@@ -219,7 +203,7 @@ fn portal_wall() -> Segment {
 
 /// Portal cannons: step into a portal in the middle of a ledge and be shot out of the one at its edge,
 /// across the gap and down onto the next ledge (steer in the air to land).
-fn portal_cannons(n: usize) -> Segment {
+pub(super) fn portal_cannons(n: usize) -> Segment {
     Box::new(move |s| {
         let len = 10.0;
         let gap = 11.0;
@@ -263,7 +247,7 @@ fn portal_cannons(n: usize) -> Segment {
 }
 
 /// Before the finish: a lone one-way portal over a last gap (a jump and a dive make it too, just).
-fn last_hop() -> Segment {
+pub(super) fn last_hop() -> Segment {
     Box::new(move |s| {
         let y = s.y;
         s.b.box_(v3(0.0, y - 1.0, s.z + 3.0), v3(10.0, 2.0, 6.0), pal::PURPLE, o());
@@ -279,33 +263,4 @@ fn last_hop() -> Segment {
             ..Default::default()
         }
     })
-}
-
-impl MapDef for PortalPanic {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Neon, LookId::Starlight, LookId::Candy]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![portal_fork(), rotor_decks(2), moving_platforms(4), pistons(3, 14.0)];
-        let mut middle = pick_sections(&mut b.rng, pool, 2).into_iter();
-        let sections = vec![
-            portal_islands(2),
-            blinking_portals(),
-            middle.next().unwrap(),
-            portal_wall(),
-            middle.next().unwrap(),
-            portal_cannons(2),
-            last_hop(),
-        ];
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

@@ -1,15 +1,11 @@
-//! A climb to the crown, the first to touch it wins; the middle sections are drawn from the seed.
+//! Climbs up to a plateau, glove launches, and the summit finish: the first to touch the crown wins.
 use std::sync::Arc;
 
 use fb_sim::bots::Waypoint;
 use fb_sim::builder::{Builder, Ramp};
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, edge_jump, hammer_bridges, moving_platforms, pick_sections, portal_fork, race_course,
-    sliding_gates, timed_doors, tipping_bridge, trampoline_gap, with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{SegOut, Segment, edge_jump};
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{Finish, GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
+use fb_sim::map::Finish;
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, GloveOpts, arm_contact_eta, glove_puncher, rolling_balls, sweep_eta, y_on_ramp};
@@ -18,22 +14,8 @@ use fb_sim::scene::pal;
 
 use crate::util::{dynamic, freq, o, rot};
 
-pub struct CrownPeak;
-
-static META: GameMeta = GameMeta {
-    finale: true,
-    ..GameMeta::new(
-        MapId::CrownPeak,
-        "Гора короны",
-        Genre::Race,
-        "Долгий подъём: склон с шарами или скользящие ступени, мосты под молотами, перчатки и батуты, дальше — испытания в случайном порядке. Кто первым коснётся короны на вершине, тот и победил!",
-        "Доберитесь до короны",
-        170.0,
-    )
-};
-
 /// Up to a plateau: a ramp with balls in two lanes (blocks on the strip between), or sliding steps.
-fn climb_fork(rise: f64) -> Segment {
+pub(super) fn climb_fork(rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let z0 = s.z;
@@ -150,7 +132,7 @@ fn climb_fork(rise: f64) -> Segment {
 }
 
 /// A plateau swept by gloves, then launch pads up to a deck with a sweeper.
-fn glove_launch(rise: f64) -> Segment {
+pub(super) fn glove_launch(rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let z0 = s.z;
@@ -216,7 +198,7 @@ fn glove_launch(rise: f64) -> Segment {
 }
 
 /// The summit: three sliding steps, then the crown over a platform guarded by a slow sweeper.
-fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
+pub(super) fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
     let slide_x = |k: f64, t: f64| m::sin(t * (0.8 + k * 0.25) + k * 2.0) * 1.6;
     b.box_(v3(0.0, y0 - 1.0, z0 + 1.5), v3(8.0, 2.0, 3.0), pal::PURPLE, o());
     for k in 0..3 {
@@ -264,33 +246,4 @@ fn summit(b: &mut Builder, z0: f64, y0: f64) -> (Finish, Vec<Waypoint>) {
         half_width: Some(2.2),
     };
     (finish, route)
-}
-
-impl MapDef for CrownPeak {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Royal, LookId::Snow, LookId::Castle]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![
-            sliding_gates(4, 5.0),
-            moving_platforms(5),
-            tipping_bridge(6),
-            trampoline_gap(),
-            timed_doors(2, 16.0),
-            portal_fork(),
-        ];
-        let more = pick_sections(&mut b.rng, pool, 3);
-        let mut sections = vec![climb_fork(8.0), hammer_bridges(3), glove_launch(5.0)];
-        sections.extend(more);
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            finish_with: Some(Box::new(summit)),
-        };
-        race_course(b, ctx, opts)
-    }
 }

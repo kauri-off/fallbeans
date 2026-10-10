@@ -1,33 +1,17 @@
-//! Up and up: rock steps to catch the edges of, a cliff with ladders under a pendulum, something from the
-//! seed, shelves zig-zagging up over the void, and a tower of ladders to the finish at the top.
+//! Climbing sections: rock steps, a ladder cliff under a pendulum, zig-zag shelves, a ladder tower.
 use std::sync::Arc;
 
 use fb_shared::rgb;
 use fb_sim::bots::{BotView, SharedTest, Waypoint};
-use fb_sim::builder::{Builder, PrimOpts};
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, hammer_bridges, pick_sections, race_course, sliding_gates, tipping_bridge, with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::builder::PrimOpts;
+use fb_sim::course::{SegOut, Segment};
 use fb_sim::m;
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::props::arm_contact_eta;
 use fb_sim::scene::Surface;
 use fb_sim::scene::{Palette, pal};
 
 use crate::util::o;
-
-pub struct CliffClimb;
-
-static META: GameMeta = GameMeta::new(
-    MapId::CliffClimb,
-    "Скалолазы",
-    Genre::Race,
-    "Всё выше и выше! Запрыгивайте на уступы и цепляйтесь за край, лезьте по лестницам (прыжок — соскочить) и не попадитесь под маятник. Наверху ждёт финиш.",
-    "Заберитесь на вершину",
-    160.0,
-);
 
 const STEP_PALS: [Palette; 6] = [pal::ORANGE, pal::YELLOW, pal::GREEN, pal::TEAL, pal::BLUE, pal::PURPLE];
 
@@ -39,7 +23,7 @@ fn rock() -> PrimOpts {
 }
 
 /// Rock steps a little under the reach of a jump: jump, catch the edge, pull up. Boulders to hop over.
-fn ledge_steps(n: u32, rise: f64) -> Segment {
+pub(super) fn ledge_steps(n: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         let w = 14.0;
         let depth = 3.5;
@@ -73,7 +57,7 @@ fn ledge_steps(n: u32, rise: f64) -> Segment {
 
 /// A cliff face with ladders up it, and a pendulum swinging along the face at mid height: wait for it to
 /// pass (or hang on and let it go by), then up.
-fn ladder_wall(h: f64) -> Segment {
+pub(super) fn ladder_wall(h: f64) -> Segment {
     Box::new(move |s| {
         let w = 14.0;
         let wf = s.z + 10.0;
@@ -130,7 +114,7 @@ fn ladder_wall(h: f64) -> Segment {
 
 /// Narrow rock shelves stepping up from side to side over the void: jump across and up to the next one
 /// (catch its edge if the jump is short).
-fn zigzag_ledges(n: u32, rise: f64) -> Segment {
+pub(super) fn zigzag_ledges(n: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         s.b.box_(v3(0.0, s.y - 1.0, s.z + 2.5), v3(10.0, 2.0, 5.0), pal::PURPLE, o());
         let mut shelves = Vec::new();
@@ -181,7 +165,7 @@ fn zigzag_ledges(n: u32, rise: f64) -> Segment {
 
 /// A tower of shelves, each a ladder's climb above the last; sweeping bars on the shelves on the way
 /// (jump them, even at the foot of a ladder).
-fn ladder_tower(levels: u32, rise: f64) -> Segment {
+pub(super) fn ladder_tower(levels: u32, rise: f64) -> Segment {
     Box::new(move |s| {
         let w = 12.0;
         let depth = 8.0;
@@ -237,28 +221,4 @@ fn ladder_tower(levels: u32, rise: f64) -> Segment {
             ..Default::default()
         }
     })
-}
-
-impl MapDef for CliffClimb {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Snow, LookId::Desert, LookId::Castle]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![tipping_bridge(5), hammer_bridges(3), sliding_gates(3, 3.0)];
-        let extra = pick_sections(&mut b.rng, pool, 1);
-        let mut sections = vec![ledge_steps(4, 1.5), ladder_wall(6.0)];
-        sections.extend(extra);
-        sections.push(zigzag_ledges(6, 1.6));
-        sections.push(ladder_tower(3, 4.0));
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

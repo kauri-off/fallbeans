@@ -1,18 +1,12 @@
-//! An icy slope you cannot run up: only the zig-zag carpet strips give grip, balls roll down across them
-//! and blocks slide across your way; then challenges drawn from the seed, and gates with sliding gaps.
+//! Ball sections: an icy uphill slope with carpet strips for grip, balls and sliding blocks; a ball ramp.
 use std::sync::Arc;
 
 use fb_shared::cause::Hazard;
 use fb_sim::bots::Waypoint;
-use fb_sim::builder::{Builder, PrimOpts, Ramp};
+use fb_sim::builder::{PrimOpts, Ramp};
 use fb_sim::collider::ColliderOpts;
-use fb_sim::course::{
-    CourseOpts, SegOut, Segment, glove_alley, pick_sections, pistons, race_course, sliding_gates, tipping_bridge,
-    with_rests,
-};
-use fb_sim::looks::LookId;
+use fb_sim::course::{SegOut, Segment};
 use fb_sim::m::{self, MinMax};
-use fb_sim::map::{GameMeta, Genre, MapCtx, MapDef, MapId, MapSpec};
 use fb_sim::math::{V3, v3};
 use fb_sim::nodes::ROOT;
 use fb_sim::props::{BallLaneOpts, rolling_balls, y_on_ramp};
@@ -21,19 +15,8 @@ use fb_sim::scene::pal;
 
 use crate::util::{o, rot};
 
-pub struct BallHill;
-
-static META: GameMeta = GameMeta::new(
-    MapId::BallHill,
-    "Скользкий склон",
-    Genre::Race,
-    "Ледяной склон: держаться можно только на ковровых дорожках, сверху катятся шары, поперёк ездят блоки. Дальше — случайные испытания и ворота со сдвигающимися проёмами.",
-    "Доберитесь до финиша",
-    150.0,
-);
-
 /// An icy slope you cannot run up: only the carpet strips give grip.
-fn ice_slope() -> Segment {
+pub(super) fn carpet_slope() -> Segment {
     Box::new(|s| {
         let y = s.y;
         let (a0z, a0y) = (s.z + 2.0, y);
@@ -206,7 +189,7 @@ fn ice_slope() -> Segment {
 }
 
 /// A grippy ramp with balls in two lanes and blocks on the strip between them: step aside when no ball comes.
-fn ball_ramp(rise: f64) -> Segment {
+pub(super) fn ball_ramp(rise: f64) -> Segment {
     Box::new(move |s| {
         let y = s.y;
         let z0 = s.z;
@@ -285,27 +268,4 @@ fn ball_ramp(rise: f64) -> Segment {
             checkpoint: Some((z1 + 0.5, V3::new(0.0, y + rise + 0.1, z1 + 3.0))),
         }
     })
-}
-
-impl MapDef for BallHill {
-    fn meta(&self) -> &'static GameMeta {
-        &META
-    }
-
-    fn looks(&self) -> &'static [LookId] {
-        &[LookId::Snow, LookId::Meadow, LookId::Candy]
-    }
-
-    fn build(&self, b: &mut Builder, ctx: &MapCtx) -> MapSpec {
-        let pool = vec![ball_ramp(6.0), pistons(3, 14.0), tipping_bridge(5), glove_alley(3)];
-        let middle = pick_sections(&mut b.rng, pool, 2);
-        let mut sections = vec![ice_slope()];
-        sections.extend(middle);
-        sections.push(sliding_gates(4, 6.0));
-        let opts = CourseOpts {
-            sections: with_rests(sections, 7.0),
-            ..Default::default()
-        };
-        race_course(b, ctx, opts)
-    }
 }

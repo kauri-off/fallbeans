@@ -503,9 +503,10 @@ impl Arena {
     /// Starts recording the round for replays (before pawns are added).
     pub fn record(&mut self) {
         self.recording = Some(Recording {
-            // 5: ticks the server skipped (`Op::Skip`).
-            v: 5,
+            // 6: the race's sections.
+            v: 6,
             game: self.map.meta().id,
+            sections: self.map.sections(),
             kind: self.kind,
             seed: self.seed,
             tick0: self.tick,

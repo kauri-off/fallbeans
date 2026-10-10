@@ -250,6 +250,8 @@ pub enum Action {
     Fold(Fold),
     Section(Section),
     SaveName(Field),
+    /// The host adds the race of the track code typed in (`Field::TrackCode`) to the list.
+    AddTrack,
     Join(String),
     SubmitPin(String),
     CancelPin,
@@ -490,6 +492,7 @@ pub enum Field {
     RoomTitle,
     Pin,
     Chat,
+    TrackCode,
 }
 
 #[derive(Component)]
