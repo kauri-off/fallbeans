@@ -746,14 +746,18 @@ fn panel_rows(
                         c.commands().entity(t).insert(TextLayout::no_wrap());
                     });
                 };
-                let bells = session.scores.get(&pl.id).copied().unwrap_or(0);
                 if lobby {
-                    cell(r, 40.0, &format!("👑{}", pl.crowns), 13.0, MUTED, false);
-                    cell(r, 44.0, &format!("🔔{bells}"), 13.0, MUTED, false);
+                    let crowns = if pl.crowns > 0 {
+                        format!("👑{}", pl.crowns)
+                    } else {
+                        String::new()
+                    };
+                    cell(r, 40.0, &crowns, 13.0, MUTED, false);
                 } else {
                     cell(r, 40.0, &icon, 13.0, MUTED, false);
                     if round && genre_points {
-                        cell(r, 28.0, &bells.to_string(), 14.5, GOOD, true);
+                        let points = session.scores.get(&pl.id).copied().unwrap_or(0);
+                        cell(r, 28.0, &points.to_string(), 14.5, GOOD, true);
                     } else {
                         let ink = if dim { GHOST } else { INK };
                         cell(r, 30.0, &pl.score.to_string(), 14.5, ink, true);
