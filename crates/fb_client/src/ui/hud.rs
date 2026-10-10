@@ -32,7 +32,7 @@ impl Plugin for HudPlugin {
                 hud_state,
                 (
                     root.run_if(resource_changed::<Hud>),
-                    panel.run_if(resource_changed::<Hud>.or_else(resource_changed::<Session>)),
+                    panel_rows.run_if(resource_changed::<Hud>.or_else(resource_changed::<Session>)),
                     net_line.run_if(on_real_timer(Duration::from_millis(250))),
                     // (Lines gone before the log is looked at: neither takes away what the other did.)
                     (expire, feed.run_if(resource_changed::<FeedLog>)).chain(),
@@ -42,7 +42,11 @@ impl Plugin for HudPlugin {
                     results.run_if(resource_changed::<Outcome>.or_else(resource_changed::<Session>)),
                     summary.run_if(resource_changed::<Outcome>.or_else(resource_changed::<Session>)),
                     status.run_if(resource_changed::<Hud>.or_else(resource_changed::<Outcome>)),
-                    prompt.run_if(resource_changed::<Hud>.or_else(resource_changed::<Ui>)),
+                    prompt.run_if(
+                        resource_changed::<Hud>
+                            .or_else(resource_changed::<Ui>)
+                            .or_else(resource_changed::<Session>),
+                    ),
                 ),
             )
                 .chain(),
@@ -95,9 +99,18 @@ pub struct RoundTime {
 #[derive(Component)]
 struct HudRoot;
 #[derive(Component)]
+struct StandingsCol;
+#[derive(Component)]
 struct PanelBox;
 #[derive(Component)]
 struct NetLine;
+/// The advice after a fallback to WebSocket: its head and the rest.
+#[derive(Component)]
+struct VpnBox;
+#[derive(Component)]
+struct VpnHead;
+#[derive(Component)]
+struct VpnMore;
 #[derive(Component)]
 struct FeedBox;
 /// A line of the feed: its entry's number and time.
@@ -120,6 +133,8 @@ enum Pill {
     Bonus,
 }
 #[derive(Component)]
+struct GoBox;
+#[derive(Component)]
 struct GoText;
 #[derive(Component)]
 struct ResultsBox;
@@ -133,6 +148,10 @@ struct StatusBox;
 #[derive(Component)]
 struct PromptBox;
 #[derive(Component)]
+struct LobbyHint;
+#[derive(Component)]
+struct CountBox;
+#[derive(Component)]
 struct CountText;
 
 /// A node placed across the screen with its content centred (`left: 50%; translateX(-50%)` in CSS).
@@ -145,63 +164,66 @@ fn centred(top: Option<Val>, bottom: Option<Val>) -> Node {
         bottom: bottom.unwrap_or(Val::Auto),
         flex_direction: FlexDirection::Column,
         align_items: AlignItems::Center,
-        row_gap: rem(0.5),
+        row_gap: px(8),
         ..default()
     }
 }
 
-/// Big text in the display face, with a coloured shadow under it.
-fn shadowed(size: f32, color: Color, shadow: Color, f: &Fonts) -> impl Bundle {
+/// Big text in the bold face.
+fn big_text(size: f32, color: Color, f: &Fonts) -> impl Bundle {
     (
         Text::new(""),
         TextFont {
-            font: f.display.clone().into(),
+            font: f.strong.clone().into(),
             font_size: FontSize::Px(size),
             ..default()
         },
         TextColor(color),
-        TextShadow {
-            offset: Vec2::new(size / 28.0, size / 16.0),
-            color: shadow,
-        },
+        Pickable::IGNORE,
     )
 }
 
 /// The colour of a place: gold, silver and bronze, then none.
-fn medal(place: usize) -> Option<Color> {
+fn medal(place: usize) -> Option<(Color, Color)> {
     match place {
-        1 => Some(GOLD),
-        2 => Some(SILVER),
-        3 => Some(BRONZE),
+        1 => Some((GOLD, hex(0x3D2E08))),
+        2 => Some((SILVER, INK)),
+        3 => Some((BRONZE, hex(0x3A2414))),
         _ => None,
     }
 }
 
-/// A place in a round badge, lit in its medal's colour.
+/// A place in a round badge (`size` px), lit in its medal's colour.
 fn place_badge(p: &mut ChildSpawnerCommands, f: &Fonts, place: usize, size: f32, lit: bool) {
-    let m = medal(place).filter(|_| lit);
+    let (fill, ink) = medal(place).filter(|_| lit).unwrap_or((CARD2, MUTED));
     p.spawn((
         Node {
-            width: rem(size),
-            height: rem(size),
+            width: px(size),
+            height: px(size),
             border_radius: BorderRadius::MAX,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             flex_shrink: 0.0,
             ..default()
         },
-        BackgroundColor(m.unwrap_or(ink_wash(0.07))),
+        BackgroundColor(fill),
     ))
     .with_children(|b| {
-        rich_in(
-            b,
-            f,
-            &place.to_string(),
-            size * 7.0,
-            if m.is_some() { INK } else { MUTED },
-            true,
-        );
+        rich_in(b, f, &place.to_string(), (size * 0.5).round(), ink, true);
     });
+}
+
+/// A small card floating over the game, softly lit from below.
+fn pill(radius: f32) -> impl Bundle {
+    (
+        Node {
+            padding: UiRect::axes(px(12), px(6)),
+            border_radius: BorderRadius::all(px(radius)),
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        BoxShadow::new(SHADOW.with_alpha(0.1), px(0), px(1), px(0), px(4)),
+    )
 }
 
 fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
@@ -219,92 +241,120 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
             Pickable::IGNORE,
         ))
         .with_children(|h| {
-            // Top left: the standings.
+            // Top left: the standings, the link under them and its advice.
             h.spawn((
+                StandingsCol,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(1.0),
-                    left: rem(1.0),
-                    width: rem(17.5),
-                    max_height: percent(96),
+                    top: px(24),
+                    left: px(24),
+                    width: px(300),
+                    max_height: percent(94),
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::new(rem(0.5), rem(0.5), rem(0.75), rem(0.625)),
-                    border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(rem(1.375)),
-                    overflow: Overflow::clip(),
+                    align_items: AlignItems::FlexStart,
+                    row_gap: px(8),
                     ..default()
                 },
-                glass(),
+                Pickable::IGNORE,
             ))
-            .with_children(|p| {
-                p.spawn((
+            .with_children(|c| {
+                c.spawn((
                     PanelBox,
                     Node {
+                        width: percent(100),
                         flex_direction: FlexDirection::Column,
-                        row_gap: px(2),
+                        padding: UiRect::new(px(12), px(12), px(12), px(8)),
+                        border_radius: BorderRadius::all(px(18)),
+                        overflow: Overflow::clip(),
                         ..default()
                     },
+                    panel(),
                 ));
-                p.spawn((
+                c.spawn((
                     NetLine,
                     Node {
-                        margin: UiRect::top(rem(0.5)),
-                        padding: UiRect::new(rem(0.5), px(0), rem(0.5), px(0)),
-                        border: UiRect::top(px(1)),
+                        margin: UiRect::left(px(6)),
+                        padding: UiRect::axes(px(9), px(3)),
+                        border_radius: BorderRadius::all(px(8)),
                         ..default()
                     },
-                    BorderColor::all(RIM),
+                    BackgroundColor(Color::srgba(0.984, 0.973, 0.953, 0.82)),
                     Text::new(""),
                     TextFont {
-                        font_size: FontSize::Px(11.0),
+                        font: f.strong.clone().into(),
+                        font_size: FontSize::Px(13.0),
                         ..default()
                     },
-                    TextColor(FAINT),
+                    TextColor(hex(0x3B4A4E)),
                 ));
+                c.spawn((
+                    VpnBox,
+                    Node {
+                        width: percent(100),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(4),
+                        padding: UiRect::axes(px(14), px(12)),
+                        border_radius: BorderRadius::all(px(18)),
+                        display: display(false),
+                        ..default()
+                    },
+                    panel(),
+                ))
+                .with_children(|v| {
+                    let t = rich_in(v, f, "", 13.5, INK, true);
+                    v.commands().entity(t).insert(VpnHead);
+                    let t = rich(v, f, "", 13.5, FAINT);
+                    v.commands().entity(t).insert(VpnMore);
+                });
             });
             // Top right: the feed.
             h.spawn((
                 FeedBox,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(1.0),
-                    right: rem(1.0),
-                    max_width: percent(40),
+                    top: px(24),
+                    right: px(24),
+                    width: px(420),
+                    max_width: percent(36),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::FlexEnd,
-                    row_gap: rem(0.375),
+                    row_gap: px(6),
                     ..default()
                 },
             ));
             // Top middle: the timer over its bar, the map's line and the bonus in effect.
-            h.spawn(centred(Some(rem(1.0)), None)).with_children(|t| {
+            h.spawn(centred(Some(px(22)), None)).with_children(|t| {
                 t.spawn((
                     TimerBox,
                     Node {
-                        min_width: rem(9.0),
+                        width: px(190),
                         flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: rem(0.375),
-                        padding: UiRect::new(rem(1.25), rem(1.25), rem(0.375), rem(0.625)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(rem(1.125)),
+                        align_items: AlignItems::Stretch,
+                        row_gap: px(4),
+                        padding: UiRect::new(px(18), px(18), px(8), px(12)),
+                        border_radius: BorderRadius::all(px(18)),
                         display: display(false),
                         ..default()
                     },
-                    glass(),
+                    panel(),
                     Reveal::new(Motion::slide(0.0, -24.0)),
                 ))
                 .with_children(|b| {
-                    b.spawn((TimerText, shadowed(26.0, INK, Color::NONE, f)));
+                    b.spawn(Node {
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        c.spawn((TimerText, big_text(40.0, INK, f)));
+                    });
                     b.spawn((
                         Node {
-                            width: percent(100),
-                            height: rem(0.25),
+                            height: px(6),
                             border_radius: BorderRadius::MAX,
                             overflow: Overflow::clip(),
                             ..default()
                         },
-                        BackgroundColor(ink_wash(0.1)),
+                        BackgroundColor(WELL),
                     ))
                     .with_children(|bar| {
                         bar.spawn((
@@ -315,80 +365,156 @@ fn build_hud(mut commands: Commands, layers: Res<Layers>, f: Res<Fonts>) {
                                 border_radius: BorderRadius::MAX,
                                 ..default()
                             },
-                            BackgroundColor(BLUE),
+                            BackgroundColor(TEAL),
                         ));
                     });
                 });
-                for pill in [Pill::MapText, Pill::Bonus] {
-                    let bonus = pill == Pill::Bonus;
-                    t.spawn((
-                        pill,
-                        Node {
-                            padding: UiRect::axes(rem(1.0), rem(0.4375)),
-                            border: UiRect::all(px(if bonus { 2 } else { 1 })),
-                            border_radius: BorderRadius::MAX,
-                            display: display(false),
-                            ..default()
-                        },
-                        BackgroundColor(PANEL),
-                        BorderColor::all(if bonus { BLUE } else { RIM }),
-                        BoxShadow::new(
-                            if bonus {
-                                BLUE.with_alpha(0.35)
-                            } else {
-                                SHADOW.with_alpha(0.4)
-                            },
-                            px(0),
-                            px(4),
-                            px(0),
-                            px(16),
-                        ),
-                        Reveal::new(Motion::pop(0.7)),
-                    ))
-                    .with_children(|p| {
-                        rich_in(p, f, "", 15.0, INK, true);
-                    });
-                }
+                t.spawn(Node {
+                    column_gap: px(8),
+                    ..default()
+                })
+                .with_children(|r| {
+                    for p in [Pill::MapText, Pill::Bonus] {
+                        let bonus = p == Pill::Bonus;
+                        r.spawn((p, pill(12.0), Reveal::new(Motion::pop(0.7))))
+                            .insert(Node {
+                                padding: UiRect::axes(px(12), px(6)),
+                                border_radius: BorderRadius::all(px(12)),
+                                display: display(false),
+                                ..default()
+                            })
+                            .insert(BackgroundColor(if bonus { APRICOT_SOFT } else { PANEL }))
+                            .with_children(|p| {
+                                rich_in(p, f, "", 14.0, if bonus { hex(0x5E331B) } else { INK }, true);
+                            });
+                    }
+                });
             });
-            h.spawn((ResultsBox, centred(Some(rem(1.0)), None)));
+            h.spawn((ResultsBox, centred(Some(px(50)), None), Pickable::IGNORE));
             h.spawn((
                 SummaryBox,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: rem(1.0),
-                    right: rem(1.0),
-                    width: rem(24.0),
-                    max_width: percent(45),
-                    max_height: percent(94),
+                    top: px(0),
+                    bottom: px(0),
+                    right: px(40),
+                    width: px(720),
+                    max_width: percent(55),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+            // The middle: 3-2-1 in a disc, and «ВПЕРЁД!».
+            h.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(100),
+                    height: percent(100),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|c| {
+                c.spawn((
+                    CountBox,
+                    Node {
+                        width: px(230),
+                        height: px(230),
+                        border_radius: BorderRadius::MAX,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        display: display(false),
+                        ..default()
+                    },
+                    panel_raised(),
+                ))
+                .with_children(|b| {
+                    b.spawn((CountText, big_text(140.0, TEAL, f)));
+                });
+                c.spawn((
+                    GoBox,
+                    Node {
+                        padding: UiRect::axes(px(48), px(16)),
+                        border_radius: BorderRadius::all(px(36)),
+                        display: display(false),
+                        ..default()
+                    },
+                    BackgroundColor(TEAL),
+                    BoxShadow::new(SHADOW, px(0), px(6), px(0), px(24)),
+                ))
+                .with_children(|b| {
+                    b.spawn((GoText, big_text(64.0, ON_FILL, f)));
+                });
+            });
+            h.spawn((
+                IntroBox,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(90),
+                    top: px(200),
+                    width: px(620),
+                    max_width: percent(60),
                     ..default()
                 },
             ));
-            // The middle: 3-2-1 and «ВПЕРЁД!».
-            h.spawn(centred(Some(percent(26)), None)).with_children(|c| {
-                c.spawn((CountText, shadowed(160.0, INK, Color::WHITE, f)));
-                c.spawn((GoText, shadowed(108.0, BLUE, Color::WHITE, f)));
+            h.spawn((StatusBox, centred(None, Some(px(30)))));
+            h.spawn(centred(None, Some(px(30)))).with_children(|c| {
+                c.spawn((
+                    LobbyHint,
+                    Node {
+                        column_gap: px(10),
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(px(22), px(12)),
+                        border_radius: BorderRadius::all(px(18)),
+                        display: display(false),
+                        ..default()
+                    },
+                    panel(),
+                    Reveal::new(Motion::slide(0.0, 16.0)),
+                ))
+                .with_children(|r| {
+                    keycap(r, f, "Esc");
+                    rich_in(r, f, text::ROOM_MENU, 15.0, INK, true);
+                    let t = rich(r, f, text::ENTER_CHAT, 15.0, FAINT);
+                    r.commands().entity(t).insert(Node {
+                        margin: UiRect::left(px(14)),
+                        ..default()
+                    });
+                });
             });
-            h.spawn((IntroBox, centred(None, Some(rem(5.0)))));
-            h.spawn((StatusBox, centred(None, Some(rem(4.5)))));
-            h.spawn(centred(Some(percent(56)), None)).with_children(|c| {
+            h.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(100),
+                    height: percent(100),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .with_children(|c| {
                 c.spawn((
                     PromptBox,
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
-                        row_gap: rem(0.375),
-                        padding: UiRect::axes(rem(2.0), rem(1.125)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(rem(1.375)),
+                        row_gap: px(6),
+                        padding: UiRect::axes(px(34), px(22)),
+                        border_radius: BorderRadius::all(px(18)),
                         display: display(false),
                         ..default()
                     },
-                    glass(),
+                    panel(),
                     Reveal::new(Motion::pop(0.85)),
                 ))
                 .with_children(|c| {
-                    rich_in(c, f, text::CLICK_FIELD, 18.0, INK, true);
-                    rich(c, f, text::OR_ESC_MENU, 12.5, MUTED);
+                    rich_in(c, f, text::CLICK_FIELD, 22.0, INK, true);
+                    rich(c, f, text::OR_ESC_MENU, 16.0, FAINT);
                 });
             });
         });
@@ -489,45 +615,17 @@ fn root(hud: Res<Hud>, mut q: Single<&mut Node, With<HudRoot>>) {
     show(&mut q, hud.on);
 }
 
-fn name_tag(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, id: PlayerId, size: f32) {
-    let (name, color) = match session.player(id) {
-        Some(pl) => (pl.name.clone(), Some(pl.color)),
-        None => (format!("#{id}"), None),
-    };
-    p.spawn(Node {
-        column_gap: rem(0.375),
-        align_items: AlignItems::Center,
-        ..default()
-    })
-    .with_children(|r| {
-        dot(r, color.map_or(MUTED, suit), 0.625);
-        rich_in(r, f, &name, size, INK, true);
-    });
-}
-
-/// A genre's tag: its colour as a dot beside the ink (text wears the inks, the dot carries the genre).
-fn genre_pill(p: &mut ChildSpawnerCommands, f: &Fonts, g: Genre, s: &str) {
-    p.spawn((
-        Node {
-            column_gap: rem(0.3125),
-            align_items: AlignItems::Center,
-            padding: UiRect::new(rem(0.375), rem(0.5), px(2), px(2)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::MAX,
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(SURFACE),
-        BorderColor::all(RIM),
-    ))
-    .with_children(|t| {
-        dot(t, genre_color(g), 0.5);
-        rich_in(t, f, s, 11.0, INK, true);
-    });
+/// A player's name in bold, "Вы" for the player.
+fn who(session: &Session, id: PlayerId) -> String {
+    if session.me == Some(id) {
+        text::YOU_SHORT.into()
+    } else {
+        session.name_of(id)
+    }
 }
 
 /// Top left: the round, the players in their order with their status, score and ping.
-fn panel(
+fn panel_rows(
     q: Single<Entity, With<PanelBox>>,
     hud: Res<Hud>,
     session: Res<Session>,
@@ -538,10 +636,11 @@ fn panel(
         return;
     };
     let round = info.kind == ArenaKind::Round;
+    let lobby = info.kind == ArenaKind::Lobby;
     let f = &*f;
     let def = fb_maps::by_id(info.game).meta();
     let mut players = session.lobby.as_ref().map_or_else(Vec::new, |l| l.players.clone());
-    if info.kind == ArenaKind::Lobby {
+    if lobby {
         players.sort_by_key(|p| (core::cmp::Reverse(p.crowns), p.id));
     } else {
         players.sort_by_key(|p| (core::cmp::Reverse(p.score), p.id));
@@ -549,40 +648,37 @@ fn panel(
     let host = session.lobby.as_ref().and_then(|l| l.host);
     let genre_points = def.genre == Genre::Points;
     rebuild(&mut commands, *q, |p| {
-        p.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: rem(0.25),
-            padding: UiRect::new(rem(0.5), rem(0.5), px(0), rem(0.5)),
-            ..default()
-        })
+        p.spawn((
+            Node {
+                column_gap: px(8),
+                align_items: AlignItems::Center,
+                padding: UiRect::new(px(4), px(4), px(2), px(10)),
+                margin: UiRect::bottom(px(4)),
+                border: UiRect::bottom(px(1)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BorderColor::all(HAIR),
+        ))
         .with_children(|h| {
-            if round {
-                row(h, false, |r| {
-                    let s = if info.practice {
-                        text::PRACTICE_TITLE.to_string()
-                    } else {
-                        format!("{}/{}", info.index, info.total)
-                    };
-                    genre_pill(r, f, def.genre, &s);
-                    caption(r, f, text::genre(def.genre));
-                });
-                big(h, f, def.title, 15.0, INK);
-            } else {
-                let s = if info.kind == ArenaKind::Podium {
-                    text::GAME_SUMMARY.to_string()
+            let title = if round {
+                let s = if info.practice {
+                    text::PRACTICE_TITLE.to_string()
                 } else {
-                    session
-                        .lobby
-                        .as_ref()
-                        .map(|l| l.room.title.clone())
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or_else(|| text::LOBBY.into())
+                    format!("{}/{}", info.index, info.total)
                 };
-                if info.kind == ArenaKind::Lobby {
-                    caption(h, f, text::LOBBY);
-                }
-                big(h, f, &s, 15.0, INK);
-            }
+                genre_tag(h, f, Some(def.genre), &s);
+                rich_in(h, f, text::genre(def.genre), 15.0, INK, true);
+                def.title.to_string()
+            } else if lobby {
+                genre_tag(h, f, None, text::LOBBY);
+                session.lobby.as_ref().map(|l| l.room.title.clone()).unwrap_or_default()
+            } else {
+                rich_in(h, f, text::GAME_SUMMARY, 15.0, INK, true);
+                String::new()
+            };
+            let t = rich_in(h, f, &title, 15.0, MUTED, true);
+            h.commands().entity(t).insert(TextLayout::no_wrap());
         });
         for (rank, pl) in players.iter().enumerate() {
             let st = hud.roster.iter().find(|r| r.id == pl.id);
@@ -600,76 +696,94 @@ fn panel(
                     Some(_) => String::new(),
                 }
             };
-            let dim = st.is_some_and(|s| s.part == Part::Out) || !pl.connected;
+            let dim = (round && st.is_none_or(|s| s.part == Part::Out)) || (!pl.connected && !pl.bot);
             let me = session.me == Some(pl.id);
             p.spawn((
                 Node {
-                    column_gap: rem(0.5),
+                    column_gap: px(8),
                     align_items: AlignItems::Center,
-                    padding: UiRect::axes(rem(0.375), rem(0.25)),
-                    border: UiRect::left(px(3)),
-                    border_radius: BorderRadius::all(rem(0.625)),
+                    height: px(31),
+                    padding: UiRect::axes(px(4), px(0)),
+                    border_radius: BorderRadius::all(px(9)),
+                    flex_shrink: 0.0,
                     ..default()
                 },
-                BackgroundColor(if me { ink_wash(0.08) } else { Color::NONE }),
-                BorderColor {
-                    left: suit(pl.color).with_alpha(if dim { 0.35 } else { 1.0 }),
-                    ..BorderColor::all(Color::NONE)
-                },
+                BackgroundColor(if me { APRICOT_SOFT } else { Color::NONE }),
             ))
             .with_children(|r| {
-                place_badge(r, f, rank + 1, 1.25, info.kind != ArenaKind::Lobby);
+                if !lobby {
+                    place_badge(r, f, rank + 1, 22.0, true);
+                }
                 r.spawn(Node {
                     flex_grow: 1.0,
+                    flex_shrink: 1.0,
                     min_width: px(0),
                     overflow: Overflow::clip(),
                     ..default()
                 })
                 .with_children(|t| {
                     let ink = if dim {
-                        FAINT
+                        GHOST
                     } else if me {
-                        BLUE
+                        hex(0x5E331B)
                     } else {
                         INK
                     };
-                    rich_in(t, f, &pl.name, 13.0, ink, true);
+                    let star = if Some(pl.id) == host { " ⭐" } else { "" };
+                    let n = rich_in(t, f, &format!("{}{star}", pl.name), 14.5, ink, me);
+                    t.commands().entity(n).insert(TextLayout::no_wrap());
                 });
-                if Some(pl.id) == host {
-                    rich(r, f, "⭐", 11.0, INK);
-                }
-                if info.kind == ArenaKind::Lobby && pl.crowns > 0 {
-                    rich_in(r, f, &format!("👑{}", pl.crowns), 11.0, INK, true);
-                }
+                let cell = |r: &mut ChildSpawnerCommands, w: f32, s: &str, size: f32, ink: Color, strong: bool| {
+                    r.spawn(Node {
+                        width: px(w),
+                        justify_content: JustifyContent::FlexEnd,
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        let t = rich_in(c, f, s, size, ink, strong);
+                        c.commands().entity(t).insert(TextLayout::no_wrap());
+                    });
+                };
                 let bells = session.scores.get(&pl.id).copied().unwrap_or(0);
-                if info.kind == ArenaKind::Lobby && bells > 0 {
-                    rich(r, f, &format!("🔔{bells}"), 11.0, INK);
-                }
-                if !icon.is_empty() {
-                    rich(r, f, &icon, 11.0, INK);
-                }
-                if round && genre_points {
-                    rich_in(r, f, &bells.to_string(), 12.0, GOOD, true);
-                }
-                if info.kind != ArenaKind::Lobby {
-                    rich_in(r, f, &pl.score.to_string(), 13.5, INK, true);
+                if lobby {
+                    cell(r, 40.0, &format!("👑{}", pl.crowns), 13.0, MUTED, false);
+                    cell(r, 44.0, &format!("🔔{bells}"), 13.0, MUTED, false);
+                } else {
+                    cell(r, 40.0, &icon, 13.0, MUTED, false);
+                    if round && genre_points {
+                        cell(r, 28.0, &bells.to_string(), 14.5, GOOD, true);
+                    } else {
+                        let ink = if dim { GHOST } else { INK };
+                        cell(r, 30.0, &pl.score.to_string(), 14.5, ink, true);
+                    }
                 }
                 let ping = if pl.bot {
                     text::BOT.to_string()
                 } else if pl.connected {
-                    pl.ping.to_string()
+                    text::ping(pl.ping)
                 } else {
                     "—".into()
                 };
-                rich(r, f, &ping, 10.5, FAINT);
+                cell(r, 44.0, &ping, 12.5, FAINT, false);
             });
         }
     });
 }
 
+/// The advice after a fallback: its card and its two texts.
+#[derive(SystemParam)]
+struct VpnAdvice<'w, 's> {
+    node: Single<'w, 's, &'static mut Node, With<VpnBox>>,
+    lines: Query<'w, 's, (&'static mut Rich, Has<VpnHead>), VpnText>,
+    net: Query<'w, 's, &'static mut Text, With<NetLine>>,
+}
+
+type VpnText = Or<(With<VpnHead>, With<VpnMore>)>;
+
 /// Under the panel: transport and ping (and frames a second); after a fallback, the VPN hint.
 fn net_line(
-    mut q: Query<&mut Text, With<NetLine>>,
+    mut vpn: VpnAdvice,
     hud: Res<Hud>,
     conn: Option<Res<Conn>>,
     links: Query<&Link>,
@@ -681,7 +795,7 @@ fn net_line(
     if !hud.on {
         return;
     }
-    let Ok(mut t) = q.single_mut() else { return };
+    let Ok(mut t) = vpn.net.single_mut() else { return };
     let Some(conn) = conn else { return };
     let rtt = conn
         .entity
@@ -700,9 +814,13 @@ fn net_line(
             .unwrap_or(0.0);
         s += &format!(" · {fps:.0} к/с");
     }
-    if let Some(hint) = crate::diag::vpn_hint(&conn, now) {
-        s += "\n";
-        s += hint;
+    let hint = crate::diag::vpn_hint(&conn, now);
+    show(&mut vpn.node, hint.is_some());
+    if let Some(hint) = hint {
+        let (head, more) = hint.split_once('\n').unwrap_or((hint, ""));
+        for (mut r, is_head) in &mut vpn.lines {
+            r.set(if is_head { head } else { more });
+        }
     }
     if t.0 != s {
         t.0 = s;
@@ -743,29 +861,25 @@ fn feed(
 }
 
 fn feed_row(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, x: &FeedEntry) {
-    let bar = match &x.what {
-        Feed::Ko { out: true, .. } => CRITICAL,
-        Feed::Ko { .. } => SERIOUS,
-        Feed::Note(_) => BLUE,
-    };
     p.spawn((
         FeedRow(x.n, x.at),
         Node {
-            column_gap: rem(0.5),
+            column_gap: px(5),
             align_items: AlignItems::Center,
-            padding: UiRect::new(rem(0.75), rem(0.875), rem(0.375), rem(0.375)),
-            border: UiRect::new(px(3), px(1), px(1), px(1)),
-            border_radius: BorderRadius::all(rem(0.75)),
+            flex_wrap: FlexWrap::Wrap,
+            padding: UiRect::axes(px(12), px(6)),
+            border_radius: BorderRadius::all(px(12)),
             // (A note may carry a long path: an F8 report's.)
-            max_width: rem(30.0),
+            max_width: percent(100),
             ..default()
         },
-        glass_bar(bar),
-        Motion::slide(56.0, 0.0),
+        BackgroundColor(Color::srgba(0.984, 0.973, 0.953, 0.95)),
+        BoxShadow::new(SHADOW.with_alpha(0.1), px(0), px(1), px(0), px(4)),
+        Motion::slide(40.0, 0.0),
     ))
     .with_children(|r| match &x.what {
         Feed::Note(s) => {
-            let t = rich(r, f, s, 13.0, INK);
+            let t = rich(r, f, s, 14.5, INK);
             wrap_anywhere(r, t);
         }
         Feed::Ko {
@@ -776,20 +890,28 @@ fn feed_row(p: &mut ChildSpawnerCommands, f: &Fonts, session: &Session, x: &Feed
             shortcut,
         } => {
             let (icon, why) = text::cause(*cause);
-            if let Some(by) = by.filter(|b| b != victim) {
-                name_tag(r, f, session, by, 13.0);
+            let ink = if *out { CRITICAL } else { INK };
+            let by = by.filter(|b| b != victim).map(|b| format!("{} ", who(session, b)));
+            let victim = who(session, *victim);
+            let why = format!(" — {}", text::ko_line(why, *out, *shortcut));
+            let icon = format!("{icon} ");
+            let mut parts = Vec::new();
+            if let Some(b) = &by {
+                parts.push((b.as_str(), true, ink));
             }
-            rich(r, f, icon, 16.0, INK);
-            name_tag(r, f, session, *victim, 13.0);
-            let ink = if *out { CRITICAL } else { MUTED };
-            rich(r, f, &text::ko_line(why, *out, *shortcut), 12.0, ink);
+            parts.extend([
+                (icon.as_str(), false, INK),
+                (victim.as_str(), true, ink),
+                (why.as_str(), false, ink),
+            ]);
+            line_of(r, f, &parts, 14.5);
         }
     });
 }
 
 /// The feed gives way to the game's summary.
 fn feed_box(outcome: Res<Outcome>, mut q: Single<&mut Node, With<FeedBox>>) {
-    show(&mut q, outcome.game_end.is_none());
+    show(&mut q, outcome.game_end.is_none() && outcome.results.is_none());
 }
 
 /// A line of the feed goes after a while.
@@ -819,34 +941,57 @@ fn intro(
     rebuild(&mut commands, *q, |p| {
         let Some(info) = info else { return };
         let m = fb_maps::by_id(info.game).meta();
-        let g = genre_color(m.genre);
         p.spawn((
             Node {
-                width: rem(38.0),
-                max_width: percent(70),
+                width: percent(100),
                 flex_direction: FlexDirection::Column,
-                row_gap: rem(0.5),
-                padding: UiRect::new(rem(1.5), rem(1.5), rem(1.25), rem(1.375)),
-                border: UiRect::new(px(4), px(1), px(1), px(1)),
-                border_radius: BorderRadius::all(rem(1.5)),
+                padding: UiRect::new(px(36), px(36), px(30), px(32)),
+                border_radius: BorderRadius::all(px(18)),
                 ..default()
             },
-            glass_bar(g),
-            Motion::slide(0.0, 40.0).lasting(0.45),
+            panel(),
+            Motion::slide(-40.0, 0.0).lasting(0.45),
         ))
         .with_children(|c| {
             row(c, false, |r| {
-                genre_pill(r, f, m.genre, text::genre(m.genre));
-                if !info.practice {
-                    caption(r, f, &text::round_of(info.index, info.total));
+                let here = r.target_entity();
+                r.commands().entity(here).insert(Node {
+                    column_gap: px(10),
+                    align_items: AlignItems::Center,
+                    ..default()
+                });
+                if info.practice {
+                    genre_tag(r, f, Some(m.genre), text::PRACTICE_TITLE);
+                } else {
+                    genre_tag(r, f, Some(m.genre), text::genre(m.genre));
+                    rich_in(r, f, &text::round_of(info.index, info.total), 16.0, MUTED, true);
                 }
                 spacer(r);
-                let left = rich_in(r, f, "", 14.0, BLUE, true);
-                r.commands().entity(left).insert(IntroLeft);
+                r.spawn((
+                    Node {
+                        padding: UiRect::axes(px(10), px(3)),
+                        border_radius: BorderRadius::MAX,
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    BackgroundColor(CARD2),
+                ))
+                .with_children(|b| {
+                    let t = rich_in(b, f, "", 13.0, MUTED, true);
+                    b.commands().entity(t).insert(IntroLeft);
+                });
             });
-            big(c, f, m.title, 36.0, INK);
-            rich_in(c, f, &format!("🎯 {}.", m.goal), 17.0, INK, true);
-            muted(c, f, m.desc);
+            let t = big(c, f, m.title, 52.0, INK);
+            c.commands().entity(t).insert(Node {
+                margin: UiRect::new(px(0), px(0), px(18), px(10)),
+                ..default()
+            });
+            rich_in(c, f, &format!("🎯 {}.", m.goal), 19.0, INK, true);
+            let d = rich(c, f, m.desc, 16.0, MUTED);
+            c.commands().entity(d).insert(Node {
+                margin: UiRect::top(px(10)),
+                ..default()
+            });
         });
     });
 }
@@ -872,16 +1017,37 @@ type NodeOf<T, A, B, C> = (With<T>, Without<A>, Without<B>, Without<C>);
 
 type PillNode = (Entity, &'static Pill, &'static mut Node);
 
-/// The intro, the timer and its bar, and the «ВПЕРЁД!» and 3-2-1 texts.
+/// The intro, the timer and its bar, and the «ВПЕРЁД!» and 3-2-1 texts in their boxes.
 #[derive(SystemParam)]
 struct Countdown<'w, 's> {
     intro: Single<'w, 's, &'static mut Node, NodeOf<IntroBox, Pill, TimerBox, TimerFill>>,
     timer_box: Single<'w, 's, (Entity, &'static mut Node), NodeOf<TimerBox, IntroBox, Pill, TimerFill>>,
-    fill: Single<'w, 's, &'static mut Node, NodeOf<TimerFill, IntroBox, Pill, TimerBox>>,
+    fill:
+        Single<'w, 's, (&'static mut Node, &'static mut BackgroundColor), NodeOf<TimerFill, IntroBox, Pill, TimerBox>>,
     timer: Single<'w, 's, (&'static mut Text, &'static mut TextColor), Only<TimerText, GoText, CountText>>,
-    go: Single<'w, 's, (Entity, &'static mut Text), Only<GoText, TimerText, CountText>>,
-    count: Single<'w, 's, (Entity, &'static mut Text, &'static mut TextColor), Only<CountText, TimerText, GoText>>,
+    go: Single<'w, 's, &'static mut Text, Only<GoText, TimerText, CountText>>,
+    count: Single<'w, 's, &'static mut Text, Only<CountText, TimerText, GoText>>,
+    boxes: Query<'w, 's, (Entity, &'static mut Node, Has<GoBox>), BoxOf>,
+    standings: Single<'w, 's, &'static mut Node, StandingsOnly>,
 }
+
+type StandingsOnly = (
+    With<StandingsCol>,
+    Without<IntroBox>,
+    Without<TimerBox>,
+    Without<TimerFill>,
+    Without<Pill>,
+    Without<GoBox>,
+    Without<CountBox>,
+);
+
+type BoxOf = (
+    Or<(With<GoBox>, With<CountBox>)>,
+    Without<IntroBox>,
+    Without<TimerBox>,
+    Without<TimerFill>,
+    Without<Pill>,
+);
 
 /// Every frame: the intro and its time to the start, the timer and its bar, the map's line, the bonus in effect,
 /// «ВПЕРЁД!», 3-2-1, and the time to the next scene.
@@ -896,55 +1062,64 @@ fn clock(
 ) {
     let between = round.between();
     let in_round = round.hud.on && round.hud.kind == Some(ArenaKind::Round) && !between;
-    let before = in_round && round.time.t < 0.0;
+    // (The intro's card gives way to the standings for 3-2-1.)
+    let before = in_round && round.time.t < -3.0;
     let on = in_round && round.time.t >= 0.0;
     show(&mut countdown.intro, before);
+    // (And to a round's results, which tell the same and more.)
+    show(&mut countdown.standings, !before && round.outcome.results.is_none());
     let (box_e, ref mut box_node) = *countdown.timer_box;
     show(box_node, on);
     let left = round.time.time_left;
     let width = percent((left / round.time.duration.max(1.0) * 100.0) as f32);
-    if countdown.fill.width != width {
-        countdown.fill.width = width;
+    let hurry = on && left < 10.0;
+    let (ref mut fill, ref mut bar) = *countdown.fill;
+    if fill.width != width {
+        fill.width = width;
     }
+    bar.set_if_neq(BackgroundColor(if hurry { CRITICAL } else { TEAL }));
     let (ref mut t, ref mut c) = *countdown.timer;
     let s = if on { text::fmt_time(left) } else { String::new() };
     if t.0 != s {
         t.0 = s;
     }
-    let hurry = on && left < 10.0;
     c.set_if_neq(TextColor(if hurry { CRITICAL } else { INK }));
     // (Each of the last ten seconds beats.)
     let sec = left.ceil() as i64;
     if hurry && sec != *ticked && sec > 0 {
-        commands.entity(box_e).insert(Motion::pop(1.12).lasting(0.3));
+        commands.entity(box_e).insert(Motion::pop(1.1).lasting(0.3));
     }
     *ticked = sec;
-    let (go_e, ref mut go) = *countdown.go;
-    let s = if on && round.time.t < 1.2 { text::GO } else { "" };
-    if go.0 != s {
-        if !s.is_empty() {
-            commands.entity(go_e).insert(Motion::pop(0.3).lasting(0.5));
-        }
-        go.0 = s.into();
-    }
+    let go_s = if on && round.time.t < 1.2 { text::GO } else { "" };
     let n = (-round.time.t).ceil() as i64;
-    let s = if round.hud.on && round.hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&n) {
+    let count_s = if round.hud.on && round.hud.kind == Some(ArenaKind::Round) && (1..=3).contains(&n) {
         n.to_string()
     } else {
         String::new()
     };
-    let (count_e, ref mut count, ref mut ink) = *countdown.count;
-    if count.0 != s {
-        if !s.is_empty() {
-            commands.entity(count_e).insert(Motion::pop(1.9).lasting(0.45));
-        }
-        count.0 = s;
+    let go_new = countdown.go.0 != go_s;
+    let count_new = countdown.count.0 != count_s;
+    if go_new {
+        countdown.go.0 = go_s.into();
     }
-    ink.set_if_neq(TextColor(match n {
-        3 => CRITICAL,
-        2 => WARNING,
-        _ => GREEN_DEEP,
-    }));
+    if count_new {
+        countdown.count.0.clone_from(&count_s);
+    }
+    for (e, mut node, go) in &mut countdown.boxes {
+        let (on, new) = if go {
+            (!go_s.is_empty(), go_new)
+        } else {
+            (!count_s.is_empty(), count_new)
+        };
+        show(&mut node, on);
+        if on && new {
+            commands.entity(e).insert(if go {
+                Motion::pop(0.3).lasting(0.5)
+            } else {
+                Motion::pop(1.6).lasting(0.45)
+            });
+        }
+    }
     for (e, pill, mut node) in &mut pills {
         let s = match pill {
             _ if !on => None,
@@ -969,33 +1144,54 @@ fn clock(
     }
 }
 
-fn next_line(p: &mut ChildSpawnerCommands, f: &Fonts, label_s: &'static str) {
-    let e = rich_in(p, f, "", 13.0, BLUE, true);
-    p.commands().entity(e).insert(NextLine(label_s));
-}
-
-/// A board's head, lit by a gradient: its caption, its title, and the time to the next scene.
+/// A board's head: its caption, its title, and the time to the next scene.
 fn board_head(p: &mut ChildSpawnerCommands, f: &Fonts, cap: &str, title: &str, next: &'static str) {
-    p.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: rem(0.25),
-            padding: UiRect::new(rem(1.375), rem(1.375), rem(1.125), rem(1.0)),
-            ..default()
-        },
-        BackgroundGradient::from(LinearGradient::to_right(vec![
-            BLUE_SOFT.into(),
-            BLUE_SOFT.with_alpha(0.0).into(),
-        ])),
-    ))
-    .with_children(|h| {
-        rich_in(h, f, &cap.to_uppercase(), 11.0, MUTED, true);
-        big(h, f, title, 24.0, INK);
-        next_line(h, f, next);
+    caption(p, f, cap);
+    // (Title and time one under the other: a title wrapped beside the time is measured a line short.)
+    p.spawn(Node {
+        flex_direction: FlexDirection::Column,
+        align_items: AlignItems::FlexStart,
+        row_gap: px(8),
+        margin: UiRect::new(px(0), px(0), px(4), px(14)),
+        flex_shrink: 0.0,
+        ..default()
+    })
+    .with_children(|r| {
+        big(r, f, title, 30.0, INK);
+        r.spawn((
+            Node {
+                padding: UiRect::axes(px(12), px(5)),
+                border_radius: BorderRadius::MAX,
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(CARD2),
+        ))
+        .with_children(|b| {
+            let e = rich_in(b, f, "", 14.0, MUTED, true);
+            b.commands().entity(e).insert(NextLine(next));
+        });
     });
 }
 
-/// After a round: points won and lost, on a board at the top.
+/// A board over the game.
+fn board(width: f32) -> impl Bundle {
+    (
+        Node {
+            width: px(width),
+            max_width: percent(92),
+            max_height: percent(100),
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::new(px(34), px(34), px(28), px(22)),
+            border_radius: BorderRadius::all(px(20)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        panel_raised(),
+    )
+}
+
+/// After a round: points won and lost, on a board at the top over the game veiled.
 fn results(
     q: Single<Entity, With<ResultsBox>>,
     outcome: Res<Outcome>,
@@ -1016,35 +1212,30 @@ fn results(
         };
         p.spawn((
             Node {
-                width: rem(36.0),
-                max_width: percent(70),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.5)),
-                overflow: Overflow::clip(),
+                position_type: PositionType::Absolute,
+                top: px(-50),
+                left: px(0),
+                width: percent(100),
+                height: Val::Vh(100.0),
                 ..default()
             },
-            glass(),
-            Motion::slide(0.0, -32.0).lasting(0.4),
-        ))
-        .with_children(|c| {
-            let cap = if r.practice {
-                text::PRACTICE_SMALL.to_string()
-            } else {
-                text::results_of(r.index, r.total)
-            };
-            board_head(c, f, &cap, title, next);
-            c.spawn(Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: px(2),
-                padding: UiRect::all(rem(0.625)),
-                ..default()
-            })
-            .with_children(|t| {
+            BackgroundColor(Color::srgba(0.188, 0.157, 0.125, 0.18)),
+            Pickable::IGNORE,
+        ));
+        p.spawn((board(820.0), Motion::slide(0.0, -32.0).lasting(0.4)))
+            .with_children(|c| {
+                let cap = if r.practice {
+                    text::PRACTICE_SMALL.to_string()
+                } else {
+                    text::results_of(r.index, r.total)
+                };
+                board_head(c, f, &cap, title, next);
                 for (i, row_) in r.rows.iter().enumerate() {
                     let me = session.me == Some(row_.id);
-                    let e = table_row(t, me, |t| {
-                        place_badge(t, f, row_.place, 1.5, true);
+                    let last = i + 1 == r.rows.len();
+                    let off = session.player(row_.id).is_some_and(|p| !p.connected && !p.bot);
+                    let e = table_row(c, me, last, 56.0, |t| {
+                        cell(t, 40.0, false, |x| place_badge(x, f, row_.place, 26.0, true));
                         t.spawn(Node {
                             flex_grow: 1.0,
                             min_width: px(0),
@@ -1053,112 +1244,115 @@ fn results(
                             ..default()
                         })
                         .with_children(|x| {
-                            name_tag(x, f, &session, row_.id, 14.0);
-                            rich(x, f, &text::round_note(row_.note), 11.5, MUTED);
+                            row(x, false, |n| {
+                                let here = n.target_entity();
+                                n.commands().entity(here).insert(Node {
+                                    column_gap: px(0),
+                                    ..default()
+                                });
+                                let ink = if off { GHOST } else { INK };
+                                rich_in(n, f, &session.name_of(row_.id), 16.0, ink, true);
+                                if me {
+                                    rich(n, f, text::YOU, 16.0, FAINT);
+                                }
+                            });
+                            rich(
+                                x,
+                                f,
+                                &text::round_note(row_.note),
+                                13.5,
+                                if off { GHOST } else { FAINT },
+                            );
                         });
-                        cell(t, 2.25, |x| {
-                            rich_in(x, f, &format!("+{}", row_.points), 13.0, GOOD, true);
-                        });
-                        cell(t, 2.0, |x| {
-                            if row_.penalty > 0 {
-                                rich_in(x, f, &format!("−{}", row_.penalty), 13.0, CRITICAL, true);
+                        cell(t, 54.0, true, |x| {
+                            if row_.points > 0 {
+                                rich_in(x, f, &format!("+{}", row_.points), 16.0, GOOD, true);
                             }
                         });
-                        cell(t, 2.75, |x| {
-                            let (fill, ink) = match row_.delta {
-                                d if d > 0 => (GREEN_DEEP.with_alpha(0.14), GOOD),
-                                d if d < 0 => (CRITICAL.with_alpha(0.12), CRITICAL),
-                                _ => (ink_wash(0.07), MUTED),
-                            };
-                            badge(x, f, &text::signed(row_.delta), fill, ink);
+                        cell(t, 54.0, true, |x| {
+                            if row_.penalty > 0 {
+                                rich_in(x, f, &format!("−{}", row_.penalty), 16.0, CRITICAL, true);
+                            }
                         });
-                        cell(t, 2.5, |x| {
-                            rich_in(x, f, &row_.total.to_string(), 16.0, INK, true);
+                        cell(t, 60.0, false, |x| {
+                            let (fill, ink) = match row_.delta {
+                                d if d > 0 => (GOOD_SOFT, GOOD),
+                                d if d < 0 => (CRITICAL_SOFT, CRITICAL),
+                                _ => (Color::NONE, GHOST),
+                            };
+                            x.spawn((
+                                Node {
+                                    padding: UiRect::axes(px(7), px(2)),
+                                    border_radius: BorderRadius::all(px(8)),
+                                    ..default()
+                                },
+                                BackgroundColor(fill),
+                            ))
+                            .with_children(|b| {
+                                let s = if row_.delta == 0 {
+                                    "—".into()
+                                } else {
+                                    text::signed(row_.delta)
+                                };
+                                rich_in(b, f, &s, 13.0, ink, true);
+                            });
+                        });
+                        cell(t, 62.0, true, |x| {
+                            rich_in(x, f, &row_.total.to_string(), 19.0, INK, true);
                         });
                     });
-                    t.commands()
+                    c.commands()
                         .entity(e)
                         .insert(Motion::slide(-24.0, 0.0).after(0.15 + i as f32 * 0.05));
                 }
             });
-        });
     });
 }
 
-fn table_row(p: &mut ChildSpawnerCommands, me: bool, f: impl FnOnce(&mut ChildSpawnerCommands)) -> Entity {
+/// A row of a board's table: lit if it is the player's, over a rule unless it is the last.
+fn table_row(
+    p: &mut ChildSpawnerCommands,
+    me: bool,
+    last: bool,
+    high: f32,
+    f: impl FnOnce(&mut ChildSpawnerCommands),
+) -> Entity {
     p.spawn((
         Node {
-            column_gap: rem(0.625),
+            column_gap: px(6),
             align_items: AlignItems::Center,
-            padding: UiRect::axes(rem(0.625), rem(0.375)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(rem(0.75)),
+            min_height: px(high),
+            padding: UiRect::axes(px(if me { 8 } else { 0 }), px(0)),
+            margin: UiRect::axes(px(if me { -8 } else { 0 }), px(0)),
+            border: UiRect::bottom(px(if me || last { 0 } else { 1 })),
+            border_radius: BorderRadius::all(px(if me { 12 } else { 0 })),
+            flex_shrink: 0.0,
             ..default()
         },
-        BackgroundColor(if me { BLUE.with_alpha(0.08) } else { ink_wash(0.03) }),
-        BorderColor::all(if me { BLUE.with_alpha(0.45) } else { Color::NONE }),
+        BackgroundColor(if me { APRICOT_SOFT } else { Color::NONE }),
+        BorderColor::all(HAIR),
     ))
     .with_children(f)
     .id()
 }
 
-fn cell(p: &mut ChildSpawnerCommands, w: f32, f: impl FnOnce(&mut ChildSpawnerCommands)) {
+/// A cell of a table `w` px wide, its content at its end or in its middle.
+fn cell(p: &mut ChildSpawnerCommands, w: f32, end: bool, f: impl FnOnce(&mut ChildSpawnerCommands)) {
     p.spawn(Node {
-        width: rem(w),
-        justify_content: JustifyContent::FlexEnd,
+        width: px(w),
+        justify_content: if end {
+            JustifyContent::FlexEnd
+        } else {
+            JustifyContent::Center
+        },
+        align_items: AlignItems::Center,
         flex_shrink: 0.0,
         ..default()
     })
     .with_children(f);
 }
 
-/// A step of the podium: the player over a block as high as their place deserves.
-fn podium_step(p: &mut ChildSpawnerCommands, f: &Fonts, s: &fb_proto::Standing) {
-    let (high, size) = match s.place {
-        1 => (5.5, 3.25),
-        2 => (4.0, 2.75),
-        _ => (3.0, 2.5),
-    };
-    let m = medal(s.place as usize).unwrap_or(MUTED);
-    p.spawn((
-        Node {
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            row_gap: rem(0.375),
-            width: rem(6.5),
-            ..default()
-        },
-        Motion::slide(0.0, 48.0).after(match s.place {
-            1 => 0.45,
-            2 => 0.25,
-            _ => 0.1,
-        }),
-    ))
-    .with_children(|c| {
-        avatar(c, f, &s.name, suit(s.color), size);
-        rich_in(c, f, &s.name, 13.0, INK, true);
-        rich_in(c, f, &s.total.to_string(), 15.0, INK, true);
-        c.spawn((
-            Node {
-                width: percent(100),
-                height: rem(high),
-                justify_content: JustifyContent::Center,
-                padding: UiRect::top(rem(0.5)),
-                border_radius: BorderRadius::new(rem(0.75), rem(0.75), px(0), px(0)),
-                ..default()
-            },
-            BackgroundGradient::from(LinearGradient::to_bottom(vec![
-                m.with_alpha(0.95).into(),
-                m.with_alpha(0.25).into(),
-            ])),
-        ))
-        .with_children(|b| {
-            big(b, f, &s.place.to_string(), 26.0, INK);
-        });
-    });
-}
-
-/// The end of the game: the podium, the final table and the titles, beside the podium on the field.
+/// The end of the game, beside the podium on the field: who won, the final table and the titles.
 fn summary(
     q: Single<Entity, With<SummaryBox>>,
     outcome: Res<Outcome>,
@@ -1169,127 +1363,118 @@ fn summary(
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
         let Some(g) = &outcome.game_end else { return };
-        p.spawn((
-            Node {
-                width: percent(100),
-                max_height: percent(100),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(rem(1.5)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            glass(),
-            Motion::slide(48.0, 0.0).lasting(0.45),
-        ))
-        .with_children(|c| {
-            let title = match g.standings.first() {
-                Some(w) if session.me == Some(w.id) => text::YOU_WON.to_string(),
-                Some(w) => text::wins(&w.name),
-                None => text::GAME_OVER.to_string(),
-            };
-            board_head(c, f, text::GAME_SUMMARY, &format!("👑 {title}"), text::BACK_TO_LOBBY);
-            c.spawn((
-                Node {
+        p.spawn((board(720.0), Motion::slide(48.0, 0.0).lasting(0.45)))
+            .with_children(|c| {
+                let title = match g.standings.first() {
+                    Some(w) if session.me == Some(w.id) => format!("👑 {}", text::YOU_WON),
+                    Some(w) => format!("👑 {}", text::wins(&w.name)),
+                    None => text::GAME_OVER.to_string(),
+                };
+                board_head(c, f, text::GAME_SUMMARY, &title, text::BACK_TO_LOBBY);
+                c.spawn(Node {
                     flex_direction: FlexDirection::Column,
-                    row_gap: rem(0.75),
-                    padding: UiRect::all(rem(1.0)),
                     overflow: Overflow::scroll_y(),
                     flex_shrink: 1.0,
-                    ..default()
-                },
-                bevy::ui_widgets::ScrollArea,
-            ))
-            .with_children(|b| {
-                b.spawn(Node {
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::FlexEnd,
-                    column_gap: rem(0.375),
-                    padding: UiRect::top(rem(0.5)),
+                    min_height: px(0),
                     ..default()
                 })
-                .with_children(|podium| {
-                    for place in [2, 1, 3] {
-                        if let Some(s) = g.standings.iter().find(|s| s.place == place) {
-                            podium_step(podium, f, s);
-                        }
-                    }
-                });
-                caption(b, f, text::STANDINGS);
-                b.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    ..default()
-                })
-                .with_children(|t| {
-                    for s in &g.standings {
-                        let me = session.me == Some(s.id);
-                        table_row(t, me, |r| {
-                            place_badge(r, f, s.place as usize, 1.375, true);
-                            r.spawn(Node {
+                .insert(bevy::ui_widgets::ScrollArea)
+                .with_children(|b| {
+                    let h = subheading(b, f, text::STANDINGS);
+                    b.commands().entity(h).insert(Node {
+                        margin: UiRect::bottom(px(6)),
+                        ..default()
+                    });
+                    let half = g.standings.len().div_ceil(2);
+                    b.spawn(Node {
+                        column_gap: px(24),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|cols| {
+                        for part in [&g.standings[..half], &g.standings[half..]] {
+                            cols.spawn(Node {
+                                flex_direction: FlexDirection::Column,
                                 flex_grow: 1.0,
+                                flex_basis: px(0),
                                 min_width: px(0),
-                                column_gap: rem(0.375),
-                                align_items: AlignItems::Center,
-                                overflow: Overflow::clip(),
                                 ..default()
                             })
-                            .with_children(|x| {
-                                dot(x, suit(s.color), 0.625);
-                                rich_in(x, f, &s.name, 13.0, INK, true);
+                            .with_children(|t| {
+                                for s in part {
+                                    let me = session.me == Some(s.id);
+                                    table_row(t, me, false, 40.0, |r| {
+                                        let here = r.target_entity();
+                                        r.commands().entity(here).insert(Node {
+                                            column_gap: px(10),
+                                            align_items: AlignItems::Center,
+                                            min_height: px(40),
+                                            padding: UiRect::axes(px(if me { 8 } else { 0 }), px(0)),
+                                            margin: UiRect::axes(px(if me { -8 } else { 0 }), px(0)),
+                                            border: UiRect::bottom(px(if me { 0 } else { 1 })),
+                                            border_radius: BorderRadius::all(px(if me { 10 } else { 0 })),
+                                            ..default()
+                                        });
+                                        place_badge(r, f, s.place as usize, 26.0, true);
+                                        let n = rich_in(r, f, &s.name, 16.0, INK, true);
+                                        r.commands().entity(n).insert((
+                                            Node {
+                                                flex_grow: 1.0,
+                                                flex_shrink: 1.0,
+                                                min_width: px(0),
+                                                ..default()
+                                            },
+                                            TextLayout::no_wrap(),
+                                        ));
+                                        let w = rich(r, f, &format!("🏆{}", s.wins), 14.0, FAINT);
+                                        r.commands().entity(w).insert(TextLayout::no_wrap());
+                                        cell(r, 34.0, true, |x| {
+                                            rich_in(x, f, &s.total.to_string(), 16.0, INK, true);
+                                        });
+                                    });
+                                }
                             });
-                            rich(r, f, &format!("🏆{}", s.wins), 12.0, MUTED);
-                            cell(r, 2.5, |x| {
-                                rich_in(x, f, &s.total.to_string(), 15.0, INK, true);
-                            });
+                        }
+                    });
+                    if !g.awards.is_empty() {
+                        let h = subheading(b, f, text::AWARDS);
+                        b.commands().entity(h).insert(Node {
+                            margin: UiRect::new(px(0), px(0), px(22), px(10)),
+                            ..default()
                         });
                     }
-                });
-                if !g.awards.is_empty() {
-                    caption(b, f, text::AWARDS);
-                }
-                for (i, a) in g.awards.iter().enumerate() {
-                    b.spawn((
-                        Node {
-                            column_gap: rem(0.75),
-                            align_items: AlignItems::Center,
-                            padding: UiRect::axes(rem(0.75), rem(0.5)),
-                            border: UiRect::all(px(1)),
-                            border_radius: BorderRadius::all(rem(0.875)),
-                            ..default()
-                        },
-                        BackgroundColor(GROUP),
-                        BorderColor::all(RIM),
-                        Motion::slide(24.0, 0.0).after(0.6 + i as f32 * 0.08),
-                    ))
-                    .with_children(|r| {
-                        let (icon, title, what) = text::award(a);
-                        r.spawn((
-                            Node {
-                                width: rem(2.5),
-                                height: rem(2.5),
-                                border_radius: BorderRadius::all(rem(0.75)),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                flex_shrink: 0.0,
-                                ..default()
-                            },
-                            BackgroundColor(GOLD.with_alpha(0.14)),
-                        ))
-                        .with_children(|i| {
-                            rich(i, f, icon, 20.0, INK);
-                        });
-                        stack(r, |s| {
-                            heading(s, f, title);
-                            row(s, true, |x| {
-                                name_tag(x, f, &session, a.id, 12.0);
-                                muted(x, f, &what);
+                    b.spawn(Node {
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: px(10),
+                        row_gap: px(10),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|grid| {
+                        for (i, a) in g.awards.iter().enumerate() {
+                            let (icon, title, what) = text::award(a);
+                            grid.spawn((
+                                Node {
+                                    width: percent(31.5),
+                                    min_width: px(170),
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: px(3),
+                                    padding: UiRect::axes(px(14), px(12)),
+                                    border_radius: BorderRadius::all(px(14)),
+                                    ..default()
+                                },
+                                BackgroundColor(CARD2),
+                                Motion::slide(24.0, 0.0).after(0.6 + i as f32 * 0.08),
+                            ))
+                            .with_children(|r| {
+                                rich_in(r, f, &format!("{icon} {title}"), 15.0, INK, true);
+                                rich_in(r, f, &session.name_of(a.id), 14.0, INK, true);
+                                rich(r, f, &what, 13.0, FAINT);
                             });
-                        });
+                        }
                     });
-                }
+                });
             });
-        });
     });
 }
 
@@ -1308,41 +1493,71 @@ fn status(
         if !on {
             return;
         }
-        let (line, ink, bar) = match hud.status {
-            Part::Finished => (text::finished(hud.place), GOOD, BLUE),
-            Part::Out => (text::YOU_ARE_OUT.to_string(), CRITICAL, CRITICAL),
-            _ => (text::SPECTATOR.to_string(), INK, BLUE),
+        let (line, ink) = match hud.status {
+            Part::Finished => (text::finished(hud.place), INK),
+            Part::Out => (text::YOU_ARE_OUT.to_string(), CRITICAL),
+            _ => (text::SPECTATOR.to_string(), INK),
         };
         p.spawn((
             Node {
+                min_width: px(420),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: rem(0.25),
-                padding: UiRect::axes(rem(1.75), rem(0.75)),
-                border: UiRect::new(px(1), px(1), px(3), px(1)),
-                border_radius: BorderRadius::all(rem(1.125)),
+                padding: UiRect::axes(px(26), px(14)),
+                border_radius: BorderRadius::all(px(18)),
                 ..default()
             },
-            BackgroundColor(PANEL),
-            BorderColor {
-                top: bar,
-                ..BorderColor::all(RIM)
-            },
-            BoxShadow::new(bar.with_alpha(0.25), px(0), px(0), px(0), px(24)),
+            panel(),
             Motion::pop(0.85),
         ))
         .with_children(|r| {
-            big(r, f, &line, 18.0, ink);
-            row(r, false, |x| {
-                rich_in(x, f, &text::camera_on(hud.spectating.as_deref()), 13.0, INK, true);
-                rich(x, f, "·", 13.0, FAINT);
-                muted(x, f, text::SPECTATE_HINT);
+            big(r, f, &line, 24.0, ink);
+            r.spawn(Node {
+                column_gap: px(12),
+                align_items: AlignItems::Center,
+                margin: UiRect::top(px(6)),
+                ..default()
+            })
+            .with_children(|x| {
+                let arrow = |x: &mut ChildSpawnerCommands, s: &str| {
+                    x.spawn((
+                        Node {
+                            width: px(30),
+                            height: px(30),
+                            border_radius: BorderRadius::all(px(10)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(CARD2),
+                    ))
+                    .with_children(|a| {
+                        rich_in(a, f, s, 18.0, MUTED, true);
+                    });
+                };
+                arrow(x, "‹");
+                rich_in(x, f, &text::camera_on(hud.spectating.as_deref()), 16.0, MUTED, true);
+                arrow(x, "›");
+            });
+            let h = rich(r, f, text::SPECTATE_HINT, 13.0, FAINT);
+            r.commands().entity(h).insert(Node {
+                margin: UiRect::top(px(6)),
+                ..default()
             });
         });
     });
 }
 
-/// In play but the mouse is free: ask for a click.
-fn prompt(ui: Res<Ui>, hud: Res<Hud>, mut q: Single<&mut Node, With<PromptBox>>) {
-    show(&mut q, hud.on && ui.need_click && !ui.menu);
+/// In play but the mouse is free: ask for a click. In the lobby with the menu closed: how to open it and the chat.
+fn prompt(
+    ui: Res<Ui>,
+    hud: Res<Hud>,
+    session: Res<Session>,
+    mut q: Single<&mut Node, (With<PromptBox>, Without<LobbyHint>)>,
+    mut hint: Single<&mut Node, (With<LobbyHint>, Without<PromptBox>)>,
+) {
+    let ask = hud.on && ui.need_click && !ui.menu;
+    show(&mut q, ask);
+    let lobby = hud.on && hud.kind == Some(ArenaKind::Lobby) && !session.practice;
+    show(&mut hint, lobby && !ui.menu && !ui.chat && !ask);
 }

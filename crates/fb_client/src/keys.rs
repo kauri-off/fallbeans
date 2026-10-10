@@ -162,10 +162,10 @@ pub fn bindable(k: KeyCode) -> bool {
     !RESERVED.contains(&k) && label(k).is_some()
 }
 
-/// An action's keys as the player reads them («—»: none).
-pub fn labels(keys: &[KeyCode]) -> String {
-    let s = keys.iter().filter_map(|k| label(*k)).collect::<Vec<_>>().join(" / ");
-    if s.is_empty() { "—".into() } else { s }
+/// An action's keys as the player reads them, one keycap each («—»: none).
+pub fn each_label(keys: &[KeyCode]) -> Vec<&'static str> {
+    let v: Vec<_> = keys.iter().filter_map(|k| label(*k)).collect();
+    if v.is_empty() { vec!["—"] } else { v }
 }
 
 /// An action's keys, saved as a list of names; an older file's "KeyW ArrowUp" (or "none") loads too. A file

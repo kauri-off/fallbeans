@@ -6,9 +6,6 @@ use bevy::prelude::*;
 use super::*;
 use crate::render::warmup::Warmup;
 
-/// The screen's backdrop: the night behind the panels.
-const BACKDROP: Color = PLANE;
-
 pub struct LoadingPlugin;
 
 impl Plugin for LoadingPlugin {
@@ -40,7 +37,7 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                row_gap: rem(1.25),
+                row_gap: px(28),
                 display: if on {
                     bevy::ui::Display::Flex
                 } else {
@@ -48,32 +45,42 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                 },
                 ..default()
             },
-            BackgroundColor(BACKDROP),
-            // (Also warms the gradient pipeline the interface draws with.)
-            BackgroundGradient::from(RadialGradient::new(
-                UiPosition::TOP,
-                RadialGradientShape::FarthestCorner,
-                vec![BLUE_SOFT.into(), BLUE_SOFT.with_alpha(0.3).into(), BACKDROP.into()],
-            )),
+            BackgroundColor(PAPER),
             // (Above every layer, the F4 overlay too.)
             GlobalZIndex(1000),
         ))
         .with_children(|s| {
-            logo(s, f, 80.0);
+            s.spawn(Node {
+                align_items: AlignItems::FlexEnd,
+                column_gap: px(10),
+                ..default()
+            })
+            .with_children(|b| {
+                for (c, h) in [(0x86A6C6, 58.0), (0xE2A07C, 80.0), (0x9DBA8C, 64.0)] {
+                    bean(b, hex(c), h);
+                }
+            });
+            rich_in(s, f, text::LOGO, 56.0, INK, true);
             row(s, false, |r| {
-                spinner(r, 1.25, BLUE);
+                let here = r.target_entity();
+                r.commands().entity(here).insert(Node {
+                    column_gap: px(12),
+                    align_items: AlignItems::Center,
+                    ..default()
+                });
+                spinner(r, 18.0, TEAL);
                 rich_in(r, f, text::LOADING, 18.0, INK, true);
             });
             s.spawn((
                 Node {
-                    width: rem(24.0),
+                    width: px(440),
                     max_width: percent(80),
-                    height: rem(0.375),
+                    height: px(8),
                     border_radius: BorderRadius::MAX,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(ink_wash(0.08)),
+                BackgroundColor(hex(0xDCD3C6)),
             ))
             .with_children(|b| {
                 b.spawn((
@@ -84,11 +91,10 @@ fn build_screen(mut commands: Commands, f: Res<Fonts>, warm: Option<Res<Warmup>>
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(BLUE),
-                    BoxShadow::new(BLUE.with_alpha(0.5), px(0), px(0), px(0), px(10)),
+                    BackgroundColor(TEAL),
                 ));
             });
-            let step = muted(s, f, "");
+            let step = rich(s, f, "", 16.0, FAINT);
             s.commands().entity(step).insert(StepLine);
         });
 }

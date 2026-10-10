@@ -31,6 +31,18 @@ fn fps(s: &str) -> Result<f64, String> {
         .ok_or_else(|| "between 1 and 1000".into())
 }
 
+/// `--size`: an image's width and height, «1600x900».
+fn size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s.split_once('x').ok_or("WxH, as 1600x900")?;
+    let (w, h): (u32, u32) = (
+        w.parse().map_err(|e| format!("{e}"))?,
+        h.parse().map_err(|e| format!("{e}"))?,
+    );
+    ((320..=7680).contains(&w) && (240..=4320).contains(&h))
+        .then_some((w, h))
+        .ok_or_else(|| "from 320x240 to 7680x4320".into())
+}
+
 /// `--perf-capture`: seconds a benchmark records (NaN or infinity would never end).
 fn capture_secs(s: &str) -> Result<f32, String> {
     let v: f32 = s.parse().map_err(|e| format!("{e}"))?;
@@ -146,6 +158,9 @@ pub struct Opts {
     /// nothing on the screen.
     #[arg(long)]
     pub offscreen: bool,
+    /// The `--offscreen` image's size.
+    #[arg(long, value_name = "WxH", default_value = "1600x900", value_parser = size, hide = true)]
+    pub size: (u32, u32),
     /// Frames a second without a window, `--headless` or `--offscreen` (a player's runs at the display's rate).
     #[arg(long, default_value_t = 60.0, value_parser = fps)]
     pub fps: f64,

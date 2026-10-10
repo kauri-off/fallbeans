@@ -6,7 +6,6 @@ use fb_shared::rules::RoundNote;
 use fb_sim::physics::Power;
 
 pub const LOGO: &str = "Fall Beans";
-pub const TAGLINE: &str = "Гонки, выживание и очки — до 8 бобов";
 pub const SECTION_CONTROLS: &str = "Управление";
 pub const SECTION_SCREEN: &str = "Экран и звук";
 pub const SECTION_NAME: &str = "Ваше имя";
@@ -32,6 +31,7 @@ pub const DOWNLOAD: &str = "Скачать";
 pub const RELEASE_PAGE: &str = "Страница релиза";
 pub const RETRY: &str = "Попробовать снова";
 pub const RESTARTING: &str = "Обновлено — перезапускаем…";
+pub const UPDATE_READY: &str = "Новую версию можно поставить прямо отсюда.";
 
 pub fn version(build: &str) -> String {
     format!("Версия {build}")
@@ -102,11 +102,15 @@ pub const IN_LOBBY: &str = "в лобби";
 pub const IN_GAME: &str = "идёт игра";
 pub const YOUR_ROOM: &str = "ваша комната";
 
-pub const RESUME: &str = "Продолжить";
-pub const RESUME_HINT: &str = "· Esc или щелчок по полю";
+pub const RESUME_HINT: &str = "вернуться в игру · раунд не на паузе";
+pub const MENU_NO_PAUSE: &str = "Пока меню открыто, ваш боб стоит на месте — раунд не ждёт.";
+pub const ROOM_MENU: &str = "меню комнаты";
+pub const ENTER_CHAT: &str = "Enter — чат";
+pub const COLOR: &str = "Цвет";
+pub const YOU_SHORT: &str = "Вы";
 pub const LEAVE_ROOM: &str = "Выйти из комнаты";
 pub const PRIVATE_ROOM: &str = "Приватная комната";
-pub const PIN_FOR_ENTRY: &str = "(вход по PIN-коду)";
+pub const PRIVATE_ROOM_PIN: &str = "Приватная комната (вход по PIN-коду)";
 pub const PRIVATE_NOTE: &str = "Приватная комната: PIN-код для друзей знает хост ⭐";
 pub const YOU: &str = " (вы)";
 pub const NO_LINK: &str = "нет связи";
@@ -144,6 +148,18 @@ pub const UI_SCALE: &str = "Размер интерфейса";
 pub const SHOW_FPS: &str = "Показывать частоту кадров";
 pub const FULLSCREEN: &str = "Полный экран (F11)";
 pub const KEYS: &str = "Клавиши";
+pub const AUTOSAVED: &str = "✓ Сохраняется само";
+
+pub fn section(s: super::Section) -> &'static str {
+    use super::Section;
+    match s {
+        Section::Controls => SECTION_CONTROLS,
+        Section::Screen => SECTION_SCREEN,
+        Section::Gfx => GRAPHICS,
+        Section::Keys => KEYS,
+        Section::Problems => PROBLEMS,
+    }
+}
 pub const GRAPHICS: &str = "Графика";
 pub const PRESET: &str = "Качество графики";
 pub const PRESET_LOW: &str = "Низкое";
@@ -333,6 +349,36 @@ pub fn players_of(n: usize, max: u32) -> String {
     format!("Игроки: {n} из {max}")
 }
 
+pub fn maps_count(n: usize) -> String {
+    plural(n as u32, "карта", "карты", "карт")
+}
+
+pub fn custom_count(n: usize) -> String {
+    format!("Карты по порядку · {n} из 12")
+}
+
+/// What the host has set up, as the others see it.
+pub fn setup_line(p: &fb_proto::Playlist) -> String {
+    use fb_proto::Mode;
+    let mode = match p.mode {
+        Mode::Mix => MODE_MIX,
+        Mode::Races => MODE_RACES,
+        Mode::Survival => MODE_SURVIVAL,
+        Mode::Custom => MODE_CUSTOM,
+    };
+    match p.mode {
+        Mode::Custom => format!(
+            "Режим: {mode} · {}",
+            plural(p.games.len() as u32, "карта", "карты", "карт")
+        ),
+        _ => format!("Режим: {mode} · раундов: {}", p.rounds),
+    }
+}
+
+pub fn hosted_by(name: Option<&str>) -> String {
+    format!("Хост ⭐ {}", name.unwrap_or("—"))
+}
+
 pub fn rooms_count(n: usize) -> String {
     if n == 0 {
         TAB_ROOMS.into()
@@ -342,14 +388,16 @@ pub fn rooms_count(n: usize) -> String {
 }
 
 pub fn room_line(host: Option<&str>, playing: bool, mine: bool) -> String {
-    let host = host.unwrap_or("—");
     let phase = if playing { IN_GAME } else { IN_LOBBY };
     let mine = if mine {
         format!(" · {YOUR_ROOM}")
     } else {
         String::new()
     };
-    format!("хост ⭐ {host} · {phase}{mine}")
+    match host {
+        Some(h) => format!("хост ⭐ {h} · {phase}{mine}"),
+        None => format!("{phase}{mine}"),
+    }
 }
 
 pub fn room_title_placeholder(name: &str) -> String {

@@ -94,14 +94,12 @@ type TagNode = (
     &'static mut BorderColor,
 );
 
-type Colors = (&'static mut BackgroundColor, &'static mut BorderColor);
-
 /// The tags, and the dots and texts in them.
 #[derive(SystemParam)]
 struct TagNodes<'w, 's> {
     tags: Query<'w, 's, TagNode>,
     children: Query<'w, 's, &'static Children>,
-    dots: Query<'w, 's, Colors, (Without<Tag>, Without<Text>)>,
+    dots: Query<'w, 's, &'static mut BackgroundColor, (Without<Tag>, Without<Text>)>,
     texts: Query<'w, 's, &'static mut TextColor>,
 }
 
@@ -286,13 +284,12 @@ fn place_tags(
         // Recoloured in steps, and once more on reaching shown or gone.
         if (a - tag.painted).abs() > 0.04 || (a != tag.painted && (a == 0.0 || a == 1.0)) {
             tag.painted = a;
-            *bg = BackgroundColor(PANEL.with_alpha(0.78 * a));
-            *rim = BorderColor::all(RIM.with_alpha(RIM.alpha() * a));
+            *bg = BackgroundColor(CARD.with_alpha(0.92 * a));
+            *rim = BorderColor::all(Color::NONE);
             let dot = suit(tag.color).with_alpha(a);
             for c in nodes.children.iter_descendants(e) {
-                if let Ok((mut fill, mut border)) = nodes.dots.get_mut(c) {
+                if let Ok(mut fill) = nodes.dots.get_mut(c) {
                     *fill = BackgroundColor(dot);
-                    *border = BorderColor::all(dot_rim(dot));
                 }
                 if let Ok(mut t) = nodes.texts.get_mut(c) {
                     t.0 = INK.with_alpha(a);
@@ -328,18 +325,18 @@ fn depth(d: f32) -> i32 {
 /// The tag's frame at size `k`.
 fn frame_node(k: f32) -> Node {
     Node {
-        column_gap: rem(0.3125 * k),
+        column_gap: px(6.0 * k),
         align_items: AlignItems::Center,
-        padding: UiRect::new(rem(0.4375 * k), rem(0.625 * k), rem(0.1875 * k), rem(0.1875 * k)),
-        border: UiRect::all(px(1)),
-        border_radius: BorderRadius::MAX,
+        padding: UiRect::axes(px(9.0 * k), px(3.0 * k)),
+        border: UiRect::all(px(0)),
+        border_radius: BorderRadius::all(px(10.0 * k)),
         ..default()
     }
 }
 
 fn tag_body(p: &mut ChildSpawnerCommands, f: &Fonts, name: &str, color: u8, k: f32, alpha: f32) {
     dot(p, suit(color).with_alpha(alpha), 0.5625 * k);
-    rich_in(p, f, name, 15.0 * k, INK.with_alpha(alpha), true);
+    rich_in(p, f, name, 14.0 * k, INK.with_alpha(alpha), true);
 }
 
 /// Where each tag goes, nearest first (each is its bottom middle and its size): inside the screen, and

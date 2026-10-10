@@ -10,7 +10,7 @@ use crate::harness::Game;
 use crate::keys::Bind;
 use crate::render::quality::Preset;
 use crate::session::{RoomList, Session};
-use crate::ui::{Action, Field, Fold, Folds, Form, HomeTab, Knob, MenuTab, Ui, UiAction};
+use crate::ui::{Action, Field, Fold, Folds, Form, HomeTab, Knob, MenuTab, Section, Ui, UiAction};
 
 /// In the dev room's lobby, where the menu opens by itself on entry.
 fn in_lobby(g: &mut Game) {
@@ -481,7 +481,7 @@ fn rebind_a_key_mid_round() {
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
     });
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Section(Section::Keys)));
     let jump = |g: &Game| g.res::<crate::settings::Bindings>().keys(Bind::Jump).to_vec();
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
@@ -672,7 +672,7 @@ fn rebind_takes_a_key_from_another_action() {
     g.press(5.0, "Настройки", |a| {
         matches!(a, Action::HomeTab(HomeTab::Settings))
     });
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Section(Section::Keys)));
     let keys = |g: &Game, b: Bind| g.res::<crate::settings::Bindings>().keys(b).to_vec();
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
@@ -858,7 +858,7 @@ fn settings_at_the_room_list() {
         matches!(a, Action::HomeTab(HomeTab::Settings))
     });
     sliders(&mut g);
-    g.press(2.0, "Клавиши", |a| matches!(a, Action::Fold(Fold::Keys)));
+    g.press(2.0, "Клавиши", |a| matches!(a, Action::Section(Section::Keys)));
     g.press(2.0, "Изменить: прыжок", |a| {
         matches!(a, Action::Rebind(Bind::Jump))
     });
@@ -870,8 +870,8 @@ fn settings_at_the_room_list() {
     on_room_list(&mut g);
 }
 
-/// A press on the menu's panel between its buttons is not one on the field: the menu stays open. One beside
-/// the panel (it is docked on the right: to its left) closes it.
+/// A press on the menu's card between its buttons is not one on the field: the menu stays open. One beside
+/// the card (it is centred, the game shows at the screen's edges) closes it.
 #[test]
 fn a_click_on_the_menu_panel_keeps_it_open() {
     let mut g = Game::new(&["--room", "dev"]);
@@ -892,7 +892,7 @@ fn a_click_on_the_menu_panel_keeps_it_open() {
     );
     g.click_at(gap);
     assert!(g.res::<Ui>().menu, "a click on the panel closed the menu");
-    g.click_at(Vec2::new(panel.min.x - 200.0, panel.center().y));
+    g.click_at(Vec2::new(2.0, panel.center().y));
     assert!(!g.res::<Ui>().menu, "a click beside the panel left the menu open");
 }
 
@@ -939,7 +939,7 @@ fn every_setting_mid_round() {
     g.press(2.0, "Настройки", |a| {
         matches!(a, Action::MenuTab(MenuTab::Settings))
     });
-    g.press(2.0, "Графика", |a| matches!(a, Action::Fold(Fold::Gfx)));
+    g.press(2.0, "Графика", |a| matches!(a, Action::Section(Section::Gfx)));
     let n = press_every(&mut g, |a| matches!(a, Action::Set(_) | Action::Gfx(_)));
     assert!(n >= 14, "only {n} options on screen");
     // Back through the presets, each with a few frames of the round behind the menu.
