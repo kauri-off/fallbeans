@@ -1,4 +1,4 @@
-//! Scoring a round: placement points by rank, fines for falls and shortcuts.
+//! Scoring a round: placement points by rank, fines for falls and shortcuts, knockouts.
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,8 @@ use crate::rng::{Rng, shuffle};
 /// Placement points for first place; last place gets 0, the rest are spread evenly between.
 pub const TOP_POINTS: i64 = 10;
 pub const FALL_PENALTY: i64 = 1;
+/// Survival: points for each bean knocked out of the round.
+pub const KO_BONUS: i64 = 1;
 pub const SHORTCUT_PENALTY: i64 = 2;
 /// Penalties never take more than this from one round.
 pub const MAX_PENALTY: i64 = 4;
@@ -210,12 +212,12 @@ impl RoundView<'_> {
             for &id in g {
                 let s = stats.get(&id).copied().unwrap_or_default();
                 let (place, placed_points) = placed[&id];
-                let points = if count == 1 { solo_points(id) } else { placed_points };
-                // Falling out of a survival round already costs its place: only races and points games add a fine.
-                let fall_fine = if self.genre == Genre::Survival {
-                    0
+                let base = if count == 1 { solo_points(id) } else { placed_points };
+                // Survival: a knockout scores. Elsewhere it cancels a fall of one's own.
+                let (points, fall_fine) = if self.genre == Genre::Survival {
+                    (base + i64::from(s.kos) * KO_BONUS, 0)
                 } else {
-                    i64::from(s.falls) * FALL_PENALTY
+                    (base, i64::from(s.falls.saturating_sub(s.kos)) * FALL_PENALTY)
                 };
                 let penalty = MAX_PENALTY.min(fall_fine + i64::from(s.shortcuts) * SHORTCUT_PENALTY);
                 let before = totals.get(&id).copied().unwrap_or(0);
@@ -454,6 +456,26 @@ mod tests {
         )]);
         let rows = score(&x, &s, &BTreeMap::new());
         assert_eq!(rows.iter().find(|r| r.id.0 == 1).unwrap().penalty, 0);
+    }
+
+    #[test]
+    fn knockouts_score_in_survival_and_cancel_falls_elsewhere() {
+        let st = |falls, kos| RoundStats {
+            falls,
+            kos,
+            ..Default::default()
+        };
+        let mut x = v(Genre::Survival);
+        x.out = vec![4, 3];
+        x.time_up = true;
+        let rows = score(&x, &stats(&[(1, st(0, 2)), (3, st(0, 1))]), &BTreeMap::new());
+        let by = |id| rows.iter().find(|r| r.id.0 == id).unwrap().clone();
+        assert_eq!((by(1).points, by(2).points, by(3).points), (8 + 2, 8, 3 + 1));
+        let mut y = v(Genre::Race);
+        y.finished = vec![1, 2, 3, 4];
+        let rows = score(&y, &stats(&[(1, st(3, 1)), (2, st(1, 4))]), &BTreeMap::new());
+        let by = |id| rows.iter().find(|r| r.id.0 == id).unwrap().clone();
+        assert_eq!((by(1).points, by(1).penalty, by(2).penalty), (10, 2, 0));
     }
 
     #[test]
