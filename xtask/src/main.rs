@@ -162,8 +162,8 @@ struct DevArgs {
 
 #[derive(Args)]
 pub struct TraceArgs {
-    /// Debug traces into target/traces: `input`, `hits`, `clicks` (the clients'), e.g. `--trace hits,clicks`.
-    #[arg(long, value_delimiter = ',', value_parser = ["input", "hits", "clicks"])]
+    /// Debug traces into target/traces: `input`, `hits`, `clicks`, `hud` (the clients'), e.g. `--trace hits,clicks`.
+    #[arg(long, value_delimiter = ',', value_parser = ["input", "hits", "clicks", "hud"])]
     trace: Vec<String>,
 }
 
@@ -180,13 +180,13 @@ impl TraceArgs {
         Ok(Some(dir))
     }
 
-    /// `--trace kind=<dir>/<kind>-<side>.txt,…` for `side` (`server`: no clicks).
+    /// `--trace kind=<dir>/<kind>-<side>.txt,…` for `side` (`server`: no clicks, no hud).
     pub fn add(&self, c: &mut Command, dir: Option<&Path>, side: &str) {
         let Some(dir) = dir else { return };
         let kinds: Vec<String> = self
             .trace
             .iter()
-            .filter(|k| side != "server" || *k != "clicks")
+            .filter(|k| side != "server" || !matches!(k.as_str(), "clicks" | "hud"))
             .map(|k| format!("{k}={}", dir.join(format!("{k}-{side}.txt")).display()))
             .collect();
         if !kinds.is_empty() {

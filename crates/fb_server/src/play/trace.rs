@@ -20,8 +20,10 @@ pub fn open(mut commands: Commands, opts: Res<Opts>) {
     if let Some(f) = opts.traces.open(TraceKind::Hits, "server") {
         commands.insert_resource(Hits(f));
     }
-    if opts.traces.on(TraceKind::Clicks) {
-        warn!("--trace clicks: a client's trace, the server has none");
+    for k in [TraceKind::Clicks, TraceKind::Hud] {
+        if opts.traces.on(k) {
+            warn!("--trace {}: a client's trace, the server has none", k.name());
+        }
     }
 }
 

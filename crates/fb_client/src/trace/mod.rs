@@ -1,4 +1,4 @@
-//! The client's `--trace` kinds (feature `traces`, not in packages): `input`, `hits`, `clicks`.
+//! The client's `--trace` kinds (feature `traces`, not in packages): `input`, `hits`, `clicks`, `hud`.
 use bevy::prelude::*;
 use fb_net::trace::{TraceKind, TraceOpts};
 
@@ -6,6 +6,7 @@ use crate::opts::Opts;
 
 mod clicks;
 pub mod hits;
+mod hud;
 pub mod input;
 
 pub struct TracePlugin {
@@ -40,6 +41,11 @@ impl Plugin for TracePlugin {
             && let Some(out) = self.traces.open(TraceKind::Clicks, &self.side)
         {
             clicks::add(app, out);
+        }
+        if self.ui
+            && let Some(out) = self.traces.open(TraceKind::Hud, &self.side)
+        {
+            hud::add(app, out);
         }
     }
 }
