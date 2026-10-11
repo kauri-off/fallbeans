@@ -12,6 +12,7 @@ mod camera;
 mod clock;
 mod crash;
 mod diag;
+mod discord;
 mod face;
 mod fullscreen;
 mod game;
@@ -66,7 +67,7 @@ use lightyear::prelude::client::ClientPlugins;
 
 use crate::opts::Opts;
 
-const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,lightyear=warn,aeronet=warn";
+const LOG_FILTER: &str = "wgpu=error,bevy_ecs=warn,lightyear=warn,aeronet=warn,discord_rich_presence=off";
 /// `--profiler`: the spans of systems and schedules (`bevy_ecs` above), for the built-in profiler.
 const PROFILER_SPANS: &str = ",bevy_ecs::system::function_system=info,bevy_ecs::schedule::schedule=info";
 /// Without it, Bevy's per-frame spans of the app and the render world go too (a span filtered out where it is
@@ -258,6 +259,7 @@ fn build(app: &mut App, opts: Opts, noop: Option<RenderCreation>) {
                 update::UpdatePlugin,
                 fullscreen::FullscreenPlugin,
                 icon::IconPlugin,
+                discord::DiscordPlugin,
             ));
         }
         app.add_systems(Update, screenshot);

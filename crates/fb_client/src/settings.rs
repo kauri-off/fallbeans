@@ -151,6 +151,8 @@ pub struct Display {
     pub show_fps: bool,
     /// Borderless fullscreen on the current monitor (F11 or Alt+Enter); off: a 1280×720 window.
     pub fullscreen: bool,
+    /// Where the player is, shown in their Discord status.
+    pub discord: bool,
 }
 
 impl Default for Display {
@@ -160,6 +162,7 @@ impl Default for Display {
             ui_scale: 1.0,
             show_fps: false,
             fullscreen: true,
+            discord: true,
         }
     }
 }
@@ -794,6 +797,7 @@ mod tests {
             ui_scale: f32::NAN,
             show_fps: true,
             fullscreen: false,
+            discord: false,
         });
         w.insert_resource(Graphics {
             upscale: Upscale::Performance,

@@ -219,6 +219,7 @@ pub enum Toggle {
     Shake,
     ShowFps,
     Fullscreen,
+    Discord,
     Vsync,
 }
 
@@ -855,6 +856,7 @@ fn ui_actions(
                     Toggle::Shake => settings.controls.camera_shake ^= true,
                     Toggle::ShowFps => settings.display.show_fps ^= true,
                     Toggle::Fullscreen => settings.display.fullscreen ^= true,
+                    Toggle::Discord => settings.display.discord ^= true,
                     Toggle::Vsync => settings.gfx.vsync ^= true,
                 }
                 crate::settings::save_soon(&mut commands);

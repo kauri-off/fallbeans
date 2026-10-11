@@ -26,7 +26,7 @@ checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
 dependencies = [
  "enumn",
  "serde",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -788,7 +788,7 @@ dependencies = [
  "bevy_utils",
  "dlss_wgpu",
  "tracing",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -851,7 +851,7 @@ dependencies = [
  "stackfuture",
  "thiserror 2.0.21",
  "tracing",
- "uuid",
+ "uuid 1.27.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1627,7 +1627,7 @@ dependencies = [
  "bevy_transform",
  "bevy_window",
  "tracing",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -1707,7 +1707,7 @@ dependencies = [
  "smallvec",
  "smol_str",
  "thiserror 2.0.21",
- "uuid",
+ "uuid 1.27.0",
  "variadics_please 1.1.0",
  "wgpu-types",
 ]
@@ -1723,7 +1723,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -2137,7 +2137,7 @@ dependencies = [
  "taffy",
  "thiserror 2.0.21",
  "tracing",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -2281,7 +2281,7 @@ dependencies = [
  "ron",
  "serde",
  "thiserror 2.0.21",
- "uuid",
+ "uuid 1.27.0",
 ]
 
 [[package]]
@@ -3179,6 +3179,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "discord-rich-presence"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c55d69cab17c19677ce3a5f8face993a9e6eaf847fecac3547f3a3ff4a2494"
+dependencies = [
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.21",
+ "uuid 0.8.2",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3231,7 +3246,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cc",
  "thiserror 2.0.21",
- "uuid",
+ "uuid 1.27.0",
  "wgpu",
 ]
 
@@ -3458,6 +3473,7 @@ dependencies = [
  "bevy_render",
  "bevy_replicon",
  "clap",
+ "discord-rich-presence",
  "dlss_wgpu",
  "fb_arena",
  "fb_maps",
@@ -3910,7 +3926,7 @@ dependencies = [
  "fnv",
  "gilrs-core",
  "log",
- "uuid",
+ "uuid 1.27.0",
  "vec_map",
 ]
 
@@ -3928,7 +3944,7 @@ dependencies = [
  "nix",
  "objc2-core-foundation",
  "objc2-io-kit",
- "uuid",
+ "uuid 1.27.0",
  "vec_map",
  "wasm-bindgen",
  "web-sys",
@@ -7728,6 +7744,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_repr"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "serde_spanned"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8790,6 +8817,15 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "uuid"
