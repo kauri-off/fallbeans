@@ -86,16 +86,17 @@ impl Sorting {
         matches!(self.state, State::Dragging) && self.list == Some(list)
     }
 
+    /// The place the row taken goes to: past every row it covers half of.
     fn to(&self) -> usize {
         let Some(me) = self.slots.get(self.from) else {
             return self.from;
         };
-        let mid = me.top + me.h / 2.0 + self.dy;
-        self.slots
-            .iter()
-            .enumerate()
-            .filter(|&(k, s)| k != self.from && s.top + s.h / 2.0 < mid)
-            .count()
+        let top = me.top + self.dy;
+        let bottom = top + me.h;
+        let mid = |s: &Slot| s.top + s.h / 2.0;
+        let above = self.slots[..self.from].iter().filter(|s| top < mid(s)).count();
+        let below = self.slots[self.from + 1..].iter().filter(|s| bottom > mid(s)).count();
+        self.from - above + below
     }
 
     /// Where each row goes, from where it is laid out.
@@ -362,5 +363,40 @@ fn adopt(added: Query<(Entity, &Sortable), Added<Sortable>>, mut sorting: ResMut
     }
     if seen {
         *sorting = Sorting::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(n: usize, from: usize, dy: f32) -> Sorting {
+        Sorting {
+            state: State::Dragging,
+            list: Some(List::Servers),
+            from,
+            dy,
+            slots: (0..n)
+                .map(|i| Slot {
+                    row: Entity::PLACEHOLDER,
+                    top: i as f32 * 60.0,
+                    h: 50.0,
+                    off: 0.0,
+                })
+                .collect(),
+            look: None,
+        }
+    }
+
+    #[test]
+    fn a_row_goes_past_the_rows_it_covers_half_of() {
+        assert_eq!(rows(2, 0, 0.0).to(), 0);
+        assert_eq!(rows(2, 0, 30.0).to(), 0);
+        assert_eq!(rows(2, 0, 40.0).to(), 1);
+        // (Down to the end of the list, as far as it is let go.)
+        assert_eq!(rows(2, 0, 60.0).to(), 1);
+        assert_eq!(rows(2, 1, -60.0).to(), 0);
+        assert_eq!(rows(4, 1, 120.0).to(), 3);
+        assert_eq!(rows(4, 2, -120.0).to(), 0);
     }
 }
