@@ -37,11 +37,12 @@ impl Plugin for MenuPlugin {
                 (
                     parts.run_if(state_changed::<MenuTab>.or_else(resource_changed::<Session>)),
                     top.run_if(resource_changed::<Session>),
-                    (players, host_setup, phase_line).run_if(resource_changed::<Session>),
+                    (players, phase_line).run_if(resource_changed::<Session>),
+                    host_setup.run_if(resource_changed::<Session>.or_else(resource_changed::<sort::Sorting>)),
                     hover_rows,
                     dev,
                 ),
-                menu_actions,
+                (menu_actions, round_moved),
             )
                 .chain(),
         );
@@ -979,9 +980,14 @@ fn host_setup(
     q: Single<Entity, With<HostBox>>,
     f: Res<Fonts>,
     fields: Query<(&Field, &EditableText)>,
+    sorting: Res<sort::Sorting>,
     mut shown: Local<Option<SetupView>>,
     mut commands: Commands,
 ) {
+    // (Not redrawn under a round being dragged: once let go.)
+    if sorting.holds(sort::List::Rounds) {
+        return;
+    }
     let Some(l) = session.lobby.as_ref().filter(|l| l.phase == Phase::Lobby) else {
         *shown = None;
         return;
@@ -1137,10 +1143,6 @@ fn setup_of(p: &mut ChildSpawnerCommands, f: &Fonts, l: &Lobby, code: &str) {
     });
 }
 
-/// A round of the host's list, by its place: dragged onto another, it takes that one's place.
-#[derive(Component)]
-struct ListRow(usize);
-
 /// Six dots to take a round by.
 fn grip(r: &mut ChildSpawnerCommands) {
     r.spawn((
@@ -1171,51 +1173,19 @@ fn grip(r: &mut ChildSpawnerCommands) {
     });
 }
 
-/// The row a picked entity is in (a drag may start on its buttons).
-fn row_of(mut e: Entity, rows: &Query<&ListRow>, parents: &Query<&ChildOf>) -> Option<usize> {
-    loop {
-        if let Ok(r) = rows.get(e) {
-            return Some(r.0);
+/// A round dropped at another place of the host's list moves there.
+fn round_moved(mut moved: MessageReader<sort::Moved>, session: Res<Session>, mut out: MessageWriter<UiAction>) {
+    for m in moved.read().filter(|m| m.list == sort::List::Rounds) {
+        let Some(l) = session.lobby.as_ref() else { continue };
+        let n = l.playlist.games.len();
+        if m.from == m.to || m.from >= n || m.to >= n {
+            continue;
         }
-        e = parents.get(e).ok()?.parent();
+        out.write(UiAction(patched(&l.playlist, |p| {
+            let g = p.games.remove(m.from);
+            p.games.insert(m.to, g);
+        })));
     }
-}
-
-fn row_drag_over(ev: On<Pointer<DragEnter>>, mut bg: Query<&mut BackgroundColor, With<ListRow>>) {
-    if let Ok(mut b) = bg.get_mut(ev.entity) {
-        b.set_if_neq(BackgroundColor(TEAL_SOFT));
-    }
-}
-
-fn row_drag_out(ev: On<Pointer<DragLeave>>, mut bg: Query<&mut BackgroundColor, With<ListRow>>) {
-    if let Ok(mut b) = bg.get_mut(ev.entity) {
-        b.set_if_neq(BackgroundColor(Color::NONE));
-    }
-}
-
-/// A round dropped on another row moves to its place.
-fn row_dropped(
-    ev: On<Pointer<DragDrop>>,
-    rows: Query<&ListRow>,
-    parents: Query<&ChildOf>,
-    mut bg: Query<&mut BackgroundColor, With<ListRow>>,
-    session: Res<Session>,
-    mut out: MessageWriter<UiAction>,
-) {
-    if let Ok(mut b) = bg.get_mut(ev.entity) {
-        b.set_if_neq(BackgroundColor(Color::NONE));
-    }
-    let (Some(from), Ok(to)) = (row_of(ev.dropped, &rows, &parents), rows.get(ev.entity).map(|r| r.0)) else {
-        return;
-    };
-    let Some(l) = session.lobby.as_ref() else { return };
-    if from == to || from >= l.playlist.games.len() || to >= l.playlist.games.len() {
-        return;
-    }
-    let mut next = l.playlist.clone();
-    let g = next.games.remove(from);
-    next.games.insert(to, g);
-    out.write(UiAction(Action::Send(ClientMsg::Playlist(next))));
 }
 
 /// The host's list changed so.
@@ -1284,22 +1254,18 @@ fn custom_list(c: &mut ChildSpawnerCommands, f: &Fonts, pl: &Playlist, code: &st
             });
             button(r, f, "×", Look::Icon, remove);
         });
-        c.commands()
-            .entity(row_e)
-            .insert((
-                ListRow(i),
-                Node {
-                    column_gap: px(8),
-                    align_items: AlignItems::Center,
-                    padding: UiRect::new(px(6), px(8), px(6), px(6)),
-                    border_radius: BorderRadius::all(px(12)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .observe(row_drag_over)
-            .observe(row_drag_out)
-            .observe(row_dropped);
+        let mut commands = c.commands();
+        commands.entity(row_e).insert((
+            Node {
+                column_gap: px(8),
+                align_items: AlignItems::Center,
+                padding: UiRect::new(px(6), px(8), px(6), px(6)),
+                border_radius: BorderRadius::all(px(12)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+        ));
+        sort::sortable(&mut commands, row_e, sort::List::Rounds, i);
     }
     if pl.games.len() >= 12 {
         return;

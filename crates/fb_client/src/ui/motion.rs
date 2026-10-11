@@ -6,9 +6,18 @@ pub struct MotionPlugin;
 
 impl Plugin for MotionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, (reveal, animate, spin).chain().before(UiSystems::Prepare));
+        app.add_systems(
+            PostUpdate,
+            (reveal, animate, spin)
+                .chain()
+                .in_set(MotionSystems)
+                .before(UiSystems::Prepare),
+        );
     }
 }
+
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MotionSystems;
 
 /// How a node comes in: from an offset (px) and a scale, to where it is laid out.
 #[derive(Component, Clone, Copy, Debug)]

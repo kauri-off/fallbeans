@@ -20,7 +20,7 @@ const REFRESH_S: f32 = 10.0;
 pub struct Servers {
     /// As the player typed them.
     pub list: Vec<String>,
-    /// The one played on last (first in the list).
+    /// The one played on last.
     pub last: Option<String>,
 }
 
@@ -41,12 +41,22 @@ impl Servers {
         }
     }
 
-    /// The last one first, then as added.
-    pub fn ordered(&self) -> Vec<String> {
-        let last = |s: &&String| Some(s.as_str()) == self.last.as_deref();
-        let mut v: Vec<String> = self.list.iter().filter(last).cloned().collect();
-        v.extend(self.list.iter().filter(|s| !last(s)).cloned());
-        v
+    /// Moves the server at `from` to `to`.
+    pub fn shift(&mut self, from: usize, to: usize) -> bool {
+        if from == to || from >= self.list.len() || to >= self.list.len() {
+            return false;
+        }
+        let s = self.list.remove(from);
+        self.list.insert(to, s);
+        true
+    }
+
+    /// The one played on, put first.
+    pub fn played(&mut self, addr: &str) {
+        if let Some(i) = self.list.iter().position(|s| s == addr) {
+            self.shift(i, 0);
+        }
+        self.last = Some(addr.to_string());
     }
 }
 
@@ -254,15 +264,19 @@ mod tests {
     }
 
     #[test]
-    fn last_first() {
+    fn played_first_then_as_sorted() {
         let mut s = Servers::default();
         assert!(s.add("a "));
         assert!(s.add("b"));
+        assert!(s.add("c"));
         assert!(!s.add("a"));
         assert!(!s.add("a b"));
-        s.last = Some("b".into());
-        assert_eq!(s.ordered(), ["b", "a"]);
+        s.played("b");
+        assert_eq!(s.list, ["b", "a", "c"]);
+        assert!(s.shift(0, 2));
+        assert!(!s.shift(1, 3));
+        assert_eq!(s.list, ["a", "c", "b"]);
         s.remove("b");
-        assert_eq!((s.ordered(), s.last), (vec!["a".to_string()], None));
+        assert_eq!((s.list, s.last), (vec!["a".to_string(), "c".to_string()], None));
     }
 }

@@ -8,6 +8,7 @@ mod loading;
 mod menu;
 pub mod motion;
 mod settings;
+mod sort;
 mod tags;
 mod wardrobe;
 mod widgets;
@@ -592,6 +593,7 @@ impl Plugin for UiPlugin {
             tags::TagsPlugin,
             loading::LoadingPlugin,
             motion::MotionPlugin,
+            sort::SortPlugin,
             wardrobe::WardrobePlugin,
         ));
     }
