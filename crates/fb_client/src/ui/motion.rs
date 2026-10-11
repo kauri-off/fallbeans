@@ -55,6 +55,12 @@ impl Motion {
         self
     }
 
+    /// Already this far in (a node rebuilt mid-motion carries on).
+    pub const fn aged(mut self, age: f32) -> Self {
+        self.age = age;
+        self
+    }
+
     fn at(&self) -> (Vec2, f32) {
         let t = ((self.age - self.delay) / self.dur).clamp(0.0, 1.0);
         let k = if self.bounce { back_out(t) } else { cubic_out(t) };

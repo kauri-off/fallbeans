@@ -137,12 +137,12 @@ struct GoBox;
 #[derive(Component)]
 struct GoText;
 #[derive(Component)]
-struct ResultsBox;
+pub(crate) struct ResultsBox;
 #[derive(Component)]
-struct SummaryBox;
+pub(crate) struct SummaryBox;
 /// The time to the next scene, after its label.
 #[derive(Component)]
-struct NextLine(&'static str);
+pub(crate) struct NextLine(&'static str);
 #[derive(Component)]
 struct StatusBox;
 #[derive(Component)]
@@ -1157,7 +1157,14 @@ fn clock(
 }
 
 /// A board's head: its caption, its title, and the time to the next scene.
-fn board_head(p: &mut ChildSpawnerCommands, f: &Fonts, cap: &str, title: &str, next: &'static str) {
+fn board_head(
+    p: &mut ChildSpawnerCommands,
+    f: &Fonts,
+    cap: &str,
+    title: &str,
+    next: &'static str,
+    next_in: Option<f64>,
+) {
     caption(p, f, cap);
     // (Title and time one under the other: a title wrapped beside the time is measured a line short.)
     p.spawn(Node {
@@ -1180,7 +1187,9 @@ fn board_head(p: &mut ChildSpawnerCommands, f: &Fonts, cap: &str, title: &str, n
             BackgroundColor(CARD2),
         ))
         .with_children(|b| {
-            let e = rich_in(b, f, "", 14.0, MUTED, true);
+            // (Filled from the start: `clock` keeps it, but a board rebuilt after it ran shows it only next frame.)
+            let now = next_in.map(|s| text::in_secs(next, s)).unwrap_or_default();
+            let e = rich_in(b, f, &now, 14.0, MUTED, true);
             b.commands().entity(e).insert(NextLine(next));
         });
     });
@@ -1203,21 +1212,47 @@ fn board(width: f32) -> impl Bundle {
     )
 }
 
+/// What a results board shows of the session: the player, and each row's name and whether they left.
+type SeenOf = (Option<PlayerId>, Vec<(String, bool)>);
+
+fn offline(session: &Session, id: PlayerId) -> bool {
+    session.player(id).is_some_and(|p| !p.connected && !p.bot)
+}
+
 /// After a round: points won and lost, on a board at the top over the game veiled.
+#[expect(clippy::too_many_arguments, reason = "a system")]
 fn results(
     q: Single<Entity, With<ResultsBox>>,
     outcome: Res<Outcome>,
     session: Res<Session>,
+    round: Res<RoundTime>,
     f: Res<Fonts>,
-    mut shown: Local<Option<Results>>,
+    real: Res<Time<Real>>,
+    mut shown: Local<(Option<Results>, f32)>,
+    mut seen: Local<SeenOf>,
     mut commands: Commands,
 ) {
     let f = &*f;
-    // (Rebuilt on any change to the session too: only new results play the motion.)
-    let fresh = *shown != outcome.results;
+    let fresh = shown.0 != outcome.results;
     if fresh {
-        shown.clone_from(&outcome.results);
+        *shown = (outcome.results.clone(), real.elapsed_secs());
     }
+    // (The session changes often, scores above all: only what the board shows of it rebuilds it.)
+    let now: SeenOf = (
+        session.me,
+        outcome
+            .results
+            .iter()
+            .flat_map(|r| &r.rows)
+            .map(|r| (session.name_of(r.id), offline(&session, r.id)))
+            .collect(),
+    );
+    if !fresh && *seen == now {
+        return;
+    }
+    *seen = now;
+    // (A rebuild mid-motion goes on from where it was, not over.)
+    let age = real.elapsed_secs() - shown.1;
     rebuild(&mut commands, *q, |p| {
         let Some(r) = &outcome.results else { return };
         let title = fb_maps::by_id(r.game).meta().title;
@@ -1240,98 +1275,93 @@ fn results(
             BackgroundColor(Color::srgba(0.188, 0.157, 0.125, 0.18)),
             Pickable::IGNORE,
         ));
-        let mut b = p.spawn(board(820.0));
-        if fresh {
-            b.insert(Motion::slide(0.0, -32.0).lasting(0.4));
-        }
-        b.with_children(|c| {
-            let cap = if r.practice {
-                text::PRACTICE_SMALL.to_string()
-            } else {
-                text::results_of(r.index, r.total)
-            };
-            board_head(c, f, &cap, title, next);
-            if let Some(code) = r.track.and_then(|t| t.code()) {
-                caption(c, f, &text::track_code(&code));
-            }
-            for (i, row_) in r.rows.iter().enumerate() {
-                let me = session.me == Some(row_.id);
-                let last = i + 1 == r.rows.len();
-                let off = session.player(row_.id).is_some_and(|p| !p.connected && !p.bot);
-                let e = table_row(c, me, last, 56.0, |t| {
-                    cell(t, 40.0, false, |x| place_badge(x, f, row_.place, 26.0, true));
-                    t.spawn(Node {
-                        flex_grow: 1.0,
-                        min_width: px(0),
-                        flex_direction: FlexDirection::Column,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    })
-                    .with_children(|x| {
-                        row(x, false, |n| {
-                            let here = n.target_entity();
-                            n.commands().entity(here).insert(Node {
-                                column_gap: px(0),
-                                ..default()
+        p.spawn((board(820.0), Motion::slide(0.0, -32.0).lasting(0.4).aged(age)))
+            .with_children(|c| {
+                let cap = if r.practice {
+                    text::PRACTICE_SMALL.to_string()
+                } else {
+                    text::results_of(r.index, r.total)
+                };
+                board_head(c, f, &cap, title, next, round.next_in);
+                if let Some(code) = r.track.and_then(|t| t.code()) {
+                    caption(c, f, &text::track_code(&code));
+                }
+                for (i, row_) in r.rows.iter().enumerate() {
+                    let me = session.me == Some(row_.id);
+                    let last = i + 1 == r.rows.len();
+                    let off = offline(&session, row_.id);
+                    let e = table_row(c, me, last, 56.0, |t| {
+                        cell(t, 40.0, false, |x| place_badge(x, f, row_.place, 26.0, true));
+                        t.spawn(Node {
+                            flex_grow: 1.0,
+                            min_width: px(0),
+                            flex_direction: FlexDirection::Column,
+                            overflow: Overflow::clip(),
+                            ..default()
+                        })
+                        .with_children(|x| {
+                            row(x, false, |n| {
+                                let here = n.target_entity();
+                                n.commands().entity(here).insert(Node {
+                                    column_gap: px(0),
+                                    ..default()
+                                });
+                                let ink = if off { GHOST } else { INK };
+                                rich_in(n, f, &session.name_of(row_.id), 16.0, ink, true);
+                                if me {
+                                    rich(n, f, text::YOU, 16.0, FAINT);
+                                }
                             });
-                            let ink = if off { GHOST } else { INK };
-                            rich_in(n, f, &session.name_of(row_.id), 16.0, ink, true);
-                            if me {
-                                rich(n, f, text::YOU, 16.0, FAINT);
+                            rich(
+                                x,
+                                f,
+                                &text::round_note(row_.note),
+                                13.5,
+                                if off { GHOST } else { FAINT },
+                            );
+                        });
+                        cell(t, 54.0, true, |x| {
+                            if row_.points > 0 {
+                                rich_in(x, f, &format!("+{}", row_.points), 16.0, GOOD, true);
                             }
                         });
-                        rich(
-                            x,
-                            f,
-                            &text::round_note(row_.note),
-                            13.5,
-                            if off { GHOST } else { FAINT },
-                        );
-                    });
-                    cell(t, 54.0, true, |x| {
-                        if row_.points > 0 {
-                            rich_in(x, f, &format!("+{}", row_.points), 16.0, GOOD, true);
-                        }
-                    });
-                    cell(t, 54.0, true, |x| {
-                        if row_.penalty > 0 {
-                            rich_in(x, f, &format!("−{}", row_.penalty), 16.0, CRITICAL, true);
-                        }
-                    });
-                    cell(t, 60.0, false, |x| {
-                        let (fill, ink) = match row_.delta {
-                            d if d > 0 => (GOOD_SOFT, GOOD),
-                            d if d < 0 => (CRITICAL_SOFT, CRITICAL),
-                            _ => (Color::NONE, GHOST),
-                        };
-                        x.spawn((
-                            Node {
-                                padding: UiRect::axes(px(7), px(2)),
-                                border_radius: BorderRadius::all(px(8)),
-                                ..default()
-                            },
-                            BackgroundColor(fill),
-                        ))
-                        .with_children(|b| {
-                            let s = if row_.delta == 0 {
-                                "—".into()
-                            } else {
-                                text::signed(row_.delta)
+                        cell(t, 54.0, true, |x| {
+                            if row_.penalty > 0 {
+                                rich_in(x, f, &format!("−{}", row_.penalty), 16.0, CRITICAL, true);
+                            }
+                        });
+                        cell(t, 60.0, false, |x| {
+                            let (fill, ink) = match row_.delta {
+                                d if d > 0 => (GOOD_SOFT, GOOD),
+                                d if d < 0 => (CRITICAL_SOFT, CRITICAL),
+                                _ => (Color::NONE, GHOST),
                             };
-                            rich_in(b, f, &s, 13.0, ink, true);
+                            x.spawn((
+                                Node {
+                                    padding: UiRect::axes(px(7), px(2)),
+                                    border_radius: BorderRadius::all(px(8)),
+                                    ..default()
+                                },
+                                BackgroundColor(fill),
+                            ))
+                            .with_children(|b| {
+                                let s = if row_.delta == 0 {
+                                    "—".into()
+                                } else {
+                                    text::signed(row_.delta)
+                                };
+                                rich_in(b, f, &s, 13.0, ink, true);
+                            });
+                        });
+                        cell(t, 62.0, true, |x| {
+                            rich_in(x, f, &row_.total.to_string(), 19.0, INK, true);
                         });
                     });
-                    cell(t, 62.0, true, |x| {
-                        rich_in(x, f, &row_.total.to_string(), 19.0, INK, true);
-                    });
-                });
-                if fresh {
                     c.commands()
                         .entity(e)
-                        .insert(Motion::slide(-24.0, 0.0).after(0.15 + i as f32 * 0.05));
+                        .insert(Motion::slide(-24.0, 0.0).after(0.15 + i as f32 * 0.05).aged(age));
                 }
-            }
-        });
+            });
     });
 }
 
@@ -1379,138 +1409,142 @@ fn cell(p: &mut ChildSpawnerCommands, w: f32, end: bool, f: impl FnOnce(&mut Chi
 }
 
 /// The end of the game, beside the podium on the field: who won, the final table and the titles.
+#[expect(clippy::too_many_arguments, reason = "a system")]
 fn summary(
     q: Single<Entity, With<SummaryBox>>,
     outcome: Res<Outcome>,
     session: Res<Session>,
+    round: Res<RoundTime>,
     f: Res<Fonts>,
-    mut shown: Local<Option<GameEnd>>,
+    real: Res<Time<Real>>,
+    mut shown: Local<(Option<GameEnd>, f32)>,
+    mut me: Local<Option<PlayerId>>,
     mut commands: Commands,
 ) {
     let f = &*f;
-    let fresh = *shown != outcome.game_end;
+    let fresh = shown.0 != outcome.game_end;
     if fresh {
-        shown.clone_from(&outcome.game_end);
+        *shown = (outcome.game_end.clone(), real.elapsed_secs());
     }
+    if !fresh && *me == session.me {
+        return;
+    }
+    *me = session.me;
+    let age = real.elapsed_secs() - shown.1;
     rebuild(&mut commands, *q, |p| {
         let Some(g) = &outcome.game_end else { return };
-        let mut b = p.spawn(board(720.0));
-        if fresh {
-            b.insert(Motion::slide(48.0, 0.0).lasting(0.45));
-        }
-        b.with_children(|c| {
-            let title = match g.standings.first() {
-                Some(w) if session.me == Some(w.id) => format!("👑 {}", text::YOU_WON),
-                Some(w) => format!("👑 {}", text::wins(&w.name)),
-                None => text::GAME_OVER.to_string(),
-            };
-            board_head(c, f, text::GAME_SUMMARY, &title, text::BACK_TO_LOBBY);
-            c.spawn(Node {
-                flex_direction: FlexDirection::Column,
-                overflow: Overflow::scroll_y(),
-                flex_shrink: 1.0,
-                min_height: px(0),
-                ..default()
-            })
-            .insert(bevy::ui_widgets::ScrollArea)
-            .with_children(|b| {
-                let h = subheading(b, f, text::STANDINGS);
-                b.commands().entity(h).insert(Node {
-                    margin: UiRect::bottom(px(6)),
-                    ..default()
-                });
-                let half = g.standings.len().div_ceil(2);
-                b.spawn(Node {
-                    column_gap: px(24),
-                    flex_shrink: 0.0,
+        p.spawn((board(720.0), Motion::slide(48.0, 0.0).lasting(0.45).aged(age)))
+            .with_children(|c| {
+                let title = match g.standings.first() {
+                    Some(w) if session.me == Some(w.id) => format!("👑 {}", text::YOU_WON),
+                    Some(w) => format!("👑 {}", text::wins(&w.name)),
+                    None => text::GAME_OVER.to_string(),
+                };
+                board_head(c, f, text::GAME_SUMMARY, &title, text::BACK_TO_LOBBY, round.next_in);
+                c.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow::scroll_y(),
+                    flex_shrink: 1.0,
+                    min_height: px(0),
                     ..default()
                 })
-                .with_children(|cols| {
-                    for part in [&g.standings[..half], &g.standings[half..]] {
-                        cols.spawn(Node {
-                            flex_direction: FlexDirection::Column,
-                            flex_grow: 1.0,
-                            flex_basis: px(0),
-                            min_width: px(0),
-                            ..default()
-                        })
-                        .with_children(|t| {
-                            for s in part {
-                                let me = session.me == Some(s.id);
-                                table_row(t, me, false, 40.0, |r| {
-                                    let here = r.target_entity();
-                                    r.commands().entity(here).insert(Node {
-                                        column_gap: px(10),
-                                        align_items: AlignItems::Center,
-                                        min_height: px(40),
-                                        padding: UiRect::axes(px(if me { 8 } else { 0 }), px(0)),
-                                        margin: UiRect::axes(px(if me { -8 } else { 0 }), px(0)),
-                                        border: UiRect::bottom(px(if me { 0 } else { 1 })),
-                                        border_radius: BorderRadius::all(px(if me { 10 } else { 0 })),
-                                        ..default()
-                                    });
-                                    place_badge(r, f, s.place as usize, 26.0, true);
-                                    let n = rich_in(r, f, &s.name, 16.0, INK, true);
-                                    r.commands().entity(n).insert((
-                                        Node {
-                                            flex_grow: 1.0,
-                                            flex_shrink: 1.0,
-                                            min_width: px(0),
-                                            ..default()
-                                        },
-                                        TextLayout::no_wrap(),
-                                    ));
-                                    let w = rich(r, f, &format!("🏆{}", s.wins), 14.0, FAINT);
-                                    r.commands().entity(w).insert(TextLayout::no_wrap());
-                                    cell(r, 34.0, true, |x| {
-                                        rich_in(x, f, &s.total.to_string(), 16.0, INK, true);
-                                    });
-                                });
-                            }
-                        });
-                    }
-                });
-                if !g.awards.is_empty() {
-                    let h = subheading(b, f, text::AWARDS);
+                .insert(bevy::ui_widgets::ScrollArea)
+                .with_children(|b| {
+                    let h = subheading(b, f, text::STANDINGS);
                     b.commands().entity(h).insert(Node {
-                        margin: UiRect::new(px(0), px(0), px(22), px(10)),
+                        margin: UiRect::bottom(px(6)),
                         ..default()
                     });
-                }
-                b.spawn(Node {
-                    flex_wrap: FlexWrap::Wrap,
-                    column_gap: px(10),
-                    row_gap: px(10),
-                    flex_shrink: 0.0,
-                    ..default()
-                })
-                .with_children(|grid| {
-                    for (i, a) in g.awards.iter().enumerate() {
-                        let (icon, title, what) = text::award(a);
-                        let mut card = grid.spawn((
-                            Node {
-                                width: percent(31.5),
-                                min_width: px(170),
+                    let half = g.standings.len().div_ceil(2);
+                    b.spawn(Node {
+                        column_gap: px(24),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|cols| {
+                        for part in [&g.standings[..half], &g.standings[half..]] {
+                            cols.spawn(Node {
                                 flex_direction: FlexDirection::Column,
-                                row_gap: px(3),
-                                padding: UiRect::axes(px(14), px(12)),
-                                border_radius: BorderRadius::all(px(14)),
+                                flex_grow: 1.0,
+                                flex_basis: px(0),
+                                min_width: px(0),
                                 ..default()
-                            },
-                            BackgroundColor(CARD2),
-                        ));
-                        if fresh {
-                            card.insert(Motion::slide(24.0, 0.0).after(0.6 + i as f32 * 0.08));
+                            })
+                            .with_children(|t| {
+                                for s in part {
+                                    let me = session.me == Some(s.id);
+                                    table_row(t, me, false, 40.0, |r| {
+                                        let here = r.target_entity();
+                                        r.commands().entity(here).insert(Node {
+                                            column_gap: px(10),
+                                            align_items: AlignItems::Center,
+                                            min_height: px(40),
+                                            padding: UiRect::axes(px(if me { 8 } else { 0 }), px(0)),
+                                            margin: UiRect::axes(px(if me { -8 } else { 0 }), px(0)),
+                                            border: UiRect::bottom(px(if me { 0 } else { 1 })),
+                                            border_radius: BorderRadius::all(px(if me { 10 } else { 0 })),
+                                            ..default()
+                                        });
+                                        place_badge(r, f, s.place as usize, 26.0, true);
+                                        let n = rich_in(r, f, &s.name, 16.0, INK, true);
+                                        r.commands().entity(n).insert((
+                                            Node {
+                                                flex_grow: 1.0,
+                                                flex_shrink: 1.0,
+                                                min_width: px(0),
+                                                ..default()
+                                            },
+                                            TextLayout::no_wrap(),
+                                        ));
+                                        let w = rich(r, f, &format!("🏆{}", s.wins), 14.0, FAINT);
+                                        r.commands().entity(w).insert(TextLayout::no_wrap());
+                                        cell(r, 34.0, true, |x| {
+                                            rich_in(x, f, &s.total.to_string(), 16.0, INK, true);
+                                        });
+                                    });
+                                }
+                            });
                         }
-                        card.with_children(|r| {
-                            rich_in(r, f, &format!("{icon} {title}"), 15.0, INK, true);
-                            rich_in(r, f, &session.name_of(a.id), 14.0, INK, true);
-                            rich(r, f, &what, 13.0, FAINT);
+                    });
+                    if !g.awards.is_empty() {
+                        let h = subheading(b, f, text::AWARDS);
+                        b.commands().entity(h).insert(Node {
+                            margin: UiRect::new(px(0), px(0), px(22), px(10)),
+                            ..default()
                         });
                     }
+                    b.spawn(Node {
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: px(10),
+                        row_gap: px(10),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|grid| {
+                        for (i, a) in g.awards.iter().enumerate() {
+                            let (icon, title, what) = text::award(a);
+                            let mut card = grid.spawn((
+                                Node {
+                                    width: percent(31.5),
+                                    min_width: px(170),
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: px(3),
+                                    padding: UiRect::axes(px(14), px(12)),
+                                    border_radius: BorderRadius::all(px(14)),
+                                    ..default()
+                                },
+                                BackgroundColor(CARD2),
+                            ));
+                            card.insert(Motion::slide(24.0, 0.0).after(0.6 + i as f32 * 0.08).aged(age));
+                            card.with_children(|r| {
+                                rich_in(r, f, &format!("{icon} {title}"), 15.0, INK, true);
+                                rich_in(r, f, &session.name_of(a.id), 14.0, INK, true);
+                                rich(r, f, &what, 13.0, FAINT);
+                            });
+                        }
+                    });
                 });
             });
-        });
     });
 }
 

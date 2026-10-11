@@ -17,16 +17,19 @@ pub enum TraceKind {
     Hits,
     /// Every left click through window, picking, button and action, with a verdict (client).
     Clicks,
+    /// The results and summary boards frame by frame: rebuilds, their cause, motion, the time line (client).
+    Hud,
 }
 
 impl TraceKind {
-    const ALL: [TraceKind; 3] = [TraceKind::Input, TraceKind::Hits, TraceKind::Clicks];
+    const ALL: [TraceKind; 4] = [TraceKind::Input, TraceKind::Hits, TraceKind::Clicks, TraceKind::Hud];
 
     pub fn name(self) -> &'static str {
         match self {
             TraceKind::Input => "input",
             TraceKind::Hits => "hits",
             TraceKind::Clicks => "clicks",
+            TraceKind::Hud => "hud",
         }
     }
 }
@@ -55,7 +58,7 @@ impl FromStr for TraceArg {
 
 #[derive(clap::Args, Clone, Debug, Default)]
 pub struct TraceOpts {
-    /// Debug traces into text files: `input`, `hits`, `clicks` (the client's), each into `<kind>-<side>.txt` here
+    /// Debug traces into text files: `input`, `hits`, `clicks`, `hud` (the client's), each into `<kind>-<side>.txt` here
     /// or `kind=file`, e.g. `--trace hits,input=in.txt`.
     #[arg(long = "trace", value_name = "KIND[=FILE]", value_delimiter = ',')]
     pub trace: Vec<TraceArg>,

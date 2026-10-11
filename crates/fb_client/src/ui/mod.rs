@@ -3,7 +3,7 @@ pub mod text;
 
 mod chat;
 mod home;
-mod hud;
+pub(crate) mod hud;
 mod loading;
 mod menu;
 pub mod motion;
