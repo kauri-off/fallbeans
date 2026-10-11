@@ -40,7 +40,11 @@ impl Plugin for HomePlugin {
                     update_box.run_if(resource_exists_and_changed::<Update>.or_else(run_once)),
                     crash_box.run_if(resource_changed::<LastCrash>),
                     own_beans.run_if(resource_changed::<Player>.or_else(resource_changed::<Session>)),
-                    servers.run_if(resource_changed::<Servers>.or_else(resource_changed::<States>)),
+                    servers.run_if(
+                        resource_changed::<Servers>
+                            .or_else(resource_changed::<States>)
+                            .or_else(resource_changed::<sort::Sorting>),
+                    ),
                     server_add.run_if(resource_changed::<Servers>.or_else(resource_changed::<Form>)),
                     rooms.run_if(
                         resource_changed::<RoomList>
@@ -55,7 +59,7 @@ impl Plugin for HomePlugin {
                     banner,
                 ),
                 enter_submits,
-                (home_actions, server_actions),
+                (home_actions, server_actions, server_moved),
             )
                 .chain(),
         );
@@ -635,21 +639,43 @@ fn servers(
     q: Single<Entity, With<ServersList>>,
     list: Res<Servers>,
     states: Res<States>,
+    sorting: Res<sort::Sorting>,
     f: Res<Fonts>,
+    mut shown: Local<Option<(Vec<String>, Vec<Status>)>>,
     mut commands: Commands,
 ) {
+    // (Not redrawn under a server being dragged: once let go.)
+    if sorting.holds(sort::List::Servers) {
+        return;
+    }
+    let next = (list.list.clone(), list.list.iter().map(|a| states.get(a)).collect());
+    if shown.as_ref() == Some(&next) {
+        return;
+    }
+    *shown = Some(next);
     let f = &*f;
     rebuild(&mut commands, *q, |p| {
         if list.list.is_empty() {
             empty_card(p, f, Some("🌐"), text::NO_SERVERS);
         }
-        for (i, addr) in list.ordered().iter().enumerate() {
+        for (i, addr) in list.list.iter().enumerate() {
             let e = server_row(p, f, addr, &states.get(addr));
-            p.commands()
+            let mut commands = p.commands();
+            commands
                 .entity(e)
                 .insert(motion::Motion::slide(0.0, 10.0).after(i as f32 * 0.04));
+            sort::sortable(&mut commands, e, sort::List::Servers, i);
         }
     });
+}
+
+/// A server dropped at another place of the list moves there.
+fn server_moved(mut moved: MessageReader<sort::Moved>, mut servers: ResMut<Servers>, mut commands: Commands) {
+    for m in moved.read().filter(|m| m.list == sort::List::Servers) {
+        if servers.shift(m.from, m.to) {
+            crate::settings::save_soon(&mut commands);
+        }
+    }
 }
 
 fn server_row(p: &mut ChildSpawnerCommands, f: &Fonts, addr: &str, status: &Status) -> Entity {
@@ -1512,7 +1538,7 @@ fn server_actions(
                     _ => crate::servers::candidates(addr).into_iter().next(),
                 };
                 let Some(base) = base else { continue };
-                book.servers.last = Some(addr.clone());
+                book.servers.played(addr);
                 crate::settings::save_soon(&mut commands);
                 // (This server's own: one never sees the player's identity on another.)
                 let identity = opts.token.clone().or_else(|| book.ids.get(&base));
