@@ -23,6 +23,7 @@ impl Options<'_> {
             Toggle::Shake => self.controls.camera_shake,
             Toggle::ShowFps => self.display.show_fps,
             Toggle::Fullscreen => self.display.fullscreen,
+            Toggle::Discord => self.display.discord,
             Toggle::Vsync => self.gfx.vsync,
         }
     }
@@ -188,6 +189,7 @@ fn section_body(c: &mut ChildSpawnerCommands, f: &Fonts, o: &Options, s: Section
             knob(c, Knob::UiScale, text::UI_SCALE, crate::settings::UI_SCALE_RANGE, 0.05);
             check(c, text::SHOW_FPS, Toggle::ShowFps);
             check(c, text::FULLSCREEN, Toggle::Fullscreen);
+            check(c, text::DISCORD, Toggle::Discord);
         }
         Section::Gfx => graphics(c, f, o),
         Section::Keys => {

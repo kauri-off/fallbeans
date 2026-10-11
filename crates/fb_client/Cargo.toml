@@ -108,6 +108,8 @@ lightyear = { workspace = true, features = [
 ] }
 # The process's RAM and CPU in the F4 overlay and recordings, read only while shown.
 sysinfo.workspace = true
+# Discord Rich Presence over its local IPC (`discord.rs`).
+discord-rich-presence = "1.1"
 # The window's icon (`icon.rs`): Bevy's winit, which does not export its `Icon`.
 winit = { version = "0.30", default-features = false }
 # Only for the `profiler` feature: the spans of these three without the rest of `bevy/trace`.

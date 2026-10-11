@@ -154,6 +154,7 @@ pub const VOLUME: &str = "Громкость звуков";
 pub const UI_SCALE: &str = "Размер интерфейса";
 pub const SHOW_FPS: &str = "Показывать частоту кадров";
 pub const FULLSCREEN: &str = "Полный экран (F11)";
+pub const DISCORD: &str = "Показывать игру в статусе Discord";
 pub const KEYS: &str = "Клавиши";
 pub const AUTOSAVED: &str = "✓ Сохраняется само";
 

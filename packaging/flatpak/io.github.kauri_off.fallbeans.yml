@@ -13,6 +13,9 @@ finish-args:
   # GPU and gamepads. Not `--device=dri` + `--device=input`: flatpak before 1.15.6 (Ubuntu 22.04 and 24.04, Debian
   # 12, the release runner's flatpak-builder) rejects `input`.
   - --device=all
+  # Discord's IPC socket (the status, `discord.rs`): a native Discord's and a flatpak one's.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/app/com.discordapp.Discord:create
 modules:
   - name: fallbeans
     buildsystem: simple
