@@ -145,6 +145,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # (The history and tags: the notes list the commits since the previous release.)
+          fetch-depth: 0
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: dist
@@ -164,7 +167,14 @@ jobs:
           sed -i 's| \./| |' SHA256SUMS
           cat SHA256SUMS
           title="Fall Beans $(echo "$VERSION" | sed -E 's/-(.*)$/ \U\1/')"
-          sed "s/@VERSION@/$VERSION/g" ../packaging/release-notes.md > notes.md
+          # The commits since the previous release, without the version bumps.
+          prev=$(git describe --tags --abbrev=0 --match 'v*' --exclude "v$VERSION" HEAD)
+          {
+            git log --no-merges --format='- %s' --invert-grep --grep='^Update to [0-9]' "$prev..HEAD"
+            echo
+            echo "**Все изменения**: https://github.com/$GITHUB_REPOSITORY/compare/$prev...v$VERSION"
+          } > notes.md
+          cat notes.md
           # (A tag left by a failed run, on this commit: the release goes on it.)
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md \
             ./*.exe ./*.AppImage ./*.deb SHA256SUMS
