@@ -87,6 +87,9 @@ pub struct Offer {
     pub dlss: bool,
     /// AMD's DLL loaded and made an upscaling context.
     pub fsr3: bool,
+    /// A discrete GPU: the best a temporal upscaler (FSR 3.1 costs an Intel UHD 620 13 ms a frame at 720p, FSR 1 and
+    /// SMAA 2 ms).
+    pub discrete: bool,
 }
 
 impl Offer {
@@ -113,9 +116,9 @@ pub fn pick(o: Offer, want: Option<Upscaler>) -> Upscaler {
     want.filter(|u| o.has(*u)).unwrap_or_else(|| choose(o))
 }
 
-/// The upscaler for what is offered: FSR 3.1, then DLSS, then FSR 1.
+/// The upscaler for what is offered: FSR 3.1, then DLSS, then FSR 1; FSR 1 on an integrated GPU.
 pub fn choose(o: Offer) -> Upscaler {
-    if !o.vulkan {
+    if !o.vulkan || !o.discrete {
         Upscaler::Fsr1
     } else if o.fsr3 {
         Upscaler::Fsr3
@@ -314,19 +317,23 @@ fn decide(
     mut up: ResMut<Upscaling>,
 ) {
     let offer = Offer {
-        vulkan: info.is_some_and(|i| i.0.backend == wgpu_types::Backend::Vulkan),
+        vulkan: info
+            .as_ref()
+            .is_some_and(|i| i.0.backend == wgpu_types::Backend::Vulkan),
         dlss: available.dlss,
         fsr3: available.fsr3,
+        discrete: info.is_some_and(|i| i.0.device_type == wgpu_types::DeviceType::DiscreteGpu),
     };
     *up = resolve(offer, &g, &faults);
     info!(
-        "upscaling: {} at {:.0}% of the resolution (setting {:?}; Vulkan {}, DLSS {}, FSR 3.1 {})",
+        "upscaling: {} at {:.0}% of the resolution (setting {:?}; Vulkan {}, DLSS {}, FSR 3.1 {}, discrete {})",
         up.active.name(),
         g.upscale.scale() * 100.0,
         g.upscaler,
         offer.vulkan,
         offer.dlss,
-        offer.fsr3
+        offer.fsr3,
+        offer.discrete
     );
 }
 
@@ -443,7 +450,12 @@ mod tests {
 
     #[test]
     fn fsr3_then_dlss_then_fsr1() {
-        let o = |vulkan, dlss, fsr3| Offer { vulkan, dlss, fsr3 };
+        let o = |vulkan, dlss, fsr3| Offer {
+            vulkan,
+            dlss,
+            fsr3,
+            discrete: true,
+        };
         assert_eq!(choose(o(true, true, true)), Upscaler::Fsr3);
         assert_eq!(choose(o(true, true, false)), Upscaler::Dlss);
         assert_eq!(choose(o(true, false, true)), Upscaler::Fsr3);
@@ -451,6 +463,13 @@ mod tests {
         // DX12 (or the tests' noop device): FSR 1 whatever else is there.
         assert_eq!(choose(o(false, true, true)), Upscaler::Fsr1);
         assert_eq!(choose(Offer::default()), Upscaler::Fsr1);
+        // An integrated GPU: FSR 1 unless asked for another.
+        let igpu = Offer {
+            discrete: false,
+            ..o(true, false, true)
+        };
+        assert_eq!(choose(igpu), Upscaler::Fsr1);
+        assert_eq!(pick(igpu, Some(Upscaler::Fsr3)), Upscaler::Fsr3);
         assert!(Upscaler::Dlss.temporal());
         assert!(Upscaler::Fsr3.temporal());
         assert!(!Upscaler::Fsr1.temporal());
@@ -462,6 +481,7 @@ mod tests {
             vulkan: true,
             dlss: true,
             fsr3: true,
+            discrete: true,
         };
         assert_eq!(pick(rtx, None), Upscaler::Fsr3);
         assert_eq!(pick(rtx, Some(Upscaler::Dlss)), Upscaler::Dlss);

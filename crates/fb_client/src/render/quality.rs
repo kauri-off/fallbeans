@@ -285,9 +285,9 @@ fn apply(
         // the picture keeps its brightness (`bloom.rs`).
         e.insert(Bloom);
     }
-    // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M. A
-    // temporal upscaler has it anyway.)
-    if preset == Preset::Low && !temporal {
+    // (Low, and High on an integrated GPU: a depth prepass first, so the main pass shades each pixel once; −0.45 ms
+    // on a GeForce 610M, −8 ms on High on an Intel UHD 620. A temporal upscaler has it anyway.)
+    if (preset == Preset::Low || q.tier < Tier::T2) && !temporal {
         e.insert(DepthPrepass);
     }
     // (High: the Gaussian, soft edges; Low one hardware-filtered tap per shadow lookup instead of nine.)
