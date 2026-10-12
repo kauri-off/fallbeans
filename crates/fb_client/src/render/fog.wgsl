@@ -90,6 +90,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     return haze_at(in.uv, textureLoad(depth, vec2<i32>(in.position.xy), 0));
 }
 
+// At half the resolution, up to the depth of each 2×2 block's first pixel (`fog_up.wgsl` scales it up).
+@fragment
+fn low(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    return haze_at(in.uv, textureLoad(depth, vec2<i32>(in.position.xy) * 2, 0));
+}
+
 // The haze through `uv` of the view, up to depth `z` (reversed infinite depth: near / distance; the sky at 0).
 fn haze_at(uv: vec2<f32>, z: f32) -> vec4<f32> {
     if (m.haze.a <= 0.0) {
