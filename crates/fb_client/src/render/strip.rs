@@ -10,7 +10,8 @@ use bevy::render::{ExtractSchedule, Render, RenderApp};
 /// Parts of the names of the systems taken out: atmosphere, screen-space reflections, volumetric fog, transmission,
 /// order-independent transparency, deferred shading, depth of field, motion blur, forward decals (clustered ones
 /// stay: they make a buffer of the mesh view's bindings), contact shadows, generated environment maps, scattering
-/// media, SSAO and TAA (`quality.rs` adds neither), occlusion culling's depth pyramid, and 2D.
+/// media, SSAO and TAA (`quality.rs` adds neither), Bevy's bloom (`bloom.rs` instead), occlusion culling's depth
+/// pyramid, and 2D.
 const UNUSED: &[&str] = &[
     "bevy_pbr::atmosphere::",
     "GpuAtmosphere",
@@ -33,6 +34,8 @@ const UNUSED: &[&str] = &[
     "bevy_pbr::medium::",
     "bevy_pbr::ssao::",
     "bevy_anti_alias::taa::",
+    "bevy_post_process::bloom::",
+    "BloomUniforms",
     "mip_generation::experimental::depth::",
     "core_2d::",
     "mesh2d",

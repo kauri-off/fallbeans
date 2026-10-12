@@ -12,7 +12,6 @@ use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrep
 use bevy::ecs::system::SystemParam;
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
-use bevy::post_process::bloom::Bloom;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::camera::{MipBias, TemporalJitter};
@@ -24,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use wgpu_types::DeviceType;
 
 use super::Sun;
+use super::bloom::Bloom;
 use super::upscale::{Upscaler, Upscaling};
 use crate::settings::Graphics;
 use crate::view::MainCamera;
@@ -282,12 +282,8 @@ fn apply(
             ..default()
         });
         // The slightest glow around what is bright (the sun on white, the bell, portals): energy-conserving, so
-        // the picture keeps its brightness.
-        e.insert(Bloom {
-            intensity: 0.06,
-            low_frequency_boost: 0.5,
-            ..Bloom::NATURAL
-        });
+        // the picture keeps its brightness (`bloom.rs`).
+        e.insert(Bloom);
     }
     // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M. A
     // temporal upscaler has it anyway.)
