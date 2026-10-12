@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::shader::ShaderRef;
+use bevy::text::{FontFeatureTag, FontFeatures};
 use bevy::time::common_conditions::on_real_timer;
 use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin};
 
@@ -44,11 +45,62 @@ impl UiMaterial for GraphMaterial {
 #[derive(Component)]
 struct Overlay;
 
-#[derive(Component)]
-struct Head;
+/// A text or table of the overlay, top to bottom (the graph sits between `Info` and `Passes`).
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Head,
+    Stats,
+    Info,
+    Passes,
+    Foot,
+}
+
+/// A grid's rows as shown, the first one its header.
+#[derive(Component, Default)]
+struct Table(Vec<Vec<String>>);
 
 #[derive(Component)]
-struct Body;
+struct Cell;
+
+/// What the overlay shows this time.
+#[derive(Default)]
+struct Page {
+    head: String,
+    stats: Vec<Vec<String>>,
+    info: String,
+    passes: Vec<Vec<String>>,
+    foot: String,
+}
+
+impl Page {
+    fn text(&self, slot: Slot) -> &str {
+        match slot {
+            Slot::Head => &self.head,
+            Slot::Info => &self.info,
+            Slot::Foot => &self.foot,
+            Slot::Stats | Slot::Passes => "",
+        }
+    }
+
+    fn table(&mut self, slot: Slot) -> Vec<Vec<String>> {
+        match slot {
+            Slot::Stats => std::mem::take(&mut self.stats),
+            Slot::Passes => std::mem::take(&mut self.passes),
+            _ => Vec::new(),
+        }
+    }
+}
+
+const TEXT: Color = Color::srgb(0.88, 0.9, 0.94);
+const HEADER: Color = Color::srgb(0.55, 0.6, 0.68);
+
+fn font() -> TextFont {
+    TextFont {
+        font_size: FontSize::Px(13.0),
+        font_features: FontFeatures::builder().enable(FontFeatureTag::TABULAR_FIGURES).build(),
+        ..default()
+    }
+}
 
 #[derive(Component)]
 struct Graph;
@@ -73,10 +125,6 @@ impl Plugin for OverlayPlugin {
 }
 
 fn setup(mut commands: Commands, mut graphs: ResMut<Assets<GraphMaterial>>) {
-    let font = || TextFont {
-        font_size: FontSize::Px(13.0),
-        ..default()
-    };
     let material = graphs.add(GraphMaterial {
         u: GraphUniform {
             frame: [Vec4::ZERO; SAMPLES / 4],
@@ -92,17 +140,48 @@ fn setup(mut commands: Commands, mut graphs: ResMut<Assets<GraphMaterial>>) {
                 left: px(10),
                 top: px(8),
                 flex_direction: FlexDirection::Column,
-                row_gap: px(4),
-                padding: UiRect::all(px(6)),
+                row_gap: px(8),
+                padding: UiRect::axes(px(12), px(10)),
+                border_radius: BorderRadius::all(px(6)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.98)),
             GlobalZIndex(101),
             Visibility::Hidden,
             Pickable::IGNORE,
         ))
         .with_children(|p| {
-            p.spawn((Head, Text::new(""), font(), TextColor(Color::WHITE), Pickable::IGNORE));
+            let text = |slot: Slot, color: Color| {
+                (
+                    slot,
+                    Text::new(""),
+                    font(),
+                    TextColor(color),
+                    Node {
+                        display: Display::None,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                )
+            };
+            let table = |slot: Slot| {
+                (
+                    slot,
+                    Table::default(),
+                    Node {
+                        display: Display::None,
+                        align_self: AlignSelf::Start,
+                        grid_template_columns: Vec::new(),
+                        column_gap: px(18),
+                        row_gap: px(1),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                )
+            };
+            p.spawn(text(Slot::Head, Color::WHITE));
+            p.spawn(table(Slot::Stats));
+            p.spawn(text(Slot::Info, TEXT));
             p.spawn((
                 Graph,
                 MaterialNode(material),
@@ -113,13 +192,8 @@ fn setup(mut commands: Commands, mut graphs: ResMut<Assets<GraphMaterial>>) {
                 },
                 Pickable::IGNORE,
             ));
-            p.spawn((
-                Body,
-                Text::new(""),
-                font(),
-                TextColor(Color::srgb(0.85, 0.88, 0.92)),
-                Pickable::IGNORE,
-            ));
+            p.spawn(table(Slot::Passes));
+            p.spawn(text(Slot::Foot, TEXT));
         });
 }
 
@@ -155,14 +229,17 @@ fn ms(v: f32) -> String {
     if v.is_finite() { format!("{v:.2}") } else { "—".into() }
 }
 
-fn row(name: &str, s: Option<Stat>) -> String {
+fn row(name: &str, s: Option<Stat>) -> Vec<String> {
+    let mut r = vec![name.to_string()];
     match s {
-        Some(s) => format!(
-            "{name:<7}{:>8.2}{:>8.2}{:>8.2}{:>8.2}{:>8.2}",
-            s.avg, s.p50, s.p95, s.p99, s.max
-        ),
-        None => format!("{name:<7}       —"),
+        Some(s) => r.extend([s.avg, s.p50, s.p95, s.p99, s.max].map(|v| format!("{v:.2}"))),
+        None => r.extend(std::iter::repeat_n("—".to_string(), 5)),
     }
+    r
+}
+
+fn header(cells: &[&str]) -> Vec<String> {
+    cells.iter().map(|c| c.to_string()).collect()
 }
 
 /// `144 fps | frame 6.94 ms p99 9.1 | 1% low 118 fps | GPU 4.20 | CPU main 2.10 render 1.80 (wait 0.40) | GPU-bound`
@@ -245,72 +322,157 @@ struct Setup<'w, 's> {
     camera: Query<'w, 's, (&'static Camera, Option<&'static MainPassResolutionOverride>), With<MainCamera>>,
 }
 
+type Plain = (Without<Table>, Without<Cell>);
+
+/// The overlay's texts, tables and table cells.
+#[derive(SystemParam)]
+struct Widgets<'w, 's> {
+    texts: Query<'w, 's, (&'static Slot, &'static mut Text, &'static mut Node), Plain>,
+    tables: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Slot,
+            &'static mut Table,
+            &'static mut Node,
+            Option<&'static Children>,
+        ),
+    >,
+    cells: Query<'w, 's, &'static mut Text, With<Cell>>,
+}
+
 fn text(
+    mut commands: Commands,
     time: Res<Time<Real>>,
     perf: Res<Perf>,
     setup: Setup,
     recording: Res<super::capture::Recording>,
-    mut head: Query<&mut Text, (With<Head>, Without<Body>)>,
-    mut body: Query<&mut Text, (With<Body>, Without<Head>)>,
+    mut ui: Widgets,
 ) {
     if perf.mode == Mode::Off {
         return;
     }
-    let now = time.elapsed_secs();
-    let (Ok(mut head), Ok(mut body)) = (head.single_mut(), body.single_mut()) else {
-        return;
-    };
+    let mut page = page(&time, &perf, &setup, &recording);
+    for (slot, mut text, mut node) in &mut ui.texts {
+        let t = page.text(*slot);
+        if text.0 != t {
+            t.clone_into(&mut text.0);
+        }
+        show(&mut node, !t.is_empty(), Display::Flex);
+    }
+    for (entity, slot, mut table, mut node, children) in &mut ui.tables {
+        let rows = page.table(*slot);
+        show(&mut node, !rows.is_empty(), Display::Grid);
+        if table.0 == rows {
+            continue;
+        }
+        let cols = rows.first().map_or(0, Vec::len);
+        let same = table.0.len() == rows.len() && table.0.first().map_or(0, Vec::len) == cols;
+        match children {
+            Some(children) if same => {
+                for (cell, value) in children.iter().zip(rows.iter().flatten()) {
+                    if let Ok(mut text) = ui.cells.get_mut(cell)
+                        && text.0 != *value
+                    {
+                        value.clone_into(&mut text.0);
+                    }
+                }
+            }
+            _ => {
+                node.grid_template_columns = vec![RepeatedGridTrack::auto(cols as u16)];
+                commands.entity(entity).despawn_children().with_children(|p| {
+                    for (r, row) in rows.iter().enumerate() {
+                        for (c, value) in row.iter().enumerate() {
+                            p.spawn((
+                                Cell,
+                                Text::new(value.clone()),
+                                font(),
+                                TextColor(if r == 0 { HEADER } else { TEXT }),
+                                TextLayout::no_wrap(),
+                                Node {
+                                    justify_self: if c == 0 { JustifySelf::Start } else { JustifySelf::End },
+                                    ..default()
+                                },
+                                Pickable::IGNORE,
+                            ));
+                        }
+                    }
+                });
+            }
+        }
+        table.0 = rows;
+    }
+}
+
+fn show(node: &mut Node, on: bool, display: Display) {
+    let d = if on { display } else { Display::None };
+    if node.display != d {
+        node.display = d;
+    }
+}
+
+fn page(time: &Time<Real>, perf: &Perf, setup: &Setup, recording: &super::capture::Recording) -> Page {
     let summary = Summary::of(&perf.recent(2.0), setup.g.vsync);
-    let mut h = line(&summary);
+    let mut head = line(&summary);
     if let Some(r) = recording.0.as_ref() {
-        h += &format!("\n● {}", r.status(now));
+        head += &format!("\n● {}", r.status(time.elapsed_secs()));
     }
     let (target, low) = setup
         .camera
         .single()
         .map_or((None, None), |(c, l)| (c.physical_target_size(), l.map(|l| l.0)));
-    let b = match perf.mode {
-        Mode::Off | Mode::Line => String::new(),
+    let page = Page { head, ..default() };
+    match perf.mode {
+        Mode::Off | Mode::Line => page,
         Mode::Full => {
             let s = Summary::of(&perf.recent(5.0), setup.g.vsync);
-            h += &format!(
-                "\n{}\n{}\n{}\n{}\n{}\n{}\n{}\nstutters {} in 5 s\n{}",
-                "ms, 5 s   avg     p50     p95     p99     max",
-                row("frame", Some(s.frame)),
-                row("gpu", s.gpu),
-                row("main", Some(s.main)),
-                row("render", Some(s.render)),
-                row("wait", s.wait),
-                row("sleep", Some(s.sleep)),
-                s.stutters,
-                setup_line(
-                    &setup.g,
-                    setup.q.as_deref(),
-                    setup.up.as_deref(),
-                    target,
-                    low,
-                    setup.info.as_deref()
-                ),
-            );
-            full_body(&perf, target)
+            full_page(
+                Page {
+                    stats: vec![
+                        header(&["ms, 5 s", "avg", "p50", "p95", "p99", "max"]),
+                        row("frame", Some(s.frame)),
+                        row("gpu", s.gpu),
+                        row("main", Some(s.main)),
+                        row("render", Some(s.render)),
+                        row("wait", s.wait),
+                        row("sleep", Some(s.sleep)),
+                    ],
+                    info: format!(
+                        "stutters {} in 5 s\n{}",
+                        s.stutters,
+                        setup_line(
+                            &setup.g,
+                            setup.q.as_deref(),
+                            setup.up.as_deref(),
+                            target,
+                            low,
+                            setup.info.as_deref()
+                        )
+                    ),
+                    ..page
+                },
+                perf,
+                target,
+            )
         }
-        Mode::Cpu => cpu_body(&perf),
-    };
-    head.0 = h;
-    body.0 = b;
+        Mode::Cpu => cpu_page(page, perf),
+    }
 }
 
-fn full_body(perf: &Perf, target: Option<UVec2>) -> String {
+fn full_page(mut page: Page, perf: &Perf, target: Option<UVec2>) -> Page {
     let pixels = target.map_or(1.0, |t| t.element_product().max(1) as f32);
     // (Bevy 0.19 times no shadow pass: their cost shows in the sweep.)
-    let mut s = String::from("GPU passes (no shadows)     GPU ms  CPU ms     tris  frag/px\n");
-    if perf.passes.is_empty() {
-        s += "  (no GPU timers: --no-gpu-timers, or the GPU has no timestamp queries)\n";
-    }
+    page.passes.push(header(&[
+        "GPU passes (no shadows)",
+        "GPU ms",
+        "CPU ms",
+        "tris",
+        "frag/px",
+    ]));
     for p in perf.passes.iter().take(14) {
-        s += &format!(
-            "  {:<26}{:>6}{:>8}{:>9}{:>9}\n",
-            p.name,
+        page.passes.push(vec![
+            p.name.clone(),
             ms(p.gpu),
             ms(p.cpu),
             big(p.tris as u64),
@@ -318,26 +480,32 @@ fn full_body(perf: &Perf, target: Option<UVec2>) -> String {
                 format!("{:.2}", p.frags / pixels)
             } else {
                 "—".into()
-            }
-        );
+            },
+        ]);
+    }
+    if perf.passes.is_empty() {
+        page.foot += "no GPU timers: --no-gpu-timers, or the GPU has no timestamp queries\n";
     }
     if let Some(scene) = &perf.scene {
-        s += &scene.line();
+        page.foot += &scene.line();
+        page.foot += "\n";
     }
-    s += "\nF4: profiler | F9: record | Shift+F9: graphics sweep";
-    s
+    page.foot += "F4: profiler | F9: record | Shift+F9: graphics sweep";
+    page
 }
 
 /// The Cpu page of a game started without `--profiler`: the spans it sums are not there.
 const NO_SPANS: &str = "Время систем и расписаний меряется, только если игра запущена с флагом --profiler\n\
                         (или с FB_PROFILER=1): без него профайлер ничего не стоит.\nF4: скрыть | F9: запись";
 
-fn cpu_body(perf: &Perf) -> String {
+fn cpu_page(mut page: Page, perf: &Perf) -> Page {
     if !profiler::BUILT {
-        return "the profiler is not in this build (feature `profiler`)".into();
+        page.foot = "the profiler is not in this build (feature `profiler`)".into();
+        return page;
     }
     if !perf.profiler {
-        return NO_SPANS.into();
+        page.foot = NO_SPANS.into();
+        return page;
     }
     let rows = &perf.cpu;
     let find = |kind: Kind, name: &str| {
@@ -345,7 +513,7 @@ fn cpu_body(perf: &Perf) -> String {
             .find(|r| r.kind == kind && r.name.ends_with(name))
             .map_or(f32::NAN, |r| r.ms)
     };
-    let mut s = format!(
+    page.info = format!(
         "CPU, ms a frame (1 s): main app {} | render app {} | acquire {} | present {}\nschedules:",
         ms(find(Kind::Frame, "main app")),
         ms(find(Kind::Frame, "RenderApp")),
@@ -353,27 +521,31 @@ fn cpu_body(perf: &Perf) -> String {
         ms(find(Kind::Frame, "present_frames")),
     );
     for r in rows.iter().filter(|r| r.kind == Kind::Schedule).take(10) {
-        s += &format!(" {} {:.2} ·", r.name, r.ms);
+        page.info += &format!(" {} {:.2} ·", r.name, r.ms);
     }
-    s.pop();
-    s += "\n    ms   runs  system\n";
+    page.info.pop();
+    page.passes.push(header(&["system", "ms", "runs"]));
     for r in rows
         .iter()
         .filter(|r| matches!(r.kind, Kind::System | Kind::Commands))
         .take(24)
     {
         let tag = if r.kind == Kind::Commands { " (commands)" } else { "" };
-        s += &format!("{:>6.2} {:>6.1}  {}{tag}\n", r.ms, r.calls, r.name);
+        page.passes.push(vec![
+            format!("{}{tag}", r.name),
+            format!("{:.2}", r.ms),
+            format!("{:.1}", r.calls),
+        ]);
     }
     if !perf.spikes.is_empty() {
-        s += "long frames:\n";
+        page.foot += "long frames:\n";
         let now = perf.frames.back().map_or(0.0, |f: &Frame| f.t);
         for sp in perf.spikes.iter().rev().take(4) {
-            s += &format!("  {:.0} s ago: {}\n", now - sp.t, sp.line());
+            page.foot += &format!("  {:.0} s ago: {}\n", now - sp.t, sp.line());
         }
     }
-    s += "F4: hide | F9: record";
-    s
+    page.foot += "F4: hide | F9: record";
+    page
 }
 
 /// The graph's frames: the last 256, 30 times a second.
