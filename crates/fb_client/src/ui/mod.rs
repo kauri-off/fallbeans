@@ -500,6 +500,11 @@ pub enum Field {
 #[derive(Component)]
 pub struct UiRoot;
 
+/// What holds the hidden layers, out of the tree: Bevy lays out and walks every node under the root each frame,
+/// shown or not (in a round the menu and the home screen, hidden, are over a thousand nodes).
+#[derive(Component)]
+struct Parked;
+
 /// Screens and layers under the root, shown or hidden by state.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Layer {
@@ -583,7 +588,11 @@ impl Plugin for UiPlugin {
         // frame, before the next frame's keys.)
         app.add_systems(
             PostUpdate,
-            ((restyle, respan).chain().before(UiSystems::Prepare), keep_focus),
+            (
+                (restyle, respan).chain().before(UiSystems::Prepare),
+                park.before(UiSystems::Prepare),
+                keep_focus,
+            ),
         );
         app.add_plugins((
             home::HomePlugin,
@@ -600,6 +609,7 @@ impl Plugin for UiPlugin {
 }
 
 fn setup(mut commands: Commands) {
+    commands.spawn(Parked);
     let mut layers = [Entity::PLACEHOLDER; 6];
     commands
         .spawn((
@@ -664,6 +674,40 @@ fn screen(
     };
     if *now.get() != s {
         next.set(s);
+    }
+}
+
+/// A layer hidden this frame goes under `Parked`, one shown goes back under the root (before the target cameras
+/// propagate and the layout runs: it is drawn this frame). Bevy syncs a node's children to the layout only when they
+/// change while it is in the tree: what a parked layer gained in the meantime is marked changed on its way back.
+fn park(
+    layers: Option<Res<Layers>>,
+    root: Query<Entity, With<UiRoot>>,
+    parked: Query<Entity, With<Parked>>,
+    nodes: Query<(&Node, &ChildOf)>,
+    mut children: Query<&mut Children>,
+    mut commands: Commands,
+) {
+    let (Some(layers), Ok(root), Ok(parked)) = (layers, root.single(), parked.single()) else {
+        return;
+    };
+    for &l in &layers.0 {
+        let Ok((node, parent)) = nodes.get(l) else { continue };
+        let hidden = node.display == bevy::ui::Display::None;
+        let want = if hidden { parked } else { root };
+        if parent.parent() == want {
+            continue;
+        }
+        commands.entity(l).insert(ChildOf(want));
+        if !hidden {
+            let mut stack = vec![l];
+            while let Some(e) = stack.pop() {
+                if let Ok(mut c) = children.get_mut(e) {
+                    c.set_changed();
+                    stack.extend(c.iter());
+                }
+            }
+        }
     }
 }
 
