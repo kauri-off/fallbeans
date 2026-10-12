@@ -296,9 +296,11 @@ fn apply(
         Preset::Low => ShadowFilteringMethod::Hardware2x2,
     });
     // Coarse shadow maps show stairs along their edges; a third High cascade cost 2.5-4 ms of render thread on DX12, so
-    // two overlap instead.
+    // two overlap instead. An integrated GPU draws High's at 2048: two 4096 ones cost an Intel UHD 620 11-14 ms a
+    // frame (2048: about 1).
+    let high = if q.tier < Tier::T2 { 2048 } else { 4096 };
     let (size, cascades, reach) = match preset {
-        Preset::High => (4096, 2, 80.0),
+        Preset::High => (high, 2, 80.0),
         Preset::Low => (1024, 1, 30.0),
     };
     commands.insert_resource(DirectionalLightShadowMap { size });
