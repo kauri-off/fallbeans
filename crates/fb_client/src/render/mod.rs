@@ -20,6 +20,7 @@ pub mod portal;
 pub mod props;
 pub mod quality;
 mod reactive;
+mod strip;
 pub mod surface;
 pub mod upscale;
 pub mod vfx;
@@ -133,6 +134,7 @@ impl Plugin for GfxPlugin {
             fsr::FsrPlugin,
             upscale::UpscalePlugin,
             warmup::WarmupPlugin { on: self.warmup },
+            strip::StripPlugin,
         ));
         app.init_resource::<LookShown>();
         app.init_resource::<EnvLights>();
