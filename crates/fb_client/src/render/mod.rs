@@ -1,6 +1,7 @@
 //! The camera's pipeline (HDR, tone mapping, grade), the round's sun, fog, sky and ambient light, and the graphics
 //! settings (`quality.rs`, `upscale.rs`).
 pub mod ao;
+mod bloom;
 mod cloth;
 mod decor;
 #[cfg(feature = "dlss")]
@@ -20,6 +21,7 @@ pub mod portal;
 pub mod props;
 pub mod quality;
 mod reactive;
+mod strip;
 pub mod surface;
 pub mod upscale;
 pub mod vfx;
@@ -119,6 +121,7 @@ impl Plugin for GfxPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "sky.wgsl");
         embedded_asset!(app, "surface.wgsl");
+        app.add_plugins(bloom::BloomPlugin);
         app.add_plugins((
             MaterialPlugin::<SkyMaterial>::default(),
             surface::SurfacePlugin,
@@ -133,6 +136,7 @@ impl Plugin for GfxPlugin {
             fsr::FsrPlugin,
             upscale::UpscalePlugin,
             warmup::WarmupPlugin { on: self.warmup },
+            strip::StripPlugin,
         ));
         app.init_resource::<LookShown>();
         app.init_resource::<EnvLights>();

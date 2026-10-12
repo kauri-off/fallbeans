@@ -109,6 +109,8 @@ pub fn setup_camera(mut commands: Commands, offscreen: Option<Res<crate::Offscre
     let mut cam = commands.spawn((
         Camera3d::default(),
         MainCamera,
+        // (No point or spot lights: nothing to sort into clusters, `render/strip.rs`.)
+        bevy::light::cluster::ClusterConfig::None,
         // (Other beans' sounds are placed against it: `audio.rs`.)
         SpatialListener::new(4.0),
         Transform::from_xyz(0.0, 14.0, 22.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),

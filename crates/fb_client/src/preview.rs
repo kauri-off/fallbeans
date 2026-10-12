@@ -131,6 +131,7 @@ fn setup(mut commands: Commands, mut props: Props) {
         Transform::from_translation(STAGE + Vec3::new(0.0, 1.35, 6.6))
             .looking_at(STAGE + Vec3::new(0.0, 1.03, 0.0), Vec3::Y),
         RenderLayers::layer(LAYER),
+        bevy::light::cluster::ClusterConfig::None,
         StageCamera,
     ));
     commands.insert_resource(Stage { image });

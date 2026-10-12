@@ -12,7 +12,6 @@ use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrep
 use bevy::ecs::system::SystemParam;
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::pbr::ScreenSpaceAmbientOcclusion;
-use bevy::post_process::bloom::Bloom;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::camera::{MipBias, TemporalJitter};
@@ -24,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use wgpu_types::DeviceType;
 
 use super::Sun;
+use super::bloom::Bloom;
 use super::upscale::{Upscaler, Upscaling};
 use crate::settings::Graphics;
 use crate::view::MainCamera;
@@ -282,16 +282,12 @@ fn apply(
             ..default()
         });
         // The slightest glow around what is bright (the sun on white, the bell, portals): energy-conserving, so
-        // the picture keeps its brightness.
-        e.insert(Bloom {
-            intensity: 0.06,
-            low_frequency_boost: 0.5,
-            ..Bloom::NATURAL
-        });
+        // the picture keeps its brightness (`bloom.rs`).
+        e.insert(Bloom);
     }
-    // (Low: a depth prepass first, so the main pass shades each pixel once; −0.45 ms on a GeForce 610M. A
-    // temporal upscaler has it anyway.)
-    if preset == Preset::Low && !temporal {
+    // (Low, and High on an integrated GPU: a depth prepass first, so the main pass shades each pixel once; −0.45 ms
+    // on a GeForce 610M, −8 ms on High on an Intel UHD 620. A temporal upscaler has it anyway.)
+    if (preset == Preset::Low || q.tier < Tier::T2) && !temporal {
         e.insert(DepthPrepass);
     }
     // (High: the Gaussian, soft edges; Low one hardware-filtered tap per shadow lookup instead of nine.)
@@ -300,9 +296,11 @@ fn apply(
         Preset::Low => ShadowFilteringMethod::Hardware2x2,
     });
     // Coarse shadow maps show stairs along their edges; a third High cascade cost 2.5-4 ms of render thread on DX12, so
-    // two overlap instead.
+    // two overlap instead. An integrated GPU draws High's at 2048: two 4096 ones cost an Intel UHD 620 11-14 ms a
+    // frame (2048: about 1).
+    let high = if q.tier < Tier::T2 { 2048 } else { 4096 };
     let (size, cascades, reach) = match preset {
-        Preset::High => (4096, 2, 80.0),
+        Preset::High => (high, 2, 80.0),
         Preset::Low => (1024, 1, 30.0),
     };
     commands.insert_resource(DirectionalLightShadowMap { size });

@@ -7,8 +7,22 @@
     mesh_view_bindings::globals,
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_functions::{calculate_diffuse_color, calculate_F0, calculate_F0_dielectric},
+    pbr_types,
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+    lighting,
+    lighting::LAYER_BASE,
+    shadows,
+    ambient,
+    clustered_forward::ClusterableObjectIndexRanges,
+    mesh_view_bindings as view_bindings,
+    mesh_view_types,
+    mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
 }
+
+#ifdef ENVIRONMENT_MAP
+#import bevy_pbr::environment_map
+#endif
 
 #ifdef VISIBILITY_RANGE_DITHER
 #import bevy_pbr::pbr_functions::visibility_range_dither;
@@ -63,6 +77,89 @@ struct SurfaceIndices {
 @group(#{MATERIAL_BIND_GROUP}) @binding(52) var detail_smp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(53) var occluder_tex: texture_2d<f32>;
 #endif
+
+// Bevy's `apply_pbr_lighting` for the light the game has: the sun (and its shadow), the ambient and the environment
+// map; no clustered, area or transmitted light, no clearcoat or anisotropy (those materials get Bevy's). About half
+// the code: Intel Gen9 runs it in SIMD16 without spilling.
+fn sun_lighting(in: pbr_types::PbrInput) -> vec4<f32> {
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    return apply_pbr_lighting(in);
+#else ifdef STANDARD_MATERIAL_ANISOTROPY
+    return apply_pbr_lighting(in);
+#else ifdef STANDARD_MATERIAL_DIFFUSE_OR_SPECULAR_TRANSMISSION
+    return apply_pbr_lighting(in);
+#else ifdef LIGHTMAP
+    return apply_pbr_lighting(in);
+#else ifdef IRRADIANCE_VOLUME
+    return apply_pbr_lighting(in);
+#else ifdef SCREEN_SPACE_REFLECTIONS
+    return apply_pbr_lighting(in);
+#else
+    let base = in.material.base_color;
+    let metallic = in.material.metallic;
+    let perceptual_roughness = in.material.perceptual_roughness;
+    let NdotV = max(dot(in.N, in.V), 0.0001);
+    let diffuse_color = calculate_diffuse_color(
+        base.rgb,
+        metallic,
+        in.material.specular_transmission,
+        in.material.diffuse_transmission,
+    );
+    let F0 = calculate_F0(base.rgb, metallic, in.material.reflectance);
+
+    var input: lighting::LightingInput;
+    input.layers[LAYER_BASE].NdotV = NdotV;
+    input.layers[LAYER_BASE].N = in.N;
+    input.layers[LAYER_BASE].R = reflect(-in.V, in.N);
+    input.layers[LAYER_BASE].perceptual_roughness = perceptual_roughness;
+    input.layers[LAYER_BASE].roughness = lighting::perceptualRoughnessToRoughness(perceptual_roughness);
+    input.P = in.world_position.xyz;
+    input.V = in.V;
+    input.diffuse_color = diffuse_color;
+    input.metallic = metallic;
+    input.F0_dielectric = calculate_F0_dielectric(in.material.reflectance);
+    input.F0_metallic = base.rgb;
+    input.F_ab = lighting::F_AB(perceptual_roughness, NdotV);
+
+    let view_z = dot(vec4(
+        view_bindings::view.view_from_world[0].z,
+        view_bindings::view.view_from_world[1].z,
+        view_bindings::view.view_from_world[2].z,
+        view_bindings::view.view_from_world[3].z
+    ), in.world_position);
+    var direct = vec3(0.0);
+    for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
+        var shadow = 1.0;
+        if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+                && (view_bindings::lights.directional_lights[i].flags
+                    & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+            shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z, in.frag_coord.xy);
+        }
+        direct += lighting::directional_light(i, &input, true) * shadow;
+    }
+
+    var indirect = vec3(0.0);
+#ifdef ENVIRONMENT_MAP
+    // (No reflection probes: the view's map.)
+    var none = ClusterableObjectIndexRanges(0u, 0u, 0u, 0u, 0u, 0u);
+    let env = environment_map::environment_map_light(&input, &none, false);
+    indirect += env.diffuse * in.diffuse_occlusion + env.specular * in.specular_occlusion;
+#endif
+    indirect += ambient::ambient_light(
+        in.world_position,
+        in.N,
+        in.V,
+        NdotV,
+        diffuse_color,
+        F0,
+        perceptual_roughness,
+        in.diffuse_occlusion,
+    );
+
+    let emissive = in.material.emissive.rgb * base.a * mix(1.0, view_bindings::view.exposure, in.material.emissive.a);
+    return vec4(view_bindings::view.exposure * (direct + indirect) + emissive, base.a);
+#endif
+}
 
 #ifdef OBJECT_FRAME
 // A vector turned by a unit quaternion (x, y, z, w).
@@ -317,7 +414,7 @@ fn fragment(
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
-        out.color = apply_pbr_lighting(pbr_input);
+        out.color = sun_lighting(pbr_input);
     } else {
         out.color = pbr_input.material.base_color;
     }
