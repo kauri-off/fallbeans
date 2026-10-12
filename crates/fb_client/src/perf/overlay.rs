@@ -142,10 +142,10 @@ fn setup(mut commands: Commands, mut graphs: ResMut<Assets<GraphMaterial>>) {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(8),
                 padding: UiRect::axes(px(12), px(10)),
+                border_radius: BorderRadius::all(px(6)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.82)),
-            BorderRadius::all(px(6)),
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.98)),
             GlobalZIndex(101),
             Visibility::Hidden,
             Pickable::IGNORE,
@@ -170,6 +170,7 @@ fn setup(mut commands: Commands, mut graphs: ResMut<Assets<GraphMaterial>>) {
                     Table::default(),
                     Node {
                         display: Display::None,
+                        align_self: AlignSelf::Start,
                         grid_template_columns: Vec::new(),
                         column_gap: px(18),
                         row_gap: px(1),
@@ -321,28 +322,46 @@ struct Setup<'w, 's> {
     camera: Query<'w, 's, (&'static Camera, Option<&'static MainPassResolutionOverride>), With<MainCamera>>,
 }
 
+type Plain = (Without<Table>, Without<Cell>);
+
+/// The overlay's texts, tables and table cells.
+#[derive(SystemParam)]
+struct Widgets<'w, 's> {
+    texts: Query<'w, 's, (&'static Slot, &'static mut Text, &'static mut Node), Plain>,
+    tables: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Slot,
+            &'static mut Table,
+            &'static mut Node,
+            Option<&'static Children>,
+        ),
+    >,
+    cells: Query<'w, 's, &'static mut Text, With<Cell>>,
+}
+
 fn text(
     mut commands: Commands,
     time: Res<Time<Real>>,
     perf: Res<Perf>,
     setup: Setup,
     recording: Res<super::capture::Recording>,
-    mut texts: Query<(&Slot, &mut Text, &mut Node), (Without<Table>, Without<Cell>)>,
-    mut tables: Query<(Entity, &Slot, &mut Table, &mut Node, Option<&Children>)>,
-    mut cells: Query<&mut Text, With<Cell>>,
+    mut ui: Widgets,
 ) {
     if perf.mode == Mode::Off {
         return;
     }
     let mut page = page(&time, &perf, &setup, &recording);
-    for (slot, mut text, mut node) in &mut texts {
+    for (slot, mut text, mut node) in &mut ui.texts {
         let t = page.text(*slot);
         if text.0 != t {
             t.clone_into(&mut text.0);
         }
         show(&mut node, !t.is_empty(), Display::Flex);
     }
-    for (entity, slot, mut table, mut node, children) in &mut tables {
+    for (entity, slot, mut table, mut node, children) in &mut ui.tables {
         let rows = page.table(*slot);
         show(&mut node, !rows.is_empty(), Display::Grid);
         if table.0 == rows {
@@ -352,8 +371,8 @@ fn text(
         let same = table.0.len() == rows.len() && table.0.first().map_or(0, Vec::len) == cols;
         match children {
             Some(children) if same => {
-                for (&cell, value) in children.iter().zip(rows.iter().flatten()) {
-                    if let Ok(mut text) = cells.get_mut(cell)
+                for (cell, value) in children.iter().zip(rows.iter().flatten()) {
+                    if let Ok(mut text) = ui.cells.get_mut(cell)
                         && text.0 != *value
                     {
                         value.clone_into(&mut text.0);
@@ -370,7 +389,7 @@ fn text(
                                 Text::new(value.clone()),
                                 font(),
                                 TextColor(if r == 0 { HEADER } else { TEXT }),
-                                TextLayout::new_with_no_wrap(),
+                                TextLayout::no_wrap(),
                                 Node {
                                     justify_self: if c == 0 { JustifySelf::Start } else { JustifySelf::End },
                                     ..default()
