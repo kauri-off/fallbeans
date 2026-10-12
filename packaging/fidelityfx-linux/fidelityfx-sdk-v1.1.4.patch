@@ -156,11 +156,31 @@ index 25cbef5..4a39937 100644
  
  #if defined(__cplusplus)
  extern "C" {
+diff --git a/sdk/include/FidelityFX/host/ffx_types.h b/sdk/include/FidelityFX/host/ffx_types.h
+--- a/sdk/include/FidelityFX/host/ffx_types.h
++++ b/sdk/include/FidelityFX/host/ffx_types.h
+@@ -1078,7 +1078,7 @@
+ /// @ingroup SDKTypes
+ typedef struct FfxComputeJobDescription {
+ 
+-    FfxPipelineState                pipeline;                               ///< Compute pipeline for the render job.
++    const FfxPipelineState*         pipeline;                               ///< Compute pipeline for the render job (the context's, alive until the jobs run).
+     uint32_t                        dimensions[3];                          ///< Dispatch dimensions.
+     FfxResourceInternal             cmdArgument;                            ///< Dispatch indirect cmd argument buffer
+     uint32_t                        cmdArgumentOffset;                      ///< Dispatch indirect offset within the cmd argument buffer
+@@ -1095,7 +1095,7 @@
+ 
+ typedef struct FfxRasterJobDescription
+ {
+-    FfxPipelineState                pipeline;                               ///< Raster pipeline for the render job.
++    const FfxPipelineState*         pipeline;                               ///< Raster pipeline for the render job (the context's, alive until the jobs run).
+     uint32_t                        numVertices;
+     FfxResourceInternal             renderTarget;
+     FfxTextureSRV                   srvTextures[FFX_MAX_NUM_SRVS];  ///< SRV texture resources to be bound in the compute job.
 diff --git a/sdk/src/backends/vk/ffx_vk.cpp b/sdk/src/backends/vk/ffx_vk.cpp
-index d914479..5d478d2 100644
 --- a/sdk/src/backends/vk/ffx_vk.cpp
 +++ b/sdk/src/backends/vk/ffx_vk.cpp
-@@ -272,6 +272,9 @@ typedef struct BackendContext_VK {
+@@ -272,6 +272,9 @@
  
  } BackendContext_VK;
  
@@ -170,7 +190,7 @@ index d914479..5d478d2 100644
  FFX_API size_t ffxGetScratchMemorySizeVK(VkPhysicalDevice physicalDevice, size_t maxContexts)
  {
      uint32_t numExtensions = 0;
-@@ -280,14 +283,14 @@ FFX_API size_t ffxGetScratchMemorySizeVK(VkPhysicalDevice physicalDevice, size_t
+@@ -280,14 +283,14 @@
          vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &numExtensions, nullptr);
  
      uint32_t extensionPropArraySize = sizeof(VkExtensionProperties) * numExtensions;
@@ -192,7 +212,7 @@ index d914479..5d478d2 100644
                              pipelineArraySize + resourceArraySize + contextArraySize,
                          sizeof(uint64_t));
  }
-@@ -341,7 +344,11 @@ FfxErrorCode ffxGetInterfaceVK(
+@@ -341,7 +344,11 @@
      backendInterface->fpBreadcrumbsWrite = BreadcrumbsWriteVK;
      backendInterface->fpBreadcrumbsPrintDeviceInfo = BreadcrumbsPrintDeviceInfoVK;
      backendInterface->fpRegisterConstantBufferAllocator = RegisterConstantBufferAllocatorVK;
@@ -204,7 +224,7 @@ index d914479..5d478d2 100644
  
      // Memory assignments
      backendInterface->scratchBuffer = scratchBuffer;
-@@ -1402,13 +1409,13 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect ef
+@@ -1402,13 +1409,13 @@
          new (&backendContext->uniformBufferMutex) std::mutex();
  
          // Map all of our pointers
@@ -225,6 +245,193 @@ index d914479..5d478d2 100644
  
          // Map gpu job array
          backendContext->pGpuJobs = (FfxGpuJobDescription*)pMem;
+@@ -3730,7 +3737,7 @@
+                                          VkCommandBuffer       vkCommandBuffer,
+                                          FfxUInt32             effectContextId)
+ {
+-    BackendContext_VK::PipelineLayout* pipelineLayout = reinterpret_cast<BackendContext_VK::PipelineLayout*>(job->computeJobDescriptor.pipeline.rootSignature);
++    BackendContext_VK::PipelineLayout* pipelineLayout = reinterpret_cast<BackendContext_VK::PipelineLayout*>(job->computeJobDescriptor.pipeline->rootSignature);
+ 
+     // bind texture & buffer UAVs (note the binding order here MUST match the root signature mapping order from CreatePipeline!)
+     uint32_t               descriptorWriteIndex = 0;
+@@ -3749,7 +3756,7 @@
+         bufferDescriptorInfos[i] = { VK_NULL_HANDLE, 0, VK_WHOLE_SIZE };
+ 
+     // bind texture UAVs
+-    for (uint32_t currentPipelineUavIndex = 0; currentPipelineUavIndex < job->computeJobDescriptor.pipeline.uavTextureCount; ++currentPipelineUavIndex)
++    for (uint32_t currentPipelineUavIndex = 0; currentPipelineUavIndex < job->computeJobDescriptor.pipeline->uavTextureCount; ++currentPipelineUavIndex)
+     {
+         FfxTextureUAV& textureUAV = job->computeJobDescriptor.uavTextures[currentPipelineUavIndex];
+ 
+@@ -3759,10 +3766,10 @@
+ 
+         addBarrier(backendContext, &textureUAV.resource, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+ 
+-        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline.uavTextureBindings[currentPipelineUavIndex];
++        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline->uavTextureBindings[currentPipelineUavIndex];
+ 
+         // where to bind it
+-        const uint32_t currentUavResourceIndex = job->computeJobDescriptor.pipeline.uavTextureBindings[currentPipelineUavIndex].slotIndex;
++        const uint32_t currentUavResourceIndex = job->computeJobDescriptor.pipeline->uavTextureBindings[currentPipelineUavIndex].slotIndex;
+ 
+         // source: UAV of resource to bind
+         const uint32_t resourceIndex = textureUAV.resource.internalIndex;
+@@ -3789,7 +3796,7 @@
+     }
+ 
+     // bind buffer UAVs
+-    for (uint32_t currentPipelineUavIndex = 0; currentPipelineUavIndex < job->computeJobDescriptor.pipeline.uavBufferCount; ++currentPipelineUavIndex) 
++    for (uint32_t currentPipelineUavIndex = 0; currentPipelineUavIndex < job->computeJobDescriptor.pipeline->uavBufferCount; ++currentPipelineUavIndex) 
+     {
+         FfxBufferUAV& bufferUAV = job->computeJobDescriptor.uavBuffers[currentPipelineUavIndex];
+ 
+@@ -3799,13 +3806,13 @@
+ 
+         addBarrier(backendContext, &bufferUAV.resource, FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+ 
+-        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline.uavBufferBindings[currentPipelineUavIndex];
++        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline->uavBufferBindings[currentPipelineUavIndex];
+ 
+         // source: UAV of buffer to bind
+         const uint32_t resourceIndex = bufferUAV.resource.internalIndex;
+ 
+         // where to bind it
+-        const uint32_t currentUavResourceIndex = job->computeJobDescriptor.pipeline.uavBufferBindings[currentPipelineUavIndex].slotIndex;
++        const uint32_t currentUavResourceIndex = job->computeJobDescriptor.pipeline->uavBufferBindings[currentPipelineUavIndex].slotIndex;
+ 
+         writeDescriptorSets[descriptorWriteIndex] = {};
+         writeDescriptorSets[descriptorWriteIndex].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+@@ -3826,7 +3833,7 @@
+     }
+ 
+     // bind texture SRVs
+-    for (uint32_t currentPipelineSrvIndex = 0; currentPipelineSrvIndex < job->computeJobDescriptor.pipeline.srvTextureCount; ++currentPipelineSrvIndex)
++    for (uint32_t currentPipelineSrvIndex = 0; currentPipelineSrvIndex < job->computeJobDescriptor.pipeline->srvTextureCount; ++currentPipelineSrvIndex)
+     {
+         FfxTextureSRV& textureSRV = job->computeJobDescriptor.srvTextures[currentPipelineSrvIndex];
+ 
+@@ -3836,10 +3843,10 @@
+ 
+         addBarrier(backendContext, &textureSRV.resource, FFX_RESOURCE_STATE_COMPUTE_READ);
+ 
+-        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline.srvTextureBindings[currentPipelineSrvIndex];
++        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline->srvTextureBindings[currentPipelineSrvIndex];
+ 
+         // where to bind it
+-        const uint32_t currentSrvResourceIndex = job->computeJobDescriptor.pipeline.srvTextureBindings[currentPipelineSrvIndex].slotIndex;
++        const uint32_t currentSrvResourceIndex = job->computeJobDescriptor.pipeline->srvTextureBindings[currentPipelineSrvIndex].slotIndex;
+ 
+         writeDescriptorSets[descriptorWriteIndex]                 = {};
+         writeDescriptorSets[descriptorWriteIndex].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+@@ -3862,7 +3869,7 @@
+     }
+ 
+     // bind buffer SRVs
+-    for (uint32_t currentPipelineSrvIndex = 0; currentPipelineSrvIndex < job->computeJobDescriptor.pipeline.srvBufferCount; ++currentPipelineSrvIndex)
++    for (uint32_t currentPipelineSrvIndex = 0; currentPipelineSrvIndex < job->computeJobDescriptor.pipeline->srvBufferCount; ++currentPipelineSrvIndex)
+     {
+         FfxBufferSRV& bufferSRV = job->computeJobDescriptor.srvBuffers[currentPipelineSrvIndex];
+ 
+@@ -3872,13 +3879,13 @@
+ 
+         addBarrier(backendContext, &bufferSRV.resource, FFX_RESOURCE_STATE_COMPUTE_READ);
+ 
+-        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline.srvBufferBindings[currentPipelineSrvIndex];
++        const FfxResourceBinding binding = job->computeJobDescriptor.pipeline->srvBufferBindings[currentPipelineSrvIndex];
+ 
+         // source: SRV of buffer to bind
+         const uint32_t resourceIndex = bufferSRV.resource.internalIndex;
+ 
+         // where to bind it
+-        const uint32_t currentSrvResourceIndex = job->computeJobDescriptor.pipeline.srvBufferBindings[currentPipelineSrvIndex].slotIndex;
++        const uint32_t currentSrvResourceIndex = job->computeJobDescriptor.pipeline->srvBufferBindings[currentPipelineSrvIndex].slotIndex;
+ 
+         writeDescriptorSets[descriptorWriteIndex]                 = {};
+         writeDescriptorSets[descriptorWriteIndex].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+@@ -3899,7 +3906,7 @@
+     }
+ 
+     // update uniform buffers
+-    for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex < job->computeJobDescriptor.pipeline.constCount; ++currentRootConstantIndex)
++    for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex < job->computeJobDescriptor.pipeline->constCount; ++currentRootConstantIndex)
+     {
+         uint32_t dataSize = job->computeJobDescriptor.cbs[currentRootConstantIndex].num32BitEntries * sizeof(uint32_t);
+         
+@@ -3917,7 +3924,7 @@
+         writeDescriptorSets[descriptorWriteIndex].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+         writeDescriptorSets[descriptorWriteIndex].pBufferInfo     = &bufferDescriptorInfos[bufferDescriptorIndex];
+         writeDescriptorSets[descriptorWriteIndex].dstBinding =
+-            job->computeJobDescriptor.pipeline.constantBufferBindings[currentRootConstantIndex].slotIndex;
++            job->computeJobDescriptor.pipeline->constantBufferBindings[currentRootConstantIndex].slotIndex;
+         writeDescriptorSets[descriptorWriteIndex].dstArrayElement = 0;
+ 
+         bufferDescriptorInfos[bufferDescriptorIndex].buffer = static_cast<VkBuffer>(allocation.resource.resource);
+@@ -3929,7 +3936,7 @@
+     }
+ 
+     // If we are dispatching indirectly, transition the argument resource to indirect argument
+-    if (job->computeJobDescriptor.pipeline.cmdSignature)
++    if (job->computeJobDescriptor.pipeline->cmdSignature)
+     {
+         addBarrier(backendContext, &job->computeJobDescriptor.cmdArgument, FFX_RESOURCE_STATE_INDIRECT_ARGUMENT);
+     }
+@@ -3941,7 +3948,7 @@
+     backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, descriptorWriteIndex, writeDescriptorSets, 0, nullptr);
+ 
+     // bind pipeline
+-    backendContext->vkFunctionTable.vkCmdBindPipeline(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, reinterpret_cast<VkPipeline>(job->computeJobDescriptor.pipeline.pipeline));
++    backendContext->vkFunctionTable.vkCmdBindPipeline(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, reinterpret_cast<VkPipeline>(job->computeJobDescriptor.pipeline->pipeline));
+ 
+     // bind descriptor sets
+     {
+@@ -3949,21 +3956,21 @@
+ 
+         BackendContext_VK::EffectContext& effectContext = backendContext->pEffectContexts[effectContextId];
+ 
+-        if (job->computeJobDescriptor.pipeline.staticTextureSrvCount > 0)
++        if (job->computeJobDescriptor.pipeline->staticTextureSrvCount > 0)
+             backendContext->vkFunctionTable.vkCmdBindDescriptorSets(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout->pipelineLayout, pipelineLayout->staticTextureSrvSet, 1, &effectContext.bindlessTextureSrvDescriptorSet, 0, nullptr);
+ 
+-        if (job->computeJobDescriptor.pipeline.staticBufferSrvCount > 0)
++        if (job->computeJobDescriptor.pipeline->staticBufferSrvCount > 0)
+             backendContext->vkFunctionTable.vkCmdBindDescriptorSets(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout->pipelineLayout, pipelineLayout->staticBufferSrvSet, 1, &effectContext.bindlessBufferSrvDescriptorSet, 0, nullptr);
+ 
+-        if (job->computeJobDescriptor.pipeline.staticTextureUavCount > 0)
++        if (job->computeJobDescriptor.pipeline->staticTextureUavCount > 0)
+             backendContext->vkFunctionTable.vkCmdBindDescriptorSets(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout->pipelineLayout, pipelineLayout->staticTextureUavSet, 1, &effectContext.bindlessTextureUavDescriptorSet, 0, nullptr);
+ 
+-        if (job->computeJobDescriptor.pipeline.staticBufferUavCount > 0)
++        if (job->computeJobDescriptor.pipeline->staticBufferUavCount > 0)
+             backendContext->vkFunctionTable.vkCmdBindDescriptorSets(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout->pipelineLayout, pipelineLayout->staticBufferUavSet, 1, &effectContext.bindlessBufferUavDescriptorSet, 0, nullptr);
+     }
+     
+     // Dispatch (or dispatch indirect)
+-    if (job->computeJobDescriptor.pipeline.cmdSignature)
++    if (job->computeJobDescriptor.pipeline->cmdSignature)
+     {
+         const uint32_t resourceIndex = job->computeJobDescriptor.cmdArgument.internalIndex;
+         VkBuffer buffer = backendContext->pResources[resourceIndex].bufferResource;
+diff --git a/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp b/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+--- a/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
++++ b/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+@@ -794,7 +794,7 @@
+     jobDescriptor.dimensions[0] = dispatchX;
+     jobDescriptor.dimensions[1] = dispatchY;
+     jobDescriptor.dimensions[2] = 1;
+-    jobDescriptor.pipeline = *pipeline;
++    jobDescriptor.pipeline = pipeline;
+ 
+     for (uint32_t currentRootConstantIndex = 0; currentRootConstantIndex < pipeline->constCount; ++currentRootConstantIndex) {
+ #ifdef FFX_DEBUG
+@@ -1391,7 +1391,7 @@
+     jobDescriptor.dimensions[0] = dispatchSrcX;
+     jobDescriptor.dimensions[1] = dispatchSrcY;
+     jobDescriptor.dimensions[2] = 1;
+-    jobDescriptor.pipeline = *pipeline;
++    jobDescriptor.pipeline = pipeline;
+ 
+     for (uint32_t currentShaderResourceViewIndex = 0; currentShaderResourceViewIndex < pipeline->srvTextureCount; ++currentShaderResourceViewIndex) {
+ 
 diff --git a/sdk/tools/ffx_shader_compiler/src/ffx_sc.cpp b/sdk/tools/ffx_shader_compiler/src/ffx_sc.cpp
 index c3ec37f..6c429b4 100644
 --- a/sdk/tools/ffx_shader_compiler/src/ffx_sc.cpp

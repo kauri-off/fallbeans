@@ -237,7 +237,7 @@ fn fidelityfx() -> Result<PathBuf> {
     fidelityfx_linux(&sdk)
 }
 
-/// `libamd_fidelityfx_vk.so` under target/fidelityfx-linux: the SDK's sources copied and patched once per
+/// `libamd_fidelityfx_vk.so` under target/fidelityfx-linux/<checkout>: the SDK's sources copied and patched once per
 /// SDK and patch, then CMake (cmake, a C++17 compiler, the Vulkan headers and loader, glslangValidator).
 fn fidelityfx_linux(sdk: &Path) -> Result<PathBuf> {
     const SOURCES: [&str; 7] = [
@@ -255,7 +255,14 @@ fn fidelityfx_linux(sdk: &Path) -> Result<PathBuf> {
     }
     let recipe = root().join("packaging/fidelityfx-linux");
     let patch = recipe.join("fidelityfx-sdk-v1.1.4.patch");
-    let work = target_dir().join("fidelityfx-linux");
+    // (One per checkout: worktrees share `target/`, and CMake's cache refuses a build directory configured from
+    // another checkout's recipe.)
+    let work = target_dir().join("fidelityfx-linux").join({
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        recipe.hash(&mut h);
+        format!("{:016x}", h.finish())
+    });
     let src = work.join("src");
     let stamp = work.join("patched");
     let want = format!(
