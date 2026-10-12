@@ -3,6 +3,7 @@
 use bevy::core_pipeline::schedule::{Core2d, Core3d};
 use bevy::ecs::intern::Interned;
 use bevy::ecs::schedule::{ScheduleCleanupPolicy, ScheduleLabel};
+use bevy::ecs::system::ScheduleSystem;
 use bevy::light::cluster::GlobalClusterSettings;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, Render, RenderApp};
@@ -68,16 +69,26 @@ fn strip(world: &mut World) {
     let mut total = 0;
     for label in labels {
         let _ = world.try_schedule_scope(label, |world, schedule| {
-            let sets: Vec<_> = schedule
+            // (A schedule that has run holds its systems in its executable, one yet to run in its graph.)
+            let unused = |s: &ScheduleSystem| {
+                let name = s.name().to_string();
+                UNUSED
+                    .iter()
+                    .any(|u| name.contains(u))
+                    .then(|| s.default_system_sets().into_iter().next())
+                    .flatten()
+            };
+            let mut sets: Vec<_> = schedule
                 .graph()
                 .systems
                 .iter()
-                .filter(|(_, s, _)| {
-                    let name = s.name().to_string();
-                    UNUSED.iter().any(|u| name.contains(u))
-                })
-                .filter_map(|(_, s, _)| s.default_system_sets().into_iter().next())
+                .filter_map(|(_, s, _)| unused(s))
                 .collect();
+            if let Ok(run) = schedule.systems() {
+                sets.extend(run.filter_map(|(_, s)| unused(s)));
+            }
+            // (What the extraction left for the render world, as `apply_extract_commands` would apply it.)
+            schedule.apply_deferred(world);
             for set in sets {
                 total += schedule
                     .remove_systems_in_set(set, world, ScheduleCleanupPolicy::RemoveSystemsOnly)
