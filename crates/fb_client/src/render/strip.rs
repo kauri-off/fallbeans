@@ -18,7 +18,10 @@ const UNUSED: &[&str] = &[
     "GpuAtmosphere",
     "bevy_pbr::ssr::",
     "bevy_pbr::volumetric_fog::",
-    "bevy_pbr::transmission::",
+    // (Not its phases' extraction: a camera without a transmissive phase gets no meshes queued, and one activated
+    // after the strip, the look's stage, would never get it.)
+    "bevy_pbr::transmission::node::",
+    "bevy_pbr::transmission::texture::",
     "Transmissive3d",
     "bevy_core_pipeline::oit::",
     "Deferred",
